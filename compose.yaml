@@ -1,0 +1,19 @@
+services:
+  win-engine:
+    build: .
+    container_name: youtube-win-engine
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    volumes:
+      - ./win_engine.db:/app/win_engine.db
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    container_name: youtube-win-engine-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
