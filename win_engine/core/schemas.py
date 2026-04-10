@@ -23,6 +23,7 @@ class AnalyzeRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     title: str
     description: str
+    tags: List[str]
     hashtags: List[str]
     intent: str
     content_angle: str
@@ -38,6 +39,7 @@ class AnalyzeResponse(BaseModel):
     upload_timing: Dict[str, Any]
     thumbnail_intelligence: Dict[str, Any]
     opportunity_gap_analysis: Dict[str, Any]
+    competitor_shadow: Dict[str, Any]
     language_strategy: Dict[str, Any]
     pacing_analysis: Dict[str, Any]
     channel_intelligence: Dict[str, Any]

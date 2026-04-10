@@ -15,9 +15,11 @@ def analyze_opportunity_gaps(
     language_context = language_context or {}
     keyword_gaps = _keyword_gaps(keyword_signals, youtube_results)
     competition = _competition_meter(youtube_results, language_context)
-    idea_kill_switch = _idea_kill_switch(top_opportunities, competition)
+    idea_kill_switch = _idea_kill_switch(top_opportunities, competition, keyword_gaps, youtube_results)
     differentiation = _differentiation_plan(keyword_gaps, competition, youtube_results)
     opportunity_score = _opportunity_score(keyword_gaps, competition, top_opportunities)
+    format_lock = _format_lock_in(top_opportunities, youtube_results, competition)
+    viability_verdict = _viability_verdict(opportunity_score, competition, idea_kill_switch, keyword_gaps)
 
     return {
         "keyword_gaps": keyword_gaps,
@@ -26,6 +28,9 @@ def analyze_opportunity_gaps(
         "entity_focus": _entity_focus(entity_signals),
         "differentiation": differentiation,
         "opportunity_score": opportunity_score,
+        "competitor_shadow": _competitor_shadow(youtube_results),
+        "format_lock": format_lock,
+        "viability_verdict": viability_verdict,
     }
 
 
@@ -108,23 +113,45 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
     }
 
 
-def _idea_kill_switch(top_opportunities: list[dict[str, Any]], competition: dict[str, Any]) -> dict[str, Any]:
+def _idea_kill_switch(
+    top_opportunities: list[dict[str, Any]],
+    competition: dict[str, Any],
+    keyword_gaps: list[dict[str, Any]],
+    youtube_results: list[dict[str, Any]],
+) -> dict[str, Any]:
     top_score = float(top_opportunities[0].get("outlier_score") or 0) if top_opportunities else 0.0
     competition_label = competition.get("label", "UNKNOWN")
+    small_channel_outliers = sum(1 for item in top_opportunities if item.get("small_channel_outlier"))
+    high_gap_count = sum(1 for item in keyword_gaps if item.get("gap_strength") == "high")
+    similar_count = len(youtube_results)
 
     proceed = True
     reason = "Opportunity is strong enough to keep pursuing."
+    confidence = "medium"
+    recommended_action = "Proceed with a differentiated angle."
 
-    if top_score < 500 and competition_label == "SATURATED":
+    if top_score < 500 and competition_label == "SATURATED" and high_gap_count == 0:
         proceed = False
         reason = "Weak outlier signal plus saturated competition makes this a poor bet."
-    elif top_score < 2000 and competition_label == "COMPETITIVE":
+        confidence = "high"
+        recommended_action = "Kill this idea or re-scope it into a narrower subtopic."
+    elif top_score < 2000 and competition_label == "COMPETITIVE" and small_channel_outliers == 0 and high_gap_count <= 1:
         proceed = False
         reason = "The topic does not show enough breakout evidence for the current competition level."
+        confidence = "high"
+        recommended_action = "Rework the topic before investing in production."
+    elif high_gap_count >= 2 or small_channel_outliers >= 1:
+        reason = "The topic still has breakout room if you lean into the uncovered angle."
+        recommended_action = "Proceed, but lock into the clearest underused promise."
+    elif similar_count <= 3 and top_score >= 1000:
+        reason = "Competitor volume is still light enough to justify a test upload."
+        recommended_action = "Proceed with a clear proof-driven package."
 
     return {
         "proceed": proceed,
         "reason": reason,
+        "confidence": confidence,
+        "recommended_action": recommended_action,
     }
 
 
@@ -170,9 +197,13 @@ def _opportunity_score(
 ) -> dict[str, Any]:
     top_outlier = float(top_opportunities[0].get("outlier_score") or 0) if top_opportunities else 0.0
     gap_bonus = min(len(keyword_gaps) * 12, 36)
+    small_channel_bonus = min(
+        sum(8 for item in top_opportunities[:3] if item.get("small_channel_outlier")),
+        16,
+    )
     competition_penalty = 30 if competition.get("label") == "SATURATED" else 15 if competition.get("label") == "COMPETITIVE" else 0
 
-    score = min(round((top_outlier / 5000) + gap_bonus - competition_penalty, 2), 100.0)
+    score = min(round((top_outlier / 5000) + gap_bonus + small_channel_bonus - competition_penalty, 2), 100.0)
     score = max(score, 0.0)
 
     if score >= 60:
@@ -185,4 +216,136 @@ def _opportunity_score(
     return {
         "score": score,
         "label": label,
+        "gap_bonus": gap_bonus,
+        "small_channel_bonus": small_channel_bonus,
+        "competition_penalty": competition_penalty,
     }
+
+
+def _competitor_shadow(youtube_results: list[dict[str, Any]]) -> dict[str, Any]:
+    if not youtube_results:
+        return {
+            "similar_video_count": 0,
+            "dominant_title_pattern": "unknown",
+            "dominant_hook_pattern": "unknown",
+            "recommended_differentiation": "Not enough competitor data yet.",
+        }
+
+    titles = [str(item.get("title", "")) for item in youtube_results]
+    title_pattern_counts = {
+        "experiment": sum(1 for title in titles if any(token in title.lower() for token in ["i tried", "i tested", "for 7 days", "for 30 days"])),
+        "search": sum(1 for title in titles if any(token in title.lower() for token in ["how to", "guide", "tutorial"])),
+        "curiosity": sum(1 for title in titles if any(token in title.lower() for token in ["shocking", "secret", "truth", "mistake"])),
+    }
+    dominant_title_pattern = max(title_pattern_counts, key=title_pattern_counts.get)
+
+    hook_pattern_counts = {
+        "first_person": sum(1 for title in titles if title.lower().startswith("i ")),
+        "how_to": sum(1 for title in titles if title.lower().startswith("how to")),
+        "question": sum(1 for title in titles if "?" in title),
+    }
+    dominant_hook_pattern = max(hook_pattern_counts, key=hook_pattern_counts.get)
+
+    if dominant_title_pattern == "experiment":
+        differentiation = "Keep the experiment angle, but narrow the promise or conflict so it does not blend into the same repeated challenge pattern."
+    elif dominant_title_pattern == "search":
+        differentiation = "Avoid generic tutorial phrasing and lead with a more specific or surprising outcome."
+    else:
+        differentiation = "Reduce generic curiosity phrasing and make the payoff more concrete."
+
+    return {
+        "similar_video_count": len(youtube_results),
+        "dominant_title_pattern": dominant_title_pattern,
+        "dominant_hook_pattern": dominant_hook_pattern,
+        "recommended_differentiation": differentiation,
+    }
+
+
+def _format_lock_in(
+    top_opportunities: list[dict[str, Any]],
+    youtube_results: list[dict[str, Any]],
+    competition: dict[str, Any],
+) -> dict[str, Any]:
+    candidates = top_opportunities[:3] if top_opportunities else youtube_results[:3]
+    if not candidates:
+        return {
+            "recommended_format": "unknown",
+            "recommended_length": "unknown",
+            "title_style": "unknown",
+            "reason": "Not enough competitor data to lock a format.",
+        }
+
+    short_form_count = 0
+    long_form_count = 0
+    first_person_count = 0
+    proof_count = 0
+
+    for item in candidates:
+        duration = str(item.get("duration") or "")
+        title = str(item.get("title") or "").lower()
+        if _is_short_form_duration(duration):
+            short_form_count += 1
+        else:
+            long_form_count += 1
+        if title.startswith("i "):
+            first_person_count += 1
+        if any(token in title for token in ["result", "truth", "worth it", "what happened", "mistake"]):
+            proof_count += 1
+
+    recommended_format = "short-form" if short_form_count > long_form_count else "long-form"
+    recommended_length = "under 60s" if recommended_format == "short-form" else "6-12 minutes"
+    title_style = "first-person proof" if first_person_count >= 2 else "outcome-led"
+    if proof_count >= 2:
+        title_style = f"{title_style} with clear payoff"
+
+    if str(competition.get("label", "UNKNOWN")).upper() == "SATURATED":
+        reason = "Competition is heavy, so the format should match proven behavior while the angle stays narrower."
+    else:
+        reason = "Competitor patterns are strong enough to guide packaging without forcing a copycat title."
+
+    return {
+        "recommended_format": recommended_format,
+        "recommended_length": recommended_length,
+        "title_style": title_style,
+        "reason": reason,
+    }
+
+
+def _viability_verdict(
+    opportunity_score: dict[str, Any],
+    competition: dict[str, Any],
+    idea_kill_switch: dict[str, Any],
+    keyword_gaps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    score_label = str(opportunity_score.get("label", "WEAK")).upper()
+    competition_label = str(competition.get("label", "UNKNOWN")).upper()
+    gap_count = len(keyword_gaps)
+    proceed = bool(idea_kill_switch.get("proceed"))
+
+    if proceed and score_label == "STRONG":
+        status = "green"
+        summary = "The idea is viable now. Focus on packaging and execution."
+    elif proceed and (score_label == "WORKABLE" or gap_count >= 2):
+        status = "yellow"
+        summary = "The idea is workable, but only if you commit to a clearer differentiation angle."
+    else:
+        status = "red"
+        summary = "The idea is not strong enough yet. Reframe it before publishing."
+
+    if competition_label == "SATURATED" and proceed:
+        summary = "The idea can still work, but only with a tighter promise and stronger packaging."
+
+    return {
+        "status": status,
+        "summary": summary,
+        "proceed": proceed,
+    }
+
+
+def _is_short_form_duration(duration: str) -> bool:
+    if not duration:
+        return False
+    normalized = duration.strip().upper()
+    if not normalized.startswith("PT"):
+        return False
+    return "M" not in normalized and "H" not in normalized

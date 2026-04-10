@@ -29,6 +29,7 @@ def generate_seo_suggestions(
     return AnalyzeResponse(
         title=seo_package["title"],
         description=seo_package["description"],
+        tags=seo_package["tags"],
         hashtags=seo_package["hashtags"],
         intent=intent,
         content_angle=seo_package["content_angle"],
@@ -44,6 +45,7 @@ def generate_seo_suggestions(
         upload_timing=research_payload.get("upload_timing", {}),
         thumbnail_intelligence=research_payload.get("thumbnail_intelligence", {}),
         opportunity_gap_analysis=seo_package["opportunity_gap_analysis"],
+        competitor_shadow=seo_package["opportunity_gap_analysis"].get("competitor_shadow", {}),
         language_strategy=seo_package["language_strategy"],
         pacing_analysis=seo_package["pacing_analysis"],
         channel_intelligence=seo_package["channel_intelligence"],

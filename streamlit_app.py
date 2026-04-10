@@ -66,8 +66,11 @@ def dedupe_preserve_order(values: list[str]) -> list[str]:
 
 
 def build_tags(result: dict[str, Any]) -> list[str]:
-    tags: list[str] = []
+    explicit_tags = result.get("tags", [])
+    if explicit_tags:
+        return dedupe_preserve_order([str(item) for item in explicit_tags])[:12]
 
+    tags: list[str] = []
     for signal in result.get("keyword_signals", []):
         keyword = str(signal.get("keyword", "")).strip()
         if keyword:
@@ -182,11 +185,6 @@ def apply_styles() -> None:
             margin-top: 0.35rem;
         }
 
-        .helper {
-            color: #98a2b3;
-            font-size: 0.92rem;
-        }
-
         pre {
             background: #111318 !important;
             border-radius: 14px !important;
@@ -222,6 +220,16 @@ def estimated_minutes(text: str) -> int:
     return max(1, math.ceil(words / 150))
 
 
+def normalize_language_for_research(selection: str) -> str:
+    mapping = {
+        "Auto-detect": "english",
+        "English": "english",
+        "Tamil": "tamil",
+        "Gen-Z Slang": "english",
+    }
+    return mapping.get(selection, "english")
+
+
 def main() -> None:
     apply_styles()
 
@@ -230,9 +238,9 @@ def main() -> None:
     if "result" not in st.session_state:
         st.session_state.result = None
 
-    col_h1, col_h2 = st.columns([2, 1])
-    with col_h1:
-        st.title("🎬 CreatorMode")
+    header_left, _ = st.columns([2, 1])
+    with header_left:
+        st.title("CreatorMode")
         st.markdown(
             "<p style='opacity: 0.68; margin-top: -15px;'>Vibe-check your SEO. Script to Studio in seconds.</p>",
             unsafe_allow_html=True,
@@ -243,7 +251,7 @@ def main() -> None:
     left_col, right_col = st.columns([1, 2.2], gap="large")
 
     with left_col:
-        st.markdown("### 🛠️ Config")
+        st.markdown("### Config")
         with st.container(border=True):
             lang = st.selectbox("Vibe (Language)", ["Auto-detect", "English", "Tamil", "Gen-Z Slang"])
             region = st.selectbox("Region", ["Global", "India", "Tamil Nadu", "Sri Lanka", "Gulf"])
@@ -257,9 +265,9 @@ def main() -> None:
 
         if st.session_state.history:
             st.write("")
-            st.markdown("### 🕒 Recent Drops")
+            st.markdown("### Recent Drops")
             for item in reversed(st.session_state.history[-3:]):
-                st.caption(f"📌 {item['title'][:42]}...")
+                st.caption(f"- {item['title'][:42]}...")
 
     with right_col:
         script_content = st.text_area(
@@ -269,22 +277,28 @@ def main() -> None:
         )
 
         char_count = len(script_content)
-        st.caption(f"Character count: {char_count} | Estimated reading time: {estimated_minutes(script_content) if script_content else 0} mins")
+        reading_minutes = estimated_minutes(script_content) if script_content else 0
+        st.caption(f"Character count: {char_count} | Estimated reading time: {reading_minutes} mins")
 
-        if st.button("Generate Final Package ⚡"):
+        if st.button("Generate Final Package"):
             if not script_content.strip():
-                st.toast("Add a script first, bestie.", icon="🚫")
+                st.toast("Add a script first.", icon="X")
             else:
                 with st.status("Cooking the SEO sauce...", expanded=True) as status:
                     st.write("Checking the hook...")
                     time.sleep(0.2)
                     settings = get_settings()
                     research = ResearchService(settings)
-                    research_payload = research.gather(script_content.strip())
+                    research_language = normalize_language_for_research(lang)
+                    research_payload = research.gather(
+                        script_content.strip(),
+                        region=region,
+                        primary_language=research_language,
+                    )
                     st.write("Optimizing for the algorithm...")
                     time.sleep(0.2)
                     generation_context = {
-                        "language": lang if lang != "Auto-detect" else "",
+                        "language": "" if lang == "Auto-detect" else research_language,
                         "region": region,
                         "audience_type": audience_type,
                     }
@@ -298,12 +312,12 @@ def main() -> None:
                         result["hashtags"] = []
                     st.session_state.result = result
                     st.session_state.history.append({"title": result["title"]})
-                    status.update(label="Manifested! ✨", state="complete", expanded=False)
+                    status.update(label="Package ready.", state="complete", expanded=False)
 
     result = st.session_state.result
     if not result:
         st.write("")
-        st.info("💡 **Pro-Tip:** Streamlit's `st.code` block has a copy button in the top right. Use it.")
+        st.info("Tip: Streamlit's `st.code` block has a copy button in the top right.")
         return
 
     best_title = str(result.get("title", "")).strip()
@@ -316,7 +330,7 @@ def main() -> None:
     ][:3]
 
     st.write("")
-    res_tab1, res_tab2, res_tab3 = st.tabs(["🔥 THE DROP", "🎲 ALT VIBES", "📊 SEO TAGS"])
+    res_tab1, res_tab2, res_tab3 = st.tabs(["THE DROP", "ALT VIBES", "SEO TAGS"])
 
     with res_tab1:
         st.markdown('<div class="copy-card best-card">', unsafe_allow_html=True)
@@ -357,7 +371,7 @@ def main() -> None:
 
     if result.get("raw_logs"):
         st.write("")
-        st.markdown("### 🧪 Dev Mode")
+        st.markdown("### Dev Mode")
         st.json(
             {
                 "intent": result.get("intent"),
@@ -365,11 +379,12 @@ def main() -> None:
                 "title_optimization": result.get("title_optimization"),
                 "keyword_signals": result.get("keyword_signals"),
                 "entity_signals": result.get("entity_signals"),
+                "opportunity_gap_analysis": result.get("opportunity_gap_analysis"),
             }
         )
 
     st.write("")
-    st.info("💡 **Pro-Tip:** Streamlit's `st.code` block has a copy button in the top right. Use it.")
+    st.info("Tip: Streamlit's `st.code` block has a copy button in the top right.")
 
 
 if __name__ == "__main__":
