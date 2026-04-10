@@ -57,6 +57,7 @@ def build_seo_package(
         script_facts,
         language_strategy,
     )
+    tags = _build_tags(keyword_signals, script_facts, language_strategy)
     hashtags = _build_hashtags(keyword_signals, entity_signals, script_facts, competitor_patterns, language_strategy)
     content_audit = audit_content_package(script, title, primary_topic, secondary_topic, angle)
     opportunity_gap_analysis = analyze_opportunity_gaps(
@@ -114,6 +115,7 @@ def build_seo_package(
     return {
         "title": title,
         "description": description,
+        "tags": tags,
         "hashtags": hashtags,
         "title_variants": title_variants,
         "content_angle": angle,
@@ -414,6 +416,48 @@ def _build_hashtags(
         tags.insert(0, "#youtube")
 
     return tags[:6]
+
+
+def _build_tags(
+    keyword_signals: list[dict[str, Any]],
+    script_facts: dict[str, str],
+    language_strategy: dict[str, Any],
+) -> list[str]:
+    tags: list[str] = []
+
+    seeds = [
+        script_facts["action"],
+        script_facts["duration"],
+        script_facts["promise"],
+        script_facts["conflict"],
+    ]
+
+    for seed in seeds:
+        cleaned = seed.strip()
+        if not cleaned:
+            continue
+        if cleaned.lower() not in {item.lower() for item in tags}:
+            tags.append(cleaned)
+
+    for signal in keyword_signals[:8]:
+        keyword = str(signal.get("keyword", "")).strip()
+        if not keyword or len(keyword.split()) > 5:
+            continue
+        if keyword.lower() not in {item.lower() for item in tags}:
+            tags.append(keyword)
+
+    primary_language = str(language_strategy.get("primary_language", "")).lower()
+    region = str(language_strategy.get("selected_region", "")).lower()
+    if primary_language in {"tamil", "tanglish"}:
+        for extra in ["Tamil YouTube", "Tamil Creator"]:
+            if extra.lower() not in {item.lower() for item in tags}:
+                tags.append(extra)
+    if region == "india" and "India" not in tags:
+        tags.append("India")
+    if region == "tamil nadu" and "Tamil Nadu" not in tags:
+        tags.append("Tamil Nadu")
+
+    return tags[:10]
 
 
 def _extract_competitor_patterns(youtube_results: list[dict[str, Any]]) -> dict[str, str]:

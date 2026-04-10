@@ -56,13 +56,34 @@ def _first_words(text: str, limit: int) -> str:
 
 
 def _contains_topic(text: str, primary_topic: str, secondary_topic: str) -> bool:
-    lowered = text.lower()
-    return primary_topic.lower() in lowered or secondary_topic.lower() in lowered
+    lowered = _normalize_text(text)
+    primary_normalized = _normalize_text(primary_topic)
+    secondary_normalized = _normalize_text(secondary_topic)
+    return primary_normalized in lowered or secondary_normalized in lowered
 
 
 def _has_stakes(text: str) -> bool:
     lowered = text.lower()
-    markers = ["grow", "views", "result", "worked", "failed", "mistake", "strategy", "improve"]
+    markers = [
+        "grow",
+        "views",
+        "result",
+        "worked",
+        "failed",
+        "mistake",
+        "strategy",
+        "improve",
+        "what happened",
+        "tried",
+        "tested",
+        "honest result",
+        "worth it",
+        "overhyped",
+        "benefit",
+        "downside",
+        "should you",
+        "honest",
+    ]
     return any(marker in lowered for marker in markers)
 
 
@@ -84,12 +105,14 @@ def _hook_strength(text: str, content_angle: str) -> str:
 
 
 def _alignment_score(title: str, script: str, primary_topic: str, secondary_topic: str) -> float:
-    lowered_title = title.lower()
-    lowered_script = script.lower()
+    lowered_title = _normalize_text(title)
+    lowered_script = _normalize_text(script)
+    primary_normalized = _normalize_text(primary_topic)
+    secondary_normalized = _normalize_text(secondary_topic)
     score = 0.0
-    if primary_topic.lower() in lowered_title and primary_topic.lower() in lowered_script:
+    if primary_normalized in lowered_title and primary_normalized in lowered_script:
         score += 0.5
-    if secondary_topic.lower() in lowered_title and secondary_topic.lower() in lowered_script:
+    if secondary_normalized in lowered_title and secondary_normalized in lowered_script:
         score += 0.3
     if any(word in lowered_script for word in re.findall(r"[a-z0-9]+", lowered_title)):
         score += 0.2
@@ -107,7 +130,10 @@ def _package_match_label(title: str, script: str, primary_topic: str, secondary_
 
 def _dropoff_risk(text: str) -> str:
     lowered = text.lower()
-    if not any(marker in lowered for marker in ["result", "strategy", "worked", "failed", "show", "explain"]):
+    if not any(
+        marker in lowered
+        for marker in ["result", "strategy", "worked", "failed", "show", "explain", "worth it", "overhyped", "what happened"]
+    ):
         return "HIGH"
     if len(text.split()) < 40:
         return "MEDIUM"
@@ -170,3 +196,10 @@ def _retention_notes(
     if not notes:
         notes.append("The opening structure is solid for a first-pass heuristic.")
     return notes
+
+
+def _normalize_text(text: str) -> str:
+    lowered = text.lower()
+    lowered = re.sub(r"[^a-z0-9\s]+", " ", lowered)
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return lowered

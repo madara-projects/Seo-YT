@@ -10,10 +10,18 @@ class HistoryStore:
     """SQLite-backed snapshot store for repeated video metric collection."""
 
     def __init__(self, database_path: str) -> None:
-        self._database_path = Path(database_path)
+        self._database_path_raw = database_path
+        self._database_path = Path(database_path) if database_path != ":memory:" else None
+        self._memory_connection: sqlite3.Connection | None = None
+        if database_path == ":memory:":
+            self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
+        if self._memory_connection is not None:
+            return self._memory_connection
+        if self._database_path is None:
+            raise RuntimeError("Database path is unavailable.")
         return sqlite3.connect(self._database_path)
 
     def _initialize(self) -> None:
@@ -340,14 +348,14 @@ class HistoryStore:
                 snapshot_count = connection.execute("SELECT COUNT(*) FROM video_snapshots").fetchone()[0]
                 analysis_count = connection.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0]
             return {
-                "database_path": str(self._database_path),
+                "database_path": self._database_path_raw,
                 "database_ok": True,
                 "snapshot_count": int(snapshot_count or 0),
                 "analysis_count": int(analysis_count or 0),
             }
         except sqlite3.Error as exc:
             return {
-                "database_path": str(self._database_path),
+                "database_path": self._database_path_raw,
                 "database_ok": False,
                 "snapshot_count": 0,
                 "analysis_count": 0,

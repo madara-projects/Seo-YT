@@ -4,9 +4,13 @@ This roadmap now reflects the **actual verified project state** in this reposito
 
 ## Current Status
 
-- Current phase: **Phase 3**
+- Current phase: **Phase 7**
 - Phase 1: **Done**
 - Phase 2: **Done**
+- Phase 3: **Done**
+- Phase 4: **Done**
+- Phase 5: **Done**
+- Phase 6: **Done**
 - Docker: **Optional**
 - Redis cache: **Optional and now supported**
 
@@ -26,6 +30,18 @@ This roadmap now reflects the **actual verified project state** in this reposito
 - [x] **Phase 2 Completion:** Improved Tamil/Tanglish title validation with real-world phrasing patterns
 - [x] **Phase 2 Completion:** Added region-aware keyword prioritization based on target market
 - [x] **Phase 2 Completion:** Added stronger local-vs-global YouTube result weighting based on language and region
+- [x] **Phase 3 Completion:** Audited YouTube research, keyword extraction, entity extraction, outlier scoring, and cache policy
+- [x] **Phase 3 Completion:** Fixed Streamlit research flow so region/language settings reach the data intelligence layer
+- [x] **Phase 3 Completion:** Fixed SQLite in-memory history behavior for audit and smoke-test reliability
+- [x] **Phase 4 Completion:** Audited intent classification, hook audit, alignment scoring, and retention-risk heuristics
+- [x] **Phase 4 Completion:** Improved intent classification coverage for search, browse, and suggested patterns
+- [x] **Phase 4 Completion:** Improved stake detection for experiment-style script openings
+- [x] **Phase 5 Completion:** Audited title, description, tags, hashtags, and CTR/A-B generation outputs
+- [x] **Phase 5 Completion:** Added proper backend tag generation instead of relying only on UI-derived tags
+- [x] **Phase 5 Completion:** Verified title variants, description generation, hashtags, tags, and CTR prediction output
+- [x] **Phase 6 Completion:** Audited competitor pattern extraction, differentiation output, and competition analysis
+- [x] **Phase 6 Completion:** Added competitor shadow analysis to the generated result payload
+- [x] **Phase 6 Completion:** Verified competitor-shadow guidance through the generation path
 
 ---
 
@@ -85,8 +101,8 @@ This roadmap now reflects the **actual verified project state** in this reposito
 
 ## Phase 3: Data Intelligence Engine
 
-- [ ] Full audit pending
-- [ ] Keep existing prototype systems, but do not mark complete until audited
+- [x] Full audit completed
+- [x] Phase 3 is verified and complete against the current roadmap scope
 
 Current prototype work already present in code:
 - [x] YouTube result gathering
@@ -95,11 +111,20 @@ Current prototype work already present in code:
 - [x] Outlier scoring baseline
 - [x] Basic cache policy split for trending vs evergreen
 
+### Phase 3 Verification
+- [x] Added a current audit script
+- [x] Verified keyword extraction
+- [x] Verified entity extraction
+- [x] Verified regional outlier scoring
+- [x] Verified cache policy logic
+- [x] Verified generation path with Phase 3 research payloads
+
 ---
 
 ## Phase 4: Script -> Intelligence Engine
 
-- [ ] Full audit pending
+- [x] Full audit completed
+- [x] Phase 4 is verified and complete against the current roadmap scope
 
 Current prototype work already present in code:
 - [x] Script input flow
@@ -107,40 +132,69 @@ Current prototype work already present in code:
 - [x] Hook/content audit baseline
 - [x] Expectation/package auditing baseline
 
+### Phase 4 Verification
+- [x] Added a current audit script
+- [x] Verified search / browse / suggested intent classification
+- [x] Verified hook-topic detection
+- [x] Verified stake detection
+- [x] Verified title-script alignment scoring
+- [x] Verified generation path returns content audit and retention-risk signals
+
 ---
 
 ## Phase 5: Generation Engine
 
-- [ ] Full audit pending
+- [x] Full audit completed
+- [x] Phase 5 is verified and complete against the current roadmap scope
 
 Current prototype work already present in code:
 - [x] Title generation
 - [x] Description generation
+- [x] Tag generation
 - [x] Hashtag generation
 - [x] Title variants
 - [x] Basic performance/CTR heuristics
+
+### Phase 5 Verification
+- [x] Added a current audit script
+- [x] Verified title generation
+- [x] Verified description generation
+- [x] Verified tag generation
+- [x] Verified hashtag generation
+- [x] Verified title variants and A/B test output
+- [x] Verified CTR prediction output
 
 ---
 
 ## Phase 6: Competitor Shadow Engine
 
-- [ ] Full audit pending
+- [x] Full audit completed
+- [x] Phase 6 is verified and complete against the current roadmap scope
 
 Current prototype work already present in code:
 - [x] Competitor video lookup
 - [x] Basic pattern extraction from titles
 - [x] Differentiation signals
 
+### Phase 6 Verification
+- [x] Added a current audit script
+- [x] Verified competition analysis output
+- [x] Verified differentiation recommendation output
+- [x] Verified competitor-shadow dominant pattern detection
+- [x] Verified competitor-shadow data reaches the generated response
+
 ---
 
 ## Phase 7: Opportunity & Kill System
 
-- [ ] Full audit pending
+- [-] In progress
 
 Current prototype work already present in code:
 - [x] Opportunity gap analysis baseline
 - [x] Competition labeling baseline
 - [x] Proceed / kill-style recommendation baseline
+- [x] Viability verdict baseline
+- [x] Format lock recommendation baseline
 
 ---
 
@@ -190,9 +244,9 @@ Current prototype work already present in code:
 
 ## Next Focus
 
-1. **Audit Phase 3** - Data Intelligence Engine (YouTube research, keyword extraction, entity extraction)
+1. **Audit Phase 7** - Opportunity & Kill System
 2. Continue improving output quality:
-   - title realism
-   - description quality
-   - tags that match real YouTube usage
-3. Validate Phase 3 systems against actual YouTube discovery patterns
+    - title realism
+    - description quality
+    - tags that match real YouTube usage
+3. Validate Phase 7 systems against real opportunity-filter expectations
