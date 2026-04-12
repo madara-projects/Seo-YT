@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+# Brain v2.0 Integration
+from win_engine.analysis.dynamic_thresholds import get_dynamic_kill_switch
+
 
 def analyze_opportunity_gaps(
     keyword_signals: list[dict[str, Any]],
@@ -15,7 +18,16 @@ def analyze_opportunity_gaps(
     language_context = language_context or {}
     keyword_gaps = _keyword_gaps(keyword_signals, youtube_results)
     competition = _competition_meter(youtube_results, language_context)
-    idea_kill_switch = _idea_kill_switch(top_opportunities, competition, keyword_gaps, youtube_results)
+    
+    # Brain v2.0: Dynamic, niche-aware kill switch instead of hard-coded thresholds
+    idea_kill_switch = get_dynamic_kill_switch(
+        top_opportunities=top_opportunities,
+        competition=competition,
+        keyword_gaps=keyword_gaps,
+        youtube_results=youtube_results,
+        language_context=language_context,
+    )
+    
     differentiation = _differentiation_plan(keyword_gaps, competition, youtube_results)
     opportunity_score = _opportunity_score(keyword_gaps, competition, top_opportunities)
     format_lock = _format_lock_in(top_opportunities, youtube_results, competition)
