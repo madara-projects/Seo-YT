@@ -476,7 +476,6 @@ See [ROADMAP.md](ROADMAP.md) for detailed priorities.
 ## 📚 Documentation
 
 - **[ROADMAP.md](ROADMAP.md)** - Complete development roadmap & phases
-- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Production deployment guide
 - **[API Docs](http://localhost:8000/docs)** - Interactive API documentation
 
 ---

@@ -20,12 +20,14 @@ def analyze_opportunity_gaps(
     competition = _competition_meter(youtube_results, language_context)
     
     # Brain v2.0: Dynamic, niche-aware kill switch instead of hard-coded thresholds
+    # Pass 'niche' if available in language_context, else default to 'general'
+    niche = language_context.get('niche', 'general') if isinstance(language_context, dict) else 'general'
     idea_kill_switch = get_dynamic_kill_switch(
         top_opportunities=top_opportunities,
         competition=competition,
         keyword_gaps=keyword_gaps,
         youtube_results=youtube_results,
-        language_context=language_context,
+        niche=niche,
     )
     
     differentiation = _differentiation_plan(keyword_gaps, competition, youtube_results)
