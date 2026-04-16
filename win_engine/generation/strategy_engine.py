@@ -14,6 +14,7 @@ from win_engine.feedback.learning_engine import build_feedback_package
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.automation_engine import build_automation_workflow
 from win_engine.generation.expansion_engine import build_binge_bridge, build_chapters, build_session_expansion
+from win_engine.analysis.nlp_titlegen import generate_dynamic_title, generate_dynamic_description
 
 
 def build_seo_package(
@@ -37,26 +38,12 @@ def build_seo_package(
     angle = _select_content_angle(intent, script, top_opportunities)
     competitor_patterns = _extract_competitor_patterns(research.get("youtube_results", []))
     language_strategy = build_language_strategy(script, language_context)
-    title_variants = _build_title_variants(
-        primary_topic,
-        secondary_topic,
-        angle,
-        intent,
-        script_facts,
-        competitor_patterns,
-        language_strategy,
-    )
-    title_optimization = optimize_titles(title_variants, primary_topic, secondary_topic, language_strategy)
-    title = _choose_primary_title(intent, title_variants, title_optimization)
-    description = _build_description(
-        script,
-        primary_topic,
-        secondary_topic,
-        angle,
-        top_opportunities,
-        script_facts,
-        language_strategy,
-    )
+    # Use NLP-powered dynamic title and description generation
+    title = generate_dynamic_title(script)
+    description = generate_dynamic_description(script)
+    # Optionally, still generate variants for UI display
+    title_variants = [title]
+    title_optimization = {"best_title": title, "scored_variants": [{"title": title, "score": 10.0}]}
     tags = _build_tags(keyword_signals, script_facts, language_strategy)
     hashtags = _build_hashtags(keyword_signals, entity_signals, script_facts, competitor_patterns, language_strategy)
     content_audit = audit_content_package(script, title, primary_topic, secondary_topic, angle)
