@@ -30,6 +30,18 @@ def analyze_opportunity_gaps(
         niche=niche,
     )
     
+    # Apply Local AI Semantic Analysis for Uniqueness
+    uniqueness_score = 0.5
+    try:
+        from win_engine.analysis.ai_enhancement import get_ai_engine
+        if youtube_results:
+            competitor_titles = [str(item.get("title", "")) for item in youtube_results[:5]]
+            target_title = str(top_opportunities[0].get("title", "")) if top_opportunities else ""
+            if target_title and competitor_titles:
+                uniqueness_score = get_ai_engine().calculate_uniqueness(target_title, competitor_titles)
+    except Exception:
+        pass
+
     differentiation = _differentiation_plan(keyword_gaps, competition, youtube_results)
     opportunity_score = _opportunity_score(keyword_gaps, competition, top_opportunities)
     format_lock = _format_lock_in(top_opportunities, youtube_results, competition)
@@ -42,6 +54,7 @@ def analyze_opportunity_gaps(
         "entity_focus": _entity_focus(entity_signals),
         "differentiation": differentiation,
         "opportunity_score": opportunity_score,
+        "ai_uniqueness_score": uniqueness_score,
         "competitor_shadow": _competitor_shadow(youtube_results),
         "format_lock": format_lock,
         "viability_verdict": viability_verdict,

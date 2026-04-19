@@ -66,6 +66,17 @@ class PsychologyTriggersAnalyzer:
         emotional_score = self._score_triggers(title_lower, self.EMOTIONAL_TRIGGERS)
         social_proof_score = self._score_triggers(title_lower, self.SOCIAL_PROOF_TRIGGERS)
         
+        # Inject Local AI emotional scoring
+        try:
+            from win_engine.analysis.ai_enhancement import get_ai_engine
+            engine = get_ai_engine()
+            ai_emotion = engine.score_emotional_hook(title)
+            if ai_emotion.get("primary_emotion") in ["positive", "negative"]:
+                # Boost emotional score if AI detects strong sentiment
+                emotional_score = max(emotional_score, ai_emotion.get("confidence_score", 0.0))
+        except Exception:
+            pass
+
         power_word_count = sum(1 for word in self.POWER_WORDS if word in title_lower)
         
         # Calculate composite psychological strength (0-100)

@@ -14,7 +14,8 @@ from win_engine.feedback.learning_engine import build_feedback_package
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.automation_engine import build_automation_workflow
 from win_engine.generation.expansion_engine import build_binge_bridge, build_chapters, build_session_expansion
-from win_engine.analysis.nlp_titlegen import generate_dynamic_title, generate_dynamic_description
+from win_engine.analysis.nlp_titlegen import generate_dynamic_title, generate_dynamic_description, generate_title_variants, generate_seo_tags
+from win_engine.ai_enhancement import get_ai_insights, analyze_content_quality_ai
 
 
 def build_seo_package(
@@ -41,11 +42,26 @@ def build_seo_package(
     # Use NLP-powered dynamic title and description generation
     title = generate_dynamic_title(script)
     description = generate_dynamic_description(script)
-    # Optionally, still generate variants for UI display
-    title_variants = [title]
-    title_optimization = {"best_title": title, "scored_variants": [{"title": title, "score": 10.0}]}
-    tags = _build_tags(keyword_signals, script_facts, language_strategy)
-    hashtags = _build_hashtags(keyword_signals, entity_signals, script_facts, competitor_patterns, language_strategy)
+
+    # Generate multiple title variants with scores
+    title_variants_data = generate_title_variants(script, count=5)
+    title_optimization = {
+        "best_title": title_variants_data[0]["title"] if title_variants_data else title,
+        "scored_variants": [
+            {
+                "title": variant["title"],
+                "score": variant["score"],
+                "estimated_ctr": variant["estimated_ctr"],
+                "character_count": variant["character_count"]
+            }
+            for variant in title_variants_data
+        ]
+    }
+
+    # Generate SEO tags
+    seo_data = generate_seo_tags(title, description)
+    tags = seo_data["tags"]
+    hashtags = seo_data["hashtags"]
     content_audit = audit_content_package(script, title, primary_topic, secondary_topic, angle)
     opportunity_gap_analysis = analyze_opportunity_gaps(
         keyword_signals=keyword_signals,
@@ -99,12 +115,17 @@ def build_seo_package(
         internal_scorecard=history_store.internal_scorecard(),
     )
 
+    # AI-powered insights and enhancements
+    competitor_scripts = [result.get("description", "") for result in research.get("youtube_results", []) if result.get("description")]
+    ai_insights = get_ai_insights(script, competitor_scripts)
+    ai_quality_analysis = analyze_content_quality_ai(script)
+
     return {
         "title": title,
         "description": description,
         "tags": tags,
         "hashtags": hashtags,
-        "title_variants": title_variants,
+        "title_variants": title_variants_data,
         "content_angle": angle,
         "title_optimization": title_optimization,
         "content_audit": content_audit,
@@ -119,6 +140,8 @@ def build_seo_package(
         "binge_bridge": binge_bridge,
         "automation_workflow": automation_workflow,
         "feedback_package": feedback_package,
+        "ai_insights": ai_insights,
+        "ai_quality_analysis": ai_quality_analysis,
     }
 
 
