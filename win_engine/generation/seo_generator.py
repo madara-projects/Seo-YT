@@ -33,7 +33,7 @@ def generate_seo_suggestions(
         hashtags=seo_package["hashtags"],
         intent=intent,
         content_angle=seo_package["content_angle"],
-        title_variants=seo_package["title_variants"],
+        title_variants=[variant["title"] for variant in seo_package["title_variants"]],
         title_optimization=seo_package["title_optimization"],
         content_audit=seo_package["content_audit"],
         cache_policy=research_payload.get("cache_policy", "evergreen"),
