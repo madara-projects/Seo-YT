@@ -458,8 +458,7 @@ We're building this for the global creator community. We'd love your contributio
 1. **Fork** the repo
 2. **Pick a phase** from [ROADMAP.md](ROADMAP.md)
 3. **Create a feature branch**: `git checkout -b feature/amazing-idea`
-4. **Test thoroughly**: `python -m pytest`
-5. **Submit a PR** with awesome details
+4. **Submit a PR** with awesome details
 
 ### Current Needs 🙏
 

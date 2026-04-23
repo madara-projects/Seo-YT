@@ -123,8 +123,6 @@ def extract_main_entities(text: str) -> Dict[str, Any]:
         if content_type in text_lower:
             entities["topics"].append(content_type)
 
-    return entities
-
     # Timeframes
     time_patterns = ["day", "week", "month", "year", "hour", "minute"]
     for pattern in time_patterns:
@@ -257,8 +255,6 @@ def generate_realistic_youtube_title(text: str, niche: str = "general") -> str:
     elif len(title) < 30:
         # Add power word if too short
         title = f"{random.choice(POWER_WORDS)} {title}"
-
-    return title
 
     return title
 
