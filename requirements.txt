@@ -5,18 +5,8 @@ pydantic-settings==2.7.1
 requests==2.32.3
 streamlit==1.45.1
 redis==6.0.0
-spacy==3.7.2
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0.tar.gz
-
-# Testing and Quality Assurance
-pytest==7.4.0
-pytest-cov==4.1.0
-pytest-asyncio==0.21.1
-pytest-mock==3.12.0
-black==23.11.0
-isort==5.12.0
-flake8==6.1.0
-mypy==1.7.1
+spacy>=3.8.0
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz
 
 # Security and Monitoring
 sentry-sdk==1.38.0
