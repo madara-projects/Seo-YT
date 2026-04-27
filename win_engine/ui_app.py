@@ -6,6 +6,7 @@ import json
 import math
 from datetime import datetime
 from typing import Any
+import os
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -62,6 +63,10 @@ def main() -> None:
     else:
         render_settings_help(settings)
 
+@st.cache_resource
+def load_ai_engine():
+    from win_engine.analysis.ai_enhancement import get_ai_engine
+    return get_ai_engine()
 
 def init_session_state() -> None:
     defaults: dict[str, Any] = {
@@ -382,6 +387,7 @@ def render_sidebar(settings: Any) -> tuple[str, dict[str, Any]]:
         )
 
         st.markdown("### Creator Controls")
+        ai_mode = st.selectbox("Select AI Mode", ["Auto (Recommended)", "Local AI (Ollama)", "Cloud AI (OpenAI)"], index=0)
         language_mode = st.selectbox("Language", ["Auto-detect", "English", "Tamil", "Gen-Z Slang"], index=0)
         region = st.selectbox("Region", ["Global", "India", "Tamil Nadu", "Sri Lanka", "Gulf"], index=0)
         audience_type = st.selectbox("Audience", ["General", "Local", "Diaspora", "Global"], index=0)
@@ -436,6 +442,7 @@ def render_sidebar(settings: Any) -> tuple[str, dict[str, Any]]:
         )
 
     ui = {
+        "ai_mode": ai_mode,
         "language_mode": language_mode,
         "region": region,
         "audience_type": audience_type,
@@ -533,29 +540,14 @@ def render_optimizer(ui: dict[str, Any]) -> None:
 
 
 def render_optimizer_results(result: dict[str, Any], ui: dict[str, Any]) -> None:
-    tabs = st.tabs(["Overview", "Titles", "Metadata", "Research", "Brain"])
-
-    with tabs[0]:
-        render_overview_tab(result)
-
-    with tabs[1]:
-        render_titles_tab(result)
-
-    with tabs[2]:
-        render_metadata_tab(result, ui)
-
-    with tabs[3]:
-        render_research_tab(result)
-
-    with tabs[4]:
-        render_brain_tab(result, ui["show_raw_data"])
-
-
-def render_overview_tab(result: dict[str, Any]) -> None:
     verdict = result.get("opportunity_gap_analysis", {}).get("viability_verdict", {})
     competition = result.get("opportunity_gap_analysis", {}).get("competition", {})
     ctr_prediction = result.get("ctr_prediction", {})
     timing = result.get("upload_timing", {})
+    viral_pkg = result.get("viral_package", {})
+
+    st.markdown("---")
+    st.markdown('<div class="section-title">🚀 Growth Insights & Verdict</div>', unsafe_allow_html=True)
 
     metrics = st.columns(4)
     metrics[0].metric(
@@ -569,33 +561,121 @@ def render_overview_tab(result: dict[str, Any]) -> None:
 
     st.markdown(
         f"""
-        <div class="title-block">
-          <div class="title-label">Primary Title</div>
-          <div class="title-main">{html.escape(str(result.get('title', 'Untitled')))}</div>
-          <div class="section-copy">{html.escape(str(verdict.get('summary', 'No summary available yet.')))}</div>
+        <div class="callout" style="margin-bottom: 1.5rem;">
+          <strong>Strategic Verdict:</strong> {html.escape(str(verdict.get('summary', 'No summary available yet.')))}
         </div>
         """,
         unsafe_allow_html=True,
     )
-    copy_button("Copy Primary Title", str(result.get("title", "")), "copy_primary_title")
 
-    summary_cols = st.columns([1.3, 1])
-    with summary_cols[0]:
-        st.markdown('<div class="section-title">Packaging Readout</div>', unsafe_allow_html=True)
-        st.markdown(
-            f"""
-            <div class="callout">
-              Timing: {html.escape(str(timing.get('recommendation', 'No timing signal yet.')))}<br>
-              Thumbnail: {html.escape(str(result.get('thumbnail_strategy', {}).get('recommendation', 'No thumbnail note.')))}<br>
-              Pacing: {html.escape(str(result.get('pacing_analysis', {}).get('recommendation', 'No pacing note.')))}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with summary_cols[1]:
-        st.markdown('<div class="section-title">Retention Notes</div>', unsafe_allow_html=True)
+    st.markdown("---")
+    
+    head_col1, head_col2 = st.columns([4, 1])
+    with head_col1:
+        st.markdown('<div class="section-title">🔥 Viral Assets</div>', unsafe_allow_html=True)
+    with head_col2:
+        if st.button("🔄 Regenerate", key="regen_viral_assets", use_container_width=True):
+            with st.spinner("Regenerating..."):
+                try:
+                    engine = load_ai_engine()
+                    new_pkg = engine.generate_viral_package(st.session_state.script_draft)
+                    st.session_state.result["viral_package"] = new_pkg
+                    st.session_state.result["title"] = new_pkg.get("title", st.session_state.result.get("title"))
+                    st.session_state.result["title_variants"] = new_pkg.get("alt_titles", [])
+                    st.experimental_rerun()
+                except Exception:
+                    pass
+
+    viral_col1, viral_col2 = st.columns([1.5, 1], gap="large")
+    
+    with viral_col1:
+        st.markdown("**Best Title**")
+        best_title = str(result.get("title", ""))
+        st.markdown(f'<div class="title-block"><div class="title-main" style="font-size: 1.6rem; color: #ff6b35;">{html.escape(best_title)}</div></div>', unsafe_allow_html=True)
+        copy_button("Copy Best Title", best_title, "copy_best_title_viral")
+        
+        st.markdown("<br>**Alternate Titles**", unsafe_allow_html=True)
+        alt_titles = viral_pkg.get("alt_titles", []) or result.get("title_variants", [])
+        for i, alt in enumerate(alt_titles[:3]):
+            st.code(alt, language=None)
+            copy_button(f"Copy Alt {i+1}", alt, f"copy_alt_{i}")
+            
+    with viral_col2:
+        st.markdown("**Thumbnail Text**")
+        thumb_text = viral_pkg.get("thumbnail_text", "BIG MISTAKE")
+        st.markdown(f'<div class="hero-shell" style="text-align:center; padding: 2rem; background: linear-gradient(135deg, #111d32, #08101b); border: 2px solid #ff6b35;"><h2 style="font-size:2.5rem; color:#f8fafc; margin:0; text-transform:uppercase; letter-spacing: 2px;">{html.escape(thumb_text)}</h2></div>', unsafe_allow_html=True)
+        copy_button("Copy Thumbnail Text", thumb_text, "copy_thumb_text")
+        
+        st.markdown("<br>**Hook (First 5 Seconds)**", unsafe_allow_html=True)
+        hook_text = viral_pkg.get("hook", "You're doing this WRONG...")
+        st.info(hook_text)
+        copy_button("Copy Hook", hook_text, "copy_hook")
+        
+        psychology = result.get("psychology_analysis", {}).get("title_analysis", {})
+        if psychology:
+            st.markdown("<br>**Why this works**", unsafe_allow_html=True)
+            components = psychology.get("components", {})
+            score = psychology.get("composite_score", 0)
+            score_val = max(0.0, min(float(score) / 100.0, 1.0))
+            st.progress(score_val, text=f"Title Score: {score}/100")
+            st.caption(f"🎯 **Curiosity:** {components.get('curiosity_gap', {}).get('level', '')} | ❤️ **Emotion:** {components.get('emotional_resonance', {}).get('level', '')}")
+
+    st.markdown("---")
+
+    col1, col2 = st.columns([1.5, 1], gap="large")
+
+    with col1:
+        st.markdown('<div class="section-title">📝 Core SEO</div>', unsafe_allow_html=True)
+        
+        st.markdown("**Optimized Description**")
+        description = str(result.get("description", ""))
+        st.code(description, language=None)
+        copy_button("Copy Description", description, "copy_description")
+
+        st.markdown('<div class="section-title" style="margin-top: 1rem;">🎯 Content Strategy Notes</div>', unsafe_allow_html=True)
+        st.write(f"- **Thumbnail:** {result.get('thumbnail_strategy', {}).get('recommendation', 'No thumbnail note.')}")
+        st.write(f"- **Timing:** {timing.get('recommendation', 'No timing signal yet.')}")
         for note in result.get("content_audit", {}).get("retention_risk", {}).get("notes", []):
             st.write(f"- {note}")
+
+    with col2:
+        st.markdown('<div class="section-title">🏷️ Discovery & Keywords</div>', unsafe_allow_html=True)
+        
+        st.markdown("**Target Topics**")
+        keywords = [str(item.get("keyword", "")) for item in result.get("keyword_signals", [])[:7]]
+        if keywords:
+            st.write(" • ".join(keywords))
+        else:
+            st.caption("No topics detected.")
+
+        st.markdown("**Tags**")
+        tags = ", ".join(build_tags(result))
+        st.code(tags, language=None)
+        copy_button("Copy Tags", tags, "copy_tags")
+        
+        if ui.get("include_hashtags"):
+            st.markdown("**Hashtags**")
+            hashtags = " ".join([tag for tag in result.get("hashtags", []) if tag])
+            st.code(hashtags, language=None)
+            copy_button("Copy Hashtags", hashtags, "copy_hashtags")
+            
+        st.markdown("**Chapters**")
+        chapters = result.get("chapters", [])
+        if chapters:
+            st.dataframe(chapters, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No chapters generated.")
+
+    st.markdown("---")
+
+    with st.expander("📚 View Title Variants & Psychology"):
+        render_titles_tab(result)
+        
+    with st.expander("🔍 View Competitor Research"):
+        render_research_tab(result)
+        
+    with st.expander("🧠 View Brain v2.0 Learning Insights"):
+        render_brain_tab(result, ui.get("show_raw_data", False))
 
 
 def render_titles_tab(result: dict[str, Any]) -> None:
@@ -635,39 +715,6 @@ def render_titles_tab(result: dict[str, Any]) -> None:
     st.write(f"- Similar videos: {competitor_shadow.get('similar_video_count', 0)}")
     st.write(f"- Dominant title pattern: {competitor_shadow.get('dominant_title_pattern', 'unknown')}")
     st.write(f"- Differentiation: {competitor_shadow.get('recommended_differentiation', 'No note yet.')}")
-
-
-def render_metadata_tab(result: dict[str, Any], ui: dict[str, Any]) -> None:
-    metadata_cols = st.columns([1.4, 1])
-
-    with metadata_cols[0]:
-        st.markdown('<div class="section-title">Description</div>', unsafe_allow_html=True)
-        st.code(str(result.get("description", "")), language=None)
-        copy_button("Copy Description", str(result.get("description", "")), "copy_description")
-
-        st.markdown('<div class="section-title">Chapters</div>', unsafe_allow_html=True)
-        chapters = result.get("chapters", [])
-        if chapters:
-            st.dataframe(chapters, use_container_width=True, hide_index=True)
-        else:
-            st.caption("No chapters generated yet.")
-
-    with metadata_cols[1]:
-        st.markdown('<div class="section-title">Tags</div>', unsafe_allow_html=True)
-        tags = ", ".join(build_tags(result))
-        st.code(tags, language=None)
-        copy_button("Copy Tags", tags, "copy_tags")
-
-        if ui["include_hashtags"]:
-            st.markdown('<div class="section-title">Hashtags</div>', unsafe_allow_html=True)
-            hashtags = " ".join([tag for tag in result.get("hashtags", []) if tag])
-            st.code(hashtags, language=None)
-            copy_button("Copy Hashtags", hashtags, "copy_hashtags")
-
-        st.markdown('<div class="section-title">Language & Thumbnail Strategy</div>', unsafe_allow_html=True)
-        st.write(f"- Packaging style: {result.get('language_strategy', {}).get('packaging_style', 'unknown')}")
-        st.write(f"- Language note: {result.get('language_strategy', {}).get('recommendation', 'No note yet.')}")
-        st.write(f"- Thumbnail note: {result.get('thumbnail_strategy', {}).get('recommendation', 'No note yet.')}")
 
 
 def render_research_tab(result: dict[str, Any]) -> None:
@@ -954,6 +1001,9 @@ def render_settings_help(settings: Any) -> None:
 
 
 def run_analysis(script: str, ui: dict[str, Any], detected_language: str | None) -> None:
+    # Inject AI Mode into environment for backend engines to consume
+    os.environ["WIN_ENGINE_AI_MODE"] = ui.get("ai_mode", "Auto (Recommended)")
+    
     with st.status("Running Win-Engine pipeline...", expanded=True) as status:
         settings = get_settings()
         research = ResearchService(settings)
@@ -970,6 +1020,16 @@ def run_analysis(script: str, ui: dict[str, Any], detected_language: str | None)
                 "audience_type": ui["audience_type"],
             },
         )
+        
+        status.write("Generating AI Viral Package...")
+        try:
+            engine = load_ai_engine()
+            viral_pkg = engine.generate_viral_package(script)
+            result["viral_package"] = viral_pkg
+            result["title"] = viral_pkg.get("title", result.get("title"))
+            result["title_variants"] = viral_pkg.get("alt_titles", result.get("title_variants", []))
+        except Exception:
+            pass
 
         if not ui["include_hashtags"]:
             result["hashtags"] = []
