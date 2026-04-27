@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m compileall -q win_engine app.py streamlit_app.py)",
+      "Bash(python -c \"import win_engine.api.app as m; print\\('api.app OK ->', getattr\\(m,'create_app',None\\)\\)\")",
+      "Bash(python -c \"import win_engine.ui_app as m; print\\('ui_app OK ->', hasattr\\(m,'main'\\)\\)\")",
+      "Bash(python -c \"from win_engine.api.app import create_app; a=create_app\\(\\); print\\('routes:',[r.path for r in a.routes][:25]\\)\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

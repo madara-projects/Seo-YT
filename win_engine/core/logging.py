@@ -135,33 +135,4 @@ def performance_logger(operation: str, threshold_ms: float = 1000.0):
 
 def get_logger(name: str) -> structlog.BoundLogger:
     """Get a structured logger instance."""
-    return structlog.get_logger(name)from __future__ import annotations
-
-import logging
-from logging.config import dictConfig
-
-
-def configure_logging() -> None:
-    """Configure application-wide logging."""
-
-    dictConfig(
-        {
-            "version": 1,
-            "disable_existing_loggers": False,
-            "formatters": {
-                "standard": {
-                    "format": "%(asctime)s %(levelname)s %(name)s %(message)s"
-                }
-            },
-            "handlers": {
-                "console": {
-                    "class": "logging.StreamHandler",
-                    "formatter": "standard",
-                    "level": "INFO",
-                }
-            },
-            "root": {"handlers": ["console"], "level": "INFO"},
-        }
-    )
-
-    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    return structlog.get_logger(name)
