@@ -7,3 +7,6 @@ __pycache__/
 *.pyd
 win_engine.db
 .DS_Store
+jenkins_home/
+Dockerfile.jenkins
+setup-jenkins.ps1
