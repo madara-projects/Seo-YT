@@ -1,0 +1,19 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "seo-app.name" . }}
+  labels: {{- include "seo-app.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "seo-app.name" . }}
+  pollingInterval: 15
+  cooldownPeriod: 120
+  minReplicaCount: {{ .Values.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.autoscaling.maxReplicas }}
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "{{ .Values.autoscaling.cpuTargetPercent }}"
+{{- end }}

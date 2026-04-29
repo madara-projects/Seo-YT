@@ -1,0 +1,33 @@
+{{- if .Values.apisix.enabled }}
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: {{ include "seo-app.name" . }}
+  labels: {{- include "seo-app.labels" . | nindent 4 }}
+spec:
+  http:
+    - name: api
+      match:
+        hosts:
+          - {{ .Values.apisix.host | quote }}
+        paths:
+          - "/api/*"
+          - "/health"
+          - "/ready"
+          - "/meta"
+          - "/diagnostics"
+          - "/"
+      backends:
+        - serviceName: {{ include "seo-app.name" . }}
+          servicePort: {{ .Values.service.port }}
+      plugins:
+        - name: limit-req
+          enable: true
+          config:
+            rate: 50
+            burst: 25
+            key: remote_addr
+            rejected_code: 429
+        - name: prometheus
+          enable: true
+{{- end }}
