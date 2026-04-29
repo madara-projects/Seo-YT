@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seo-app
+  namespace: seo-app
+  labels:
+    app: seo-app
+    app.kubernetes.io/name: seo-app
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: seo-app
+  template:
+    metadata:
+      labels:
+        app: seo-app
+        app.kubernetes.io/name: seo-app
+        app.kubernetes.io/component: api
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: seo-app
+          # Built locally and loaded into Minikube via:
+          #   docker build -t seo-app:ollama .
+          #   minikube image load seo-app:ollama
+          image: seo-app:ollama
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8000"
+            - name: WIN_ENGINE_DATABASE_PATH
+              value: "/app/win_engine.db"
+            # Reach Ollama running on the Windows host (Docker Desktop).
+            # If you deploy Ollama as a k8s Service, use that DNS instead.
+            - name: OLLAMA_BASE_URL
+              value: "http://host.docker.internal:11434"
+            - name: OLLAMA_MODEL
+              value: "mistral"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 10   # 30 s budget — app starts in <1 s
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: false
+            capabilities:
+              drop: ["ALL"]
+      restartPolicy: Always
