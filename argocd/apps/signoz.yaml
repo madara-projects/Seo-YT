@@ -10,10 +10,13 @@ spec:
   source:
     repoURL: https://charts.signoz.io
     chart: signoz
-    targetRevision: 0.55.0
+    targetRevision: 0.117.1
     helm:
       releaseName: signoz
       values: |
+        # SigNoz chart 0.55.0 was retired from the chart index; 0.117.x is
+        # current stable. Newer versions don't depend on the deprecated
+        # Bitnami images so no overrides are needed.
         clickhouse:
           persistence:
             size: 10Gi
@@ -22,13 +25,6 @@ spec:
         frontend:
           service:
             type: ClusterIP
-        # Bitnami removed pinned legacy tags from docker.io/bitnami/* in
-        # Aug-2025; the free mirror lives at docker.io/bitnamilegacy/*.
-        zookeeper:
-          image:
-            registry: docker.io
-            repository: bitnamilegacy/zookeeper
-            tag: 3.7.1
   destination:
     server: https://kubernetes.default.svc
     namespace: signoz
