@@ -27,6 +27,13 @@ spec:
           enabled: true
           service:
             type: ClusterIP
+        # Bitnami removed pinned legacy tags from docker.io/bitnami/* in
+        # Aug-2025; the free mirror lives at docker.io/bitnamilegacy/*.
+        etcd:
+          image:
+            registry: docker.io
+            repository: bitnamilegacy/etcd
+            tag: 3.5.10
   destination:
     server: https://kubernetes.default.svc
     namespace: apisix
