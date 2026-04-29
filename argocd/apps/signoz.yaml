@@ -22,6 +22,13 @@ spec:
         frontend:
           service:
             type: ClusterIP
+        # Bitnami removed pinned legacy tags from docker.io/bitnami/* in
+        # Aug-2025; the free mirror lives at docker.io/bitnamilegacy/*.
+        zookeeper:
+          image:
+            registry: docker.io
+            repository: bitnamilegacy/zookeeper
+            tag: 3.7.1
   destination:
     server: https://kubernetes.default.svc
     namespace: signoz
