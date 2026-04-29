@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://helm.releases.hashicorp.com
+    chart: vault
+    targetRevision: 0.28.1
+    helm:
+      releaseName: vault
+      values: |
+        # LOCAL DEV ONLY — Vault runs in dev mode (in-memory storage,
+        # well-known root token). DO NOT use this configuration in production.
+        # Real secrets are written via `vault kv put` after install
+        # (see docs/vault-bootstrap.md), not committed here.
+        server:
+          dev:
+            enabled: true
+            devRootToken: "root"
+        injector:
+          enabled: true
+        ui:
+          enabled: true
+          serviceType: ClusterIP
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
