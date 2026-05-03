@@ -4,9 +4,11 @@ from typing import Any, Dict
 
 from win_engine.analysis.intent_classifier import classify_intent
 from win_engine.analysis.topic_lock import (
+    _is_junk_tag,
     expand_idea_to_script,
     extract_main_topic,
     fallback_keyword_signals,
+    force_hashtags,
     force_topic_in_description,
     force_topic_in_tags,
     force_topic_in_title,
@@ -57,12 +59,31 @@ def generate_seo_suggestions(
     seo_package = build_seo_package(intent, safe_script, research_payload, history_store)
 
     # ---- Topic-lock post-process ---------------------------------------
-    locked_title = force_topic_in_title(seo_package["title"], main_topic, category)   # Fix 1 + 5
+    locked_title = force_topic_in_title(seo_package["title"], main_topic, category)
     locked_description = force_topic_in_description(seo_package["description"], main_topic)
     locked_tags = force_topic_in_tags(seo_package["tags"], main_topic, category)
+    locked_hashtags = force_hashtags(main_topic, category)
     locked_variants = [
-        force_topic_in_title(variant["title"], main_topic, category)
-        for variant in seo_package["title_variants"]
+        force_topic_in_title(v["title"], main_topic, category, variant_index=i)
+        for i, v in enumerate(seo_package["title_variants"])
+    ]
+
+    # Patch title_optimization so best_title + scored_variants are also topic-locked.
+    title_opt = dict(seo_package.get("title_optimization") or {})
+    if title_opt.get("best_title"):
+        title_opt["best_title"] = force_topic_in_title(
+            title_opt["best_title"], main_topic, category)
+    sv = list(title_opt.get("scored_variants") or [])
+    for i, item in enumerate(sv):
+        if isinstance(item, dict) and item.get("title"):
+            item["title"] = force_topic_in_title(
+                item["title"], main_topic, category, variant_index=i)
+    title_opt["scored_variants"] = sv
+
+    # Strip junk from any keyword_signals that came back from research.
+    locked_signals = [
+        s for s in (research_payload.get("keyword_signals") or [])
+        if not _is_junk_tag(str(s.get("keyword", "")))
     ]
     # --------------------------------------------------------------------
 
@@ -70,17 +91,17 @@ def generate_seo_suggestions(
         title=locked_title,
         description=locked_description,
         tags=locked_tags,
-        hashtags=seo_package["hashtags"],
+        hashtags=locked_hashtags,
         intent=intent,
         content_angle=seo_package["content_angle"],
         title_variants=locked_variants,
-        title_optimization=seo_package["title_optimization"],
+        title_optimization=title_opt,
         content_audit=seo_package["content_audit"],
         cache_policy=research_payload.get("cache_policy", "evergreen"),
         research_warnings=research_payload.get("research_warnings", []),
         youtube_results=research_payload.get("youtube_results", []),
         top_opportunities=research_payload.get("top_opportunities", []),
-        keyword_signals=research_payload.get("keyword_signals", []),
+        keyword_signals=locked_signals,
         entity_signals=research_payload.get("entity_signals", []),
         upload_timing=research_payload.get("upload_timing", {}),
         thumbnail_intelligence=research_payload.get("thumbnail_intelligence", {}),

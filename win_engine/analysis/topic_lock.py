@@ -91,21 +91,36 @@ CATEGORY_FALLBACK_KEYWORDS: dict[str, List[str]] = {
 # Fix 6: Risk filter — risky words → safer alternatives
 # ---------------------------------------------------------------------------
 RISK_TERMS: dict[str, str] = {
-    # multi-word first (matched before single-word equivalents)
-    "free fire hack": "free fire tricks",
-    "unlimited diamonds": "earn diamonds",
-    "unlimited money": "money tips",
-    "free diamonds": "earn diamonds",
-    "free diamond": "earn diamonds",
-    "mod apk": "official method",
-    # single-word
-    "hack": "tricks",
-    "hacks": "tricks",
-    "hacking": "smart methods",
-    "cheat": "trick",
-    "cheats": "tricks",
-    "cheating": "smart play",
-    "scam": "real methods",
+    # phrase priority — longest match wins (sorted by length at apply-time)
+    "unlimited free diamonds": "ways to earn diamonds",
+    "unlimited free diamond":  "ways to earn diamonds",
+    "free fire hack":          "free fire tricks",
+    "unlimited diamonds":      "earn diamonds",
+    "unlimited money":         "money tips",
+    "free diamonds":           "earn diamonds",
+    "free diamond":            "earn diamonds",
+    "mod apk":                 "official method",
+    "hack":                    "tricks",
+    "hacks":                   "tricks",
+    "hacking":                 "smart methods",
+    "cheat":                   "trick",
+    "cheats":                  "tricks",
+    "cheating":                "smart play",
+    "scam":                    "real methods",
+}
+
+# Junk tag stop-list — drop these from any tag/hashtag output.
+STOP_TAGS: set[str] = {
+    "video", "additional", "step", "implementation", "valuable",
+    "question", "introduction", "resource", "link", "today",
+    "depth", "scratch", "analysis", "guide", "tip", "tips",
+    "solution", "timestamp", "mistake", "comprehension",
+    "understanding", "fire", "comment", "comments", "content",
+    "actionable", "secret", "method", "methods", "thing", "things",
+    "way", "ways", "stuff", "patreon", "subscribe", "like",
+    "description", "descriptions", "result", "results", "free",
+    "channel", "follow", "share", "watch", "click", "below",
+    "common", "general", "basic", "simple", "easy",
 }
 
 # ---------------------------------------------------------------------------
@@ -113,10 +128,10 @@ RISK_TERMS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 TITLE_PATTERNS: List[str] = [
     "How to {topic} (2026 Guide)",
-    "{topic}: What Actually Works",
-    "{topic} - Real Methods (No Scam)",
-    "{topic} Tips That Actually Work in 2026",
-    "Complete {topic} Guide (Beginner Friendly)",
+    "{topic}: Real Methods That Work",
+    "{topic} Tips & Tricks (No Scam)",
+    "Complete {topic} Guide for Beginners",
+    "How I Improved {topic} (Step-by-Step)",
 ]
 
 _STOPWORDS = {
@@ -144,14 +159,19 @@ def normalize_risk_terms(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Fix 2 — category inference
 # ---------------------------------------------------------------------------
+def _whole_word_in(term: str, lowered: str) -> bool:
+    """Word-boundary check so 'tax' doesn't match 'syntax', 'app' doesn't match 'apply'."""
+    return re.search(r"\b" + re.escape(term) + r"\b", lowered) is not None
+
+
 def infer_category(text: str, hint: str | None = None) -> str:
-    """Infer category from text via keyword matching. Honors explicit hint."""
+    """Infer category from text via word-boundary keyword matching."""
     if hint and hint.lower() in CATEGORY_KEYWORDS:
         return hint.lower()
     lowered = (text or "").lower()
     if not lowered:
         return "general"
-    scores = {cat: sum(1 for term in terms if term in lowered)
+    scores = {cat: sum(1 for term in terms if _whole_word_in(term, lowered))
               for cat, terms in CATEGORY_KEYWORDS.items()}
     best_cat, best_score = max(scores.items(), key=lambda kv: kv[1])
     return best_cat if best_score > 0 else "general"
@@ -172,7 +192,7 @@ def extract_main_topic(text: str) -> str:
         term
         for terms in CATEGORY_KEYWORDS.values()
         for term in terms
-        if term in lowered and len(term) > 3
+        if _whole_word_in(term, lowered) and len(term) > 3
     ]
     if matches:
         return max(matches, key=len)
@@ -209,17 +229,23 @@ def expand_idea_to_script(idea: str) -> str:
 # ---------------------------------------------------------------------------
 # Fix 3 — keyword fallback when YouTube API has no data
 # ---------------------------------------------------------------------------
+def _is_junk_tag(tag: str) -> bool:
+    """A tag is junk if it contains weird chars (#, |, etc.), is empty,
+    or every meaningful word is in STOP_TAGS."""
+    if not tag:
+        return True
+    if re.search(r"[^A-Za-z0-9\s\-]", tag):  # only alnum + space + dash allowed
+        return True
+    words = [w for w in re.findall(r"[A-Za-z]+", tag.lower()) if w]
+    return not words or all(w in STOP_TAGS for w in words)
+
+
 def fallback_keyword_signals(category: str) -> list[dict[str, object]]:
     seeds = CATEGORY_FALLBACK_KEYWORDS.get(category, CATEGORY_FALLBACK_KEYWORDS["general"])
     return [
-        {
-            "keyword": kw,
-            "mentions": 1,
-            "strength": "medium",
-            "region_relevant": False,
-            "source": "fallback",
-        }
-        for kw in seeds
+        {"keyword": kw, "mentions": 1, "strength": "medium",
+         "region_relevant": False, "source": "fallback"}
+        for kw in seeds if not _is_junk_tag(kw)
     ]
 
 
@@ -232,12 +258,24 @@ def title_contains_topic(title: str, topic: str) -> bool:
     return topic.lower() in (title or "").lower()
 
 
-def force_topic_in_title(title: str, topic: str, category: str = "general") -> str:
-    """Regenerate the title via a safe rule-based pattern if the topic is absent."""
-    if title_contains_topic(title, topic):
+def _topic_in_head(title: str, topic: str, max_words: int = 4) -> bool:
+    """Keyword-first check: topic appears within the first `max_words` of the title."""
+    if not topic:
+        return True
+    head = " ".join((title or "").split()[:max_words]).lower()
+    return topic.lower() in head
+
+
+def force_topic_in_title(title: str, topic: str, category: str = "general",
+                         variant_index: int = 0) -> str:
+    """Regenerate the title via a safe pattern if the topic is missing OR buried.
+    `variant_index` selects one of the 5 patterns so 5 variants come out unique.
+    """
+    if title and _topic_in_head(title, topic):
         return title
     pretty = topic.strip().title() if topic else f"{category.title()} Guide"
-    return TITLE_PATTERNS[0].format(topic=pretty)
+    pattern = TITLE_PATTERNS[variant_index % len(TITLE_PATTERNS)]
+    return pattern.format(topic=pretty)
 
 
 def force_topic_in_description(description: str, topic: str) -> str:
@@ -246,15 +284,49 @@ def force_topic_in_description(description: str, topic: str) -> str:
     return f"{topic.strip().title()} - complete guide. " + (description or "")
 
 
-def force_topic_in_tags(tags: list[str], topic: str, category: str) -> list[str]:
-    """Ensure the main topic and category fallback keywords appear as tags."""
-    out: list[str] = list(tags or [])
-    lowered = {t.lower() for t in out}
-    if topic and topic.lower() not in lowered:
-        out.insert(0, topic.lower())
-        lowered.add(topic.lower())
-    for kw in CATEGORY_FALLBACK_KEYWORDS.get(category, [])[:3]:
-        if kw.lower() not in lowered:
-            out.append(kw)
-            lowered.add(kw.lower())
-    return out
+def force_topic_in_tags(tags: list[str], topic: str, category: str,
+                        max_tags: int = 12) -> list[str]:
+    """Drop junk tags, ensure topic is first, top up with category fallbacks."""
+    out: list[str] = []
+    seen: set[str] = set()
+    if topic:
+        out.append(topic.lower())
+        seen.add(topic.lower())
+    for raw in tags or []:
+        t = (raw or "").strip().lower()
+        if not t or t in seen or _is_junk_tag(t):
+            continue
+        out.append(t)
+        seen.add(t)
+    for kw in CATEGORY_FALLBACK_KEYWORDS.get(category, []):
+        kwl = kw.lower()
+        if len(out) >= max_tags:
+            break
+        if kwl not in seen and not _is_junk_tag(kwl):
+            out.append(kwl)
+            seen.add(kwl)
+    return out[:max_tags]
+
+
+def force_hashtags(topic: str, category: str, count: int = 3) -> list[str]:
+    """Generate exactly `count` SEO hashtags, derived from topic + category."""
+    def _slug(s: str) -> str:
+        parts = re.findall(r"[A-Za-z0-9]+", s)
+        return "#" + "".join(p.title() for p in parts) if parts else ""
+    out: list[str] = []
+    seen: set[str] = set()
+    if topic:
+        h = _slug(topic)
+        if h and h.lower() not in seen:
+            out.append(h)
+            seen.add(h.lower())
+    for kw in CATEGORY_FALLBACK_KEYWORDS.get(category, []):
+        if len(out) >= count:
+            break
+        if _is_junk_tag(kw):
+            continue
+        h = _slug(kw)
+        if h and h.lower() not in seen:
+            out.append(h)
+            seen.add(h.lower())
+    return out[:count]
