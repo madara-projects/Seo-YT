@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/name: seo-app
     app.kubernetes.io/component: api
 spec:
-  replicas: 3
+  replicas: 1
   revisionHistoryLimit: 5
   strategy:
     type: RollingUpdate
