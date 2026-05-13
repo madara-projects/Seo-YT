@@ -59,10 +59,13 @@ def generate_seo_suggestions(
     seo_package = build_seo_package(intent, safe_script, research_payload, history_store)
 
     # ---- Topic-lock post-process ---------------------------------------
+    # force_topic_in_title now only regenerates if the LLM title is broken
+    # (empty, < 10 chars, or all-junk). LLM output is preserved otherwise.
+    # force_hashtags accepts the LLM's hashtags and only tops up if missing.
     locked_title = force_topic_in_title(seo_package["title"], main_topic, category)
     locked_description = force_topic_in_description(seo_package["description"], main_topic)
     locked_tags = force_topic_in_tags(seo_package["tags"], main_topic, category)
-    locked_hashtags = force_hashtags(main_topic, category)
+    locked_hashtags = force_hashtags(seo_package.get("hashtags") or [], main_topic, category)
     locked_variants = [
         force_topic_in_title(v["title"], main_topic, category, variant_index=i)
         for i, v in enumerate(seo_package["title_variants"])

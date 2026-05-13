@@ -266,13 +266,31 @@ def _topic_in_head(title: str, topic: str, max_words: int = 4) -> bool:
     return topic.lower() in head
 
 
+def _title_is_broken(title: str) -> bool:
+    """A title is broken only if empty, too short, or made entirely of junk
+    stopwords. Punctuation like '()' ':' '?' is fine — common in real titles."""
+    if not title:
+        return True
+    cleaned = title.strip()
+    if len(cleaned) < 10:
+        return True
+    words = [w for w in re.findall(r"[A-Za-z]+", cleaned.lower()) if len(w) > 2]
+    if not words:
+        return True
+    return all(w in STOP_TAGS for w in words)
+
+
 def force_topic_in_title(title: str, topic: str, category: str = "general",
                          variant_index: int = 0) -> str:
-    """Regenerate the title via a safe pattern if the topic is missing OR buried.
-    `variant_index` selects one of the 5 patterns so 5 variants come out unique.
+    """Regenerate ONLY when the LLM title is missing or unusable.
+
+    Previous version regenerated whenever the topic wasn't in the first 4 words,
+    which threw away perfectly good LLM titles. We now respect the LLM output
+    unless the title is structurally broken.
     """
-    if title and _topic_in_head(title, topic):
-        return title
+    cleaned = (title or "").strip()
+    if not _title_is_broken(cleaned):
+        return cleaned
     pretty = topic.strip().title() if topic else f"{category.title()} Guide"
     pattern = TITLE_PATTERNS[variant_index % len(TITLE_PATTERNS)]
     return pattern.format(topic=pretty)
@@ -308,18 +326,45 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
     return out[:max_tags]
 
 
-def force_hashtags(topic: str, category: str, count: int = 3) -> list[str]:
-    """Generate exactly `count` SEO hashtags, derived from topic + category."""
+def force_hashtags(existing: list[str] | None, topic: str, category: str,
+                   count: int = 3) -> list[str]:
+    """Prefer LLM-generated hashtags; only top up / regenerate when missing.
+
+    Earlier version ignored `existing` entirely and rebuilt hashtags from a
+    category template, which threw away Ollama output. Now: keep the LLM's
+    hashtags if they are non-junk, only fill the gap from topic + category
+    fallbacks when the LLM returned nothing usable.
+    """
     def _slug(s: str) -> str:
         parts = re.findall(r"[A-Za-z0-9]+", s)
         return "#" + "".join(p.title() for p in parts) if parts else ""
+
     out: list[str] = []
     seen: set[str] = set()
+
+    for raw in existing or []:
+        if not raw:
+            continue
+        tag = raw.strip()
+        if not tag.startswith("#"):
+            tag = "#" + tag.lstrip("#")
+        body = tag.lstrip("#")
+        if not body or _is_junk_tag(body):
+            continue
+        key = tag.lower()
+        if key in seen:
+            continue
+        out.append(tag)
+        seen.add(key)
+        if len(out) >= count:
+            return out[:count]
+
     if topic:
         h = _slug(topic)
         if h and h.lower() not in seen:
             out.append(h)
             seen.add(h.lower())
+
     for kw in CATEGORY_FALLBACK_KEYWORDS.get(category, []):
         if len(out) >= count:
             break
@@ -329,4 +374,5 @@ def force_hashtags(topic: str, category: str, count: int = 3) -> list[str]:
         if h and h.lower() not in seen:
             out.append(h)
             seen.add(h.lower())
+
     return out[:count]
