@@ -17,19 +17,6 @@ jenkins_home/
 Dockerfile.jenkins
 setup-jenkins.ps1
 
-# Local kubeconfig / certs / keys
-kubeconfig
-*.kubeconfig
-*.pem
-*.key
-*.crt
-id_rsa*
-id_ed25519*
-
-# Local Helm artifacts
-charts/
-*.tgz
-
 # Editor / OS / IDE state
 .vscode/
 .idea/
