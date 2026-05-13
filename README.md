@@ -1,228 +1,98 @@
-# 🎬 YouTube Win-Engine OS  
-## *Enterprise-Grade YouTube SEO for Every Creator*
+# YouTube SEO Analyzer
 
-<div align="center">
+A local-first tool that turns a video script (or even a one-line idea) into a
+ready-to-paste YouTube SEO package: title, 5 title variants, description,
+tags, hashtags, and supporting strategy data.
 
-**Stop guessing. Start winning.** 🚀  
+Built for personal use — single user, a few videos per day.
 
-Transform your video scripts into optimized YouTube packages with **AI-powered SEO intelligence**
+## What it gives you
 
-<br>
+For any video idea you type in:
 
-![Architecture](https://img.shields.io/badge/Architecture-Modular-orange)
-![AI System](https://img.shields.io/badge/AI-Multi--Provider-blue)
-![Performance](https://img.shields.io/badge/Latency-~1.8s-brightgreen)
-![Reliability](https://img.shields.io/badge/Failover-Enabled-success)
+- **Title** (SEO + CTR optimized) + 4 alternates in different styles
+- **Description** (120–180 words, keyword-front-loaded, with CTA)
+- **Tags** (10, cleaned of junk filler)
+- **Hashtags** (3, topic-derived)
+- Supporting analysis: intent, content audit, competitor gap, pacing,
+  thumbnail strategy, chapter outline, A/B test pack
 
-<br>
+## How it works
 
-> **12 Production-Ready Phases** | **Modular AI System (v2)** | **Optimized for Speed & Scale**
-
-</div>
-
----
-
-## ⚡ The Challenge
-
-You have a great video idea, but:
-- ❌ Is this topic saturated?
-- ❌ What title actually gets clicks?
-- ❌ Should you even make this video?
-
-**Win-Engine eliminates guesswork** with intelligent automation and real data.
-
----
-
-## 🧠 AI Architecture (v2) — NEW
-
-Win-Engine is now built on a **modular, provider-agnostic AI system**
-
-### 🔌 Multi-Provider Strategy Pattern
-- `BaseAIProvider` interface
-- Supports:
-  - OpenAI
-  - Ollama
-  - HuggingFace
-- `ProviderFactory` dynamically selects the best provider
-
-### ⚙️ Decoupled Generation Engine
-- `ViralPackageEngine` handles:
-  - Titles
-  - Hooks
-  - Thumbnails
-- Fully independent from API layer
-
-### 🔄 Failover System (Chained Provider)
-- Automatic fallback:
+```
+Your idea  ─►  YouTube research (competitor titles, keywords)
+           ─►  Ollama generates SEO copy from your idea + competitor context
+           ─►  Topic-lock layer (validates output, drops junk, enforces topic)
+           ─►  Final package
 ```
 
-Ollama → OpenAI → HuggingFace
+Ollama is the brain. If Ollama is offline, the app falls back to template-only
+output (still usable, but much less natural).
 
-````
-- Ensures zero UI failure even if APIs crash
+## Quick start
 
----
+### 1. Install Ollama
+Download from [ollama.ai](https://ollama.ai), then in a terminal:
+```powershell
+ollama pull mistral
+```
+The daemon auto-starts on `http://localhost:11434`.
 
-## ⚡ Performance Improvements
-
-| Metric | Before | After |
-|--------|--------|--------|
-| Latency | ~6.5s | ~1.8s ⚡ |
-| Model Loading | Repeated | Cached ✅ |
-| API Failures | Crashed | Auto-retry 🔁 |
-
-### 🚀 Key Optimizations
-- `@st.cache_resource` → loads models once
-- Reduced token usage → faster responses
-- Cleaner prompt pipelines
-
----
-
-## 🛡️ Reliability & Fail-Safe Design
-
-### 🔁 Retry System
-- Automatic retries on failure
-- Handles:
-- Rate limits
-- Timeouts
-- Temporary API errors
-
-### 🔄 Smart Fallback
-- If one provider fails → switches instantly
-- Improves success rate by **~66%**
-
----
-
-## 🎯 Why Win-Engine is Different
-
-| Feature | Others | Win-Engine |
-|--------|--------|-----------|
-| Multi-AI Providers | ❌ | ✅ |
-| Failover System | ❌ | ✅ |
-| Learning Engine | Basic | Advanced |
-| Decision System | ❌ | ✅ Go/Kill |
-| Speed | Slow | ⚡ Fast |
-
----
-
-## 📊 What You Get
-
-- 🎭 Titles (CTR optimized)
-- 📝 Descriptions
-- 🏷️ Tags
-- 📋 Thumbnail ideas
-- 📊 Opportunity score
-- 🎯 Go / Kill decision
-
----
-
-## 🏆 12 Phases Complete
-
-✅ Fully production-ready system  
-✅ End-to-end pipeline complete  
-
----
-
-## 🛠️ Tech Stack
-
-- FastAPI (Backend)
-- Streamlit (UI)
-- SQLite / Redis
-- Python 3.13+
-
----
-
-## 🚀 Quick Start
-
-### 1️⃣ Clone the Repository
-```bash
-git clone https://github.com/madara-projects/Seo-YT
-cd Seo-YT
-````
-
-### 2️⃣ Setup Environment
-
-```bash
+### 2. Install Python deps
+```powershell
 python -m venv .venv
-.venv\Scripts\activate  # Windows
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3️⃣ Configure API Key
-
-```bash
-cp .env.example .env
+### 3. Configure
+```powershell
+copy .env.example .env
 ```
+Open `.env` and set `WIN_ENGINE_YOUTUBE_API_KEY` (free key from
+[Google Cloud Console](https://console.cloud.google.com/) — enable
+**YouTube Data API v3**).
 
-Add your key:
-
-```
-WIN_ENGINE_YOUTUBE_API_KEY=your_api_key_here
-```
-
-### 4️⃣ Run the App
-
-#### 🎨 UI (Recommended)
-
-```bash
-streamlit run streamlit_app.py
-```
-
-👉 [http://localhost:8501](http://localhost:8501)
-
-#### ⚡ API
-
-```bash
+### 4. Run
+```powershell
 python app.py
 ```
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) — built-in HTML form.
+Or hit `POST /analyze` directly. Swagger docs at `/docs`.
 
-👉 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+## Stack
 
----
+- **FastAPI** — API + built-in HTML form (no Streamlit, no second port)
+- **spaCy** — keyword + entity extraction
+- **Ollama (mistral)** — title/description generation
+- **SQLite** — local history for learning + comparison
+- **Redis** (optional) — caches YouTube research between requests
+- **Docker** + **Jenkins** — optional, only if you want a containerized run
 
-## 🔄 Workflow
+## Run with Docker
 
-```
-Script → Research → Analyze → Generate → Score → Decision → Publish
-```
-
----
-
-## ⚠️ Limitations
-
-* New trends → lower confidence
-* Thumbnail generation → concept only
-* Strongest in India market (expanding)
-
----
-
-## 🤝 Contributing
-
-PRs are welcome 🚀
-
-Steps:
-
-1. Fork the repo
-2. Create a feature branch
-3. Submit a pull request
-
----
-
-## ⭐ Support
-
-If this project helped you:
-
-* ⭐ Star the repo
-* 🔄 Share it
-* 💬 Give feedback
-
----
-
-<div align="center">
-
-**Built for creators who want to win.**
-
-</div>
+```powershell
+docker build -t seo-app .
+docker run -p 8000:8000 --env-file .env -e OLLAMA_BASE_URL=http://host.docker.internal:11434 seo-app
 ```
 
----
+## Project shape
+
+```
+app.py                          FastAPI entry
+win_engine/
+  api/        routes (/, /analyze, /health, /ready, /meta, /diagnostics)
+  ingestion/  YouTube client + research orchestration
+  analysis/   topic-lock, NLP, intent, gap, pacing, thumbnail, content audit
+  generation/ SEO package builder + automation/expansion/chapters
+  feedback/   history store, learning engine, CTR prediction
+  llm/        Ollama client + SEO writer
+  scoring/    outlier engine for YouTube video scoring
+  core/       config, schemas, logging, middleware, rate-limit
+```
+
+## Limits
+
+- New / very niche trends → lower confidence from research signals
+- Thumbnail output is concept guidance, not generated images
+- Best results when Ollama is running locally
