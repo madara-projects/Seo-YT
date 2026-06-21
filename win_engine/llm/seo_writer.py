@@ -1,7 +1,8 @@
 """Ollama-powered SEO writer.
 
 Generates title, 5 variants, description, tags, and hashtags from a video
-script + competitor context. Language-aware (English / Tamil / Tanglish).
+script + competitor context. Language-aware (English / Tamil / Tanglish / Hindi)
+and niche-aware (gaming / education / finance / tech / fitness / cooking / vlog).
 Returns None if Ollama is offline or the model output cannot be parsed.
 """
 
@@ -21,8 +22,8 @@ Competitor = Union[str, dict]
 _SYSTEM_PROMPT = (
     "You are a senior YouTube SEO strategist who writes upload-ready metadata "
     "for real creators. You match the natural voice and rhythm of top-performing "
-    "videos in the niche. You output ONLY valid JSON — no prose, no markdown "
-    "fences, no commentary."
+    "videos in the niche. You write like a human creator, never like a template. "
+    "You output ONLY valid JSON — no prose, no markdown fences, no commentary."
 )
 
 _LANGUAGE_INSTRUCTIONS = {
@@ -48,12 +49,76 @@ _LANGUAGE_INSTRUCTIONS = {
     ),
 }
 
+# language_engine emits a few labels that are not direct keys above.
+_LANGUAGE_ALIASES = {
+    "hinglish_or_hindi": "hindi",
+    "hinglish": "hindi",
+    "spanish_like": "english",
+}
+
+# Per-niche voice guidance injected into the prompt so a gaming title does not
+# read like a finance title. Keyed by topic_lock.infer_category output.
+_NICHE_GUIDANCE = {
+    "gaming": (
+        "Niche: GAMING. Lead with the game name and the stakes (win/clutch/rank/"
+        "loot). Energetic, fast, FOMO-driven. Numbers and 'how I' framing work well."
+    ),
+    "education": (
+        "Niche: EDUCATION. Lead with the concept and the outcome ('understand X', "
+        "'pass Y'). Clear, credible, promise-of-clarity voice. Avoid hype words."
+    ),
+    "finance": (
+        "Niche: FINANCE. Lead with the money outcome and a concrete number/timeframe. "
+        "Trustworthy, specific, no get-rich-quick scam phrasing."
+    ),
+    "tech": (
+        "Niche: TECH/REVIEW. Lead with the product/tool and the verdict or use-case. "
+        "Honest, specific, benefit-led. 'worth it?' and comparison framing work well."
+    ),
+    "fitness": (
+        "Niche: FITNESS. Lead with the body/goal and a realistic result + timeframe. "
+        "Motivating but honest; avoid miracle claims."
+    ),
+    "cooking": (
+        "Niche: COOKING. Lead with the dish and the hook (easy/quick/authentic/"
+        "secret ingredient). Appetite-driven, sensory voice."
+    ),
+    "vlog": (
+        "Niche: VLOG/LIFESTYLE. Lead with the relatable moment or transformation. "
+        "Warm, personal, first-person voice. Curiosity over keywords, but keep it "
+        "searchable."
+    ),
+    "general": (
+        "Niche: GENERAL. Lead with the clearest specific promise. Natural, "
+        "human creator voice; avoid generic filler."
+    ),
+}
+
+# Compact few-shot examples — a 7B model follows examples far better than prose.
+_FEWSHOT = {
+    "tamil": (
+        'Example tone (Tamil): title "ஆபீஸ் வாழ்க்கை உண்மை — யாரும் சொல்லாத விஷயங்கள்", '
+        'variant "9-5 ஜாப் ல நான் கத்துக்கிட்ட 5 விஷயங்கள்".'
+    ),
+    "tanglish": (
+        'Example tone (Tanglish): title "Office Life Reality — Yaarum Sollatha Truth", '
+        'variant "Semma Boring 9-5 Job ah Interesting Aakkura 5 Tips".'
+    ),
+    "english": (
+        'Example tone (English): title "Office Life Honestly — What Nobody Tells You", '
+        'variant "5 Things I Learned in My First Year at a 9-5".'
+    ),
+}
+
 
 def _language_instruction(language: str) -> str:
-    return _LANGUAGE_INSTRUCTIONS.get(
-        (language or "english").lower(),
-        _LANGUAGE_INSTRUCTIONS["english"],
-    )
+    key = (language or "english").lower()
+    key = _LANGUAGE_ALIASES.get(key, key)
+    return _LANGUAGE_INSTRUCTIONS.get(key, _LANGUAGE_INSTRUCTIONS["english"])
+
+
+def _niche_header(category: Optional[str]) -> str:
+    return _NICHE_GUIDANCE.get((category or "general").lower(), _NICHE_GUIDANCE["general"])
 
 
 def _fmt_views(value: Any) -> str:
@@ -68,6 +133,30 @@ def _fmt_views(value: Any) -> str:
     return f"{n} views"
 
 
+def _engagement_label(entry: dict) -> str:
+    """Like/comment rates relative to views — signal for WHY a title won."""
+    try:
+        views = int(entry.get("views") or 0)
+    except (TypeError, ValueError):
+        views = 0
+    if views <= 0:
+        return ""
+    parts: list[str] = []
+    try:
+        likes = int(entry.get("likes") or 0)
+        if likes:
+            parts.append(f"{(likes / views) * 100:.1f}% like rate")
+    except (TypeError, ValueError):
+        pass
+    try:
+        comments = int(entry.get("comments") or 0)
+        if comments:
+            parts.append(f"{(comments / views) * 1000:.1f} comments/1k")
+    except (TypeError, ValueError):
+        pass
+    return ", ".join(parts)
+
+
 def _build_competitor_block(competitors: Optional[list[Competitor]]) -> str:
     if not competitors:
         return ""
@@ -77,15 +166,17 @@ def _build_competitor_block(competitors: Optional[list[Competitor]]) -> str:
             title = (entry.get("title") or "").strip()
             if not title:
                 continue
-            views_label = _fmt_views(entry.get("views"))
-            lines.append(f"- {title} ({views_label})" if views_label else f"- {title}")
+            meta_bits = [b for b in (_fmt_views(entry.get("views")), _engagement_label(entry)) if b]
+            meta = f" ({' · '.join(meta_bits)})" if meta_bits else ""
+            lines.append(f"- {title}{meta}")
         elif isinstance(entry, str) and entry.strip():
             lines.append(f"- {entry.strip()}")
     if not lines:
         return ""
     return (
-        "\nTop-performing competitor titles in this niche (for tone and "
-        "structure reference — do not copy verbatim):\n" + "\n".join(lines) + "\n"
+        "\nTop-performing competitor videos in this niche (titles + engagement, for "
+        "tone/structure reference — note which framing drives likes & comments, do NOT "
+        "copy verbatim):\n" + "\n".join(lines) + "\n"
     )
 
 
@@ -95,15 +186,21 @@ def _build_user_prompt(
     language: str,
     region: str,
     audience_type: str,
+    category: Optional[str] = None,
 ) -> str:
+    fewshot_key = (language or "english").lower()
+    fewshot_key = _LANGUAGE_ALIASES.get(fewshot_key, fewshot_key)
+    fewshot = _FEWSHOT.get(fewshot_key, _FEWSHOT["english"])
     return f"""Video script or idea:
 \"\"\"
 {script.strip()}
 \"\"\"
 {competitor_block}
+{_niche_header(category)}
 Target language: {language}
 Target region: {region}
 Audience type: {audience_type}
+{fewshot}
 
 Constraints:
 - {_language_instruction(language)}
@@ -166,39 +263,25 @@ def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
-def write_seo_package(
+def _generate_one(
     script: str,
-    competitors: Optional[list[Competitor]] = None,
+    competitors: Optional[list[Competitor]],
     *,
-    language: str = "english",
-    region: str = "global",
-    audience_type: str = "general",
-    temperature: float = 0.7,
-    max_tokens: int = 900,
+    language: str,
+    region: str,
+    audience_type: str,
+    category: Optional[str],
+    temperature: float,
+    max_tokens: int,
 ) -> Optional[dict[str, Any]]:
-    """Generate a full SEO package via Ollama.
-
-    Args:
-        script: User's video script or idea.
-        competitors: List of competitor entries — either plain title strings
-            or dicts with {"title": str, "views": int|None}. View counts give
-            the model signal about which patterns actually win.
-        language: Target output language. One of english/tamil/tanglish/hindi.
-        region: Geographic / cultural target (Global, India, Tamil Nadu, ...).
-        audience_type: General / Local / Diaspora — shapes phrasing.
-
-    Returns dict {title, variants, description, tags, hashtags} or None.
-    """
-    if not script or not script.strip():
-        return None
-    if not ollama_client.is_available():
-        return None
+    """Single generation call. Assumes Ollama reachability was already checked."""
     prompt = _build_user_prompt(
         script=script,
         competitor_block=_build_competitor_block(competitors),
         language=(language or "english"),
         region=(region or "global"),
         audience_type=(audience_type or "general"),
+        category=category,
     )
     raw = ollama_client.generate(
         prompt=prompt,
@@ -212,3 +295,71 @@ def write_seo_package(
     if parsed is None:
         return None
     return _validate(parsed)
+
+
+def write_seo_package(
+    script: str,
+    competitors: Optional[list[Competitor]] = None,
+    *,
+    language: str = "english",
+    region: str = "global",
+    audience_type: str = "general",
+    category: Optional[str] = None,
+    temperature: float = 0.5,
+    max_tokens: int = 1100,
+) -> Optional[dict[str, Any]]:
+    """Generate a full SEO package via Ollama for a single language.
+
+    Returns dict {title, variants, description, tags, hashtags} or None when
+    Ollama is offline or the output cannot be parsed.
+    """
+    if not script or not script.strip():
+        return None
+    if not ollama_client.is_available():
+        return None
+    return _generate_one(
+        script,
+        competitors,
+        language=language,
+        region=region,
+        audience_type=audience_type,
+        category=category,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+
+def write_multilang_packages(
+    script: str,
+    competitors: Optional[list[Competitor]] = None,
+    *,
+    languages: Optional[list[str]] = None,
+    region: str = "global",
+    audience_type: str = "general",
+    category: Optional[str] = None,
+    temperature: float = 0.5,
+    max_tokens: int = 1100,
+) -> dict[str, Optional[dict[str, Any]]]:
+    """Generate SEO packages for several languages in one pass.
+
+    Checks Ollama reachability ONCE (avoids N slow timeouts when offline).
+    Returns {language: package|None}. A None value means that language must be
+    handled by the caller's fallback.
+    """
+    langs = [l.lower() for l in (languages or ["english", "tamil", "tanglish"])]
+    if not script or not script.strip() or not ollama_client.is_available():
+        return {lang: None for lang in langs}
+
+    out: dict[str, Optional[dict[str, Any]]] = {}
+    for lang in langs:
+        out[lang] = _generate_one(
+            script,
+            competitors,
+            language=lang,
+            region=region,
+            audience_type=audience_type,
+            category=category,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    return out

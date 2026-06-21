@@ -290,6 +290,7 @@ _DASHBOARD_HTML = """<!doctype html>
       <div class="export-note">The dashboard now shows score cards, comparisons, and a one-click export of the latest analysis.</div>
 
       <div id="summary" class="section" style="display:none;"></div>
+      <div id="multilang" class="section" style="display:none;"></div>
       <div id="system" class="section" style="display:none;"></div>
       <div id="titles" class="section" style="display:none;"></div>
       <div id="audit" class="section" style="display:none;"></div>
@@ -314,6 +315,7 @@ _DASHBOARD_HTML = """<!doctype html>
     const btn = document.getElementById("analyzeBtn");
     const diagBtn = document.getElementById("diagBtn");
     const summary = document.getElementById("summary");
+    const multilang = document.getElementById("multilang");
     const system = document.getElementById("system");
     const titles = document.getElementById("titles");
     const audit = document.getElementById("audit");
@@ -386,6 +388,7 @@ _DASHBOARD_HTML = """<!doctype html>
       latestAnalysis = null;
       exportBtn.disabled = true;
       summary.style.display = "none";
+      multilang.style.display = "none";
       system.style.display = "none";
       titles.style.display = "none";
       audit.style.display = "none";
@@ -466,6 +469,31 @@ _DASHBOARD_HTML = """<!doctype html>
             ${(Array.isArray(data.title_variants) ? data.title_variants : []).map(item => `<div class='mini-card'><h4>${item}</h4><div class='muted'>Alternate title option for testing.</div></div>`).join("")}
           </div>
         `;
+
+        const ml = data.multilang || {};
+        const langLabels = { english: "English", tamil: "Tamil", tanglish: "Tanglish" };
+        const renderPkg = (key) => {
+          const p = ml[key];
+          if (!p || !p.title) return "";
+          const variants = (Array.isArray(p.variants) ? p.variants : [])
+            .map(v => `<li class='row'>${v}</li>`).join("");
+          const tags = (Array.isArray(p.tags) ? p.tags : []).join(", ");
+          const hashtags = (Array.isArray(p.hashtags) ? p.hashtags : []).join(" ");
+          return `
+            <div class='mini-card'>
+              <h4>${langLabels[key] || key}</h4>
+              <div class='row'><strong>Title:</strong> ${p.title}</div>
+              <div class='row'><strong>Variants:</strong><ul class='list'>${variants}</ul></div>
+              <div class='row'><strong>Description:</strong> ${p.description || ""}</div>
+              <div class='row'><strong>Tags:</strong> ${tags}</div>
+              <div class='row'><strong>Hashtags:</strong> ${hashtags}</div>
+            </div>`;
+        };
+        const mlHtml = ["english", "tamil", "tanglish"].map(renderPkg).join("");
+        if (mlHtml) {
+          multilang.style.display = "block";
+          multilang.innerHTML = `<h3>Upload-Ready Packages — English / Tamil / Tanglish</h3><div class='cards'>${mlHtml}</div>`;
+        }
 
         system.style.display = "block";
         system.innerHTML = `
