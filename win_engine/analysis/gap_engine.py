@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# Brain v2.0 Integration
+from win_engine.ai_enhancement import find_content_similarity
 from win_engine.analysis.dynamic_thresholds import get_dynamic_kill_switch
 
 
@@ -12,6 +12,7 @@ def analyze_opportunity_gaps(
     youtube_results: list[dict[str, Any]],
     top_opportunities: list[dict[str, Any]],
     language_context: dict[str, Any] | None = None,
+    target_title: str = "",
 ) -> dict[str, Any]:
     """Gap analysis and opportunity heuristics for Phase 4."""
 
@@ -30,17 +31,19 @@ def analyze_opportunity_gaps(
         niche=niche,
     )
     
-    # Apply Local AI Semantic Analysis for Uniqueness
+    # Uniqueness = how different the chosen title is from the top competitor
+    # titles (1.0 = fully distinct, 0.0 = near-duplicate). Uses the existing
+    # word-overlap (Jaccard) similarity — no extra dependency, no fake constant.
     uniqueness_score = 0.5
-    try:
-        from win_engine.analysis.ai_enhancement import get_ai_engine
-        if youtube_results:
-            competitor_titles = [str(item.get("title", "")) for item in youtube_results[:5]]
-            target_title = str(top_opportunities[0].get("title", "")) if top_opportunities else ""
-            if target_title and competitor_titles:
-                uniqueness_score = get_ai_engine().calculate_uniqueness(target_title, competitor_titles)
-    except Exception:
-        pass
+    competitor_titles = [
+        str(item.get("title", "")).strip()
+        for item in (youtube_results or [])[:5]
+        if isinstance(item, dict) and item.get("title")
+    ]
+    if target_title and competitor_titles:
+        sims = [find_content_similarity(target_title, c) for c in competitor_titles]
+        if sims:
+            uniqueness_score = round(1.0 - max(sims), 3)
 
     differentiation = _differentiation_plan(keyword_gaps, competition, youtube_results)
     opportunity_score = _opportunity_score(keyword_gaps, competition, top_opportunities)

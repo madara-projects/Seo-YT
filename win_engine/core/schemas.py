@@ -32,6 +32,7 @@ class AnalyzeResponse(BaseModel):
     content_audit: Dict[str, Any]
     cache_policy: str
     research_warnings: List[str]
+    multilang: Dict[str, Any] = Field(default_factory=dict)
     youtube_results: List[Dict[str, Any]]
     top_opportunities: List[Dict[str, Any]]
     keyword_signals: List[Dict[str, Any]]
