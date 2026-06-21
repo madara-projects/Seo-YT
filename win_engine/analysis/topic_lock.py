@@ -268,12 +268,20 @@ def _topic_in_head(title: str, topic: str, max_words: int = 4) -> bool:
 
 def _title_is_broken(title: str) -> bool:
     """A title is broken only if empty, too short, or made entirely of junk
-    stopwords. Punctuation like '()' ':' '?' is fine — common in real titles."""
+    stopwords. Punctuation like '()' ':' '?' is fine — common in real titles.
+
+    Non-Latin scripts (e.g. Tamil) are legitimate titles: the junk-stopword check
+    only applies to Latin text, otherwise a perfectly good Tamil-script title
+    (which has no [A-Za-z] words) would be wrongly flagged broken and regenerated
+    into English."""
     if not title:
         return True
     cleaned = title.strip()
     if len(cleaned) < 10:
         return True
+    # A title containing non-ASCII letters (Tamil, etc.) is treated as valid.
+    if any(ord(ch) > 127 for ch in cleaned):
+        return False
     words = [w for w in re.findall(r"[A-Za-z]+", cleaned.lower()) if len(w) > 2]
     if not words:
         return True
@@ -297,14 +305,29 @@ def force_topic_in_title(title: str, topic: str, category: str = "general",
 
 
 def force_topic_in_description(description: str, topic: str) -> str:
-    if not topic or topic.lower() in (description or "").lower():
-        return description or ""
-    return f"{topic.strip().title()} - complete guide. " + (description or "")
+    """Trust a real description. Only synthesize one when it is missing.
+
+    The old version prepended a robotic "{Topic} - complete guide. " whenever the
+    topic string was not literally present — which made natural LLM/Tamil/Tanglish
+    descriptions read like templates. We now leave any non-empty description alone
+    and only fall back to a topic line when there is genuinely nothing to show.
+    """
+    desc = (description or "").strip()
+    if desc:
+        return desc
+    if not topic:
+        return ""
+    return f"{topic.strip().title()} — a practical walkthrough."
 
 
 def force_topic_in_tags(tags: list[str], topic: str, category: str,
-                        max_tags: int = 12) -> list[str]:
-    """Drop junk tags, ensure topic is first, top up with category fallbacks."""
+                        max_tags: int = 12, min_before_fallback: int = 6) -> list[str]:
+    """Drop junk tags, ensure topic is first, keep the model's real tags.
+
+    Generic category fallbacks are only added when the model gave us too few real
+    tags (< ``min_before_fallback``). Previously they were always appended, which
+    flooded good output with filler like "daily vlog, lifestyle, real life".
+    """
     out: list[str] = []
     seen: set[str] = set()
     if topic:
@@ -316,13 +339,14 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
             continue
         out.append(t)
         seen.add(t)
-    for kw in CATEGORY_FALLBACK_KEYWORDS.get(category, []):
-        kwl = kw.lower()
-        if len(out) >= max_tags:
-            break
-        if kwl not in seen and not _is_junk_tag(kwl):
-            out.append(kwl)
-            seen.add(kwl)
+    if len(out) < min_before_fallback:
+        for kw in CATEGORY_FALLBACK_KEYWORDS.get(category, []):
+            kwl = kw.lower()
+            if len(out) >= max_tags:
+                break
+            if kwl not in seen and not _is_junk_tag(kwl):
+                out.append(kwl)
+                seen.add(kwl)
     return out[:max_tags]
 
 
