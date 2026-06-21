@@ -88,6 +88,49 @@ def generate_seo_suggestions(
         s for s in (research_payload.get("keyword_signals") or [])
         if not _is_junk_tag(str(s.get("keyword", "")))
     ]
+
+    # ---- Multi-language packages (English + Tamil + Tanglish) ----------
+    def _lock_pkg(p: dict[str, Any], lang: str) -> dict[str, Any]:
+        if not isinstance(p, dict):
+            return {}
+        title = force_topic_in_title(p.get("title", ""), main_topic, category)
+        variants = [
+            force_topic_in_title(v, main_topic, category, variant_index=i)
+            for i, v in enumerate(p.get("variants", []) or [])
+        ]
+        tags = force_topic_in_tags(p.get("tags", []) or [], main_topic, category)
+        hashtags = force_hashtags(p.get("hashtags", []) or [], main_topic, category)
+        description = p.get("description", "") or ""
+        # Only English gets the topic-presence fallback; Tamil / Tanglish
+        # descriptions stay in their own language, untouched.
+        if lang == "english":
+            description = force_topic_in_description(description, main_topic)
+        return {
+            "title": title,
+            "variants": variants,
+            "description": description,
+            "tags": tags,
+            "hashtags": hashtags,
+        }
+
+    multilang_packages = {
+        lang: _lock_pkg(p, lang)
+        for lang, p in (seo_package.get("multilang") or {}).items()
+    }
+
+    # Honest warning when a non-English language fell back to the English template
+    # (i.e. Ollama was offline / returned nothing usable for that language).
+    research_warnings = list(research_payload.get("research_warnings", []) or [])
+    non_english_fallback = [
+        lang for lang in (seo_package.get("fallback_languages") or []) if lang != "english"
+    ]
+    if non_english_fallback:
+        research_warnings.append(
+            ", ".join(sorted(non_english_fallback)).title()
+            + " fell back to an English template because Ollama returned no native "
+            "output. Install and start Ollama (e.g. `ollama pull mistral`) for "
+            "genuine Tamil/Tanglish generation."
+        )
     # --------------------------------------------------------------------
 
     return AnalyzeResponse(
@@ -101,7 +144,8 @@ def generate_seo_suggestions(
         title_optimization=title_opt,
         content_audit=seo_package["content_audit"],
         cache_policy=research_payload.get("cache_policy", "evergreen"),
-        research_warnings=research_payload.get("research_warnings", []),
+        research_warnings=research_warnings,
+        multilang=multilang_packages,
         youtube_results=research_payload.get("youtube_results", []),
         top_opportunities=research_payload.get("top_opportunities", []),
         keyword_signals=locked_signals,

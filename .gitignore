@@ -12,11 +12,6 @@ win_engine.db
 *.sqlite3
 .DS_Store
 
-# Jenkins (local install, not source-of-truth)
-jenkins_home/
-Dockerfile.jenkins
-setup-jenkins.ps1
-
 # Editor / OS / IDE state
 .vscode/
 .idea/
