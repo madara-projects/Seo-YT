@@ -67,14 +67,26 @@ Or hit `POST /analyze` directly. Swagger docs at `/docs`.
 - **Ollama (mistral)** — title/description generation
 - **SQLite** — local history for learning + comparison
 - **Redis** (optional) — caches YouTube research between requests
-- **Docker** + **Jenkins** — optional, only if you want a containerized run
+- **Docker** — optional, for a containerized run
 
 ## Run with Docker
 
+The easiest way is Docker Compose (brings up the app + Redis, and points Ollama
+at the host daemon automatically):
+
+```powershell
+docker compose up --build
+```
+
+Or build and run the single container by hand:
+
 ```powershell
 docker build -t seo-app .
-docker run -p 8000:8000 --env-file .env -e OLLAMA_BASE_URL=http://host.docker.internal:11434 seo-app
+docker run -p 8000:8000 --env-file .env --add-host host.docker.internal:host-gateway -e OLLAMA_BASE_URL=http://host.docker.internal:11434 seo-app
 ```
+
+Either way, open [http://127.0.0.1:8000](http://127.0.0.1:8000). Keep Ollama
+running on the host (`ollama serve` / `ollama pull mistral`).
 
 ## Project shape
 

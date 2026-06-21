@@ -27,7 +27,7 @@ from win_engine.generation.expansion_engine import (
     build_chapters,
     build_session_expansion,
 )
-from win_engine.llm.seo_writer import write_seo_package
+from win_engine.llm.seo_writer import write_multilang_packages
 
 
 _TOPIC_STOPWORDS = {"video", "youtube", "will", "what", "days", "today", "going"}
@@ -55,21 +55,45 @@ def build_seo_package(
     angle = _select_content_angle(intent, script, top_opportunities)
     language_strategy = build_language_strategy(script, language_context)
 
+    category = str(research.get("category") or "general")
+
     competitors = [
-        {"title": r.get("title", ""), "views": r.get("view_count")}
+        {
+            "title": r.get("title", ""),
+            "views": r.get("view_count"),
+            "likes": r.get("like_count"),
+            "comments": r.get("comment_count"),
+            "subscribers": r.get("subscriber_count"),
+            "duration": r.get("duration"),
+        }
         for r in (research.get("youtube_results") or [])
         if isinstance(r, dict) and r.get("title")
     ]
 
-    llm_pkg = write_seo_package(
+    region = str(language_context.get("region", "global"))
+    audience_type = str(language_context.get("audience_type", "general"))
+
+    # Always generate English + Tamil + Tanglish so the creator gets all three
+    # from a single request. One reachability check inside the helper.
+    _LANGS = ["english", "tamil", "tanglish"]
+    multilang_raw = write_multilang_packages(
         script,
         competitors=competitors,
-        language=str(language_strategy.get("primary_language", "english")),
-        region=str(language_context.get("region", "global")),
-        audience_type=str(language_context.get("audience_type", "general")),
+        languages=_LANGS,
+        region=region,
+        audience_type=audience_type,
+        category=category,
     )
+    fallback_languages = [lang for lang in _LANGS if not multilang_raw.get(lang)]
 
-    pkg = llm_pkg or _fallback_package(primary_topic, keyword_signals)
+    def _resolve(lang: str) -> dict[str, Any]:
+        return multilang_raw.get(lang) or _fallback_package(primary_topic, keyword_signals)
+
+    multilang = {lang: _resolve(lang) for lang in _LANGS}
+
+    # The English package backs the top-level fields and all downstream analysis.
+    llm_pkg = multilang_raw.get("english")
+    pkg = multilang["english"]
 
     title = pkg["title"]
     description = pkg["description"]
@@ -109,6 +133,7 @@ def build_seo_package(
         youtube_results=research.get("youtube_results", []),
         top_opportunities=top_opportunities,
         language_context=language_context,
+        target_title=title,
     )
     pacing_analysis = analyze_script_pacing(script)
     channel_intelligence = build_channel_intelligence(research.get("youtube_results", []))
@@ -188,7 +213,9 @@ def build_seo_package(
         "feedback_package": feedback_package,
         "ai_insights": ai_insights,
         "ai_quality_analysis": ai_quality_analysis,
-        "generation_source": "ollama" if llm_pkg else "fallback",
+        "multilang": multilang,
+        "fallback_languages": fallback_languages,
+        "generation_source": "ollama" if any(multilang_raw.values()) else "fallback",
     }
 
 

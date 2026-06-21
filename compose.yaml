@@ -6,6 +6,12 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # Reach the Ollama daemon running on the host, not inside the container.
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - WIN_ENGINE_REDIS_URL=redis://redis:6379/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - redis
     volumes:
