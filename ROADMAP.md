@@ -57,7 +57,7 @@ You can submit a complete brief in under two minutes, and the tool warns you whe
 
 ---
 
-## Stage 2 — Stronger research and packaging (in progress)
+## Stage 2 — Stronger research and packaging (complete)
 
 ### Problem today
 
