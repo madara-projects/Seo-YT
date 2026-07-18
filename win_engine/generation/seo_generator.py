@@ -48,6 +48,9 @@ def generate_seo_suggestions(
         research_payload["language_context"] = context
     research_payload["category"] = category
     research_payload["main_topic"] = main_topic
+    creator_brief = ctx.get("creator_brief")
+    if isinstance(creator_brief, dict):
+        research_payload["creator_brief"] = creator_brief
 
     # Fix 3: API fallback — seed keyword signals from category presets when
     # YouTube returned nothing usable.
@@ -121,6 +124,8 @@ def generate_seo_suggestions(
     # Honest warning when a non-English language fell back to the English template
     # (i.e. Ollama was offline / returned nothing usable for that language).
     research_warnings = list(research_payload.get("research_warnings", []) or [])
+    if isinstance(creator_brief, dict):
+        research_warnings.extend(creator_brief.get("warnings", []))
     non_english_fallback = [
         lang for lang in (seo_package.get("fallback_languages") or []) if lang != "english"
     ]
@@ -145,6 +150,7 @@ def generate_seo_suggestions(
         content_audit=seo_package["content_audit"],
         cache_policy=research_payload.get("cache_policy", "evergreen"),
         research_warnings=research_warnings,
+        creator_brief=creator_brief if isinstance(creator_brief, dict) else {},
         multilang=multilang_packages,
         youtube_results=research_payload.get("youtube_results", []),
         top_opportunities=research_payload.get("top_opportunities", []),

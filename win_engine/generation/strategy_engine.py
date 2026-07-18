@@ -71,6 +71,9 @@ def build_seo_package(
 
     region = str(language_context.get("region", "global"))
     audience_type = str(language_context.get("audience_type", "general"))
+    creator_brief = research.get("creator_brief")
+    if not isinstance(creator_brief, dict):
+        creator_brief = None
 
     # Always generate English + Tamil + Tanglish so the creator gets all three
     # from a single request. One reachability check inside the helper.
@@ -82,6 +85,7 @@ def build_seo_package(
         region=region,
         audience_type=audience_type,
         category=category,
+        creator_brief=creator_brief,
     )
     fallback_languages = [lang for lang in _LANGS if not multilang_raw.get(lang)]
 

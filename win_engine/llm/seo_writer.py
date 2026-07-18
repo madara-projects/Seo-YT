@@ -180,6 +180,26 @@ def _build_competitor_block(competitors: Optional[list[Competitor]]) -> str:
     )
 
 
+def _build_creator_brief_block(creator_brief: Optional[dict[str, Any]]) -> str:
+    """Format creator context so the model packages the real video, not a generic topic."""
+    if not creator_brief:
+        return ""
+
+    fields = [
+        ("Target viewer", creator_brief.get("target_audience")),
+        ("Viewer promise", creator_brief.get("viewer_promise")),
+        ("Unique angle", creator_brief.get("unique_angle")),
+        ("Proof or real footage", creator_brief.get("proof")),
+        ("Video format", creator_brief.get("video_format")),
+        ("Preferred title style", creator_brief.get("title_style")),
+        ("Thumbnail direction", creator_brief.get("thumbnail_idea")),
+    ]
+    lines = [f"- {label}: {str(value).strip()}" for label, value in fields if value and str(value).strip()]
+    if not lines:
+        return ""
+    return "\nCreator brief (source of truth for audience and promise):\n" + "\n".join(lines) + "\n"
+
+
 def _build_user_prompt(
     script: str,
     competitor_block: str,
@@ -187,6 +207,7 @@ def _build_user_prompt(
     region: str,
     audience_type: str,
     category: Optional[str] = None,
+    creator_brief: Optional[dict[str, Any]] = None,
 ) -> str:
     fewshot_key = (language or "english").lower()
     fewshot_key = _LANGUAGE_ALIASES.get(fewshot_key, fewshot_key)
@@ -195,6 +216,7 @@ def _build_user_prompt(
 \"\"\"
 {script.strip()}
 \"\"\"
+{_build_creator_brief_block(creator_brief)}
 {competitor_block}
 {_niche_header(category)}
 Target language: {language}
@@ -204,6 +226,7 @@ Audience type: {audience_type}
 
 Constraints:
 - {_language_instruction(language)}
+- the title, description, and tags must accurately match the creator brief and real video; never invent proof or promise a result the video does not deliver
 - title: 50-65 characters, has the main keyword in the first 4 words, no clickbait scams, no all-caps shouting
 - variants: 5 GENUINELY DIFFERENT title styles — (1) how-to, (2) listicle/number, (3) beginner-focused, (4) result-driven outcome, (5) curious question. Each variant must feel like a real creator wrote it.
 - description: 120-180 words, opens with the main keyword, includes 3-4 keywords naturally, mentions what the viewer will learn, ends with a soft call to engage. No timestamps, no fake "What I'll cover" lists.
@@ -271,6 +294,7 @@ def _generate_one(
     region: str,
     audience_type: str,
     category: Optional[str],
+    creator_brief: Optional[dict[str, Any]],
     temperature: float,
     max_tokens: int,
 ) -> Optional[dict[str, Any]]:
@@ -282,6 +306,7 @@ def _generate_one(
         region=(region or "global"),
         audience_type=(audience_type or "general"),
         category=category,
+        creator_brief=creator_brief,
     )
     raw = ollama_client.generate(
         prompt=prompt,
@@ -305,6 +330,7 @@ def write_seo_package(
     region: str = "global",
     audience_type: str = "general",
     category: Optional[str] = None,
+    creator_brief: Optional[dict[str, Any]] = None,
     temperature: float = 0.5,
     max_tokens: int = 1100,
 ) -> Optional[dict[str, Any]]:
@@ -324,6 +350,7 @@ def write_seo_package(
         region=region,
         audience_type=audience_type,
         category=category,
+        creator_brief=creator_brief,
         temperature=temperature,
         max_tokens=max_tokens,
     )
@@ -337,6 +364,7 @@ def write_multilang_packages(
     region: str = "global",
     audience_type: str = "general",
     category: Optional[str] = None,
+    creator_brief: Optional[dict[str, Any]] = None,
     temperature: float = 0.5,
     max_tokens: int = 1100,
 ) -> dict[str, Optional[dict[str, Any]]]:
@@ -359,6 +387,7 @@ def write_multilang_packages(
             region=region,
             audience_type=audience_type,
             category=category,
+            creator_brief=creator_brief,
             temperature=temperature,
             max_tokens=max_tokens,
         )
