@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -10,6 +11,13 @@ _DISPLAY_NAMES = {
     "viewer_promise": "what the viewer will get",
     "unique_angle": "what makes this video different",
     "proof": "proof, footage, result, or personal experience",
+}
+
+_TOPIC_STOPWORDS = {
+    "a", "an", "and", "the", "this", "that", "with", "for", "from", "my", "our",
+    "video", "footage", "show", "shows", "showing", "real", "realistic", "perfect",
+    "what", "will", "see", "feel", "learn", "work", "life", "content",
+    "day", "own", "not", "but", "into", "your", "their",
 }
 
 
@@ -64,3 +72,29 @@ def build_creator_brief(
         "warnings": warnings,
         "recommendation": recommendation,
     }
+
+
+def creator_topic(creator_brief: dict[str, Any] | None) -> str:
+    """Make a compact topic for fallbacks and topic locking from the creator's own words."""
+
+    brief = creator_brief or {}
+    sources = [brief.get("unique_angle"), brief.get("content"), brief.get("viewer_promise")]
+    candidates: list[str] = []
+    for source in sources:
+        for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", str(source or "").lower()):
+            if len(word) < 3 or word in _TOPIC_STOPWORDS or word in candidates:
+                continue
+            candidates.append(word)
+
+    # Preserve the first two concrete words from the unique angle, then make a
+    # creator / routine context explicit before less useful words such as "job".
+    selected = candidates[:2]
+    for word in ("creator", "routine", "vlog", "review", "tutorial"):
+        if word in candidates and word not in selected:
+            selected.append(word)
+    for word in candidates:
+        if word not in selected:
+            selected.append(word)
+        if len(selected) >= 4:
+            break
+    return " ".join(selected[:4])
