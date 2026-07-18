@@ -14,14 +14,12 @@ def analyze_opportunity_gaps(
     language_context: dict[str, Any] | None = None,
     target_title: str = "",
 ) -> dict[str, Any]:
-    """Gap analysis and opportunity heuristics for Phase 4."""
+    """Build gap analysis and opportunity heuristics."""
 
     language_context = language_context or {}
     keyword_gaps = _keyword_gaps(keyword_signals, youtube_results)
     competition = _competition_meter(youtube_results, language_context)
     
-    # Brain v2.0: Dynamic, niche-aware kill switch instead of hard-coded thresholds
-    # Pass 'niche' if available in language_context, else default to 'general'
     niche = language_context.get('niche', 'general') if isinstance(language_context, dict) else 'general'
     idea_kill_switch = get_dynamic_kill_switch(
         top_opportunities=top_opportunities,
@@ -140,48 +138,6 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
         "reason": reason,
         "repeated_title_patterns": repeated_title_patterns,
         "big_channel_count": big_channel_count,
-    }
-
-
-def _idea_kill_switch(
-    top_opportunities: list[dict[str, Any]],
-    competition: dict[str, Any],
-    keyword_gaps: list[dict[str, Any]],
-    youtube_results: list[dict[str, Any]],
-) -> dict[str, Any]:
-    top_score = float(top_opportunities[0].get("outlier_score") or 0) if top_opportunities else 0.0
-    competition_label = competition.get("label", "UNKNOWN")
-    small_channel_outliers = sum(1 for item in top_opportunities if item.get("small_channel_outlier"))
-    high_gap_count = sum(1 for item in keyword_gaps if item.get("gap_strength") == "high")
-    similar_count = len(youtube_results)
-
-    proceed = True
-    reason = "Opportunity is strong enough to keep pursuing."
-    confidence = "medium"
-    recommended_action = "Proceed with a differentiated angle."
-
-    if top_score < 500 and competition_label == "SATURATED" and high_gap_count == 0:
-        proceed = False
-        reason = "Weak outlier signal plus saturated competition makes this a poor bet."
-        confidence = "high"
-        recommended_action = "Kill this idea or re-scope it into a narrower subtopic."
-    elif top_score < 2000 and competition_label == "COMPETITIVE" and small_channel_outliers == 0 and high_gap_count <= 1:
-        proceed = False
-        reason = "The topic does not show enough breakout evidence for the current competition level."
-        confidence = "high"
-        recommended_action = "Rework the topic before investing in production."
-    elif high_gap_count >= 2 or small_channel_outliers >= 1:
-        reason = "The topic still has breakout room if you lean into the uncovered angle."
-        recommended_action = "Proceed, but lock into the clearest underused promise."
-    elif similar_count <= 3 and top_score >= 1000:
-        reason = "Competitor volume is still light enough to justify a test upload."
-        recommended_action = "Proceed with a clear proof-driven package."
-
-    return {
-        "proceed": proceed,
-        "reason": reason,
-        "confidence": confidence,
-        "recommended_action": recommended_action,
     }
 
 
