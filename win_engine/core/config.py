@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     youtube_api_key: str | None = None
     youtube_api_keys: str | None = None
     youtube_max_results: int = 5
+    youtube_max_research_queries: int = 5
 
     cache_ttl_trending_seconds: int = 21600
     cache_ttl_evergreen_seconds: int = 604800

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from win_engine.analysis.content_auditor import audit_content_package
+from win_engine.analysis.creator_brief import creator_topic
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
 from win_engine.analysis.language_engine import build_language_strategy
 from win_engine.analysis.pacing_engine import analyze_script_pacing
@@ -47,10 +48,16 @@ def build_seo_package(
     if not isinstance(language_context, dict):
         language_context = {}
 
+    creator_brief = research.get("creator_brief")
+    if not isinstance(creator_brief, dict):
+        creator_brief = None
+    brief_topic = creator_topic(creator_brief)
     primary_topic, secondary_topic = _topic_from_signals(
         keyword_signals,
         fallback=str(research.get("main_topic") or ""),
     )
+    if brief_topic:
+        primary_topic = brief_topic
     angle = _select_content_angle(intent, script, top_opportunities)
     language_strategy = build_language_strategy(script, language_context)
 
@@ -71,10 +78,6 @@ def build_seo_package(
 
     region = str(language_context.get("region", "global"))
     audience_type = str(language_context.get("audience_type", "general"))
-    creator_brief = research.get("creator_brief")
-    if not isinstance(creator_brief, dict):
-        creator_brief = None
-
     # Always generate English + Tamil + Tanglish so the creator gets all three
     # from a single request. One reachability check inside the helper.
     _LANGS = ["english", "tamil", "tanglish"]
@@ -90,7 +93,7 @@ def build_seo_package(
     fallback_languages = [lang for lang in _LANGS if not multilang_raw.get(lang)]
 
     def _resolve(lang: str) -> dict[str, Any]:
-        return multilang_raw.get(lang) or _fallback_package(primary_topic, keyword_signals)
+        return multilang_raw.get(lang) or _fallback_package(primary_topic, keyword_signals, creator_brief)
 
     multilang = {lang: _resolve(lang) for lang in _LANGS}
 
@@ -266,7 +269,11 @@ def _deterministic_score(title: str, topic: str) -> float:
     return round(min(score, 9.5), 1)
 
 
-def _fallback_package(primary_topic: str, keyword_signals: list[dict[str, Any]]) -> dict[str, Any]:
+def _fallback_package(
+    primary_topic: str,
+    keyword_signals: list[dict[str, Any]],
+    creator_brief: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Deterministic minimal SEO package used only when Ollama is offline.
 
     No randomness, no clickbait Mad Libs. Just a topic-locked title set, a
@@ -274,19 +281,33 @@ def _fallback_package(primary_topic: str, keyword_signals: list[dict[str, Any]])
     topic_lock will still validate this.
     """
     pretty = (primary_topic or "your topic").strip().title()
-    variants = [
-        f"How to {pretty} (Step-by-Step)",
+    brief = creator_brief or {}
+    is_vlog = str(brief.get("video_format") or "").lower() in {"vlog", "story"}
+    promise = str(brief.get("viewer_promise") or "").strip()
+    if is_vlog:
+        variants = [
+            f"The Real {pretty}",
+            f"Inside My {pretty}",
+            f"My Honest {pretty}",
+            f"What {pretty} Is Really Like",
+            f"A Realistic {pretty}",
+        ]
+    else:
+        variants = [
+            f"How to {pretty} (Step-by-Step)",
         f"{pretty}: Real Methods That Work",
         f"{pretty} for Beginners — Honest Guide",
         f"What I Learned About {pretty}",
-        f"{pretty} Tips That Actually Help",
-    ]
+            f"{pretty} Tips That Actually Help",
+        ]
     description = (
         f"{pretty} — a practical walkthrough.\n\n"
         f"In this video I cover what {pretty.lower()} actually involves, "
         f"the mistakes most people make when they start, and the steps that "
         f"genuinely move the needle. By the end you will have a clear, "
-        f"simple plan you can apply immediately.\n\n"
+        f"simple plan you can apply immediately."
+        + (f" The viewer takeaway is: {promise}." if promise else "")
+        + "\n\n"
         f"If this helped, leave a like and tell me in the comments what you "
         f"want covered next."
     )
