@@ -11,6 +11,7 @@ from typing import Any
 
 from win_engine.analysis.content_auditor import audit_content_package
 from win_engine.analysis.creator_brief import creator_topic
+from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
 from win_engine.analysis.language_engine import build_language_strategy
 from win_engine.analysis.pacing_engine import analyze_script_pacing
@@ -27,7 +28,7 @@ from win_engine.generation.expansion_engine import (
     build_chapters,
     build_session_expansion,
 )
-from win_engine.llm.seo_writer import write_multilang_packages
+from win_engine.llm.seo_writer import write_multilang_packages_with_source
 
 
 _TOPIC_STOPWORDS = {"video", "youtube", "will", "what", "days", "today", "going"}
@@ -81,7 +82,7 @@ def build_seo_package(
     # Always generate English + Tamil + Tanglish so the creator gets all three
     # from a single request. One reachability check inside the helper.
     _LANGS = ["english", "tamil", "tanglish"]
-    multilang_raw = write_multilang_packages(
+    multilang_raw, generation_source = write_multilang_packages_with_source(
         script,
         competitors=competitors,
         languages=_LANGS,
@@ -131,6 +132,7 @@ def build_seo_package(
             for v in title_variants_data
         ],
     }
+    title_thumbnail_packages = build_title_thumbnail_packages(title_variants_data, creator_brief)
 
     content_audit = audit_content_package(script, title, primary_topic, secondary_topic, angle)
     opportunity_gap_analysis = analyze_opportunity_gaps(
@@ -197,6 +199,7 @@ def build_seo_package(
         "title_variants": title_variants_data,
         "content_angle": angle,
         "title_optimization": title_optimization,
+        "title_thumbnail_packages": title_thumbnail_packages,
         "content_audit": content_audit,
         "opportunity_gap_analysis": opportunity_gap_analysis,
         "language_strategy": language_strategy,
@@ -211,7 +214,7 @@ def build_seo_package(
         "feedback_package": feedback_package,
         "multilang": multilang,
         "fallback_languages": fallback_languages,
-        "generation_source": "ollama" if any(multilang_raw.values()) else "fallback",
+        "generation_source": generation_source,
     }
 
 

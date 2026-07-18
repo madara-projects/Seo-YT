@@ -13,6 +13,7 @@ from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.ingestion.research_service import ResearchService
+from win_engine.llm import gemini_client
 
 router = APIRouter()
 
@@ -784,6 +785,12 @@ _DASHBOARD_HTML = """<!doctype html>
       return sec("Competitor Research", out);
     }
 
+    function renderPackages(d) {
+      const packages = arr(d.title_thumbnail_packages);
+      if (!packages.length) return "";
+      return sec("Title + Thumbnail Packages", `<div class="feed">${packages.map((item) => `<div class="feed-card"><div class="tile-row"><h4>${esc(item.package || "Option")} · ${esc(item.title)}</h4>${chip(item.approach || "balanced", "ok")}</div><div class="feed-reason" style="margin-top:10px"><b>Thumbnail text:</b> ${esc(item.thumbnail_text || "")}</div><div class="feed-reason"><b>Visual:</b> ${esc(item.thumbnail_visual || "")}</div><div class="feed-reason"><b>Why viewers may click:</b> ${esc(item.why_click || "")}</div></div>`).join("")}</div>`);
+    }
+
     /* ---------- render: workflow + feedback ---------- */
     function renderWorkflow(d) {
       const w = d.automation_workflow || {};
@@ -824,6 +831,7 @@ _DASHBOARD_HTML = """<!doctype html>
       return sec("Creator Brief", `<div class="card card-pad">
         <div class="tile-row"><div><span class="label">Brief readiness</span><div class="metric sm">${esc(b.status === "ready" ? "Ready to package" : "Needs more detail")}</div></div>${chip((b.completeness || 0) + "% complete", statusTone)}</div>
         <div class="sub" style="margin-top:8px">${esc(b.recommendation || "")}</div>
+        <div class="sub" style="margin-top:8px">Writing source: <b style="color:var(--text)">${esc(d.generation_source || "local fallback")}</b></div>
         <div class="kv" style="margin-top:16px">${rows.map(([label, value]) => `<div class="kv-row"><span class="kv-k">${esc(label)}</span><span class="kv-v">${esc(value)}</span></div>`).join("") || "<div class='sub'>Add audience, promise, angle, and proof above for more specific packaging.</div>"}</div>
       </div>`);
     }
@@ -838,6 +846,7 @@ _DASHBOARD_HTML = """<!doctype html>
         renderLangs(d) +
         renderAudit(d) +
         renderTitleOpt(d) +
+        renderPackages(d) +
         renderGap(d) +
         renderStrategy(d) +
         renderSignals(d) +
@@ -978,7 +987,7 @@ def diagnostics(request: Request):
         _require_admin(request, settings)
     research = ResearchService(settings)
 
-    return research.diagnostics()
+    return {**research.diagnostics(), "gemini": gemini_client.diagnostics()}
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)

@@ -49,9 +49,11 @@ class AnalyzeResponse(BaseModel):
     content_angle: str
     title_variants: List[str]
     title_optimization: Dict[str, Any]
+    title_thumbnail_packages: List[Dict[str, Any]] = Field(default_factory=list)
     content_audit: Dict[str, Any]
     cache_policy: str
     research_warnings: List[str]
+    generation_source: str = "fallback"
     creator_brief: Dict[str, Any] = Field(default_factory=dict)
     research_queries: List[Dict[str, str]] = Field(default_factory=list)
     research_decision: Dict[str, Any] = Field(default_factory=dict)
