@@ -53,6 +53,8 @@ class AnalyzeResponse(BaseModel):
     cache_policy: str
     research_warnings: List[str]
     creator_brief: Dict[str, Any] = Field(default_factory=dict)
+    research_queries: List[Dict[str, str]] = Field(default_factory=list)
+    research_decision: Dict[str, Any] = Field(default_factory=dict)
     multilang: Dict[str, Any] = Field(default_factory=dict)
     youtube_results: List[Dict[str, Any]]
     top_opportunities: List[Dict[str, Any]]

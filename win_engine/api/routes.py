@@ -770,8 +770,15 @@ _DASHBOARD_HTML = """<!doctype html>
     function renderResearch(d) {
       const opp = arr(d.top_opportunities);
       const yt = arr(d.youtube_results);
-      if (!opp.length && !yt.length) return "";
+      const queries = arr(d.research_queries);
+      const decision = d.research_decision || {};
+      if (!opp.length && !yt.length && !queries.length && !decision.recommended_angle) return "";
       let out = "";
+      if (decision.recommended_angle) {
+        const repeated = arr(decision.repeated_title_patterns).map((item) => `${item.pattern} (${item.count})`).join(", ");
+        out += `<div class="card card-pad" style="margin-bottom:18px"><span class="label">Recommended angle</span><div class="metric sm" style="margin-top:8px">${esc(decision.recommended_angle)}</div><div class="sub" style="margin-top:10px">${esc(decision.reason || "")}</div><div class="kv" style="margin-top:14px"><div class="kv-row"><span class="kv-k">Competitor pattern</span><span class="kv-v">${esc(decision.dominant_competitor_pattern || "n/a")}</span></div><div class="kv-row"><span class="kv-k">Patterns to avoid</span><span class="kv-v">${esc(arr(decision.avoid).join(" "))}</span></div>${repeated ? `<div class="kv-row"><span class="kv-k">Repeated patterns</span><span class="kv-v">${esc(repeated)}</span></div>` : ""}</div></div>`;
+      }
+      if (queries.length) out += `<div style="margin:0 0 18px 2px"><span class="label">Research searches</span><div class="taglist" style="margin-top:10px">${queries.map((item) => chip(`${item.type}: ${item.query}`, "")).join("")}</div></div>`;
       if (opp.length) out += `<div style="margin-bottom:18px"><span class="label" style="margin-left:2px">Top Opportunities</span><div class="feed" style="margin-top:10px">${opp.map((i) => feedCard(i, true)).join("")}</div></div>`;
       if (yt.length) out += `<div><span class="label" style="margin-left:2px">Competitor Results</span><div class="feed" style="margin-top:10px">${yt.map((i) => feedCard(i, false)).join("")}</div></div>`;
       return sec("Competitor Research", out);
@@ -988,7 +995,12 @@ def analyze_script(payload: AnalyzeRequest):
         thumbnail_idea=payload.thumbnail_idea,
     )
     research = ResearchService(settings)
-    research_data = research.gather(payload.script, region=payload.region, primary_language=payload.language)
+    research_data = research.gather(
+        payload.script,
+        region=payload.region,
+        primary_language=payload.language,
+        creator_brief=creator_brief,
+    )
 
     context = {
         "language": payload.language,

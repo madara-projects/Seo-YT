@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import logging
 import re
+from hashlib import sha256
+from typing import Any
 
 from win_engine.analysis.entity_extractor import extract_entity_signals
 from win_engine.analysis.keyword_extractor import extract_keyword_signals
+from win_engine.analysis.research_insights import build_research_decision
+from win_engine.analysis.research_planner import brief_research_text, plan_research_queries
 from win_engine.analysis.thumbnail_intelligence import analyze_thumbnails
 from win_engine.core.config import Settings
 from win_engine.feedback.history_store import HistoryStore
@@ -29,23 +33,32 @@ class ResearchService:
         self._youtube = YouTubeClient(settings.youtube_api_key_pool, settings.request_timeout_seconds)
         self._history = HistoryStore(settings.database_path)
 
-    def gather(self, script: str, region: str = "global", primary_language: str = "english") -> dict[str, object]:
-        query = script[:120]
+    def gather(
+        self,
+        script: str,
+        region: str = "global",
+        primary_language: str = "english",
+        creator_brief: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        research_queries = plan_research_queries(
+            script=script,
+            creator_brief=creator_brief,
+            region=region,
+            primary_language=primary_language,
+            max_queries=self._settings.youtube_max_research_queries,
+        )
+        query = research_queries[0]["query"] if research_queries else script[:120]
         cache_policy, ttl_seconds = self._select_cache_policy(query)
 
-        youtube_key = f"yt:{cache_policy}:{query}"
-
-        youtube_results = self._cache.get(youtube_key)
-        if youtube_results is None:
-            youtube_results = self._youtube.search_videos(query, self._settings.youtube_max_results)
-            self._cache.set(youtube_key, youtube_results, ttl_seconds=ttl_seconds)
+        youtube_results = self._search_research_queries(research_queries, cache_policy, ttl_seconds)
 
         scored_results = score_outliers(youtube_results, region=region, primary_language=primary_language)
         scored_results = self._attach_velocity_signals(scored_results)
         self._history.record_snapshots(query, scored_results)
         top_opportunities = scored_results[:3]
-        keyword_signals = extract_keyword_signals(script, scored_results, region, primary_language)
-        entity_signals = extract_entity_signals(script, scored_results)
+        research_text = brief_research_text(script, creator_brief)
+        keyword_signals = extract_keyword_signals(research_text, scored_results, region, primary_language)
+        entity_signals = extract_entity_signals(research_text, scored_results)
         upload_timing = self._history.upload_timing_insights(scored_results)
         thumbnail_intelligence = analyze_thumbnails(scored_results)
         runtime_state = self._youtube.runtime_state()
@@ -63,11 +76,50 @@ class ResearchService:
             "entity_signals": entity_signals,
             "upload_timing": upload_timing,
             "thumbnail_intelligence": thumbnail_intelligence,
+            "research_queries": research_queries,
+            "research_decision": build_research_decision(creator_brief, scored_results),
             "research_warnings": research_warnings,
             "cache_policy": cache_policy,
             "youtube_runtime": runtime_state,
             "history_store": self._history,
         }
+
+    def _search_research_queries(
+        self,
+        research_queries: list[dict[str, str]],
+        cache_policy: str,
+        ttl_seconds: int,
+    ) -> list[dict[str, object]]:
+        """Search each planned angle and de-duplicate videos across the result set."""
+
+        merged: dict[str, dict[str, object]] = {}
+        for item in research_queries:
+            query = item["query"]
+            query_type = item["type"]
+            cache_id = sha256(query.casefold().encode("utf-8")).hexdigest()[:20]
+            youtube_key = f"yt:{cache_policy}:{cache_id}"
+            results = self._cache.get(youtube_key)
+            if results is None:
+                results = self._youtube.search_videos(query, self._settings.youtube_max_results)
+                self._cache.set(youtube_key, results, ttl_seconds=ttl_seconds)
+
+            for result in results or []:
+                video_id = str(result.get("video_id") or "")
+                if not video_id:
+                    continue
+                existing = merged.get(video_id)
+                if existing:
+                    matched = list(existing.get("matched_queries") or [])
+                    if query_type not in matched:
+                        matched.append(query_type)
+                        existing["matched_queries"] = matched
+                    continue
+                merged[video_id] = {
+                    **result,
+                    "research_query": query,
+                    "matched_queries": [query_type],
+                }
+        return list(merged.values())
 
     def diagnostics(self) -> dict[str, object]:
         """Return a quick health check for external integrations."""

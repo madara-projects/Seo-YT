@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from win_engine.analysis.intent_classifier import classify_intent
+from win_engine.analysis.creator_brief import creator_topic
+from win_engine.analysis.research_planner import brief_research_text
 from win_engine.analysis.topic_lock import (
     _is_junk_tag,
     expand_idea_to_script,
@@ -34,8 +36,13 @@ def generate_seo_suggestions(
         safe_script = expand_idea_to_script(safe_script)
 
     ctx = context or {}
-    category = infer_category(safe_script, hint=ctx.get("category"))   # Fix 2
-    main_topic = extract_main_topic(safe_script)                       # Fix 1
+    creator_brief = ctx.get("creator_brief")
+    topic_source = brief_research_text(
+        safe_script,
+        creator_brief if isinstance(creator_brief, dict) else None,
+    )
+    category = infer_category(topic_source, hint=ctx.get("category"))   # Fix 2
+    main_topic = creator_topic(creator_brief if isinstance(creator_brief, dict) else None) or extract_main_topic(topic_source)  # Fix 1
     # --------------------------------------------------------------------
 
     intent = classify_intent(safe_script)
@@ -48,7 +55,6 @@ def generate_seo_suggestions(
         research_payload["language_context"] = context
     research_payload["category"] = category
     research_payload["main_topic"] = main_topic
-    creator_brief = ctx.get("creator_brief")
     if isinstance(creator_brief, dict):
         research_payload["creator_brief"] = creator_brief
 
@@ -151,6 +157,8 @@ def generate_seo_suggestions(
         cache_policy=research_payload.get("cache_policy", "evergreen"),
         research_warnings=research_warnings,
         creator_brief=creator_brief if isinstance(creator_brief, dict) else {},
+        research_queries=research_payload.get("research_queries", []),
+        research_decision=research_payload.get("research_decision", {}),
         multilang=multilang_packages,
         youtube_results=research_payload.get("youtube_results", []),
         top_opportunities=research_payload.get("top_opportunities", []),
