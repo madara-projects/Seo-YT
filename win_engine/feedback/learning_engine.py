@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# Brain v2.0 Integration
 from win_engine.analysis.ctr_prediction_v2 import get_enhanced_ctr_prediction
-from win_engine.feedback.deep_learning_engine import DeepLearningEngine
 
 
 def build_feedback_package(
@@ -13,15 +11,14 @@ def build_feedback_package(
     learning_summary: dict[str, Any],
     internal_scorecard: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build Phase 5 feedback signals from generated package and stored history."""
+    """Build feedback signals from the generated package and stored history."""
 
     scored_variants = seo_package.get("title_optimization", {}).get("scored_variants", [])
     best_variant = scored_variants[0] if scored_variants else {"title": seo_package["title"], "score": 0}
     winning_titles = learning_summary.get("winning_titles", [])
     angle_effectiveness = learning_summary.get("angle_effectiveness", [])
 
-    # Brain v2.0: Enhanced CTR prediction with niche awareness
-    ctr_prediction = _ctr_prediction_v2(best_variant, seo_package, research, internal_scorecard)
+    ctr_prediction = _ctr_prediction(best_variant, seo_package)
     winning_patterns = _winning_patterns(angle_effectiveness, winning_titles)
     ab_test_pack = _ab_test_pack(scored_variants, seo_package["title"])
     performance_sync = _performance_sync(research, seo_package, internal_scorecard)
@@ -43,66 +40,26 @@ def build_feedback_package(
     }
 
 
-def _ctr_prediction(best_variant: dict[str, Any]) -> dict[str, Any]:
-    score = float(best_variant.get("score") or 0)
-    if score >= 10:
-        label = "HIGH"
-        confidence = "strong"
-    elif score >= 7:
-        label = "MEDIUM"
-        confidence = "moderate"
-    else:
-        label = "LOW"
-        confidence = "early"
-
-    return {
-        "label": label,
-        "score": round(score, 2),
-        "confidence": confidence,
-        "expected_band": _expected_ctr_band(label),
-        "reason": "Derived from title length, power words, curiosity markers, and topic coverage.",
-    }
-
-
-def _ctr_prediction_v2(
+def _ctr_prediction(
     best_variant: dict[str, Any],
     seo_package: dict[str, Any],
-    research: dict[str, Any],
-    internal_scorecard: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Brain v2.0 CTR prediction using niche-aware ML-inspired model.
-    90%+ accuracy compared to 70% of v1.0
-    """
+    """Build directional, niche-aware CTR guidance."""
     title = best_variant.get("title", seo_package.get("title", ""))
-    title_score = float(best_variant.get("score", 7.0))
     
     # Extract context from seo_package
     primary_topic = seo_package.get("primary_topic", "")
-    secondary_topic = seo_package.get("secondary_topic", "")
-    
-    # Get niche from opportunity analysis
     gap_analysis = seo_package.get("opportunity_gap_analysis", {})
-    competition = gap_analysis.get("competition", {})
-    competition_level = competition.get("level", "COMPETITIVE")
-    niche = internal_scorecard.get("niche", "general")
     
     # Get intent classification
     script_analysis = seo_package.get("script_analysis", {})
     intent = script_analysis.get("intent", "browse")
     
-    # Get language context
-    language_context = seo_package.get("language_context", {})
-    
-    # Use enhanced v2.0 predictor
     prediction = get_enhanced_ctr_prediction(
         title=title,
         primary_topic=primary_topic,
-        secondary_topic=secondary_topic,
         intent=intent,
-        language_strategy=language_context,
         opportunity_gap_analysis=gap_analysis,
-        historical_scorecard=internal_scorecard,
     )
     
     # Format for backward compatibility
@@ -111,17 +68,9 @@ def _ctr_prediction_v2(
         "predicted_ctr_percent": prediction.get("predicted_ctr_percent", 5.0),
         "confidence": prediction.get("confidence", "moderate"),
         "expected_band": prediction.get("expected_band", "around recent baseline"),
-        "reason": f"[Brain v2.0] {prediction.get('reason', 'Niche-aware ML prediction')}",
+        "reason": prediction.get("reasoning", "Niche-aware heuristic CTR guidance"),
         "reasoning": prediction.get("reasoning", {}),
     }
-
-
-def _expected_ctr_band(label: str) -> str:
-    if label == "HIGH":
-        return "above recent baseline"
-    if label == "MEDIUM":
-        return "around recent baseline"
-    return "below recent baseline"
 
 
 def _winning_patterns(
@@ -220,81 +169,3 @@ def _comparison_summary(
     if current_title_score < avg_title_score and current_opportunity_score < avg_opportunity_score:
         return "This analysis is weaker than your recent average and may need a stronger angle or title."
     return "This analysis is mixed versus your recent average: one side is stronger, the other needs work."
-
-
-# === PHASE 8: PATTERN MEMORY INTEGRATION ===
-
-
-def build_pattern_memory_package(
-    history_store: Any,
-) -> dict[str, Any]:
-    """Build comprehensive pattern memory insights from stored history."""
-
-    performance_corr = history_store.performance_correlation()
-    success_formulas = history_store.success_formula_recognition()
-    trends = history_store.trend_analysis()
-    memory = history_store.memory_persistence()
-    baseline = history_store.creator_baseline()
-
-    return {
-        "performance_correlation": performance_corr,
-        "success_formulas": success_formulas,
-        "trend_analysis": trends,
-        "memory_persistence": memory,
-        "creator_baseline": baseline,
-    }
-
-
-def enrich_feedback_with_patterns(
-    feedback_package: dict[str, Any],
-    pattern_memory: dict[str, Any],
-) -> dict[str, Any]:
-    """Enhance feedback with pattern memory insights."""
-
-    success_formulas = pattern_memory.get("success_formulas", {})
-    creator_baseline = pattern_memory.get("creator_baseline", {})
-    trends = pattern_memory.get("trend_analysis", {})
-    memory = pattern_memory.get("memory_persistence", {})
-
-    # Add pattern recommendations
-    pattern_rec = {
-        "recommended_angles": [f["angle"] for f in success_formulas.get("strongest_angles", [])],
-        "avoid_patterns": [
-            f["risk_type"] for f in memory.get("risk_patterns_to_avoid", []) if f.get("frequency", 0) > 2
-        ],
-        "baseline_comparison": {
-            "vs_creator_average": feedback_package.get("historical_comparison", {}).get("title_score_vs_average", 0),
-            "creator_baseline_score": creator_baseline.get("baseline_title_score", 0),
-        },
-        "trend_direction": trends.get("title_score_trend", {}).get("direction", "unknown"),
-    }
-
-    # Enhance the feedback
-    enriched = feedback_package.copy()
-    enriched["pattern_memory_insights"] = pattern_rec
-
-    return enriched
-
-
-def pattern_memory_summary(pattern_memory: dict[str, Any]) -> str:
-    """Generate human-readable summary of pattern memory insights."""
-
-    success_formulas = pattern_memory.get("success_formulas", {})
-    trends = pattern_memory.get("trend_analysis", {})
-    baseline = pattern_memory.get("creator_baseline", {})
-
-    formulas_insight = success_formulas.get("observation", "")
-
-    title_trend = trends.get("title_score_trend", {})
-    trend_msg = f"Title scores are {title_trend.get('direction', 'stable')} "
-    if title_trend.get("trend_line"):
-        trend_msg += f"(trending {'+' if title_trend.get('trend_line', 0) > 0 else '-'}{abs(title_trend.get('trend_line', 0))})."
-
-    baseline_msg = (
-        f"Your baseline title score is {baseline.get('baseline_title_score', 0)}, "
-        f"with a range of {baseline.get('score_range', {}).get('lowest_title_score', 0)}"
-        f" to {baseline.get('score_range', {}).get('highest_title_score', 0)}."
-    )
-
-    return f"{formulas_insight} {trend_msg} {baseline_msg}"
-

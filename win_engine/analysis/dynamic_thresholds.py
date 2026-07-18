@@ -253,7 +253,7 @@ def get_dynamic_kill_switch(
     """
     Enhanced kill-switch replacement using dynamic thresholds.
     
-    Drop-in for _idea_kill_switch() function.
+    Build a niche-aware publish recommendation from current research signals.
     """
     
     calculator = DynamicThresholdCalculator(historical_data)

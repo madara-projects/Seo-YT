@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from win_engine.ai_enhancement import analyze_content_quality_ai, get_ai_insights
 from win_engine.analysis.content_auditor import audit_content_package
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
 from win_engine.analysis.language_engine import build_language_strategy
@@ -183,14 +182,6 @@ def build_seo_package(
         internal_scorecard=history_store.internal_scorecard(),
     )
 
-    competitor_descriptions = [
-        r.get("description", "")
-        for r in research.get("youtube_results", []) or []
-        if isinstance(r, dict) and r.get("description")
-    ]
-    ai_insights = get_ai_insights(script, competitor_descriptions)
-    ai_quality_analysis = analyze_content_quality_ai(script)
-
     return {
         "title": title,
         "description": description,
@@ -211,8 +202,6 @@ def build_seo_package(
         "binge_bridge": binge_bridge,
         "automation_workflow": automation_workflow,
         "feedback_package": feedback_package,
-        "ai_insights": ai_insights,
-        "ai_quality_analysis": ai_quality_analysis,
         "multilang": multilang,
         "fallback_languages": fallback_languages,
         "generation_source": "ollama" if any(multilang_raw.values()) else "fallback",
