@@ -23,7 +23,7 @@ Complete one stage, test it with a few real video ideas, and only then begin the
 
 ---
 
-## Stage 1 — Better video input
+## Stage 1 — Better video input (complete)
 
 ### Problem today
 

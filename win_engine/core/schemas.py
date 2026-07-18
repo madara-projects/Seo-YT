@@ -10,6 +10,13 @@ class AnalyzeRequest(BaseModel):
     language: str = Field(default="english", description="Selected language (english, tamil, tanglish, etc.)")
     region: str = Field(default="global", description="Target region (Global, India, Tamil Nadu, Sri Lanka, Gulf, etc.)")
     audience_type: str = Field(default="general", description="Target audience type (General, Local, Diaspora)")
+    target_audience: str = Field(default="", max_length=200, description="Specific viewer the video is for")
+    viewer_promise: str = Field(default="", max_length=300, description="What the viewer will get, learn, feel, or see")
+    unique_angle: str = Field(default="", max_length=300, description="What makes this video different")
+    proof: str = Field(default="", max_length=300, description="Proof, footage, result, or personal experience")
+    video_format: str = Field(default="", max_length=80, description="Vlog, tutorial, Short, review, story, challenge, etc.")
+    title_style: str = Field(default="balanced", max_length=80, description="Searchable, curiosity-led, or balanced")
+    thumbnail_idea: str = Field(default="", max_length=200, description="Optional thumbnail direction")
 
     @field_validator("script")
     @classmethod
@@ -18,6 +25,19 @@ class AnalyzeRequest(BaseModel):
         if not cleaned:
             raise ValueError("Field 'script' cannot be empty")
         return cleaned
+
+    @field_validator(
+        "target_audience",
+        "viewer_promise",
+        "unique_angle",
+        "proof",
+        "video_format",
+        "title_style",
+        "thumbnail_idea",
+    )
+    @classmethod
+    def clean_creator_brief_text(cls, value: str) -> str:
+        return value.strip()
 
 
 class AnalyzeResponse(BaseModel):
@@ -32,6 +52,7 @@ class AnalyzeResponse(BaseModel):
     content_audit: Dict[str, Any]
     cache_policy: str
     research_warnings: List[str]
+    creator_brief: Dict[str, Any] = Field(default_factory=dict)
     multilang: Dict[str, Any] = Field(default_factory=dict)
     youtube_results: List[Dict[str, Any]]
     top_opportunities: List[Dict[str, Any]]

@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 
+from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.core.config import get_settings
 from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse
 from win_engine.feedback.history_store import HistoryStore
@@ -148,6 +149,19 @@ _DASHBOARD_HTML = """<!doctype html>
       padding: 16px; font-size: 15px; line-height: 1.6; font-family: var(--sans);
     }
     textarea#script::placeholder { color: #52525b; }
+    .brief-panel { padding: 16px; border-top: 1px solid var(--border); background: var(--bg-soft); }
+    .brief-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 13px; flex-wrap: wrap; }
+    .brief-head p { margin: 0; font-size: 12px; color: var(--muted-2); }
+    .brief-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .brief-field { display: flex; flex-direction: column; gap: 6px; }
+    .brief-field.wide { grid-column: span 2; }
+    .brief-field label { font-size: 11px; font-weight: 600; color: var(--muted); }
+    .brief-field input, .brief-field select {
+      width: 100%; border: 1px solid var(--border-soft); outline: none; border-radius: 8px;
+      background: var(--panel); color: var(--text); padding: 10px 11px; font: inherit; font-size: 13px;
+    }
+    .brief-field input:focus, .brief-field select:focus { border-color: rgba(244,63,94,0.65); }
+    .brief-field input::placeholder { color: #52525b; }
     .editor-foot {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 12px 14px; border-top: 1px solid var(--border); background: var(--panel-2); flex-wrap: wrap;
@@ -265,6 +279,8 @@ _DASHBOARD_HTML = """<!doctype html>
     }
     @media (max-width: 560px) {
       .grid-2 { grid-template-columns: 1fr; }
+      .brief-grid { grid-template-columns: 1fr; }
+      .brief-field.wide { grid-column: span 1; }
       .nav-inner { flex-direction: column; align-items: flex-start; }
     }
   </style>
@@ -301,7 +317,53 @@ _DASHBOARD_HTML = """<!doctype html>
         <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
         <span class="editor-name">script.md</span>
       </div>
-      <textarea id="script" placeholder="e.g. My video is about my daily office life vlog and personal experiences..."></textarea>
+       <textarea id="script" placeholder="e.g. My video is about my daily office life vlog and personal experiences..."></textarea>
+      <div class="brief-panel">
+        <div class="brief-head">
+          <span class="label">Creator brief</span>
+          <p>Add these details for titles that match the real video. All fields are optional, but more detail gives better output.</p>
+        </div>
+        <div class="brief-grid">
+          <div class="brief-field">
+            <label for="targetAudience">Who is this video for?</label>
+            <input id="targetAudience" placeholder="e.g. Tamil working professionals aged 20–30" />
+          </div>
+          <div class="brief-field">
+            <label for="viewerPromise">What will the viewer get?</label>
+            <input id="viewerPromise" placeholder="e.g. Feel understood and learn how I manage my time" />
+          </div>
+          <div class="brief-field">
+            <label for="uniqueAngle">What makes this video different?</label>
+            <input id="uniqueAngle" placeholder="e.g. Real office footage, not a perfect productivity routine" />
+          </div>
+          <div class="brief-field">
+            <label for="proof">Your proof, footage, or experience</label>
+            <input id="proof" placeholder="e.g. My commute, workday, and evening creator routine" />
+          </div>
+          <div class="brief-field">
+            <label for="videoFormat">Video format</label>
+            <select id="videoFormat">
+              <option value="">Choose a format</option><option>Vlog</option><option>Tutorial</option><option>Short</option><option>Review</option><option>Story</option><option>Challenge</option>
+            </select>
+          </div>
+          <div class="brief-field">
+            <label for="titleStyle">Preferred title style</label>
+            <select id="titleStyle"><option value="balanced">Balanced</option><option value="searchable">Searchable</option><option value="curiosity-led">Curiosity-led</option></select>
+          </div>
+          <div class="brief-field">
+            <label for="language">Output language</label>
+            <select id="language"><option value="english">English</option><option value="tamil">Tamil</option><option value="tanglish">Tanglish</option></select>
+          </div>
+          <div class="brief-field">
+            <label for="region">Target region</label>
+            <select id="region"><option value="global">Global</option><option value="india">India</option><option value="tamil nadu">Tamil Nadu</option><option value="sri lanka">Sri Lanka</option><option value="gulf">Gulf</option></select>
+          </div>
+          <div class="brief-field wide">
+            <label for="thumbnailIdea">Optional thumbnail idea</label>
+            <input id="thumbnailIdea" placeholder="e.g. Tired face in an office elevator; text: NO TIME LEFT" />
+          </div>
+        </div>
+      </div>
       <div class="editor-foot">
         <span class="hint" id="charHint">0 characters</span>
         <div class="btn-group">
@@ -331,6 +393,12 @@ _DASHBOARD_HTML = """<!doctype html>
     const diagBtn = $("diagBtn");
     const exportBtn = $("exportBtn");
     const scriptInput = $("script");
+    const briefInputs = {
+      target_audience: $("targetAudience"), viewer_promise: $("viewerPromise"),
+      unique_angle: $("uniqueAngle"), proof: $("proof"), video_format: $("videoFormat"),
+      title_style: $("titleStyle"), thumbnail_idea: $("thumbnailIdea"),
+      language: $("language"), region: $("region"),
+    };
     const results = $("results");
     const alertBox = $("alert");
     const charHint = $("charHint");
@@ -737,11 +805,28 @@ _DASHBOARD_HTML = """<!doctype html>
         <div>${w.map((x) => esc(x)).join("<br>")}</div></div>`;
     }
 
+    function renderBrief(d) {
+      const b = d.creator_brief || {};
+      if (!b.status) return "";
+      const statusTone = b.status === "ready" ? "ok" : "warn";
+      const rows = [
+        ["Audience", b.target_audience], ["Viewer promise", b.viewer_promise],
+        ["Unique angle", b.unique_angle], ["Proof", b.proof],
+        ["Format", b.video_format], ["Title style", b.title_style],
+      ].filter(([, value]) => value && value !== "unspecified");
+      return sec("Creator Brief", `<div class="card card-pad">
+        <div class="tile-row"><div><span class="label">Brief readiness</span><div class="metric sm">${esc(b.status === "ready" ? "Ready to package" : "Needs more detail")}</div></div>${chip((b.completeness || 0) + "% complete", statusTone)}</div>
+        <div class="sub" style="margin-top:8px">${esc(b.recommendation || "")}</div>
+        <div class="kv" style="margin-top:16px">${rows.map(([label, value]) => `<div class="kv-row"><span class="kv-k">${esc(label)}</span><span class="kv-v">${esc(value)}</span></div>`).join("") || "<div class='sub'>Add audience, promise, angle, and proof above for more specific packaging.</div>"}</div>
+      </div>`);
+    }
+
     /* ---------- main ---------- */
     function render(d) {
       results.classList.remove("hidden");
       results.innerHTML =
         renderWarnings(d) +
+        renderBrief(d) +
         renderMetrics(d) +
         renderLangs(d) +
         renderAudit(d) +
@@ -778,7 +863,10 @@ _DASHBOARD_HTML = """<!doctype html>
       try {
         const r = await fetch("/analyze", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ script }),
+          body: JSON.stringify({
+            script,
+            ...Object.fromEntries(Object.entries(briefInputs).map(([key, input]) => [key, input.value.trim()])),
+          }),
         });
         const data = await r.json();
         if (!r.ok) { showAlert("err", data.error?.message || data.detail || "Analysis failed."); return; }
@@ -889,6 +977,16 @@ def diagnostics(request: Request):
 @router.post("/analyze", response_model=AnalyzeResponse)
 def analyze_script(payload: AnalyzeRequest):
     settings = get_settings()
+    creator_brief = build_creator_brief(
+        script=payload.script,
+        target_audience=payload.target_audience,
+        viewer_promise=payload.viewer_promise,
+        unique_angle=payload.unique_angle,
+        proof=payload.proof,
+        video_format=payload.video_format,
+        title_style=payload.title_style,
+        thumbnail_idea=payload.thumbnail_idea,
+    )
     research = ResearchService(settings)
     research_data = research.gather(payload.script, region=payload.region, primary_language=payload.language)
 
@@ -896,6 +994,7 @@ def analyze_script(payload: AnalyzeRequest):
         "language": payload.language,
         "region": payload.region,
         "audience_type": payload.audience_type,
+        "creator_brief": creator_brief,
     }
     return generate_seo_suggestions(payload.script, research_data, context=context)
 
