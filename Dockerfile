@@ -8,20 +8,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PORT=8000
 
-# curl is used by HEALTHCHECK only. No build tools, no ML runtime libs.
+# curl is used by the container health check.
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
-# --only-binary=:all: blocks any source-build fallback so a missing wheel
-# fails fast instead of triggering a C/C++ compile.
-# en-core-web-sm is a model archive (no compile) — explicit allow.
+# Fail fast instead of triggering a C/C++ source build when a wheel is missing.
 RUN pip install --upgrade pip && \
-    pip install \
-        --only-binary=:all: \
-        --no-binary=en-core-web-sm \
-        -r requirements.txt
+    pip install --only-binary=:all: -r requirements.txt
 
 COPY . .
 

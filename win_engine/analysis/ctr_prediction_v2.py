@@ -1,7 +1,4 @@
-"""
-Enhanced CTR Prediction Model v2.0
-Niche-aware, ML-inspired regression model with empirical validation
-"""
+"""Niche-aware heuristic CTR guidance."""
 
 from __future__ import annotations
 from typing import Any
@@ -30,7 +27,6 @@ class CTRPredictorV2:
         primary_topic: str,
         niche: str = "general",
         content_type: str = "general",
-        title_score: float = 7.0,
         competition_level: str = "COMPETITIVE",
     ) -> dict[str, Any]:
         """
@@ -41,7 +37,6 @@ class CTRPredictorV2:
             primary_topic: Main topic/keyword
             niche: Content niche (gaming, tech, education, lifestyle, etc)
             content_type: Type of content (tutorial, vlog, experiment, etc)
-            title_score: Score from title optimizer (0-10)
             competition_level: SATURATED|COMPETITIVE|UNDERSERVED
             
         Returns:
@@ -71,7 +66,7 @@ class CTRPredictorV2:
         base_ctr = niche_baseline + feature_bonus
         adjusted_ctr = (base_ctr * competition_factor * content_multiplier * seasonality_factor)
         
-        # Normalize to 0-1, then scale to title_score-based prediction
+        # Normalize to a realistic guidance range.
         predicted_ctr = min(max(adjusted_ctr, 0.01), 0.15)  # Realistic bounds: 1-15% CTR
         
         # Step 7: Determine confidence level
@@ -292,20 +287,11 @@ class CTRPredictorV2:
 def get_enhanced_ctr_prediction(
     title: str,
     primary_topic: str,
-    secondary_topic: str,
     intent: str = "browse",
-    language_strategy: dict[str, Any] | None = None,
     opportunity_gap_analysis: dict[str, Any] | None = None,
-    historical_scorecard: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Drop-in replacement for old CTR prediction that's 90%+ accurate.
-    
-    Integrates with existing system by accepting same inputs.
-    """
-    language_strategy = language_strategy or {}
+    """Estimate a directional CTR range from title and niche heuristics."""
     opportunity_gap_analysis = opportunity_gap_analysis or {}
-    historical_scorecard = historical_scorecard or {}
     
     # Infer niche from topic and intent
     niche = _infer_niche(primary_topic, intent)
@@ -316,9 +302,6 @@ def get_enhanced_ctr_prediction(
     # Get competition level
     competition_level = opportunity_gap_analysis.get("competition", {}).get("label", "COMPETITIVE")
     
-    # Use title score if available
-    title_score = opportunity_gap_analysis.get("opportunity_score", {}).get("score", 7.0)
-    
     # Create predictor instance
     predictor = CTRPredictorV2()
     
@@ -328,7 +311,6 @@ def get_enhanced_ctr_prediction(
         primary_topic=primary_topic,
         niche=niche,
         content_type=content_type,
-        title_score=title_score,
         competition_level=competition_level,
     )
     
@@ -337,8 +319,8 @@ def get_enhanced_ctr_prediction(
         "score": prediction["predicted_ctr_percent"],
         "confidence": prediction["confidence"],
         "expected_band": prediction["expected_band"],
-        "reasoning": "ML-inspired niche-aware CTR prediction with competition and content-type adjustments",
-        "model_version": "2.0",
+        "reasoning": "Heuristic CTR guidance using niche, competition, title features, and content type",
+        "model_version": "heuristic-v1",
     }
 
 

@@ -9,7 +9,7 @@ IntentLabel = Literal["SEARCH", "BROWSE", "SUGGESTED"]
 def classify_intent(script: str) -> IntentLabel:
     """Basic heuristic intent classifier.
 
-    TODO: Replace with robust classifier using real data.
+    Uses deterministic keyword signals and a conservative fallback.
     """
 
     lower = script.lower()

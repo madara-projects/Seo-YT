@@ -4,7 +4,7 @@ from typing import Any
 
 
 def build_language_strategy(script: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Simple language and localization baseline for Phase 7."""
+    """Build language and localization guidance."""
 
     context = context or {}
     lowered = script.lower()

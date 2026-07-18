@@ -55,19 +55,3 @@ def generate(prompt: str, system: str = "", model: Optional[str] = None,
     except Exception as exc:
         logger.warning("Ollama generate failed: %s", exc)
         return ""
-
-
-async def agenerate(prompt: str, system: str = "", model: Optional[str] = None,
-                    max_tokens: int = 250, temperature: float = 0.7) -> str:
-    """Async generation for FastAPI handlers."""
-    try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            r = await client.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json=_payload(prompt, system, model, max_tokens, temperature),
-            )
-            r.raise_for_status()
-            return (r.json().get("response") or "").strip()
-    except Exception as exc:
-        logger.warning("Ollama agenerate failed: %s", exc)
-        return ""

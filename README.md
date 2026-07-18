@@ -1,110 +1,168 @@
 # YouTube SEO Analyzer
 
-A local-first tool that turns a video script (or even a one-line idea) into a
-ready-to-paste YouTube SEO package: title, 5 title variants, description,
-tags, hashtags, and supporting strategy data.
+A local-first FastAPI application that turns a video idea or script into a researched, upload-ready YouTube SEO package. It is designed for one creator running a few analyses per day, either directly on Windows or with Docker Compose.
 
-Built for personal use — single user, a few videos per day.
+The staged plan for turning it into a private, channel-aware growth tool is in [ROADMAP.md](ROADMAP.md).
 
-## What it gives you
+## What it produces
 
-For any video idea you type in:
+- English, Tamil, and Tanglish title packages
+- A primary title plus five scored alternatives
+- Description, tags, and hashtags
+- YouTube competitor research and outlier scoring
+- Keyword, entity, opportunity, pacing, and content-audit signals
+- Thumbnail direction, chapters, content-graph ideas, and publishing workflow
+- CTR guidance, A/B title suggestions, and comparison with local analysis history
+- JSON export from the built-in dashboard
 
-- **Title** (SEO + CTR optimized) + 4 alternates in different styles
-- **Description** (120–180 words, keyword-front-loaded, with CTA)
-- **Tags** (10, cleaned of junk filler)
-- **Hashtags** (3, topic-derived)
-- Supporting analysis: intent, content audit, competitor gap, pacing,
-  thumbnail strategy, chapter outline, A/B test pack
+Ollama generates the natural-language SEO copy. If Ollama is unavailable, the application remains usable through a deterministic English fallback and reports when native Tamil or Tanglish output could not be generated.
 
-## How it works
+## Architecture
 
+```text
+Browser or API client
+        |
+        v
+FastAPI routes and validation
+        |
+        +--> YouTube Data API research --> outlier and opportunity scoring
+        |
+        +--> Ollama generation --> topic-lock validation
+        |
+        +--> analysis and strategy engines
+        |
+        +--> SQLite history and feedback
+        |
+        v
+Structured analysis response
 ```
-Your idea  ─►  YouTube research (competitor titles, keywords)
-           ─►  Ollama generates SEO copy from your idea + competitor context
-           ─►  Topic-lock layer (validates output, drops junk, enforces topic)
-           ─►  Final package
+
+The service uses one FastAPI process and an inline HTML/JavaScript dashboard. There is no frontend build toolchain or separate UI server.
+
+## Requirements
+
+- Python 3.11+
+- A YouTube Data API v3 key
+- [Ollama](https://ollama.com/) with a local model for high-quality multilingual output
+- Docker Desktop only if using the container workflow
+
+Redis is optional for direct local runs and is included by Docker Compose.
+
+## Configuration
+
+Copy the example file and add your API key:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
-Ollama is the brain. If Ollama is offline, the app falls back to template-only
-output (still usable, but much less natural).
+Important variables:
 
-## Quick start
+| Variable | Purpose | Default |
+|---|---|---|
+| `WIN_ENGINE_YOUTUBE_API_KEY` | YouTube Data API v3 key | empty |
+| `WIN_ENGINE_YOUTUBE_API_KEYS` | Comma-separated key rotation pool | empty |
+| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Competitors fetched per analysis | `5` |
+| `OLLAMA_BASE_URL` | Ollama HTTP endpoint | `http://localhost:11434` |
+| `OLLAMA_MODEL` | Generation model | `mistral` |
+| `OLLAMA_TIMEOUT_SECONDS` | Generation timeout | `30` in the example |
+| `WIN_ENGINE_DATABASE_PATH` | SQLite history path | `win_engine.db` |
+| `WIN_ENGINE_REDIS_URL` | Optional Redis cache URL | empty |
+| `WIN_ENGINE_PUBLIC_DIAGNOSTICS_ENABLED` | Allow diagnostics without an admin token | `true` |
+| `WIN_ENGINE_ADMIN_API_TOKEN` | Token for protected operational endpoints | empty |
 
-### 1. Install Ollama
-Download from [ollama.ai](https://ollama.ai), then in a terminal:
+Do not commit `.env`; it is excluded by `.gitignore`. In non-development environments, configure an admin token before exposing operational endpoints.
+
+## Run locally
+
+Install and start Ollama first:
+
 ```powershell
 ollama pull mistral
 ```
-The daemon auto-starts on `http://localhost:11434`.
 
-### 2. Install Python deps
+Create a clean virtual environment and install the application:
+
 ```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-### 3. Configure
-```powershell
-copy .env.example .env
-```
-Open `.env` and set `WIN_ENGINE_YOUTUBE_API_KEY` (free key from
-[Google Cloud Console](https://console.cloud.google.com/) — enable
-**YouTube Data API v3**).
-
-### 4. Run
-```powershell
 python app.py
 ```
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000) — built-in HTML form.
-Or hit `POST /analyze` directly. Swagger docs at `/docs`.
 
-## Stack
-
-- **FastAPI** — API + built-in HTML form (no Streamlit, no second port)
-- **spaCy** — keyword + entity extraction
-- **Ollama (mistral)** — title/description generation
-- **SQLite** — local history for learning + comparison
-- **Redis** (optional) — caches YouTube research between requests
-- **Docker** — optional, for a containerized run
+Open <http://127.0.0.1:8000>. Interactive API documentation is available at <http://127.0.0.1:8000/docs>.
 
 ## Run with Docker
 
-The easiest way is Docker Compose (brings up the app + Redis, and points Ollama
-at the host daemon automatically):
+Keep Ollama running on the host, then build and start the application with Redis:
 
 ```powershell
-docker compose up --build
+docker compose up --build -d
+docker compose ps
 ```
 
-Or build and run the single container by hand:
+The Compose configuration maps the host Ollama daemon through `host.docker.internal` and persists SQLite data in `win_engine.db`.
+
+Stop the stack without deleting its data:
 
 ```powershell
-docker build -t seo-app .
-docker run -p 8000:8000 --env-file .env --add-host host.docker.internal:host-gateway -e OLLAMA_BASE_URL=http://host.docker.internal:11434 seo-app
+docker compose down
 ```
 
-Either way, open [http://127.0.0.1:8000](http://127.0.0.1:8000). Keep Ollama
-running on the host (`ollama serve` / `ollama pull mistral`).
+## API
 
-## Project shape
+### Analyze a script
 
+`POST /analyze`
+
+```json
+{
+  "script": "How I organize a productive workday from home",
+  "language": "english",
+  "region": "global",
+  "audience_type": "general"
+}
 ```
-app.py                          FastAPI entry
+
+Only `script` is required. The response contains the upload-ready packages and the supporting research and strategy fields.
+
+### Operational endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /` | Dashboard |
+| `GET /health` | Process and database health |
+| `GET /ready` | Database and YouTube-key readiness |
+| `GET /meta` | Version and capabilities |
+| `GET /diagnostics` | Live YouTube integration probe |
+| `GET /docs` | OpenAPI interface |
+
+When an endpoint is protected, send the token in the `X-Admin-Token` header.
+
+## Project layout
+
+```text
+app.py                  Application entry point
+compose.yaml            App and Redis services
+Dockerfile              Production-style container image
+requirements.txt        Python runtime dependencies
 win_engine/
-  api/        routes (/, /analyze, /health, /ready, /meta, /diagnostics)
-  ingestion/  YouTube client + research orchestration
-  analysis/   topic-lock, NLP, intent, gap, pacing, thumbnail, content audit
-  generation/ SEO package builder + automation/expansion/chapters
-  feedback/   history store, learning engine, CTR prediction
-  llm/        Ollama client + SEO writer
-  scoring/    outlier engine for YouTube video scoring
-  core/       config, schemas, logging, middleware, rate-limit
+  api/                   FastAPI factory, dashboard, and routes
+  analysis/              Topic, content, CTR, pacing, and strategy analysis
+  core/                  Configuration, schemas, middleware, logging, rate limiting
+  feedback/              SQLite history and feedback summaries
+  generation/            SEO package and workflow generation
+  ingestion/             YouTube client, caching, and research orchestration
+  llm/                   Ollama client and SEO prompts
+  scoring/               Competitor outlier scoring
 ```
 
-## Limits
+## Current scope and limitations
 
-- New / very niche trends → lower confidence from research signals
-- Thumbnail output is concept guidance, not generated images
-- Best results when Ollama is running locally
+- This is a local, single-user tool; it has no user accounts or multi-tenant isolation.
+- YouTube research quality depends on a valid API key and available quota.
+- Native Tamil and Tanglish generation requires Ollama.
+- CTR values are heuristic guidance, not measured predictions.
+- Chapter timestamps are generic suggestions and should be reviewed before publishing.
+- The repository currently has no automated test suite; validate changes with import, API, and container smoke checks.
