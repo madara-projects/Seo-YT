@@ -13,7 +13,7 @@ import logging
 import re
 from typing import Any, Optional, Union
 
-from win_engine.llm import ollama_client
+from win_engine.llm import gemini_client, ollama_client
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +297,7 @@ def _generate_one(
     creator_brief: Optional[dict[str, Any]],
     temperature: float,
     max_tokens: int,
+    provider: str = "ollama",
 ) -> Optional[dict[str, Any]]:
     """Single generation call. Assumes Ollama reachability was already checked."""
     prompt = _build_user_prompt(
@@ -308,12 +309,20 @@ def _generate_one(
         category=category,
         creator_brief=creator_brief,
     )
-    raw = ollama_client.generate(
-        prompt=prompt,
-        system=_SYSTEM_PROMPT,
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
+    if provider == "gemini":
+        raw = gemini_client.generate(
+            prompt=prompt,
+            system=_SYSTEM_PROMPT,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    else:
+        raw = ollama_client.generate(
+            prompt=prompt,
+            system=_SYSTEM_PROMPT,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
     if not raw:
         return None
     parsed = _extract_json(raw)
@@ -341,7 +350,8 @@ def write_seo_package(
     """
     if not script or not script.strip():
         return None
-    if not ollama_client.is_available():
+    provider = "ollama" if ollama_client.is_available() else "gemini" if gemini_client.is_available() else ""
+    if not provider:
         return None
     return _generate_one(
         script,
@@ -353,6 +363,7 @@ def write_seo_package(
         creator_brief=creator_brief,
         temperature=temperature,
         max_tokens=max_tokens,
+        provider=provider,
     )
 
 
@@ -368,27 +379,69 @@ def write_multilang_packages(
     temperature: float = 0.5,
     max_tokens: int = 1100,
 ) -> dict[str, Optional[dict[str, Any]]]:
+    packages, _ = write_multilang_packages_with_source(
+        script,
+        competitors,
+        languages=languages,
+        region=region,
+        audience_type=audience_type,
+        category=category,
+        creator_brief=creator_brief,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    return packages
+
+
+def write_multilang_packages_with_source(
+    script: str,
+    competitors: Optional[list[Competitor]] = None,
+    *,
+    languages: Optional[list[str]] = None,
+    region: str = "global",
+    audience_type: str = "general",
+    category: Optional[str] = None,
+    creator_brief: Optional[dict[str, Any]] = None,
+    temperature: float = 0.5,
+    max_tokens: int = 1100,
+) -> tuple[dict[str, Optional[dict[str, Any]]], str]:
     """Generate SEO packages for several languages in one pass.
 
-    Checks Ollama reachability ONCE (avoids N slow timeouts when offline).
-    Returns {language: package|None}. A None value means that language must be
-    handled by the caller's fallback.
+    Prefer Ollama, then use Gemini only for missing packages. Returns the
+    packages plus ``ollama``, ``gemini``, ``mixed``, or ``fallback``.
     """
     langs = [l.lower() for l in (languages or ["english", "tamil", "tanglish"])]
-    if not script or not script.strip() or not ollama_client.is_available():
-        return {lang: None for lang in langs}
+    if not script or not script.strip():
+        return {lang: None for lang in langs}, "fallback"
 
     out: dict[str, Optional[dict[str, Any]]] = {}
+    sources: set[str] = set()
+    ollama_ready = ollama_client.is_available()
+    gemini_ready = gemini_client.is_available()
     for lang in langs:
-        out[lang] = _generate_one(
-            script,
-            competitors,
-            language=lang,
-            region=region,
-            audience_type=audience_type,
-            category=category,
-            creator_brief=creator_brief,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    return out
+        package = None
+        if ollama_ready:
+            package = _generate_one(
+                script, competitors, language=lang, region=region, audience_type=audience_type,
+                category=category, creator_brief=creator_brief, temperature=temperature,
+                max_tokens=max_tokens, provider="ollama",
+            )
+            if package:
+                sources.add("ollama")
+        if package is None and gemini_ready:
+            package = _generate_one(
+                script, competitors, language=lang, region=region, audience_type=audience_type,
+                category=category, creator_brief=creator_brief, temperature=temperature,
+                max_tokens=max_tokens, provider="gemini",
+            )
+            if package:
+                sources.add("gemini")
+        out[lang] = package
+
+    if not sources:
+        source = "fallback"
+    elif len(sources) == 1:
+        source = next(iter(sources))
+    else:
+        source = "mixed"
+    return out, source

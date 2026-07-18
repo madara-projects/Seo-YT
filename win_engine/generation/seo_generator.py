@@ -135,12 +135,13 @@ def generate_seo_suggestions(
     non_english_fallback = [
         lang for lang in (seo_package.get("fallback_languages") or []) if lang != "english"
     ]
+    generation_source = str(seo_package.get("generation_source") or "fallback")
     if non_english_fallback:
+        provider_hint = "Ollama and Gemini" if generation_source == "fallback" else "the available AI provider"
         research_warnings.append(
             ", ".join(sorted(non_english_fallback)).title()
-            + " fell back to an English template because Ollama returned no native "
-            "output. Install and start Ollama (e.g. `ollama pull mistral`) for "
-            "genuine Tamil/Tanglish generation."
+            + " fell back to an English template because " + provider_hint
+            + " returned no native output."
         )
     # --------------------------------------------------------------------
 
@@ -153,9 +154,11 @@ def generate_seo_suggestions(
         content_angle=seo_package["content_angle"],
         title_variants=locked_variants,
         title_optimization=title_opt,
+        title_thumbnail_packages=seo_package.get("title_thumbnail_packages", []),
         content_audit=seo_package["content_audit"],
         cache_policy=research_payload.get("cache_policy", "evergreen"),
         research_warnings=research_warnings,
+        generation_source=generation_source,
         creator_brief=creator_brief if isinstance(creator_brief, dict) else {},
         research_queries=research_payload.get("research_queries", []),
         research_decision=research_payload.get("research_decision", {}),
