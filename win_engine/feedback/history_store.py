@@ -43,6 +43,27 @@ class HistoryStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS youtube_channel_connection (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    encrypted_refresh_token TEXT NOT NULL,
+                    channel_id TEXT,
+                    channel_title TEXT,
+                    connected_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS youtube_channel_syncs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    synced_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_video_snapshots_video_time
                 ON video_snapshots(video_id, captured_at)
                 """

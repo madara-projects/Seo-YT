@@ -129,7 +129,7 @@ You can confidently choose two honest title-thumbnail packages before publishing
 
 ---
 
-## Stage 4 — Connect your YouTube channel
+## Stage 4 — Connect your YouTube channel (implementation complete — OAuth setup pending)
 
 ### What this adds
 

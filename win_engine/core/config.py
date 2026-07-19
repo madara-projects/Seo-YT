@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 10
     database_path: str = "win_engine.db"
 
+    youtube_oauth_client_id: str | None = None
+    youtube_oauth_client_secret: str | None = None
+    youtube_oauth_redirect_uri: str = "http://127.0.0.1:8000/oauth/youtube/callback"
+    oauth_token_encryption_key: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_prefix="WIN_ENGINE_", extra="ignore")
 
     @property
