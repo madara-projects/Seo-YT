@@ -5,35 +5,46 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from win_engine.ai_enhancement import find_content_similarity
+
+
+_GENERIC_WORDS = {
+    "amazing", "best", "crazy", "epic", "life", "movie", "new", "video", "vlog", "wow",
+    "today", "update", "watch", "must", "viral", "everything", "things",
+}
+_CONTEXT_STOPWORDS = {"about", "after", "and", "are", "for", "from", "have", "into", "my", "of", "our", "the", "this", "to", "with", "your"}
+
 
 def build_title_thumbnail_packages(
     title_variants: list[dict[str, Any]],
     creator_brief: dict[str, Any] | None = None,
+    competitor_titles: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return only clear, non-duplicated packages a creator can compare."""
 
     brief = creator_brief or {}
     packages: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for index, variant in enumerate(title_variants, start=1):
+    for variant in title_variants:
         title = str(variant.get("title") or "").strip()
         key = title.casefold()
         if not title or key in seen:
             continue
         seen.add(key)
-        issues = _quality_issues(title, brief)
+        issues = _quality_issues(title, brief, competitor_titles or [])
         if issues:
             continue
         style = _title_style(title)
         packages.append(
             {
-                "package": chr(64 + index),
+                "package": chr(65 + len(packages)),
                 "title": title,
                 "thumbnail_text": _thumbnail_text(title, brief),
                 "thumbnail_visual": str(brief.get("thumbnail_idea") or _default_visual(brief)).strip(),
                 "viewer_promise": str(brief.get("viewer_promise") or "A clear, truthful reason to watch.").strip(),
                 "why_click": _why_click(style, brief),
                 "approach": style,
+                "best_for": _best_for(style, brief),
                 "misleading_risk": "low",
                 "quality_status": "approved",
             }
@@ -41,16 +52,29 @@ def build_title_thumbnail_packages(
     return packages[:8]
 
 
-def _quality_issues(title: str, brief: dict[str, Any]) -> list[str]:
+def _quality_issues(title: str, brief: dict[str, Any], competitor_titles: list[str]) -> list[str]:
     issues: list[str] = []
-    if len(title) < 28 or len(title) > 78:
+    if len(title) < 28 or len(title) > 70:
         issues.append("title length is outside the useful range")
     lowered = title.lower()
-    if any(term in lowered for term in ("guaranteed", "100%", "secret trick", "get rich quick")):
+    if any(term in lowered for term in ("guaranteed", "100%", "secret trick", "get rich quick", "you won't believe")):
         issues.append("misleading claim")
-    if not any(char.isalpha() for char in title):
-        issues.append("title has no usable topic")
+    title_words = _meaningful_words(title)
+    if len(title_words) < 3 or all(word in _GENERIC_WORDS for word in title_words):
+        issues.append("title is too vague")
+    context_words = _meaningful_words(" ".join(str(brief.get(field) or "") for field in ("content", "unique_angle", "viewer_promise", "proof")))
+    if context_words and not set(title_words).intersection(context_words):
+        issues.append("title is not connected to the video brief")
+    if any(find_content_similarity(title, competitor) >= 0.78 for competitor in competitor_titles if competitor):
+        issues.append("title is too similar to a competitor")
     return issues
+
+
+def _meaningful_words(value: str) -> list[str]:
+    return [
+        word.lower() for word in re.findall(r"[A-Za-z0-9]+", value)
+        if len(word) >= 3 and word.lower() not in _CONTEXT_STOPWORDS
+    ]
 
 
 def _thumbnail_text(title: str, brief: dict[str, Any]) -> str:
@@ -86,3 +110,11 @@ def _why_click(style: str, brief: dict[str, Any]) -> str:
     if style == "curiosity-led":
         return f"It creates curiosity, backed by {proof}."
     return f"It balances a clear topic with the viewer payoff: {promise}"
+
+
+def _best_for(style: str, brief: dict[str, Any]) -> str:
+    if style == "searchable":
+        return "Search / new viewers"
+    if style == "curiosity-led":
+        return "Browse / relatable viewers"
+    return "Search and browse"

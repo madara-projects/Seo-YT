@@ -94,7 +94,7 @@ Each analysis shows a recommended angle, the reason it is different, and the com
 
 ---
 
-## Stage 3 — Title + thumbnail packages (in progress)
+## Stage 3 — Title + thumbnail packages (complete)
 
 ### Problem today
 

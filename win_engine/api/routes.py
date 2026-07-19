@@ -788,7 +788,7 @@ _DASHBOARD_HTML = """<!doctype html>
     function renderPackages(d) {
       const packages = arr(d.title_thumbnail_packages);
       if (!packages.length) return "";
-      return sec("Title + Thumbnail Packages", `<div class="feed">${packages.map((item) => `<div class="feed-card"><div class="tile-row"><h4>${esc(item.package || "Option")} · ${esc(item.title)}</h4>${chip(item.approach || "balanced", "ok")}</div><div class="feed-reason" style="margin-top:10px"><b>Thumbnail text:</b> ${esc(item.thumbnail_text || "")}</div><div class="feed-reason"><b>Visual:</b> ${esc(item.thumbnail_visual || "")}</div><div class="feed-reason"><b>Why viewers may click:</b> ${esc(item.why_click || "")}</div></div>`).join("")}</div>`);
+      return sec("Title + Thumbnail Packages", `<div class="feed">${packages.map((item) => `<div class="feed-card"><div class="tile-row"><h4>${esc(item.package || "Option")} · ${esc(item.title)}</h4>${chip(item.approach || "balanced", "ok")}</div><div class="feed-reason" style="margin-top:10px"><b>Thumbnail text:</b> ${esc(item.thumbnail_text || "")}</div><div class="feed-reason"><b>Visual:</b> ${esc(item.thumbnail_visual || "")}</div><div class="feed-reason"><b>Why viewers may click:</b> ${esc(item.why_click || "")}</div><div class="feed-reason"><b>Best for:</b> ${esc(item.best_for || "")}&nbsp; · &nbsp;<b>Misleading risk:</b> ${esc(item.misleading_risk || "low")}</div></div>`).join("")}</div>`);
     }
 
     /* ---------- render: workflow + feedback ---------- */
