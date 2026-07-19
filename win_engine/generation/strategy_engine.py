@@ -132,7 +132,11 @@ def build_seo_package(
             for v in title_variants_data
         ],
     }
-    title_thumbnail_packages = build_title_thumbnail_packages(title_variants_data, creator_brief)
+    title_thumbnail_packages = build_title_thumbnail_packages(
+        title_variants_data,
+        creator_brief,
+        competitor_titles=[str(item.get("title") or "") for item in research.get("youtube_results", []) if isinstance(item, dict)],
+    )
 
     content_audit = audit_content_package(script, title, primary_topic, secondary_topic, angle)
     opportunity_gap_analysis = analyze_opportunity_gaps(
