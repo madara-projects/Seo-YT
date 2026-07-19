@@ -13,6 +13,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from win_engine.core.config import Settings
 
@@ -65,7 +66,13 @@ class YouTubeChannelService:
         ).execute()
         item = (data.get("items") or [{}])[0]
         self._save_connection(credentials.refresh_token, str(item.get("id") or ""), str((item.get("snippet") or {}).get("title") or ""))
-        return self.refresh()
+        try:
+            return self.refresh()
+        except HttpError as exc:
+            # OAuth is already complete and the encrypted token is safely stored.
+            # API enablement can take a few minutes, so do not turn that into a
+            # failed connection or force the creator to authorize again.
+            return {"connected": True, "sync_pending": True, "sync_error": str(exc)}
 
     def disconnect(self) -> None:
         with self._connect() as connection:
@@ -83,7 +90,7 @@ class YouTubeChannelService:
         metrics = "views,estimatedMinutesWatched,averageViewDuration,subscribersGained,likes,comments"
         current = self._query(analytics, start, today - timedelta(days=1), metrics)
         previous = self._query(analytics, previous_start, start - timedelta(days=1), metrics)
-        videos = self._query(analytics, start, today - timedelta(days=1), "views,estimatedMinutesWatched,averageViewDuration,likes,comments", dimensions="video", sort="-views", max_results=10)
+        videos = self._query(analytics, start, today - timedelta(days=1), "views,estimatedMinutesWatched,averageViewDuration,likes,comments", dimensions="video", sort="-views", maxResults=10)
         payload = {
             "channel": {"id": channel_item.get("id"), "title": (channel_item.get("snippet") or {}).get("title"), "subscribers": (channel_item.get("statistics") or {}).get("subscriberCount")},
             "period": {"start": start.isoformat(), "end": (today - timedelta(days=1)).isoformat()},
