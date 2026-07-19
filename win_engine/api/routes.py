@@ -5,7 +5,7 @@ import time
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.core.config import get_settings
@@ -14,6 +14,7 @@ from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.ingestion.research_service import ResearchService
 from win_engine.llm import gemini_client
+from win_engine.integrations.youtube_channel import YouTubeChannelService
 
 router = APIRouter()
 
@@ -368,6 +369,7 @@ _DASHBOARD_HTML = """<!doctype html>
       <div class="editor-foot">
         <span class="hint" id="charHint">0 characters</span>
         <div class="btn-group">
+          <button class="btn" id="channelBtn">Connect YouTube Channel</button>
           <button class="btn" id="diagBtn">Run Diagnostics</button>
           <button class="btn" id="exportBtn" disabled>Export</button>
           <button class="btn btn-primary" id="analyzeBtn">
@@ -379,6 +381,7 @@ _DASHBOARD_HTML = """<!doctype html>
     </div>
 
     <div id="alert" style="margin-top:16px; display:none;"></div>
+    <div id="channelPanel" class="card card-pad" style="margin-top:16px; display:none;"></div>
 
     <div class="results hidden" id="results"></div>
 
@@ -392,6 +395,8 @@ _DASHBOARD_HTML = """<!doctype html>
     const $ = (id) => document.getElementById(id);
     const analyzeBtn = $("analyzeBtn");
     const diagBtn = $("diagBtn");
+    const channelBtn = $("channelBtn");
+    const channelPanel = $("channelPanel");
     const exportBtn = $("exportBtn");
     const scriptInput = $("script");
     const briefInputs = {
@@ -919,6 +924,32 @@ _DASHBOARD_HTML = """<!doctype html>
         out.textContent = "Diagnostics request failed. Is the server running?";
       }
     });
+    channelBtn.addEventListener("click", () => { window.location.href = "/youtube/channel/connect"; });
+    async function loadChannelStatus() {
+      try {
+        const r = await fetch("/youtube/channel/status");
+        const data = await r.json();
+        channelPanel.style.display = "block";
+        if (!data.configured) {
+          channelPanel.innerHTML = `<span class="label">YouTube Channel</span><div class="sub" style="margin-top:8px">${esc(data.setup_message || "OAuth setup is required.")}</div>`;
+          channelBtn.textContent = "Set up YouTube OAuth";
+          return;
+        }
+        if (!data.connected) {
+          channelPanel.innerHTML = `<span class="label">YouTube Channel</span><div class="sub" style="margin-top:8px">Ready to connect with read-only permissions.</div>`;
+          channelBtn.textContent = "Connect YouTube Channel";
+          return;
+        }
+        const channel = data.channel || {};
+        const sync = (data.latest_sync || {}).data || {};
+        const current = sync.current_28_days || {};
+        channelPanel.innerHTML = `<div class="tile-row"><div><span class="label">Connected channel</span><div class="metric sm">${esc(channel.title || "YouTube channel")}</div><div class="sub" style="margin-top:6px">Last 28 days: ${num(current.views)} views · ${num(current.estimatedMinutesWatched)} minutes watched</div></div><div class="btn-group"><button class="btn" id="channelRefresh">Refresh analytics</button><button class="btn" id="channelDisconnect">Disconnect</button></div></div>`;
+        $("channelRefresh").addEventListener("click", async () => { await fetch("/youtube/channel/refresh", {method:"POST"}); await loadChannelStatus(); });
+        $("channelDisconnect").addEventListener("click", async () => { if (confirm("Disconnect this YouTube channel from the local tool?")) { await fetch("/youtube/channel/disconnect", {method:"POST"}); await loadChannelStatus(); } });
+        channelBtn.style.display = "none";
+      } catch (_) { /* connection controls are optional; the editor remains usable */ }
+    }
+    loadChannelStatus();
   </script>
 </body>
 </html>
@@ -988,6 +1019,45 @@ def diagnostics(request: Request):
     research = ResearchService(settings)
 
     return {**research.diagnostics(), "gemini": gemini_client.diagnostics()}
+
+
+@router.get("/youtube/channel/status")
+def youtube_channel_status():
+    return YouTubeChannelService(get_settings()).status()
+
+
+@router.get("/youtube/channel/connect")
+def connect_youtube_channel():
+    service = YouTubeChannelService(get_settings())
+    try:
+        return RedirectResponse(service.authorization_url())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/oauth/youtube/callback")
+def youtube_oauth_callback(code: str = "", state: str = "", error: str = ""):
+    if error:
+        return RedirectResponse(url=f"/?youtube=error&reason={error}")
+    try:
+        YouTubeChannelService(get_settings()).complete_authorization(code=code, state=state)
+    except ValueError as exc:
+        return RedirectResponse(url="/?youtube=error")
+    return RedirectResponse(url="/?youtube=connected")
+
+
+@router.post("/youtube/channel/refresh")
+def refresh_youtube_channel():
+    try:
+        return YouTubeChannelService(get_settings()).refresh()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/youtube/channel/disconnect")
+def disconnect_youtube_channel():
+    YouTubeChannelService(get_settings()).disconnect()
+    return {"disconnected": True}
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)

@@ -15,7 +15,7 @@ The staged plan for turning it into a private, channel-aware growth tool is in [
 - CTR guidance, A/B title suggestions, and comparison with local analysis history
 - JSON export from the built-in dashboard
 
-Ollama generates the natural-language SEO copy. If Ollama is unavailable, the application remains usable through a deterministic English fallback and reports when native Tamil or Tanglish output could not be generated.
+Ollama generates the natural-language SEO copy. If it is unavailable, an optional Gemini API key is used; only then does the app use its local fallback.
 
 ## Architecture
 
@@ -63,6 +63,9 @@ Important variables:
 | `WIN_ENGINE_YOUTUBE_API_KEY` | YouTube Data API v3 key | empty |
 | `WIN_ENGINE_YOUTUBE_API_KEYS` | Comma-separated key rotation pool | empty |
 | `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Competitors fetched per analysis | `5` |
+| `WIN_ENGINE_GEMINI_API_KEY` | Optional Gemini generation fallback | empty |
+| `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_ID` / `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_SECRET` | Local YouTube channel OAuth client | empty |
+| `WIN_ENGINE_OAUTH_TOKEN_ENCRYPTION_KEY` | Fernet key that encrypts the saved refresh token | empty |
 | `OLLAMA_BASE_URL` | Ollama HTTP endpoint | `http://localhost:11434` |
 | `OLLAMA_MODEL` | Generation model | `mistral` |
 | `OLLAMA_TIMEOUT_SECONDS` | Generation timeout | `30` in the example |
@@ -72,6 +75,16 @@ Important variables:
 | `WIN_ENGINE_ADMIN_API_TOKEN` | Token for protected operational endpoints | empty |
 
 Do not commit `.env`; it is excluded by `.gitignore`. In non-development environments, configure an admin token before exposing operational endpoints.
+
+### Connect your YouTube channel
+
+In Google Cloud, enable **YouTube Data API v3** and **YouTube Analytics API**, then create a Web OAuth client with this exact redirect URL:
+
+```text
+http://127.0.0.1:8000/oauth/youtube/callback
+```
+
+Add the client ID, client secret, and a generated Fernet key to `.env`. Then restart Docker and select **Connect YouTube Channel** in the dashboard. The app asks only for read-only YouTube and Analytics scopes, encrypts the refresh token in local SQLite, and offers a disconnect endpoint that deletes it.
 
 ## Run locally
 
