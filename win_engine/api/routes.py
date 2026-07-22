@@ -943,7 +943,8 @@ _DASHBOARD_HTML = """<!doctype html>
         const channel = data.channel || {};
         const sync = (data.latest_sync || {}).data || {};
         const current = sync.current_28_days || {};
-        channelPanel.innerHTML = `<div class="tile-row"><div><span class="label">Connected channel</span><div class="metric sm">${esc(channel.title || "YouTube channel")}</div><div class="sub" style="margin-top:6px">Last 28 days: ${num(current.views)} views · ${num(current.estimatedMinutesWatched)} minutes watched</div></div><div class="btn-group"><button class="btn" id="channelRefresh">Refresh analytics</button><button class="btn" id="channelDisconnect">Disconnect</button></div></div>`;
+        const learning = sync.video_learning || {};
+        channelPanel.innerHTML = `<div class="tile-row"><div><span class="label">Connected channel</span><div class="metric sm">${esc(channel.title || "YouTube channel")}</div><div class="sub" style="margin-top:6px">Last 28 days: ${num(current.views)} views · ${num(current.estimatedMinutesWatched)} minutes watched</div><div class="sub" style="margin-top:6px">${esc(learning.recommendation || "Refresh analytics to begin video learning.")}</div></div><div class="btn-group"><button class="btn" id="channelRefresh">Refresh analytics</button><button class="btn" id="channelDisconnect">Disconnect</button></div></div>`;
         $("channelRefresh").addEventListener("click", async () => { await fetch("/youtube/channel/refresh", {method:"POST"}); await loadChannelStatus(); });
         $("channelDisconnect").addEventListener("click", async () => { if (confirm("Disconnect this YouTube channel from the local tool?")) { await fetch("/youtube/channel/disconnect", {method:"POST"}); await loadChannelStatus(); } });
         channelBtn.style.display = "none";

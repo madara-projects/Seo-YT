@@ -163,7 +163,7 @@ You can connect your channel, see the latest 28 days inside this dashboard, refr
 
 ---
 
-## Stage 5 — Learn from published videos
+## Stage 5 — Learn from published videos (implementation complete — collecting evidence)
 
 ### Problem today
 
