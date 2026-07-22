@@ -16,6 +16,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from win_engine.core.config import Settings
+from win_engine.feedback.channel_learning import learning_summary, save_video_snapshots
 
 _SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
@@ -90,13 +91,16 @@ class YouTubeChannelService:
         metrics = "views,estimatedMinutesWatched,averageViewDuration,subscribersGained,likes,comments"
         current = self._query(analytics, start, today - timedelta(days=1), metrics)
         previous = self._query(analytics, previous_start, start - timedelta(days=1), metrics)
-        videos = self._query(analytics, start, today - timedelta(days=1), "views,estimatedMinutesWatched,averageViewDuration,likes,comments", dimensions="video", sort="-views", maxResults=10)
+        videos = self._query(analytics, start, today - timedelta(days=1), "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained", dimensions="video", sort="-views", maxResults=10)
+        video_rows = self._enrich_videos(youtube, videos.get("rows", []))
+        save_video_snapshots(self.settings.database_path, video_rows)
         payload = {
             "channel": {"id": channel_item.get("id"), "title": (channel_item.get("snippet") or {}).get("title"), "subscribers": (channel_item.get("statistics") or {}).get("subscriberCount")},
             "period": {"start": start.isoformat(), "end": (today - timedelta(days=1)).isoformat()},
             "current_28_days": current,
             "previous_28_days": previous,
-            "top_videos": videos,
+            "top_videos": {"rows": video_rows},
+            "video_learning": learning_summary(self.settings.database_path),
         }
         self._save_sync(payload)
         return payload
@@ -108,6 +112,12 @@ class YouTubeChannelService:
         if kwargs.get("dimensions"):
             return {"rows": [dict(zip(headers, row)) for row in rows]}
         return dict(zip(headers, rows[0])) if rows else {}
+
+    def _enrich_videos(self, youtube, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ids = [str(row.get("video") or "") for row in rows if row.get("video")]
+        details = youtube.videos().list(part="snippet", id=",".join(ids), maxResults=50).execute().get("items", []) if ids else []
+        metadata = {item.get("id"): item.get("snippet") or {} for item in details}
+        return [{**row, "video_id": row.get("video"), "title": metadata.get(row.get("video"), {}).get("title"), "published_at": metadata.get(row.get("video"), {}).get("publishedAt")} for row in rows]
 
     def _flow(self, state: str) -> Flow:
         return Flow.from_client_config({"web": {"client_id": self.settings.youtube_oauth_client_id, "client_secret": self.settings.youtube_oauth_client_secret, "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token", "redirect_uris": [self.settings.youtube_oauth_redirect_uri]}}, scopes=_SCOPES, redirect_uri=self.settings.youtube_oauth_redirect_uri, state=state)
