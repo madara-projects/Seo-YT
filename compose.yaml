@@ -3,15 +3,11 @@ services:
     build: .
     container_name: youtube-win-engine
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
-      # Reach the Ollama daemon running on the host, not inside the container.
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - WIN_ENGINE_REDIS_URL=redis://redis:6379/0
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - redis
     volumes:
@@ -20,6 +16,4 @@ services:
   redis:
     image: redis:7-alpine
     container_name: youtube-win-engine-redis
-    ports:
-      - "6379:6379"
     restart: unless-stopped

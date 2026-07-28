@@ -41,6 +41,52 @@ def build_channel_intelligence(youtube_results: list[dict[str, Any]]) -> dict[st
     }
 
 
+def build_upload_timing(youtube_results: list[dict[str, Any]], region: str = "global") -> dict[str, Any]:
+    """Derive optimal upload timing and location strategy from competitor publishing patterns."""
+    if not youtube_results:
+        return {
+            "recommended_day": "Thursday or Friday",
+            "recommended_time_utc": "14:00 - 17:00 UTC",
+            "target_region": region.upper() if region else "GLOBAL",
+            "reasoning": "Standard peak YouTube activity window for general audiences.",
+        }
+
+    days: Counter[str] = Counter()
+    hours: Counter[int] = Counter()
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    for item in youtube_results:
+        pub = str(item.get("published_at") or "")
+        if pub and len(pub) >= 19:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+                days[day_names[dt.weekday()]] += 1
+                hours[dt.hour] += 1
+            except Exception:
+                pass
+
+    best_day = days.most_common(1)[0][0] if days else "Thursday"
+    best_hour = hours.most_common(1)[0][0] if hours else 15
+
+    start_h = max(0, best_hour - 1)
+    end_h = min(23, best_hour + 2)
+
+    ist_start_min = (start_h * 60 + 330) % 1440
+    ist_end_min = (end_h * 60 + 330) % 1440
+    ist_start_str = f"{(ist_start_min//60)%12 or 12}:{ist_start_min%60:02d} {'PM' if (ist_start_min//60)>=12 else 'AM'}"
+    ist_end_str = f"{(ist_end_min//60)%12 or 12}:{ist_end_min%60:02d} {'PM' if (ist_end_min//60)>=12 else 'AM'}"
+    ist_time_range = f"{ist_start_str} - {ist_end_str} IST (Indian Time)"
+
+    return {
+        "recommended_day": best_day,
+        "recommended_time_utc": f"{start_h:02d}:00 - {end_h:02d}:00 UTC",
+        "recommended_time_ist": ist_time_range,
+        "target_region": region.upper() if region else "GLOBAL",
+        "reasoning": f"Based on competitor publishing patterns: best upload window is {ist_time_range} ({start_h:02d}:00 UTC) on {best_day}s.",
+    }
+
+
 def build_content_graph_strategy(
     primary_topic: str,
     secondary_topic: str,

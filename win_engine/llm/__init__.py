@@ -1,1 +1,1 @@
-"""LLM client subpackage. Currently Ollama-only."""
+"""Gemini client and SEO generation prompts."""

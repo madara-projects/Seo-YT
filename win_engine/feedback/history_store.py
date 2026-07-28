@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,10 +23,14 @@ class HistoryStore:
             return self._memory_connection
         if self._database_path is None:
             raise RuntimeError("Database path is unavailable.")
-        return sqlite3.connect(self._database_path)
+        connection = sqlite3.connect(self._database_path, timeout=10)
+        connection.execute("PRAGMA busy_timeout = 10000")
+        return connection
 
     def _initialize(self) -> None:
         with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS video_snapshots (
@@ -100,10 +105,14 @@ class HistoryStore:
                     title_score REAL DEFAULT 0,
                     retention_risk TEXT,
                     opportunity_label TEXT,
-                    opportunity_score REAL DEFAULT 0
+                    opportunity_score REAL DEFAULT 0,
+                    payload_json TEXT
                 )
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(analysis_runs)").fetchall()}
+            if "payload_json" not in columns:
+                connection.execute("ALTER TABLE analysis_runs ADD COLUMN payload_json TEXT")
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_analysis_runs_created_at
@@ -184,14 +193,15 @@ class HistoryStore:
         retention_risk: str,
         opportunity_label: str,
         opportunity_score: float,
-    ) -> None:
+        payload: dict[str, Any] | None = None,
+    ) -> int:
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO analysis_runs (
                     query, created_at, intent, content_angle, title,
-                    title_score, retention_risk, opportunity_label, opportunity_score
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    title_score, retention_risk, opportunity_label, opportunity_score, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     query,
@@ -203,8 +213,118 @@ class HistoryStore:
                     retention_risk,
                     opportunity_label,
                     opportunity_score,
+                    json.dumps(payload) if payload is not None else None,
                 ),
             )
+        return int(cursor.lastrowid)
+
+    def update_analysis_payload(self, run_id: int, title: str, payload: dict[str, Any]) -> None:
+        """Replace an intermediate package with the exact final API response."""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE analysis_runs SET title = ?, payload_json = ? WHERE id = ?",
+                (title, json.dumps(payload), run_id),
+            )
+
+    def history_runs(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """Return saved packages in newest-first order without the large payload."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, created_at, title, opportunity_score, title_score, query, payload_json
+                FROM analysis_runs ORDER BY created_at DESC LIMIT ? OFFSET ?
+                """
+                , (max(1, min(limit, 100)), max(0, offset))
+            ).fetchall()
+        return [
+            {
+                "id": row[0], "created_at": row[1], "title": row[2],
+                "opportunity_score": round(float(row[3] or 0), 2),
+                "title_score": round(float(row[4] or 0), 2), "query": row[5],
+                "has_full_package": bool(row[6]),
+            }
+            for row in rows
+        ]
+
+    def history_run(self, run_id: int) -> dict[str, Any] | None:
+        """Return a saved SEO package and its historical metadata."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, created_at, query, intent, content_angle, title, title_score,
+                       retention_risk, opportunity_label, opportunity_score, payload_json
+                FROM analysis_runs WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            package = json.loads(row[10]) if row[10] else None
+        except json.JSONDecodeError:
+            package = None
+        return {
+            "id": row[0], "created_at": row[1], "query": row[2], "intent": row[3],
+            "content_angle": row[4], "title": row[5], "title_score": round(float(row[6] or 0), 2),
+            "retention_risk": row[7], "opportunity_label": row[8],
+            "opportunity_score": round(float(row[9] or 0), 2), "package": package,
+        }
+
+    def record_owned_snapshot(self, title: str, views: int, likes: int) -> None:
+        """Record performance snapshot of creator's video for self-learning."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO owned_video_snapshots (
+                    video_id, captured_at, title, views, likes
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    f"perf_{int(datetime.now(timezone.utc).timestamp())}",
+                    datetime.now(timezone.utc).isoformat(),
+                    title,
+                    views,
+                    likes,
+                ),
+            )
+
+    def owned_performance_summary(self) -> dict[str, Any]:
+        """Aggregate metrics of creator's video snapshots recorded in database."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT SUM(views), SUM(likes), COUNT(*), MAX(views)
+                FROM owned_video_snapshots
+                """
+            ).fetchone()
+            latest = connection.execute(
+                """
+                SELECT title, views, likes, captured_at
+                FROM owned_video_snapshots
+                ORDER BY captured_at DESC
+                LIMIT 5
+                """
+            ).fetchall()
+        total_views = int(row[0] or 0) if row and row[0] is not None else 0
+        total_likes = int(row[1] or 0) if row and row[1] is not None else 0
+        video_count = int(row[2] or 0) if row and row[2] is not None else 0
+        max_views = int(row[3] or 0) if row and row[3] is not None else 0
+
+        return {
+            "total_views": total_views,
+            "total_likes": total_likes,
+            "video_count": video_count,
+            "max_views": max_views,
+            "videos": [
+                {
+                    "title": r[0],
+                    "views": r[1],
+                    "likes": r[2],
+                    "captured_at": r[3],
+                }
+                for r in latest
+            ],
+        }
 
     def learning_summary(self) -> dict[str, Any]:
         with self._connect() as connection:
@@ -381,6 +501,14 @@ class HistoryStore:
             "top_weekdays": top_weekdays,
             "recommendation": recommendation,
         }
+
+    def reset_database(self) -> None:
+        """Clear all historical test data for a fresh workspace setup."""
+        with self._connect() as connection:
+            connection.execute("DELETE FROM video_snapshots")
+            connection.execute("DELETE FROM owned_video_snapshots")
+            connection.execute("DELETE FROM youtube_channel_syncs")
+            connection.execute("DELETE FROM analysis_runs")
 
     def system_status(self) -> dict[str, Any]:
         try:
