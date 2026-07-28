@@ -9,6 +9,7 @@ from win_engine.analysis.entity_extractor import extract_entity_signals
 from win_engine.analysis.keyword_extractor import extract_keyword_signals
 from win_engine.analysis.research_insights import build_research_decision
 from win_engine.analysis.research_planner import brief_research_text, plan_research_queries
+from win_engine.analysis.strategy_layer import build_upload_timing
 from win_engine.analysis.thumbnail_intelligence import analyze_thumbnails
 from win_engine.core.config import Settings
 from win_engine.feedback.history_store import HistoryStore
@@ -59,7 +60,7 @@ class ResearchService:
         research_text = brief_research_text(script, creator_brief)
         keyword_signals = extract_keyword_signals(research_text, scored_results, region, primary_language)
         entity_signals = extract_entity_signals(research_text, scored_results)
-        upload_timing = self._history.upload_timing_insights(scored_results)
+        upload_timing = build_upload_timing(scored_results, region=region)
         thumbnail_intelligence = analyze_thumbnails(scored_results)
         runtime_state = self._youtube.runtime_state()
         research_warnings = [runtime_state["warning"]] if runtime_state.get("warning") else []
@@ -134,8 +135,9 @@ class ResearchService:
         if youtube_status == "ok":
             try:
                 self._youtube.search_videos(test_query, max_results=1, raise_on_error=True)
-            except Exception as exc:  # noqa: BLE001 - show error details to user
-                youtube_error = str(exc)
+            except Exception as exc:  # noqa: BLE001 - diagnostics must not expose request URLs or keys
+                logger.warning("Diagnostics YouTube check failed: %s", type(exc).__name__)
+                youtube_error = "YouTube request failed. Check the API key and network connection."
                 youtube_status = "error"
 
         return {

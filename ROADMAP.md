@@ -1,240 +1,376 @@
-# YouTube Growth Tool Roadmap
+# SEO YT Personal Growth Engine Roadmap
 
-## The goal
+## Product contract
 
-Build a private, local tool that helps you make better video decisions before publishing and learn from your own YouTube results after publishing.
+SEO YT is a private, single-user YouTube planning and learning tool. It runs in Docker on the creator's laptop today and may later have an Android client. It is not a public SaaS product.
 
-It will not promise 90% or 100% growth. Nobody can guarantee that: YouTube recommendations depend on how viewers choose, watch, enjoy, and return to videos. The tool will instead help us improve the things we can control: topic choice, title, thumbnail idea, first 30 seconds, description, and learning from real performance.
+The tool must improve decisions before publishing and learn from the creator's own videos after publishing. It must never promise a fixed growth percentage. Titles, thumbnails, topic demand, viewer satisfaction, retention, and distribution all influence performance.
 
-## Cost rule
+### Non-negotiable constraints
 
-The target cost is **$0 per month**.
+- Keep the app local. Docker must bind the application to 127.0.0.1:8000 and must not publish Redis.
+- Keep Gemini, YouTube API, OAuth, and encryption keys only in ignored local environment files. Never write secrets to source, logs, responses, screenshots, database history JSON, or commits.
+- Gemini is the sole AI provider. Do not reintroduce Ollama.
+- Do not add paid keyword tools, paid hosting, automatic uploads, or automatic edits to live YouTube metadata without explicit creator approval.
+- Preserve the existing YouTube connection, package history, and channel data during every change and database migration.
+- The tool is advisory. The creator always chooses what is published or changed.
 
-- Run the app and database on your own computer with Docker.
-- Use the free YouTube Data API and YouTube Analytics API within Google's default quota.
-- Use Ollama locally for writing titles and descriptions. It runs on your computer, so there is no per-request charge.
-- Do not add paid AI, paid keyword tools, cloud hosting, or subscriptions unless you explicitly decide to later.
+### Definition of success
 
-Ollama should stay. It is the part that writes natural titles, descriptions, and Tamil/Tanglish output. Removing it would leave only rigid templates, which would make the quality worse. We will remove the weak silent template fallback and show a clear message when Ollama is unavailable instead.
+The tool can eventually say:
 
-## How we will work
+> For your Tamil work-life Shorts, specific personal-outcome titles with short emotional thumbnail text have produced stronger early performance than generic vlog titles. Use package B and make the first 15 seconds faster.
 
-Complete one stage, test it with a few real video ideas, and only then begin the next stage. Every stage has a clear finish line.
+It must say Collecting evidence when there is not enough data to support the conclusion.
 
----
+## Current implementation snapshot
 
-## Stage 1 — Better video input (complete)
+Keep these features working:
 
-### Problem today
+- Creator brief: audience, promise, proof, unique angle, format, language, region, title style, and thumbnail direction.
+- YouTube competitor research, query planning, outlier scoring, keyword/entity extraction, and packaging angle recommendations.
+- Gemini-generated English, Tamil, and Tanglish packages with titles, descriptions, tags, hashtags, variants, thumbnail direction, chapters, and workflow advice.
+- Read-only YouTube OAuth, encrypted refresh token storage, 28-day channel refresh, and owned-video snapshots.
+- Full package persistence for new History entries.
+- Laptop-only safety defaults: localhost Docker binding, private Redis, production mode, request limits, input validation, SQLite WAL, and protected destructive endpoints.
 
-The tool mainly receives one text box. A vague idea such as “my office vlog” does not give it enough information to make a strong title.
+### Main gap to solve first
 
-### Build
+Generated packages and YouTube performance are stored separately. The app does not yet reliably link a generated package to the exact published YouTube video that used it. Without that link, the app cannot accurately learn whether a title, description, thumbnail direction, or tag strategy worked.
 
-Replace the single-input workflow with a simple creator brief:
+This is the highest-priority product feature.
 
-- What happens in the video?
-- Who is the viewer?
-- What will the viewer get, learn, feel, or see?
-- What is unique about your video?
-- What proof do you have: result, story, footage, before/after, experiment?
-- Video type: vlog, tutorial, Short, review, story, challenge, etc.
-- Language and target location.
-- Preferred title style: searchable, curiosity-led, or balanced.
-- Optional thumbnail idea.
+## Rules for any AI agent working on this project
 
-The tool should turn this into a structured internal brief before researching or writing.
+Before editing:
 
-### What you will see
+1. Read this roadmap, README.md, compose.yaml, core configuration, API routes, history store, and the relevant feature module.
+2. Inspect the working tree. Never overwrite unrelated user changes.
+3. Never delete the database, OAuth token, existing history, or channel snapshots unless the creator explicitly requests that exact deletion.
+4. Use additive, reversible database migrations. Use CREATE TABLE IF NOT EXISTS, additive columns, and indexes. Never require a destructive reset.
+5. Show missing data as Not available. Never create guessed analytics values.
+6. Add or update tests for every backend behavior and exercise changed dashboard actions in a browser test.
 
-Instead of one generic package, you will see a clear statement such as:
+After editing:
 
-> Audience: young Tamil working professionals. Promise: the honest reality of balancing a 9-to-5 job and content creation. Proof: real commute, office, and evening workflow footage.
+1. Run Python compilation and targeted tests.
+2. Rebuild with docker compose up -d --build.
+3. Verify docker compose ps is healthy and only 127.0.0.1:8000 is published.
+4. Test changed API endpoints and the matching dashboard flow.
+5. Report what changed, what data was preserved, and any remaining limitation.
 
-### Done when
+## Metadata quality standards
 
-You can submit a complete brief in under two minutes, and the tool warns you when the idea is too broad or has no clear viewer promise.
+### Titles
 
----
+Generate three materially different choices:
 
-## Stage 2 — Stronger research and packaging (complete)
+| Package | Use | Required characteristics |
+|---|---|---|
+| Search | Viewers actively seeking an answer | Main topic plus clear outcome |
+| Browse | Home and Suggested viewers | Curiosity or emotion plus truthful payoff |
+| Existing audience | Returning viewers | Channel-specific pattern plus real proof or story |
 
-### Problem today
+Every title must:
 
-The tool searches YouTube using the opening part of your text and sees only a small number of competitors. It creates titles, but it does not properly choose the best angle to compete with.
+- Match the real video, creator brief, and available proof.
+- Include the main topic naturally when search intent matters.
+- Explain an outcome, conflict, transformation, lesson, or reason to watch.
+- Be distinct from competitor wording.
+- Avoid false certainty, unrelated trend terms, and misleading promises.
+- Pair with a thumbnail that adds information rather than repeating the title.
 
-### Build
+Do not present predicted CTR as fact. Before personal data exists, label it as a low-confidence heuristic.
 
-For every brief, generate several research searches:
+### Descriptions
 
-- Main topic
-- Viewer problem
-- Desired result
-- Local-language / Tamil / Tanglish variation
-- Video-format variation
-- Competitor framing
+For each description:
 
-Then group competitor titles by pattern and identify:
+1. Put the main topic and viewer promise in the first two lines.
+2. Explain what the video actually contains.
+3. Add chapters only when appropriate.
+4. Add a relevant playlist, related-video, or next-view suggestion when the creator provides one.
+5. Add a short natural call to action.
+6. Put relevant hashtags at the end.
 
-- Repeated promises
-- Repeated thumbnail styles
-- Strong videos from smaller channels
-- Viewer questions competitors do not answer well
-- A specific angle for your video to own
+YouTube recommends featuring one or two main words in the title and description, and the first lines are especially visible before viewers expand the description. https://support.google.com/youtube/answer/12948449?hl=en-GB
 
-### What you will see
+### Tags and hashtags
 
-The tool should give a decision, not just a list:
+- Generate 5 to 12 tags only.
+- Use tags for exact phrases, names, spelling variants, common misspellings, and useful Tamil/Tanglish transliterations.
+- Do not generate unrelated viral, trending, fyp, or celebrity tags.
+- Generate 1 to 3 focused hashtags. Never create a hashtag block.
 
-> Do not use “Daily Office Vlog.” Use “The Real 9-to-5 + Creator Life in Chennai” because competitors are generic and your personal proof is the differentiator.
+YouTube says title, thumbnail, and description matter more for discovery than tags; tags are mainly useful for common misspellings. https://support.google.com/youtube/answer/146402?hl=en
 
-### Done when
+YouTube can ignore all hashtags when more than 60 are used and prohibits misleading or excessive tagging. https://support.google.com/youtube/answer/6390658?hl=en
 
-Each analysis shows a recommended angle, the reason it is different, and the competitor patterns to avoid copying.
+## Stage A — Link a package to a published video
 
----
+### Goal
 
-## Stage 3 — Title + thumbnail packages (complete)
+Create the missing relationship between a saved SEO package and an actual creator-owned YouTube video.
 
-### Problem today
+### Database migration
 
-A title alone is not enough. Viewers decide using the title and thumbnail together.
+Add a published_video_links table. Do not modify or delete existing analysis_runs.
 
-### Build
+Required fields:
 
-Generate 5 to 8 complete packages. Each package must include:
-
-- Title
-- Thumbnail visual idea
-- Thumbnail text, limited to 2–4 words
-- Viewer promise
-- Why someone would click
-- Whether it is searchable or curiosity-led
-- Risk of being misleading
-
-Add a quality gate. The tool must reject titles that are vague, clickbait, unrelated to the video, too long, or too similar to competitors.
-
-### What you will see
-
-You choose from packages, not isolated titles:
-
-| Package | Title | Thumbnail text | Best for |
-|---|---|---|---|
-| A | The Real 9-to-5 + Creator Life in Chennai | NO TIME LEFT | Browse / relatable viewers |
-| B | How I Create Content After a Full-Time Office Job | 6 PM START | Search / aspiring creators |
-
-### Done when
-
-You can confidently choose two honest title-thumbnail packages before publishing.
-
----
-
-## Stage 4 — Connect your YouTube channel (complete)
-
-### What this adds
-
-This is the most important stage. It lets the tool learn from **your actual channel**, not generic guesses.
-
-### Build
-
-1. Create a Google Cloud project.
-2. Enable YouTube Data API v3 and YouTube Analytics API.
-3. Create local desktop/web OAuth credentials with `http://127.0.0.1` as the redirect URL.
-4. Add a **Connect YouTube Channel** button to the dashboard.
-5. Ask for the smallest read-only permissions needed:
-   - `https://www.googleapis.com/auth/yt-analytics.readonly`
-   - a read-only YouTube scope only if required to list the creator's videos/channel details
-6. Store the encrypted refresh token locally; never send it to another service.
-7. Add a **Disconnect Channel** button that deletes the saved token.
-
-### Dashboard to add
-
-- Channel overview: views, watch time, subscribers gained, returning viewers
-- Last 28 days compared with the previous 28 days
-- Best and weakest recent videos
-- Per-video: impressions, CTR, average view duration, average percentage viewed, likes, comments, traffic source where available
-- Audience / device / geography summaries when Analytics makes them available
-
-Google requires OAuth for private channel data, and channel reports can be queried for the authenticated channel using `channel==MINE`. [YouTube OAuth guide](https://developers.google.com/youtube/v3/guides/authentication) · [YouTube Analytics channel reports](https://developers.google.com/youtube/analytics/channel_reports)
-
-### Done when
-
-You can connect your channel, see the latest 28 days inside this dashboard, refresh the data, and disconnect safely.
-
----
-
-## Stage 5 — Learn from published videos (implementation complete — collecting evidence)
-
-### Problem today
-
-The existing history tracks tool analyses, not the results of videos you actually published. It cannot tell whether your title choices worked.
-
-### Build
-
-For every published video, save:
-
-- Video ID and publish date
-- Topic, audience, format, language, and selected angle
-- The title and thumbnail package selected
-- Impressions and CTR after 24 hours, 7 days, and 28 days
-- Average view duration and percentage viewed
-- Retention at the opening and major drop-off points when available
-- Views, likes, comments, shares, subscribers gained, and traffic sources
-
-Then compare similar videos, not unrelated ones. For example: Tamil work-life vlogs compared with other Tamil work-life vlogs.
-
-### What you will see
-
-Useful findings such as:
-
-> Your work-life videos with a specific personal outcome have a better early CTR than generic “daily vlog” titles. Their retention drops after the intro, so the next video needs a faster opening.
-
-### Done when
-
-The tool shows evidence-based recommendations based on at least 10 published videos in one content group.
-
----
-
-## Stage 6 — Test, improve, repeat
-
-### Build
-
-- Keep the two best packaging packages for each video.
-- Flag videos with low impressions and below-usual CTR.
-- Recommend a title/thumbnail change only when the video is underperforming.
-- Record what changed and compare results afterwards.
-- Build a small evaluation set of real video briefs to ensure new changes improve output quality rather than adding noise.
-
-Do not constantly change videos that are already working. YouTube notes that title or thumbnail changes can help or hurt because viewers respond differently to the new packaging. [YouTube recommendation guidance](https://support.google.com/youtube/answer/16559651?hl=en)
-
-### Done when
-
-Every change has a reason, a before/after record, and a measurable result.
-
----
-
-## What matters most for growth
-
-| Priority | What the tool should improve |
+| Field | Purpose |
 |---|---|
-| 1 | Pick a video idea with a clear audience and promise |
-| 2 | Make title and thumbnail work together |
-| 3 | Deliver the promise in the first 30 seconds |
-| 4 | Keep the viewer interested through the whole video |
-| 5 | Learn from your own Analytics data |
-| 6 | Write a clear description |
-| 7 | Add relevant tags; do not over-focus on them |
+| id | Primary key |
+| analysis_run_id | Linked saved package |
+| youtube_video_id | Creator-owned YouTube video ID; unique |
+| published_at | ISO-8601 publication time |
+| selected_title | Exact title actually used |
+| selected_thumbnail_package | A, B, C, or manual description |
+| selected_description | Exact published description if edited |
+| selected_tags_json | Exact tags used |
+| selected_hashtags_json | Exact hashtags used |
+| format, language, region | Comparison cohorts |
+| notes | Optional creator note |
+| linked_at, updated_at | Audit trail |
 
-YouTube describes discovery as a combination of appeal, engagement, and satisfaction. Titles, thumbnails, and descriptions matter, but tags are primarily useful for common misspellings. [YouTube performance guidance](https://support.google.com/youtube/answer/16559650?hl=en) · [YouTube tags guidance](https://support.google.com/youtube/answer/146402?hl=en-EN)
+Create indexes for analysis_run_id, youtube_video_id, and published_at.
 
-## First task when we start
+### Backend work
 
-Start with **Stage 1**. It is cheap, quick, and gives every later stage better information. Do not connect YouTube Analytics until the tool first understands what kind of video you are trying to make.
+Add:
 
-## What we will not do
+- POST /api/history/runs/{id}/link-video. Validate the video belongs to the connected channel before saving.
+- GET /api/published-videos. Return links plus latest performance summary.
+- PATCH /api/published-videos/{id}. Allow the creator to record a title, thumbnail, or description change.
 
-- No paid AI API by default
-- No paid SEO or keyword subscriptions
-- No guaranteed growth percentage
-- No misleading clickbait
-- No automatic uploading or automatic changing of live video metadata without your approval
+Validation rules:
+
+- Never accept an arbitrary YouTube video ID without checking ownership.
+- A video may link to one analysis run only unless the creator explicitly replaces the link.
+- Store creator-edited metadata exactly. Do not silently replace it with generated content.
+
+### Dashboard work
+
+Add to the History detail page:
+
+- Mark as published
+- Paste YouTube URL or select from recent owned videos
+- Selected package A, B, C, or manual
+- Optional fields for title/description edits made before upload
+- Link status and last refresh time
+
+### Acceptance checks
+
+- A saved package links to one owned YouTube video.
+- A link survives Docker restart.
+- The UI distinguishes Generated package from Metadata actually published.
+- No existing package or channel data is deleted.
+
+## Stage B — Collect comparable performance snapshots
+
+### Goal
+
+Measure linked video performance at comparable ages, not merely total lifetime views.
+
+### Snapshot schedule
+
+For every linked video, collect snapshots at approximately:
+
+- 24 hours after publish
+- 7 days after publish
+- 28 days after publish
+
+Also provide a manual Refresh linked video performance action. The laptop app may refresh only while it is running; do not require a cloud background worker.
+
+### Metrics to store
+
+Store only metrics actually returned by authorized YouTube reports:
+
+- Views
+- Estimated minutes watched
+- Average view duration
+- Average view percentage
+- Likes, comments, shares
+- Subscribers gained
+
+Where the connected report supports them, additionally store:
+
+- Thumbnail impressions
+- Thumbnail impressions click-through rate
+- Traffic source
+- Returning/new viewer information
+
+Use null values for unavailable metrics. Never substitute views for impressions or invent CTR.
+
+The YouTube Analytics API supports metrics including views, watch time, average view duration, average view percentage, likes, comments, shares, and subscribers gained. https://developers.google.com/youtube/analytics/metrics
+
+### Cohort comparison rules
+
+Compare videos only within a relevant cohort:
+
+- Same format: Short, tutorial, quote, vlog, review, and so on.
+- Same primary language where possible.
+- Similar video age.
+- Similar topic cluster when enough examples exist.
+
+Never compare a 28-day tutorial with a 24-hour Short.
+
+### Acceptance checks
+
+- Every linked video has an age-based snapshot timeline.
+- The dashboard shows Missing, Collecting, or actual values honestly.
+- Repeated refreshes do not corrupt data.
+- Retain raw snapshots for at least 12 months on the private laptop.
+
+## Stage C — Personal learning engine
+
+### Goal
+
+Turn linked package plus outcome data into conservative recommendations.
+
+### Evidence thresholds
+
+| Evidence | Allowed recommendation |
+|---|---|
+| Fewer than 5 linked videos in a cohort | Collecting evidence; no winner claim |
+| 5 to 9 linked videos | Directional observation with low confidence |
+| 10 to 19 linked videos | Moderate-confidence pattern |
+| 20 or more linked videos with repeated outcome | Evidence-based recommendation |
+
+### Learn these features
+
+For each cohort calculate:
+
+- Median early view performance
+- Retention and average percentage viewed
+- Subscriber conversion per 1,000 views
+- Engagement per 1,000 views
+- Thumbnail CTR where available
+- Best title style, title length range, and promise type
+- Best upload day/time only when sample size is adequate
+
+Use robust comparisons:
+
+- Prefer medians over one extreme viral winner.
+- Flag outliers so they do not dominate the result.
+- Show sample size and confidence beside every recommendation.
+- Do not make causal claims when topic demand or distribution may explain results.
+
+Good recommendation:
+
+> Based on 14 linked Tamil tutorial Shorts, specific How to titles with a visible result had higher median retention than generic tips titles. Confidence: moderate.
+
+Bad recommendation:
+
+> This title will get 10 percent CTR.
+
+### Acceptance checks
+
+- Every recommendation names its cohort, sample size, metric, time window, and confidence.
+- The tool never calls one video a proven strategy.
+- High-confidence personal patterns guide generation but do not become rigid templates.
+
+## Stage D — Package experiments and post-publish decisions
+
+### Goal
+
+Track packaging choices and make responsible title/thumbnail improvement suggestions.
+
+### Build
+
+- Preserve the top 2 to 3 title-thumbnail packages for each analysis.
+- Record which package was actually used.
+- Let the creator log later manual title or thumbnail changes with timestamp and reason.
+- Show a review candidate only when performance is below its relevant cohort and enough time has passed.
+- Show before/after performance windows after a creator-approved metadata change.
+
+### Guardrails
+
+- Never automatically change live YouTube metadata.
+- Never recommend a title change using only a few hours of data.
+- Do not change a video already outperforming its cohort.
+- Clearly separate observed result from suggestion.
+
+### Acceptance checks
+
+- Every experiment has package, date, reason, and before/after record.
+- The creator explicitly approves every live metadata change.
+
+## Stage E — Research and generation upgrades
+
+Start this only after Stages A through C create usable linked data.
+
+### Research upgrades
+
+- Improve competitor clustering by topic, format, language, title pattern, and published age.
+- Detect repeated competitor promises and identify gaps supported by the creator's proof.
+- Keep cache keys normalized by language, region, and query.
+- Retain different cache lifetimes for trending and evergreen topics.
+- Do not scrape YouTube search pages. Use approved API data only.
+
+### Generation upgrades
+
+- Produce the Search, Browse, and Existing Audience packages defined above.
+- Make title and thumbnail pairing explicit.
+- Explain why a package matches channel history only when personal evidence exists.
+- Generate a short and long description.
+- Keep tags and hashtags optional; they are not the primary growth lever.
+- Make selected language the fast default. Make other languages an optional generation action if Gemini latency or cost matters.
+
+### Acceptance checks
+
+- Packages are distinct, truthful, and connected to the creator brief.
+- The model does not repeat generic templates for unrelated ideas.
+- All metadata stays within YouTube limits and policy requirements.
+
+## Stage F — Reliability and Android readiness
+
+### Backend and data
+
+- Keep FastAPI as the single business-logic API.
+- Version database migrations and document each schema change.
+- Add paginated history, history search, JSON export, and local encrypted backup.
+- Add database integrity checks and backup-before-migration.
+- Keep SQLite, OAuth tokens, Gemini key, YouTube API key, OAuth secret, and encryption key on the laptop.
+
+### Required tests
+
+- Unit tests for creator brief, title quality gate, keyword rules, score calculations, migrations, link validation, and learning thresholds.
+- API tests for validation errors, rate limits, pagination, linking/unlinking, and OAuth expiry.
+- Browser tests for sidebar routing, generation, History detail, mark-published flow, diagnostics, and errors.
+- Docker test confirming localhost-only app binding and no Redis host port.
+
+### Android boundary
+
+Before Android implementation, choose one architecture:
+
+1. Laptop companion mode: Android connects to the laptop only on a trusted local network. Requires authenticated pairing and stops working when the laptop is off.
+2. Private backend mode: a secure personal backend is reachable by the phone. Requires a separate security and cost decision.
+3. Export/import mode: laptop remains the engine; Android only views exported package/history files. Lowest complexity and no remote secrets.
+
+Do not start Android implementation until one option is explicitly chosen.
+
+## Operational checklist
+
+Before every major feature:
+
+- Confirm Docker is healthy.
+- Confirm only localhost exposes the app.
+- Back up win_engine.db.
+- Confirm no secrets appear in git status, logs, response payloads, or screenshots.
+
+Before declaring a stage complete:
+
+- Run tests and Python compilation.
+- Rebuild Docker.
+- Verify the changed flow in a browser.
+- Test both success and error paths.
+- Update the Current implementation snapshot in this roadmap.
+
+## Explicit non-goals
+
+- No fixed 90 percent or 100 percent growth promise.
+- No fake CTR prediction presented as fact.
+- No misleading clickbait or unrelated tag stuffing.
+- No automatic publishing or automatic live-video metadata changes.
+- No public hosting, multi-user accounts, or external access without a new explicit security plan.

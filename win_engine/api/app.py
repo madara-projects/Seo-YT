@@ -34,13 +34,18 @@ def create_app() -> FastAPI:
         max_requests=settings.rate_limit_max_requests,
         window_seconds=settings.rate_limit_window_seconds,
     )
+    analyze_rate_limiter = InMemoryRateLimiter(
+        max_requests=settings.analyze_rate_limit_max_requests,
+        window_seconds=settings.rate_limit_window_seconds,
+    )
     app.middleware("http")(request_context_middleware(app_start))
 
     @app.middleware("http")
     async def rate_limit_requests(request: Request, call_next):
         client_host = request.client.host if request.client else "unknown"
+        limiter = analyze_rate_limiter if request.url.path == "/analyze" else rate_limiter
         limiter_key = f"{client_host}:{request.url.path}"
-        allowed, retry_after = rate_limiter.check(limiter_key)
+        allowed, retry_after = limiter.check(limiter_key)
         if not allowed:
             request_id = getattr(request.state, "request_id", "unavailable")
             return JSONResponse(
@@ -54,7 +59,22 @@ def create_app() -> FastAPI:
                 },
                 headers={"Retry-After": str(retry_after)},
             )
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "connect-src 'self'; "
+            "img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "script-src 'self' 'unsafe-inline'; "
+            "base-uri 'self'; frame-ancestors 'none'"
+        )
+        return response
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):

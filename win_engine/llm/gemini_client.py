@@ -1,30 +1,33 @@
-"""Small Gemini REST client used only when the local Ollama writer is unavailable."""
+"""Small Gemini REST client used for AI SEO generation."""
 
 from __future__ import annotations
 
 import logging
 import os
+from typing import Optional
 
 import httpx
-
+from win_engine.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-GEMINI_API_KEY = os.environ.get("WIN_ENGINE_GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("WIN_ENGINE_GEMINI_MODEL", "gemini-3.5-flash").strip()
-GEMINI_TIMEOUT = float(os.environ.get("WIN_ENGINE_GEMINI_TIMEOUT_SECONDS", "30"))
+
+def _get_key() -> str:
+    return (os.environ.get("WIN_ENGINE_GEMINI_API_KEY") or get_settings().gemini_api_key or "").strip()
+
+
+def _get_model() -> str:
+    return (os.environ.get("WIN_ENGINE_GEMINI_MODEL") or get_settings().gemini_model or "gemini-1.5-flash").strip()
 
 
 def is_available() -> bool:
     """A configured key is enough to attempt generation; errors stay non-fatal."""
-
-    return bool(GEMINI_API_KEY and GEMINI_MODEL)
+    return bool(_get_key() and _get_model())
 
 
 def diagnostics() -> dict[str, object]:
     """Safe configuration state for the local diagnostics endpoint."""
-
-    return {"configured": is_available(), "model": GEMINI_MODEL if is_available() else None}
+    return {"configured": is_available(), "model": _get_model() if is_available() else None}
 
 
 def generate(
@@ -35,19 +38,19 @@ def generate(
     temperature: float = 0.5,
 ) -> str:
     """Return generated text, or an empty string when Gemini cannot be used."""
-
     if not is_available():
         return ""
+
+    key = _get_key()
+    model = _get_model()
+    timeout = float(os.environ.get("WIN_ENGINE_GEMINI_TIMEOUT_SECONDS", "30"))
 
     payload = {
         "systemInstruction": {"parts": [{"text": system}]} if system else None,
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
-            # Gemini 3.5 uses part of this allowance for reasoning.  The SEO
-            # JSON itself is sizeable (five titles plus a description), so the
-            # local Ollama budget of 1100 would otherwise truncate valid JSON.
-            "maxOutputTokens": max(max_tokens, 2400),
+            "maxOutputTokens": min(max(max_tokens, 256), 2048),
             "responseMimeType": "application/json",
         },
     }
@@ -56,10 +59,10 @@ def generate(
 
     try:
         response = httpx.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-            headers={"x-goog-api-key": GEMINI_API_KEY},
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": key},
             json=payload,
-            timeout=GEMINI_TIMEOUT,
+            timeout=timeout,
         )
         response.raise_for_status()
         candidates = response.json().get("candidates") or []

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+import time
 from datetime import date, timedelta
 from typing import Any
 
@@ -22,7 +23,8 @@ _SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
     "https://www.googleapis.com/auth/youtube.readonly",
 ]
-_PENDING_STATES: set[str] = set()
+_PENDING_STATES: dict[str, float] = {}
+_OAUTH_STATE_TTL_SECONDS = 600
 
 
 class YouTubeChannelService:
@@ -47,16 +49,17 @@ class YouTubeChannelService:
     def authorization_url(self) -> str:
         self._require_configured()
         state = secrets.token_urlsafe(32)
-        _PENDING_STATES.add(state)
+        _PENDING_STATES.clear()
+        _PENDING_STATES[state] = time.time() + _OAUTH_STATE_TTL_SECONDS
         flow = self._flow(state=state)
         url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
         return url
 
     def complete_authorization(self, *, code: str, state: str) -> dict[str, Any]:
         self._require_configured()
-        if state not in _PENDING_STATES:
+        expires_at = _PENDING_STATES.pop(state, None)
+        if not expires_at or time.time() > expires_at:
             raise ValueError("The connection request expired. Start the connection again.")
-        _PENDING_STATES.discard(state)
         flow = self._flow(state=state)
         flow.fetch_token(code=code)
         credentials = flow.credentials

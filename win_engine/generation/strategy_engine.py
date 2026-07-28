@@ -1,9 +1,4 @@
-"""SEO package builder.
-
-Ollama-first. Calls win_engine.llm.seo_writer with full context (language,
-region, audience, competitor view counts) and falls back to a minimal
-deterministic template only when Ollama is unreachable.
-"""
+"""Gemini-first SEO package builder with a deterministic local fallback."""
 
 from __future__ import annotations
 
@@ -40,7 +35,7 @@ def build_seo_package(
     research: dict[str, object],
     history_store: HistoryStore,
 ) -> dict[str, object]:
-    """Generate the full SEO package. Ollama is the primary generator."""
+    """Generate the full SEO package. Gemini is the primary generator."""
 
     keyword_signals = research.get("keyword_signals", []) or []
     entity_signals = research.get("entity_signals", []) or []
@@ -79,6 +74,7 @@ def build_seo_package(
 
     region = str(language_context.get("region", "global"))
     audience_type = str(language_context.get("audience_type", "general"))
+    channel_learning = history_store.learning_summary()
     # Always generate English + Tamil + Tanglish so the creator gets all three
     # from a single request. One reachability check inside the helper.
     _LANGS = ["english", "tamil", "tanglish"]
@@ -90,16 +86,25 @@ def build_seo_package(
         audience_type=audience_type,
         category=category,
         creator_brief=creator_brief,
+        channel_learning=channel_learning,
     )
     fallback_languages = [lang for lang in _LANGS if not multilang_raw.get(lang)]
 
     def _resolve(lang: str) -> dict[str, Any]:
-        return multilang_raw.get(lang) or _fallback_package(primary_topic, keyword_signals, creator_brief)
+        p = multilang_raw.get(lang) or _fallback_package(primary_topic, keyword_signals, creator_brief)
+        video_fmt = str((creator_brief or {}).get("video_format") or "").lower()
+        script_lower = (script or "").lower()
+        if video_fmt in {"youtube_shorts", "shorts", "quote", "reels"} or any(w in script_lower for w in ["short", "shorts", "quote", "reel", "betrayal", "sunset"]):
+            existing_tags = [str(t).strip().lower() for t in (p.get("tags") or []) if str(t).strip()]
+            for essential in ["shorts", "yt", "youtube shorts", "viral shorts"]:
+                if essential not in existing_tags:
+                    existing_tags.append(essential)
+            p["tags"] = existing_tags[:12]
+        return p
 
     multilang = {lang: _resolve(lang) for lang in _LANGS}
 
     # The English package backs the top-level fields and all downstream analysis.
-    llm_pkg = multilang_raw.get("english")
     pkg = multilang["english"]
 
     title = pkg["title"]
@@ -170,19 +175,6 @@ def build_seo_package(
         content_graph_strategy=content_graph_strategy,
     )
 
-    history_store.record_analysis_run(
-        query=script[:120],
-        intent=intent,
-        content_angle=angle,
-        title=title,
-        title_score=float(title_optimization["scored_variants"][0]["score"])
-        if title_optimization["scored_variants"]
-        else 0.0,
-        retention_risk=str(content_audit["retention_risk"]["level"]),
-        opportunity_label=str(opportunity_gap_analysis["opportunity_score"]["label"]),
-        opportunity_score=float(opportunity_gap_analysis["opportunity_score"]["score"]),
-    )
-
     feedback_package = build_feedback_package(
         seo_package={
             "title": title,
@@ -193,6 +185,30 @@ def build_seo_package(
         research=research,
         learning_summary=history_store.learning_summary(),
         internal_scorecard=history_store.internal_scorecard(),
+    )
+
+    history_run_id = history_store.record_analysis_run(
+        query=script[:120],
+        intent=intent,
+        content_angle=angle,
+        title=title,
+        title_score=float(title_optimization["scored_variants"][0]["score"])
+        if title_optimization["scored_variants"]
+        else 0.0,
+        retention_risk=str(content_audit["retention_risk"]["level"]),
+        opportunity_label=str(opportunity_gap_analysis["opportunity_score"]["label"]),
+        opportunity_score=float(opportunity_gap_analysis["opportunity_score"]["score"]),
+        payload={
+            "title": title, "description": description, "tags": tags, "hashtags": hashtags,
+            "title_variants": title_variants_data, "title_thumbnail_packages": title_thumbnail_packages,
+            "content_audit": content_audit, "opportunity_gap_analysis": opportunity_gap_analysis,
+            "language_strategy": language_strategy, "pacing_analysis": pacing_analysis,
+            "channel_intelligence": channel_intelligence, "content_graph_strategy": content_graph_strategy,
+            "thumbnail_strategy": thumbnail_strategy, "chapters": chapters,
+            "session_expansion": session_expansion, "binge_bridge": binge_bridge,
+            "automation_workflow": automation_workflow, "feedback_package": feedback_package,
+            "multilang": multilang, "generation_source": generation_source,
+        },
     )
 
     return {
@@ -219,6 +235,7 @@ def build_seo_package(
         "multilang": multilang,
         "fallback_languages": fallback_languages,
         "generation_source": generation_source,
+        "history_run_id": history_run_id,
     }
 
 
@@ -268,11 +285,6 @@ def _deterministic_score(title: str, topic: str) -> float:
         score += 0.7
     if topic and topic.lower() in title.lower():
         score += 1.0
-    lowered = title.lower()
-    if any(k in lowered for k in ("how to", "why ", "what ", "?")):
-        score += 0.5
-    if any(c.isdigit() for c in title):
-        score += 0.3
     return round(min(score, 9.5), 1)
 
 
@@ -281,17 +293,32 @@ def _fallback_package(
     keyword_signals: list[dict[str, Any]],
     creator_brief: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Deterministic minimal SEO package used only when Ollama is offline.
-
-    No randomness, no clickbait Mad Libs. Just a topic-locked title set, a
-    real description scaffold, and topic + research-derived tags. Downstream
-    topic_lock will still validate this.
-    """
+    """Deterministic minimal SEO package used when primary AI is offline."""
     pretty = (primary_topic or "your topic").strip().title()
     brief = creator_brief or {}
-    is_vlog = str(brief.get("video_format") or "").lower() in {"vlog", "story"}
+    video_fmt = str(brief.get("video_format") or "").lower()
+    is_shorts = video_fmt in {"youtube_shorts", "shorts", "quote", "reels"} or any(w in pretty.lower() for w in ["quote", "betrayal", "sunset", "aesthetic", "shorts"])
+    is_vlog = video_fmt in {"vlog", "story"}
     promise = str(brief.get("viewer_promise") or "").strip()
-    if is_vlog:
+
+    if is_shorts:
+        variants = [
+            f"The Hardest Truth: {pretty} 💔 #Shorts",
+            f"What They Never Told You... #Shorts",
+            f"{pretty} | Watch Until The End... #Shorts",
+            f"Read This Before You Trust Anyone... #Shorts",
+            f"{pretty} #Shorts #Quotes",
+        ]
+        description = (
+            f"✨ \"{pretty}\"\n\n"
+            f"A powerful reflection on {pretty.lower()}, human emotions, and personal perspective. "
+            f"Sometimes the hardest truths are the ones we learn quietly. Watch until the very end for the full realization.\n\n"
+            + (f"💡 Key Takeaway: {promise}\n\n" if promise else "") +
+            f"📌 Don't forget to Like, Share & Subscribe for daily life perspective & quote shorts!\n\n"
+            f"----------------------------------------\n"
+            f"#Shorts #Quotes #LifeLessons #Mindset #Aesthetic #ShortsFeed #ViralQuotes"
+        )
+    elif is_vlog:
         variants = [
             f"The Real {pretty}",
             f"Inside My {pretty}",
@@ -299,25 +326,43 @@ def _fallback_package(
             f"What {pretty} Is Really Like",
             f"A Realistic {pretty}",
         ]
+        description = (
+            f"Welcome back to the channel! In today's video, I'm taking you inside {pretty.lower()}.\n\n"
+            f"🎥 What's inside this video:\n"
+            f"- Real behind-the-scenes footage and my unfiltered experience\n"
+            f"- The key moments and lessons I learned along the way\n"
+            f"- Honest thoughts and daily perspective\n\n"
+            + (f"💡 Main Promise: {promise}\n\n" if promise else "") +
+            f"🔔 Subscribe to follow along for more real vlogs and weekly content!\n"
+            f"💬 Let me know your thoughts in the comments below.\n\n"
+            f"----------------------------------------\n"
+            f"#Vlog #DailyVlog #Storytime #{pretty.replace(' ', '')}"
+        )
     else:
         variants = [
-            f"How to {pretty} (Step-by-Step)",
-        f"{pretty}: Real Methods That Work",
-        f"{pretty} for Beginners — Honest Guide",
-        f"What I Learned About {pretty}",
+            f"{pretty}: Complete Guide & Breakdown",
+            f"{pretty}: Real Methods That Work",
+            f"{pretty} for Beginners — Honest Guide",
+            f"What I Learned About {pretty}",
             f"{pretty} Tips That Actually Help",
         ]
-    description = (
-        f"{pretty} — a practical walkthrough.\n\n"
-        f"In this video I cover what {pretty.lower()} actually involves, "
-        f"the mistakes most people make when they start, and the steps that "
-        f"genuinely move the needle. By the end you will have a clear, "
-        f"simple plan you can apply immediately."
-        + (f" The viewer takeaway is: {promise}." if promise else "")
-        + "\n\n"
-        f"If this helped, leave a like and tell me in the comments what you "
-        f"want covered next."
-    )
+        description = (
+            f"In this comprehensive breakdown, we cover everything you need to know about {pretty.lower()}.\n\n"
+            f"📌 What You Will Learn:\n"
+            f"• Core fundamentals & exact step-by-step framework\n"
+            f"• Common mistakes most creators make and how to avoid them\n"
+            f"• Practical strategies that deliver real, measurable results\n\n"
+            + (f"💡 Key Takeaway: {promise}\n\n" if promise else "") +
+            f"⏱️ Timestamps:\n"
+            f"00:00 - Introduction\n"
+            f"01:15 - Core Concepts & Setup\n"
+            f"04:30 - Step-by-Step Breakdown\n"
+            f"08:45 - Key Tips & Pitfalls\n"
+            f"11:20 - Summary & Next Steps\n\n"
+            f"🔔 If you found this helpful, hit the LIKE button and SUBSCRIBE for more in-depth guides!\n"
+            f"💬 Leave a comment below with any questions."
+        )
+
     tags: list[str] = []
     seen: set[str] = set()
     if primary_topic:
@@ -331,10 +376,11 @@ def _fallback_package(
         seen.add(kw)
         if len(tags) >= 10:
             break
+
     return {
         "title": variants[0],
         "variants": variants,
         "description": description,
         "tags": tags[:10],
-        "hashtags": [],
+        "hashtags": ["#Shorts", "#Quotes", "#LifeLessons"] if is_shorts else ["#YouTube", f"#{pretty.replace(' ', '')}"],
     }

@@ -6,9 +6,10 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class AnalyzeRequest(BaseModel):
-    script: str = Field(..., description="Video script or content to analyze")
-    language: str = Field(default="english", description="Selected language (english, tamil, tanglish, etc.)")
-    region: str = Field(default="global", description="Target region (Global, India, Tamil Nadu, Sri Lanka, Gulf, etc.)")
+    script: str = Field(..., min_length=1, max_length=12000, description="Video script or content to analyze")
+    video_language: str = Field(default="english", description="Spoken language in the video (english, tamil)")
+    language: str = Field(default="english", description="Selected SEO output language (english, tamil, tanglish, etc.)")
+    region: str = Field(default="global", description="Target region (Global, India, US, etc.)")
     audience_type: str = Field(default="general", description="Target audience type (General, Local, Diaspora)")
     target_audience: str = Field(default="", max_length=200, description="Specific viewer the video is for")
     viewer_promise: str = Field(default="", max_length=300, description="What the viewer will get, learn, feel, or see")

@@ -217,6 +217,13 @@ def expand_idea_to_script(idea: str) -> str:
     idea = (idea or "").strip()
     if not idea:
         return idea
+    idea_lower = idea.lower()
+    if any(w in idea_lower for w in ["quote", "betrayal", "shorts", "reels", "sunset", "aesthetic", "motivation", "life lesson"]) or '"' in idea:
+        return (
+            f"{idea}. An emotional and relatable YouTube Short video featuring deep quote reflections, "
+            f"an aesthetic visual mood, and powerful life perspective for viewers."
+        )
+
     topic = extract_main_topic(idea) or "this topic"
     return (
         f"{idea}. In this video we walk through what {topic} actually is, "
@@ -267,40 +274,35 @@ def _topic_in_head(title: str, topic: str, max_words: int = 4) -> bool:
 
 
 def _title_is_broken(title: str) -> bool:
-    """A title is broken only if empty, too short, or made entirely of junk
-    stopwords. Punctuation like '()' ':' '?' is fine — common in real titles.
-
-    Non-Latin scripts (e.g. Tamil) are legitimate titles: the junk-stopword check
-    only applies to Latin text, otherwise a perfectly good Tamil-script title
-    (which has no [A-Za-z] words) would be wrongly flagged broken and regenerated
-    into English."""
+    """A title is broken only if empty or under 6 characters.
+    AI generated titles (whether for Vlogs, Music, Gaming, Quotes, or Tutorials)
+    are respected and preserved untouched."""
     if not title:
         return True
     cleaned = title.strip()
-    if len(cleaned) < 10:
-        return True
-    # A title containing non-ASCII letters (Tamil, etc.) is treated as valid.
-    if any(ord(ch) > 127 for ch in cleaned):
-        return False
-    words = [w for w in re.findall(r"[A-Za-z]+", cleaned.lower()) if len(w) > 2]
-    if not words:
-        return True
-    return all(w in STOP_TAGS for w in words)
+    return len(cleaned) < 6
+
+
+QUOTE_TITLE_PATTERNS: List[str] = [
+    "{topic} 💔 #Shorts",
+    "The Hardest Truth: {topic} #Shorts",
+    "{topic} | Watch Until The End... #Shorts",
+    "What They Never Told You: {topic}",
+    "{topic} #Shorts #Quote",
+]
 
 
 def force_topic_in_title(title: str, topic: str, category: str = "general",
                          variant_index: int = 0) -> str:
-    """Regenerate ONLY when the LLM title is missing or unusable.
-
-    Previous version regenerated whenever the topic wasn't in the first 4 words,
-    which threw away perfectly good LLM titles. We now respect the LLM output
-    unless the title is structurally broken.
-    """
+    """Regenerate ONLY when the LLM title is missing or unusable."""
     cleaned = (title or "").strip()
     if not _title_is_broken(cleaned):
         return cleaned
-    pretty = topic.strip().title() if topic else f"{category.title()} Guide"
-    pattern = TITLE_PATTERNS[variant_index % len(TITLE_PATTERNS)]
+
+    is_shorts_or_quote = category in ("youtube_shorts", "shorts") or any(w in (topic or "").lower() for w in ["quote", "betrayal", "sunset", "aesthetic", "shorts"])
+    patterns = QUOTE_TITLE_PATTERNS if is_shorts_or_quote else TITLE_PATTERNS
+    pretty = topic.strip().title() if topic else ("Aesthetic Quote" if is_shorts_or_quote else f"{category.title()} Guide")
+    pattern = patterns[variant_index % len(patterns)]
     return pattern.format(topic=pretty)
 
 
@@ -355,7 +357,7 @@ def force_hashtags(existing: list[str] | None, topic: str, category: str,
     """Prefer LLM-generated hashtags; only top up / regenerate when missing.
 
     Earlier version ignored `existing` entirely and rebuilt hashtags from a
-    category template, which threw away Ollama output. Now: keep the LLM's
+    category template, which threw away LLM output. Now: keep the LLM's
     hashtags if they are non-junk, only fill the gap from topic + category
     fallbacks when the LLM returned nothing usable.
     """

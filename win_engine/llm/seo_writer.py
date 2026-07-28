@@ -1,9 +1,8 @@
-"""Ollama-powered SEO writer.
+"""SEO writer for YouTube Studio.
 
 Generates title, 5 variants, description, tags, and hashtags from a video
-script + competitor context. Language-aware (English / Tamil / Tanglish / Hindi)
-and niche-aware (gaming / education / finance / tech / fitness / cooking / vlog).
-Returns None if Ollama is offline or the model output cannot be parsed.
+script + competitor context. Language-aware and auto-detects content type
+(Vlogs, Gaming, Quotes, Shorts, Music, Tutorials, etc.).
 """
 
 from __future__ import annotations
@@ -13,17 +12,19 @@ import logging
 import re
 from typing import Any, Optional, Union
 
-from win_engine.llm import gemini_client, ollama_client
+from win_engine.llm import gemini_client
 
 logger = logging.getLogger(__name__)
 
 Competitor = Union[str, dict]
 
 _SYSTEM_PROMPT = (
-    "You are a senior YouTube SEO strategist who writes upload-ready metadata "
-    "for real creators. You match the natural voice and rhythm of top-performing "
-    "videos in the niche. You write like a human creator, never like a template. "
-    "You output ONLY valid JSON — no prose, no markdown fences, no commentary."
+    "You are an expert YouTube SEO strategist. You analyze the user's video input, script, or idea "
+    "to automatically determine the exact content type (e.g. YouTube Short, Quote Video, Vlog, Gaming, Music, "
+    "Tutorial, Review, or Story). You match the natural voice, emotion, and format of that specific category. "
+    "For Quote Videos or Shorts, write emotional, high-retention titles and viral hashtags. "
+    "For Tutorials, write clear searchable titles. For Vlogs, write engaging personal titles. "
+    "You write like a real creator, never robotic or templated. Output ONLY valid JSON."
 )
 
 _LANGUAGE_INSTRUCTIONS = {
@@ -49,15 +50,12 @@ _LANGUAGE_INSTRUCTIONS = {
     ),
 }
 
-# language_engine emits a few labels that are not direct keys above.
 _LANGUAGE_ALIASES = {
     "hinglish_or_hindi": "hindi",
     "hinglish": "hindi",
     "spanish_like": "english",
 }
 
-# Per-niche voice guidance injected into the prompt so a gaming title does not
-# read like a finance title. Keyed by topic_lock.infer_category output.
 _NICHE_GUIDANCE = {
     "gaming": (
         "Niche: GAMING. Lead with the game name and the stakes (win/clutch/rank/"
@@ -200,6 +198,26 @@ def _build_creator_brief_block(creator_brief: Optional[dict[str, Any]]) -> str:
     return "\nCreator brief (source of truth for audience and promise):\n" + "\n".join(lines) + "\n"
 
 
+def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) -> str:
+    """Format channel learning history so the LLM models titles after proven channel winners."""
+    if not channel_learning:
+        return ""
+    lines: list[str] = []
+    best_videos = channel_learning.get("best_videos") or []
+    for v in best_videos[:3]:
+        t = (v.get("title") or "").strip()
+        views = v.get("views")
+        if t:
+            v_str = f" ({int(views):,} views)" if views else ""
+            lines.append(f"- Proven Top Video: \"{t}\"{v_str}")
+    rec = channel_learning.get("recommendation")
+    if rec and str(rec).strip():
+        lines.append(f"- Channel Insight: {str(rec).strip()}")
+    if not lines:
+        return ""
+    return "\nChannel learning signals (past performance on this channel):\n" + "\n".join(lines) + "\n"
+
+
 def _build_user_prompt(
     script: str,
     competitor_block: str,
@@ -208,6 +226,7 @@ def _build_user_prompt(
     audience_type: str,
     category: Optional[str] = None,
     creator_brief: Optional[dict[str, Any]] = None,
+    channel_learning: Optional[dict[str, Any]] = None,
 ) -> str:
     fewshot_key = (language or "english").lower()
     fewshot_key = _LANGUAGE_ALIASES.get(fewshot_key, fewshot_key)
@@ -217,6 +236,7 @@ def _build_user_prompt(
 {script.strip()}
 \"\"\"
 {_build_creator_brief_block(creator_brief)}
+{_build_channel_learning_block(channel_learning)}
 {competitor_block}
 {_niche_header(category)}
 Target language: {language}
@@ -226,21 +246,10 @@ Audience type: {audience_type}
 
 Constraints:
 - {_language_instruction(language)}
-- the title, description, and tags must accurately match the creator brief and real video; never invent proof or promise a result the video does not deliver
-- title: 50-65 characters, has the main keyword in the first 4 words, no clickbait scams, no all-caps shouting
-- variants: 5 GENUINELY DIFFERENT title styles — (1) how-to, (2) listicle/number, (3) beginner-focused, (4) result-driven outcome, (5) curious question. Each variant must feel like a real creator wrote it.
-- description: 120-180 words, opens with the main keyword, includes 3-4 keywords naturally, mentions what the viewer will learn, ends with a soft call to engage. No timestamps, no fake "What I'll cover" lists.
-- tags: 10 lowercase tags, single or two-word, no '#' symbol, no junk filler like "video" "guide" "tips"
-- hashtags: exactly 3, each starting with '#', CamelCase, derived from the topic and niche
-
-Return ONLY this JSON object — no other text:
-{{
-  "title": "...",
-  "variants": ["...", "...", "...", "...", "..."],
-  "description": "...",
-  "tags": ["...", "...", "...", "...", "...", "...", "...", "...", "...", "..."],
-  "hashtags": ["#...", "#...", "#..."]
-}}"""
+- the title, description, and tags must accurately match the creator brief and real video
+- description MUST be detailed and comprehensive (150-300 words), structured with an engaging opening hook, clear bullet points of takeaways or timestamps, subscriber call to action, and top hashtags
+- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
+"""
 
 
 def _extract_json(raw: str) -> Optional[dict[str, Any]]:
@@ -260,7 +269,7 @@ def _extract_json(raw: str) -> Optional[dict[str, Any]]:
     try:
         return json.loads(match.group(0))
     except json.JSONDecodeError as exc:
-        logger.warning("Ollama returned malformed JSON: %s", exc)
+        logger.warning("Gemini returned malformed JSON: %s", exc)
         return None
 
 
@@ -295,11 +304,11 @@ def _generate_one(
     audience_type: str,
     category: Optional[str],
     creator_brief: Optional[dict[str, Any]],
+    channel_learning: Optional[dict[str, Any]] = None,
     temperature: float,
     max_tokens: int,
-    provider: str = "ollama",
 ) -> Optional[dict[str, Any]]:
-    """Single generation call. Assumes Ollama reachability was already checked."""
+    """Generate and validate one SEO package with Gemini."""
     prompt = _build_user_prompt(
         script=script,
         competitor_block=_build_competitor_block(competitors),
@@ -308,21 +317,14 @@ def _generate_one(
         audience_type=(audience_type or "general"),
         category=category,
         creator_brief=creator_brief,
+        channel_learning=channel_learning,
     )
-    if provider == "gemini":
-        raw = gemini_client.generate(
-            prompt=prompt,
-            system=_SYSTEM_PROMPT,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    else:
-        raw = ollama_client.generate(
-            prompt=prompt,
-            system=_SYSTEM_PROMPT,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+    raw = gemini_client.generate(
+        prompt=prompt,
+        system=_SYSTEM_PROMPT,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
     if not raw:
         return None
     parsed = _extract_json(raw)
@@ -340,18 +342,14 @@ def write_seo_package(
     audience_type: str = "general",
     category: Optional[str] = None,
     creator_brief: Optional[dict[str, Any]] = None,
+    channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.5,
     max_tokens: int = 1100,
 ) -> Optional[dict[str, Any]]:
-    """Generate a full SEO package via Ollama for a single language.
-
-    Returns dict {title, variants, description, tags, hashtags} or None when
-    Ollama is offline or the output cannot be parsed.
-    """
+    """Generate a full SEO package with Gemini, or return ``None`` when unavailable."""
     if not script or not script.strip():
         return None
-    provider = "ollama" if ollama_client.is_available() else "gemini" if gemini_client.is_available() else ""
-    if not provider:
+    if not gemini_client.is_available():
         return None
     return _generate_one(
         script,
@@ -361,9 +359,9 @@ def write_seo_package(
         audience_type=audience_type,
         category=category,
         creator_brief=creator_brief,
+        channel_learning=channel_learning,
         temperature=temperature,
         max_tokens=max_tokens,
-        provider=provider,
     )
 
 
@@ -376,6 +374,7 @@ def write_multilang_packages(
     audience_type: str = "general",
     category: Optional[str] = None,
     creator_brief: Optional[dict[str, Any]] = None,
+    channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.5,
     max_tokens: int = 1100,
 ) -> dict[str, Optional[dict[str, Any]]]:
@@ -387,6 +386,7 @@ def write_multilang_packages(
         audience_type=audience_type,
         category=category,
         creator_brief=creator_brief,
+        channel_learning=channel_learning,
         temperature=temperature,
         max_tokens=max_tokens,
     )
@@ -402,46 +402,28 @@ def write_multilang_packages_with_source(
     audience_type: str = "general",
     category: Optional[str] = None,
     creator_brief: Optional[dict[str, Any]] = None,
+    channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.5,
     max_tokens: int = 1100,
 ) -> tuple[dict[str, Optional[dict[str, Any]]], str]:
     """Generate SEO packages for several languages in one pass.
 
-    Prefer Ollama, then use Gemini only for missing packages. Returns the
-    packages plus ``ollama``, ``gemini``, ``mixed``, or ``fallback``.
+    Uses Gemini for every requested language. Returns ``gemini`` or ``fallback``.
     """
     langs = [l.lower() for l in (languages or ["english", "tamil", "tanglish"])]
     if not script or not script.strip():
         return {lang: None for lang in langs}, "fallback"
 
     out: dict[str, Optional[dict[str, Any]]] = {}
-    sources: set[str] = set()
-    ollama_ready = ollama_client.is_available()
     gemini_ready = gemini_client.is_available()
     for lang in langs:
         package = None
-        if ollama_ready:
+        if gemini_ready:
             package = _generate_one(
                 script, competitors, language=lang, region=region, audience_type=audience_type,
-                category=category, creator_brief=creator_brief, temperature=temperature,
-                max_tokens=max_tokens, provider="ollama",
+                category=category, creator_brief=creator_brief, channel_learning=channel_learning,
+                temperature=temperature, max_tokens=max_tokens,
             )
-            if package:
-                sources.add("ollama")
-        if package is None and gemini_ready:
-            package = _generate_one(
-                script, competitors, language=lang, region=region, audience_type=audience_type,
-                category=category, creator_brief=creator_brief, temperature=temperature,
-                max_tokens=max_tokens, provider="gemini",
-            )
-            if package:
-                sources.add("gemini")
         out[lang] = package
 
-    if not sources:
-        source = "fallback"
-    elif len(sources) == 1:
-        source = next(iter(sources))
-    else:
-        source = "mixed"
-    return out, source
+    return out, "gemini" if any(out.values()) else "fallback"
