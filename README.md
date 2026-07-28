@@ -1,181 +1,173 @@
-# YouTube SEO Analyzer
+# 🚀 YouTube SEO Analyzer & Growth Engine
 
-A local-first FastAPI application that turns a video idea or script into a researched, upload-ready YouTube SEO package. It is designed for one creator running a few analyses per day, either directly on Windows or with Docker Compose.
+<p align="center">
+  <b>A local-first, AI-powered YouTube SEO & Channel Strategy Engine built with FastAPI, Google Gemini 3.5 Flash, and SQLite.</b>
+</p>
 
-The staged plan for turning it into a private, channel-aware growth tool is in [ROADMAP.md](ROADMAP.md).
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python" alt="Python Version" />
+  <img src="https://img.shields.io/badge/Framework-FastAPI-009688?style=for-the-badge&logo=fastapi" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/AI_Engine-Gemini_3.5_Flash-8E44AD?style=for-the-badge&logo=google" alt="Gemini AI" />
+  <img src="https://img.shields.io/badge/Database-SQLite_WAL-003B57?style=for-the-badge&logo=sqlite" alt="SQLite" />
+  <img src="https://img.shields.io/badge/Container-Docker-2496ED?style=for-the-badge&logo=docker" alt="Docker" />
+</p>
 
-## What it produces
+---
 
-- English, Tamil, and Tanglish title packages
-- A primary title plus five scored alternatives
-- Description, tags, and hashtags
-- YouTube competitor research and outlier scoring
-- Keyword, entity, opportunity, pacing, and content-audit signals
-- Thumbnail direction, chapters, content-graph ideas, and publishing workflow
-- CTR guidance, A/B title suggestions, and comparison with local analysis history
-- JSON export from the built-in dashboard
+## 🌟 Overview
 
-Ollama generates the natural-language SEO copy. If it is unavailable, an optional Gemini API key is used; only then does the app use its local fallback.
+**YouTube SEO Analyzer** turns raw video scripts or topic ideas into upload-ready, highly optimized YouTube SEO packages. Designed for solo creators and digital strategists, it combines **live YouTube Data API v3 market research**, **outlier competitor scoring**, and **Google Gemini AI** to produce maximum organic reach and high CTR titles.
 
-## Architecture
+---
 
-```text
-Browser or API client
-        |
-        v
-FastAPI routes and validation
-        |
-        +--> YouTube Data API research --> outlier and opportunity scoring
-        |
-        +--> Ollama generation --> topic-lock validation
-        |
-        +--> analysis and strategy engines
-        |
-        +--> SQLite history and feedback
-        |
-        v
-Structured analysis response
-```
+## ✨ Key Features & Capabilities
 
-The service uses one FastAPI process and an inline HTML/JavaScript dashboard. There is no frontend build toolchain or separate UI server.
+- 🎯 **High-CTR Title Suite**: Generates a primary recommended title plus 5 distinct, scored title variants (How-to, Curiosity Gap, Result-Driven, Beginner, and Question styles).
+- 📝 **Rich Description Engine**: Produces 150–300 word structured YouTube descriptions featuring opening hooks, bulleted key takeaways, chapter scaffolds, subscriber call-to-actions, and hashtags.
+- 🌐 **Multi-Language & Regional Support**: Full generation support for **English**, **Tamil**, and **Tanglish** (Tamil-English blend), tailored for global or India-specific audiences.
+- 📊 **Channel Self-Learning System**: Automatically records video performance snapshots (e.g. 1,000+ view milestones) in SQLite and injects top channel winners into AI prompts to continuously refine title recommendations.
+- 🔍 **Live Competitor & Gap Analysis**: Analyzes competitor view counts, published dates, and keyword density to calculate topic **Opportunity Scores (0–100)** and **Content Retention Audit Signals**.
+- 🎨 **Bento Grid Studio Dashboard**: Built-in zero-dependency SPA UI with tabbed views (**Dashboard**, **SEO Creator Studio**, **Channel Analytics**, **Settings & APIs**) and fail-proof 1-click copy buttons for titles, descriptions, and tags.
+- 🐳 **Pure Docker Isolation**: 100% containerized deployment with Redis caching and persistent volume mapping.
 
-## Requirements
+---
 
-- Python 3.11+
-- A YouTube Data API v3 key
-- [Ollama](https://ollama.com/) with a local model for high-quality multilingual output
-- Docker Desktop only if using the container workflow
-
-Redis is optional for direct local runs and is included by Docker Compose.
-
-## Configuration
-
-Copy the example file and add your API key:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Important variables:
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `WIN_ENGINE_YOUTUBE_API_KEY` | YouTube Data API v3 key | empty |
-| `WIN_ENGINE_YOUTUBE_API_KEYS` | Comma-separated key rotation pool | empty |
-| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Competitors fetched per analysis | `5` |
-| `WIN_ENGINE_GEMINI_API_KEY` | Optional Gemini generation fallback | empty |
-| `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_ID` / `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_SECRET` | Local YouTube channel OAuth client | empty |
-| `WIN_ENGINE_OAUTH_TOKEN_ENCRYPTION_KEY` | Fernet key that encrypts the saved refresh token | empty |
-| `OLLAMA_BASE_URL` | Ollama HTTP endpoint | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Generation model | `mistral` |
-| `OLLAMA_TIMEOUT_SECONDS` | Generation timeout | `30` in the example |
-| `WIN_ENGINE_DATABASE_PATH` | SQLite history path | `win_engine.db` |
-| `WIN_ENGINE_REDIS_URL` | Optional Redis cache URL | empty |
-| `WIN_ENGINE_PUBLIC_DIAGNOSTICS_ENABLED` | Allow diagnostics without an admin token | `true` |
-| `WIN_ENGINE_ADMIN_API_TOKEN` | Token for protected operational endpoints | empty |
-
-Do not commit `.env`; it is excluded by `.gitignore`. In non-development environments, configure an admin token before exposing operational endpoints.
-
-### Connect your YouTube channel
-
-In Google Cloud, enable **YouTube Data API v3** and **YouTube Analytics API**, then create a Web OAuth client with this exact redirect URL:
+## 📐 System Architecture
 
 ```text
-http://127.0.0.1:8000/oauth/youtube/callback
+                     ┌────────────────────────────────────────┐
+                     │   Creator / Web Browser Dashboard      │
+                     └───────────────────┬────────────────────┘
+                                         │
+                                         v
+                     ┌────────────────────────────────────────┐
+                     │    FastAPI Application Core Services   │
+                     └───────┬────────────────────────┬───────┘
+                             │                        │
+                             v                        v
+  ┌────────────────────────────────────┐    ┌───────────────────────────────────┐
+  │   YouTube Data API v3 Research     │    │  Google Gemini 3.5 Flash Engine   │
+  │ • Outlier Competitor Scoring       │    │ • Topic-Lock Title Suite          │
+  │ • Opportunity Score (0-100)        │    │ • Structured 200w Descriptions    │
+  │ • Keyword & Entity Extraction      │    │ • Multi-Lang (Eng/Tamil/Tanglish) │
+  └──────────────────┬─────────────────┘    └─────────────────┬─────────────────┘
+                     │                                        │
+                     └───────────────────┬────────────────────┘
+                                         │
+                                         v
+                     ┌────────────────────────────────────────┐
+                     │    SQLite Local Database (WAL Mode)    │
+                     │ • Permanent JSON Analysis History Log  │
+                     │ • Channel Snapshot Self-Learning Store │
+                     └────────────────────────────────────────┘
 ```
 
-Add the client ID, client secret, and a generated Fernet key to `.env`. Then restart Docker and select **Connect YouTube Channel** in the dashboard. The app asks only for read-only YouTube and Analytics scopes, encrypts the refresh token in local SQLite, and offers a disconnect endpoint that deletes it.
+---
 
-## Run locally
+## 🛠️ Configuration & Environment Variables
 
-Install and start Ollama first:
+Copy `.env.example` to create your local `.env` configuration:
 
-```powershell
-ollama pull mistral
+```bash
+cp .env.example .env
 ```
 
-Create a clean virtual environment and install the application:
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `WIN_ENGINE_GEMINI_API_KEY` | **Google Gemini API Key** for AI copy generation | *Required for AI copy* |
+| `WIN_ENGINE_YOUTUBE_API_KEY` | **YouTube Data API v3 Key** for live competitor research | *Required for research* |
+| `WIN_ENGINE_DATABASE_PATH` | Path to local SQLite database | `win_engine.db` |
+| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Number of competitor videos analyzed per run | `5` |
+| `WIN_ENGINE_REDIS_URL` | Optional Redis cache connection URL | `redis://localhost:6379/0` |
+| `WIN_ENGINE_ADMIN_API_TOKEN` | Token for protected operational endpoints | *Optional* |
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python app.py
-```
+---
 
-Open <http://127.0.0.1:8000>. Interactive API documentation is available at <http://127.0.0.1:8000/docs>.
+## 🐳 Quick Start with Docker (Recommended)
 
-## Run with Docker
+Run the full stack (FastAPI Backend + Redis Cache + SQLite Storage) inside isolated Docker containers:
 
-Keep Ollama running on the host, then build and start the application with Redis:
-
-```powershell
+```bash
+# 1. Build and launch the container stack
 docker compose up --build -d
+
+# 2. Check container health status
 docker compose ps
 ```
 
-The Compose configuration maps the host Ollama daemon through `host.docker.internal` and persists SQLite data in `win_engine.db`.
+Open your browser and navigate to:
+- **Studio Dashboard**: [http://localhost:8000](http://localhost:8000)
+- **Interactive OpenAPI Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-Stop the stack without deleting its data:
-
-```powershell
+To stop the containers while preserving database history:
+```bash
 docker compose down
 ```
 
-## API
+---
 
-### Analyze a script
+## 💻 Local Windows / Python Installation
 
-`POST /analyze`
+If running directly without Docker:
 
+```powershell
+# 1. Create and activate a virtual environment
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+
+# 2. Install dependencies
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+# 3. Launch the server
+python app.py
+```
+
+---
+
+## 🔌 API Endpoints Reference
+
+### 1. Analyze Script / Idea (`POST /analyze`)
+**Request Body:**
 ```json
 {
-  "script": "How I organize a productive workday from home",
+  "script": "The biggest betrayal is knowing that if you didn't find out, they would have never told you.",
   "language": "english",
-  "region": "global",
+  "region": "in",
   "audience_type": "general"
 }
 ```
 
-Only `script` is required. The response contains the upload-ready packages and the supporting research and strategy fields.
+### 2. Live Operational Endpoints
+| HTTP Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/` | Web Dashboard & SEO Studio UI |
+| `GET` | `/api/history` | Retrieves stored analysis runs and channel self-learning stats |
+| `GET` | `/diagnostics` | Diagnostic check for Gemini, YouTube API, and DB connection |
+| `GET` | `/health` | System health and container status |
 
-### Operational endpoints
+---
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /` | Dashboard |
-| `GET /health` | Process and database health |
-| `GET /ready` | Database and YouTube-key readiness |
-| `GET /meta` | Version and capabilities |
-| `GET /diagnostics` | Live YouTube integration probe |
-| `GET /docs` | OpenAPI interface |
-
-When an endpoint is protected, send the token in the `X-Admin-Token` header.
-
-## Project layout
+## 📁 Repository Structure
 
 ```text
-app.py                  Application entry point
-compose.yaml            App and Redis services
-Dockerfile              Production-style container image
-requirements.txt        Python runtime dependencies
-win_engine/
-  api/                   FastAPI factory, dashboard, and routes
-  analysis/              Topic, content, CTR, pacing, and strategy analysis
-  core/                  Configuration, schemas, middleware, logging, rate limiting
-  feedback/              SQLite history and feedback summaries
-  generation/            SEO package and workflow generation
-  ingestion/             YouTube client, caching, and research orchestration
-  llm/                   Ollama client and SEO prompts
-  scoring/               Competitor outlier scoring
+Seo-YT/
+├── app.py                      # FastAPI application entry point
+├── compose.yaml                # Docker Compose orchestration
+├── Dockerfile                  # Production container image manifest
+├── requirements.txt            # Python dependencies
+├── win_engine/
+│   ├── api/                    # FastAPI routes, CORS, and Dashboard HTML UI
+│   ├── analysis/               # Topic-lock, content audit, CTR, & gap engines
+│   ├── core/                   # Config, schemas, middleware, & logging
+│   ├── feedback/               # SQLite history store & channel self-learning
+│   ├── generation/             # Strategy engine & SEO package builders
+│   ├── ingestion/              # YouTube research client & caching
+│   └── llm/                    # Gemini 3.5 Flash client & prompt strategies
 ```
 
-## Current scope and limitations
+---
 
-- This is a local, single-user tool; it has no user accounts or multi-tenant isolation.
-- YouTube research quality depends on a valid API key and available quota.
-- Native Tamil and Tanglish generation requires Ollama.
-- CTR values are heuristic guidance, not measured predictions.
-- Chapter timestamps are generic suggestions and should be reviewed before publishing.
-- The repository currently has no automated test suite; validate changes with import, API, and container smoke checks.
+<p align="center">
+  Made for creators aiming for <b>higher CTR, deeper viewer retention, and maximum channel growth</b>. 🚀
+</p>

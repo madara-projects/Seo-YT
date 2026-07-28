@@ -127,8 +127,7 @@ def generate_seo_suggestions(
         for lang, p in (seo_package.get("multilang") or {}).items()
     }
 
-    # Honest warning when a non-English language fell back to the English template
-    # (i.e. Ollama was offline / returned nothing usable for that language).
+    # Honest warning when a non-English language falls back to the English template.
     research_warnings = list(research_payload.get("research_warnings", []) or [])
     if isinstance(creator_brief, dict):
         research_warnings.extend(creator_brief.get("warnings", []))
@@ -137,7 +136,7 @@ def generate_seo_suggestions(
     ]
     generation_source = str(seo_package.get("generation_source") or "fallback")
     if non_english_fallback:
-        provider_hint = "Ollama and Gemini" if generation_source == "fallback" else "the available AI provider"
+        provider_hint = "Gemini" if generation_source == "fallback" else "the configured AI provider"
         research_warnings.append(
             ", ".join(sorted(non_english_fallback)).title()
             + " fell back to an English template because " + provider_hint
@@ -145,7 +144,7 @@ def generate_seo_suggestions(
         )
     # --------------------------------------------------------------------
 
-    return AnalyzeResponse(
+    response = AnalyzeResponse(
         title=locked_title,
         description=locked_description,
         tags=locked_tags,
@@ -188,3 +187,8 @@ def generate_seo_suggestions(
         internal_scorecard=seo_package["feedback_package"]["internal_scorecard"],
         historical_comparison=seo_package["feedback_package"]["historical_comparison"],
     ).model_dump()
+    history_store = research_payload.get("history_store")
+    history_run_id = seo_package.get("history_run_id")
+    if isinstance(history_store, HistoryStore) and isinstance(history_run_id, int):
+        history_store.update_analysis_payload(history_run_id, response["title"], response)
+    return response

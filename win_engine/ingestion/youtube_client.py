@@ -185,15 +185,15 @@ class YouTubeClient:
                     )
                     logger.warning("Rotating YouTube API key due to %s", reason or "quota/access issue")
                     continue
-                logger.exception("YouTube request failed: %s", exc)
-                self._last_warning = f"YouTube API request failed: {reason or str(exc)}"
+                logger.warning("YouTube request failed with HTTP status %s: %s", exc.response.status_code if exc.response else "unknown", reason or "unknown error")
+                self._last_warning = f"YouTube API request failed: {reason or 'unknown error'}"
                 if raise_on_error:
                     raise
                 return {}
             except requests.RequestException as exc:
                 last_error = exc
-                logger.exception("YouTube request failed: %s", exc)
-                self._last_warning = f"YouTube request error: {exc}"
+                logger.warning("YouTube request failed: %s", type(exc).__name__)
+                self._last_warning = "YouTube API request failed. Check the network connection."
                 if raise_on_error:
                     raise
                 return {}

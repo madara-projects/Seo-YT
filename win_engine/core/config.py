@@ -12,10 +12,10 @@ class Settings(BaseSettings):
     app_name: str = "YouTube Win-Engine"
     app_version: str = "0.8.0"
     app_environment: str = "development"
-    public_diagnostics_enabled: bool = True
     admin_api_token: str | None = None
     rate_limit_window_seconds: int = 60
     rate_limit_max_requests: int = 60
+    analyze_rate_limit_max_requests: int = 8
 
     youtube_api_key: str | None = None
     youtube_api_keys: str | None = None
@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     youtube_oauth_client_secret: str | None = None
     youtube_oauth_redirect_uri: str = "http://127.0.0.1:8000/oauth/youtube/callback"
     oauth_token_encryption_key: str | None = None
+
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-1.5-flash"
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="WIN_ENGINE_", extra="ignore")
 
