@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -83,3 +83,34 @@ class AnalyzeResponse(BaseModel):
     ab_test_pack: Dict[str, str]
     internal_scorecard: Dict[str, Any]
     historical_comparison: Dict[str, Any]
+
+
+class LinkVideoRequest(BaseModel):
+    youtube_video_id: str = Field(..., min_length=11, max_length=200)
+    published_at: str | None = None
+    selected_title: str | None = Field(default=None, max_length=100)
+    selected_thumbnail_package: str | None = Field(default=None, max_length=100)
+    selected_description: str | None = Field(default=None, max_length=5000)
+    selected_tags: List[str] = Field(default_factory=list, max_length=12)
+    selected_hashtags: List[str] = Field(default_factory=list, max_length=3)
+    format: str | None = Field(default=None, max_length=80)
+    language: str | None = Field(default=None, max_length=40)
+    region: str | None = Field(default=None, max_length=40)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class UpdatePublishedVideoRequest(BaseModel):
+    selected_title: str | None = Field(default=None, max_length=100)
+    selected_thumbnail_package: str | None = Field(default=None, max_length=100)
+    selected_description: str | None = Field(default=None, max_length=5000)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class RecordExperimentRequest(BaseModel):
+    youtube_video_id: str = Field(..., min_length=11, max_length=11)
+    old_title: str | None = Field(default=None, max_length=100)
+    new_title: str | None = Field(default=None, max_length=100)
+    old_thumbnail: str | None = Field(default=None, max_length=1000)
+    new_thumbnail: str | None = Field(default=None, max_length=1000)
+    reason: str | None = Field(default=None, max_length=1000)
+    performance_before: Dict[str, Any] = Field(default_factory=dict)

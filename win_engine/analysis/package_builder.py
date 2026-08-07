@@ -35,6 +35,7 @@ def build_title_thumbnail_packages(
         if issues:
             continue
         style = _title_style(title)
+        package_intent = str(variant.get("package_intent") or "Alternative")
         packages.append(
             {
                 "package": chr(65 + len(packages)),
@@ -44,7 +45,8 @@ def build_title_thumbnail_packages(
                 "viewer_promise": str(brief.get("viewer_promise") or "A clear, truthful reason to watch.").strip(),
                 "why_click": _why_click(style, brief),
                 "approach": style,
-                "best_for": _best_for(style, brief),
+                "package_intent": package_intent,
+                "best_for": _best_for(style, brief, package_intent),
                 "misleading_risk": "low",
                 "quality_status": "approved",
             }
@@ -112,7 +114,13 @@ def _why_click(style: str, brief: dict[str, Any]) -> str:
     return f"It balances a clear topic with the viewer payoff: {promise}"
 
 
-def _best_for(style: str, brief: dict[str, Any]) -> str:
+def _best_for(style: str, brief: dict[str, Any], package_intent: str = "") -> str:
+    if package_intent == "Search":
+        return "Search / new viewers"
+    if package_intent == "Browse":
+        return "Browse / home and suggested viewers"
+    if package_intent == "Existing audience":
+        return "Returning viewers / existing audience"
     if style == "searchable":
         return "Search / new viewers"
     if style == "curiosity-led":

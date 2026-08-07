@@ -25,20 +25,14 @@ It must say Collecting evidence when there is not enough data to support the con
 
 ## Current implementation snapshot
 
-Keep these features working:
+The core implementation for Stages A through F is present and verified locally. Personal recommendations remain in the Collecting evidence state until real linked videos reach the documented sample thresholds.
 
-- Creator brief: audience, promise, proof, unique angle, format, language, region, title style, and thumbnail direction.
-- YouTube competitor research, query planning, outlier scoring, keyword/entity extraction, and packaging angle recommendations.
-- Gemini-generated English, Tamil, and Tanglish packages with titles, descriptions, tags, hashtags, variants, thumbnail direction, chapters, and workflow advice.
-- Read-only YouTube OAuth, encrypted refresh token storage, 28-day channel refresh, and owned-video snapshots.
-- Full package persistence for new History entries.
-- Laptop-only safety defaults: localhost Docker binding, private Redis, production mode, request limits, input validation, SQLite WAL, and protected destructive endpoints.
-
-### Main gap to solve first
-
-Generated packages and YouTube performance are stored separately. The app does not yet reliably link a generated package to the exact published YouTube video that used it. Without that link, the app cannot accurately learn whether a title, description, thumbnail direction, or tag strategy worked.
-
-This is the highest-priority product feature.
+- **Stage A (Package-to-Video Linking)**: `published_video_links` table, video ownership validation, `POST /api/history/runs/{id}/link-video`, `GET /api/published-videos`, `PATCH /api/published-videos/{id}`, and 1-click **🔗 Link Video** actions in the dashboard.
+- **Stage B (Age-Based Snapshots)**: `video_performance_snapshots` table and manual due-snapshot refresh for 24h, 7d, and 28d timelines. It stores only metrics returned by YouTube Analytics.
+- **Stage C (Personal Learning Engine)**: Cohort analytics engine (`GET /api/learning/cohorts`) with honest evidence confidence thresholds (`Collecting evidence`, `Directional observation`, `Moderate-confidence pattern`, `Evidence-based recommendation`) and cohort median calculations.
+- **Stage D (Package Experiments)**: `package_experiments` table and experiment logging endpoints (`POST /api/experiments`) with a real saved performance baseline; all live YouTube changes remain manual.
+- **Stage E (Search/Browse/Audience Packages)**: Gemini multilingual generation producing dedicated Search, Browse, and Returning Audience title/thumbnail packages.
+- **Stage F (Reliability & Test Suite)**: Unit test suite for persistence and cohort thresholds, SQLite WAL persistence, no-cache headers, and verified Docker `127.0.0.1:8000` binding. Browser automation remains a future test-harness improvement, not a product blocker.
 
 ## Rules for any AI agent working on this project
 
@@ -374,3 +368,106 @@ Before declaring a stage complete:
 - No misleading clickbait or unrelated tag stuffing.
 - No automatic publishing or automatic live-video metadata changes.
 - No public hosting, multi-user accounts, or external access without a new explicit security plan.
+
+## Stage G — Personal research and optimization workspace
+
+### Goal
+
+Add the strongest useful workflows found in mature creator tools while preserving SEO YT's private, local, creator-controlled design. Build original features and use only approved YouTube and Google data. Do not copy another product's code, proprietary score, database, interface, or scraped data.
+
+### Build order
+
+Complete and verify each item before the next one:
+
+1. Idea backlog and topic opportunity workspace.
+2. Competitor and outlier watchlist.
+3. Published-video audit checklist.
+4. Creator-approved experiment center and thumbnail comparison.
+5. Search-position tracking only after an approved data source is chosen.
+
+### G1 — Idea backlog and topic opportunity workspace
+
+#### Database
+
+Create `content_ideas` with: `id`, `topic`, `notes`, `format`, `language`, `region`, `search_angle`, `browse_angle`, `audience_angle`, `evidence_json`, `status`, `analysis_run_id`, `published_video_link_id`, `created_at`, and `updated_at`.
+
+- `status` is one of `idea`, `scripted`, `package_generated`, `published`, or `archived`.
+- Add indexes for `status`, `created_at`, and the format/language/region combination.
+- Preserve dated research evidence. A refresh creates a new evidence snapshot or explicitly updates `updated_at`; it must never silently rewrite history.
+
+#### API and UI
+
+- `POST /api/ideas` creates a validated idea.
+- `GET /api/ideas?status=&limit=&offset=` returns paginated newest-first results.
+- `PATCH /api/ideas/{id}` changes only creator-approved fields and status.
+- `POST /api/ideas/{id}/research` runs existing approved research and saves dated evidence.
+- `POST /api/ideas/{id}/generate` invokes the existing generator and records `analysis_run_id`.
+
+Create an Ideas page with list, filter, and detail panel. Every card shows topic, status, format/language, last research date, and a transparent opportunity explanation. The detail shows Search, Browse, and Existing Audience angles, competitor evidence, publication dates, and actions for Research, Generate package, Mark published, and Archive.
+
+Show `Not enough personal evidence` when appropriate. Never display a guessed search-volume number, trend percentage, or confidence label.
+
+#### Acceptance checks
+
+- An idea survives Docker restart and links to its generated package and published video.
+- Pagination and status filters work with 100+ saved ideas.
+- Missing research data is represented honestly, not fabricated.
+
+### G2 — Competitor and outlier watchlist
+
+Create `competitor_channels` with unique `channel_id`, title, notes, format/language focus, created_at, and updated_at. Limit the private workspace to 20 saved channels.
+
+- `POST /api/competitors` validates a channel ID through an approved API call.
+- `GET /api/competitors` returns saved channels and latest refresh summary.
+- `POST /api/competitors/{id}/refresh` records an immutable dated snapshot of recent public uploads.
+- `DELETE /api/competitors/{id}` removes only the watchlist entry after creator confirmation; never delete package history.
+
+Calculate a possible outlier only against the median of at least five recent comparable uploads from the same watched channel. Show formula, sample size, publication age, and capture date. Label it `possible outlier`, never `guaranteed viral video`.
+
+UI must offer `Create different angle`, which opens a blank original brief. It must never prefill or offer to copy a competitor title or script.
+
+### G3 — Published-video audit checklist
+
+Add `GET /api/published-videos/{id}/audit`. Return individual checks with `pass`, `review`, `missing`, or `not_available`, explanation, and evidence source. Do not create one misleading SEO percentage.
+
+Evaluate only known fields:
+
+- Title is truthful and has a clear topic/outcome.
+- First two description lines state topic and viewer promise.
+- Tags are 5–12 relevant phrases; hashtags are 1–3 focused terms.
+- Package is linked, actual metadata is recorded, and an age snapshot is due or complete.
+- Playlist, end-screen, card, and thumbnail checks are `not_available` unless connected API data supports them.
+
+### G4 — Experiment center and thumbnail comparison
+
+Show two or three saved title/thumbnail packages side by side. Let the creator upload local thumbnail drafts for visual comparison; keep only local file paths or generated local assets.
+
+- Require one changed variable per experiment: title, thumbnail, description, or tags.
+- Save the latest real linked-video metrics as baseline.
+- Allow a creator-selected follow-up date and show before/after metrics with dates and caveat that distribution can affect results.
+- Never automatically change live YouTube metadata.
+- Do not suggest experiments for videos younger than 14 days or already above cohort median unless the creator explicitly overrides.
+- Mark multi-variable experiments `mixed / inconclusive`.
+
+Every experiment retains original metadata, changed metadata, reason, baseline, follow-up, and creator approval timestamp.
+
+### G5 — Search-position tracking decision
+
+Search position must not be built by scraping YouTube result pages. Before implementation, document and approve one legal, low-cost data source, including quota, retention, and terms. If no approved source fits the personal budget, do not implement ranking tracking.
+
+Until then, use connected-channel YouTube Analytics search-term data as channel evidence, never as a claimed search ranking.
+
+### Data boundaries and references
+
+- Use the official YouTube Data API and YouTube Analytics API only for YouTube data.
+- Keep Gemini local to this workflow; never send OAuth tokens, private analytics, or history to another product.
+- Do not imitate vidIQ, TubeBuddy, or YouTube scores. Document every SEO YT formula and input.
+- Treat keyword volume, competition, trend, and thumbnail predictions as estimates only when an approved source and capture date are available.
+- Do not add a browser extension, scraper, paid keyword provider, or automatic metadata editor without a separate explicit decision.
+
+Workflow references, not implementation dependencies:
+
+- vidIQ research: https://support.vidiq.com/en/articles/9421214-keywords-research
+- vidIQ channel audit: https://support.vidiq.com/en/articles/10141815-channel-audit
+- TubeBuddy keyword explorer: https://www.tubebuddy.com/tools/keyword-explorer/
+- TubeBuddy experiment guidance: https://support.tubebuddy.com/hc/en-us/articles/21191305824027-A-B-Testing-FAQs

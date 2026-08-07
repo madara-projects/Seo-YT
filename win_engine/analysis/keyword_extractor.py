@@ -133,11 +133,18 @@ def extract_keyword_signals(script: str, youtube_results: Iterable[dict[str, obj
     script_phrases = _extract_phrases(script)
     counter.update(script_phrases)
 
+    script_tokens = set(_tokenize(script))
     for result in youtube_results:
         title = str(result.get("title", ""))
         description = str(result.get("description", ""))
-        counter.update(_extract_phrases(title))
-        counter.update(_extract_phrases(description))
+        title_phrases = _extract_phrases(title)
+        desc_phrases = _extract_phrases(description)
+        for phrase in title_phrases + desc_phrases:
+            phrase_tokens = set(_tokenize(phrase))
+            # Require topic relevance with the input script if script is non-empty
+            if script_tokens and not (phrase_tokens & script_tokens):
+                continue
+            counter[phrase] += 1
 
     signals: list[dict[str, object]] = []
     region_keywords = _REGION_PRIORITY_KEYWORDS.get(region.lower(), _REGION_PRIORITY_KEYWORDS["global"])
