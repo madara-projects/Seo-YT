@@ -47,6 +47,14 @@ CATEGORY_KEYWORDS: dict[str, set[str]] = {
         "vlog", "daily routine", "morning routine", "weekend", "day in life",
         "lifestyle",
     },
+    "quotes": {
+        "quote", "quotes", "motivation", "motivational", "healing", "heartbreak",
+        "heart", "aesthetic", "rain", "peaceful", "wisdom", "lessons", "thoughts",
+        "life quotes", "deep quotes",
+    },
+    "shorts": {
+        "shorts", "short", "youtube shorts", "reels", "viral shorts", "aesthetic shorts",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -80,6 +88,18 @@ CATEGORY_FALLBACK_KEYWORDS: dict[str, List[str]] = {
     "vlog": [
         "daily vlog", "morning routine", "weekend vlog", "lifestyle",
         "day in life", "real life",
+    ],
+    "quotes": [
+        "quote video", "life quotes", "deep quotes", "motivational quote",
+        "healing quotes", "aesthetic quotes", "shorts quotes", "heart quotes",
+    ],
+    "shorts": [
+        "youtube shorts", "trending shorts", "short video", "viral shorts",
+        "aesthetic shorts", "relatable shorts",
+    ],
+    "youtube_shorts": [
+        "youtube shorts", "trending shorts", "short video", "viral shorts",
+        "aesthetic shorts", "relatable shorts",
     ],
     "general": [
         "complete guide", "tips and tricks", "how to", "tutorial",

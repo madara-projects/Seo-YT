@@ -119,6 +119,84 @@ class HistoryStore:
                 ON analysis_runs(created_at)
                 """
             )
+
+            # Stage A: Link saved package to published video
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS published_video_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    analysis_run_id INTEGER NOT NULL,
+                    youtube_video_id TEXT NOT NULL UNIQUE,
+                    published_at TEXT NOT NULL,
+                    selected_title TEXT,
+                    selected_thumbnail_package TEXT,
+                    selected_description TEXT,
+                    selected_tags_json TEXT,
+                    selected_hashtags_json TEXT,
+                    format TEXT,
+                    language TEXT,
+                    region TEXT,
+                    notes TEXT,
+                    linked_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id)
+                )
+                """
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_run_id ON published_video_links(analysis_run_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_yt_id ON published_video_links(youtube_video_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_pub_at ON published_video_links(published_at)")
+
+            # Stage B: Comparable age-based performance snapshots
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS video_performance_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    youtube_video_id TEXT NOT NULL,
+                    age_hours REAL NOT NULL,
+                    views INTEGER DEFAULT 0,
+                    watch_time_minutes REAL DEFAULT 0,
+                    avg_view_duration_seconds REAL DEFAULT 0,
+                    avg_view_percentage REAL DEFAULT 0,
+                    likes INTEGER DEFAULT 0,
+                    comments INTEGER DEFAULT 0,
+                    shares INTEGER DEFAULT 0,
+                    subscribers_gained INTEGER DEFAULT 0,
+                    impressions INTEGER DEFAULT 0,
+                    impressions_ctr REAL DEFAULT 0,
+                    snapshot_window TEXT,
+                    captured_at TEXT NOT NULL
+                )
+                """
+            )
+            self._ensure_column(connection, "video_performance_snapshots", "snapshot_window", "TEXT")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_perf_snaps_yt_id ON video_performance_snapshots(youtube_video_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_perf_snaps_yt_window ON video_performance_snapshots(youtube_video_id, snapshot_window)")
+
+            # Stage D: Package experiments & post-publish changes
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS package_experiments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    youtube_video_id TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    old_title TEXT,
+                    new_title TEXT,
+                    old_thumbnail TEXT,
+                    new_thumbnail TEXT,
+                    reason TEXT,
+                    performance_before_json TEXT,
+                    performance_after_json TEXT
+                )
+                """
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_pkg_exp_yt_id ON package_experiments(youtube_video_id)")
+
+    @staticmethod
+    def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     def record_snapshots(self, query: str, youtube_results: list[dict[str, Any]]) -> None:
         captured_at = datetime.now(timezone.utc).isoformat()
         rows = [
@@ -509,6 +587,393 @@ class HistoryStore:
             connection.execute("DELETE FROM owned_video_snapshots")
             connection.execute("DELETE FROM youtube_channel_syncs")
             connection.execute("DELETE FROM analysis_runs")
+            connection.execute("DELETE FROM published_video_links")
+            connection.execute("DELETE FROM video_performance_snapshots")
+            connection.execute("DELETE FROM package_experiments")
+
+    # --- Stage A: Published Video Linking Methods ---
+
+    def link_published_video(
+        self,
+        analysis_run_id: int,
+        youtube_video_id: str,
+        published_at: str,
+        selected_title: str | None = None,
+        selected_thumbnail_package: str | None = None,
+        selected_description: str | None = None,
+        selected_tags_json: str | None = None,
+        selected_hashtags_json: str | None = None,
+        format_val: str | None = None,
+        language: str | None = None,
+        region: str | None = None,
+        notes: str | None = None,
+    ) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO published_video_links (
+                    analysis_run_id, youtube_video_id, published_at,
+                    selected_title, selected_thumbnail_package, selected_description,
+                    selected_tags_json, selected_hashtags_json, format, language, region, notes,
+                    linked_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(youtube_video_id) DO UPDATE SET
+                    analysis_run_id = excluded.analysis_run_id,
+                    published_at = excluded.published_at,
+                    selected_title = excluded.selected_title,
+                    selected_thumbnail_package = excluded.selected_thumbnail_package,
+                    selected_description = excluded.selected_description,
+                    selected_tags_json = excluded.selected_tags_json,
+                    selected_hashtags_json = excluded.selected_hashtags_json,
+                    format = excluded.format,
+                    language = excluded.language,
+                    region = excluded.region,
+                    notes = excluded.notes,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    analysis_run_id,
+                    youtube_video_id,
+                    published_at,
+                    selected_title,
+                    selected_thumbnail_package,
+                    selected_description,
+                    selected_tags_json,
+                    selected_hashtags_json,
+                    format_val,
+                    language,
+                    region,
+                    notes,
+                    now,
+                    now,
+                ),
+            )
+            return cursor.lastrowid or 0
+
+    def published_video_links_list(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT p.id, p.analysis_run_id, p.youtube_video_id, p.published_at,
+                       p.selected_title, p.selected_thumbnail_package, p.selected_description,
+                       p.format, p.language, p.region, p.notes, p.linked_at, p.updated_at,
+                       COALESCE(a.title, a.query, 'Saved Package'), a.opportunity_score, a.title_score,
+                       s.age_hours, s.views, s.avg_view_percentage, s.impressions_ctr, s.snapshot_window, s.captured_at
+                FROM published_video_links p
+                LEFT JOIN analysis_runs a ON p.analysis_run_id = a.id
+                LEFT JOIN video_performance_snapshots s ON s.id = (
+                    SELECT vs.id FROM video_performance_snapshots vs
+                    WHERE vs.youtube_video_id = p.youtube_video_id
+                    ORDER BY vs.captured_at DESC LIMIT 1
+                )
+                ORDER BY p.published_at DESC
+                """
+            ).fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "analysis_run_id": r[1],
+                    "youtube_video_id": r[2],
+                    "published_at": r[3],
+                    "selected_title": r[4],
+                    "selected_thumbnail_package": r[5],
+                    "selected_description": r[6],
+                    "format": r[7],
+                    "language": r[8],
+                    "region": r[9],
+                    "notes": r[10],
+                    "linked_at": r[11],
+                    "updated_at": r[12],
+                    "package_topic": r[13],
+                    "package_opportunity_score": r[14],
+                    "package_title_score": r[15],
+                    "latest_performance": {
+                        "age_hours": r[16], "views": r[17], "avg_view_percentage": r[18],
+                        "impressions_ctr": r[19], "snapshot_window": r[20], "captured_at": r[21],
+                    } if r[21] else None,
+                }
+                for r in rows
+            ]
+
+    def published_video_link_by_run(self, run_id: int) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, analysis_run_id, youtube_video_id, published_at,
+                       selected_title, selected_thumbnail_package, selected_description,
+                       format, language, region, notes, linked_at, updated_at
+                FROM published_video_links
+                WHERE analysis_run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "analysis_run_id": row[1],
+                "youtube_video_id": row[2],
+                "published_at": row[3],
+                "selected_title": row[4],
+                "selected_thumbnail_package": row[5],
+                "selected_description": row[6],
+                "format": row[7],
+                "language": row[8],
+                "region": row[9],
+                "notes": row[10],
+                "linked_at": row[11],
+                "updated_at": row[12],
+            }
+
+    def published_video_link(self, link_id: int) -> dict[str, Any] | None:
+        for link in self.published_video_links_list():
+            if link["id"] == link_id:
+                return link
+        return None
+
+    def update_published_video_link(
+        self,
+        link_id: int,
+        selected_title: str | None = None,
+        selected_thumbnail_package: str | None = None,
+        selected_description: str | None = None,
+        notes: str | None = None,
+    ) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE published_video_links
+                SET selected_title = COALESCE(?, selected_title),
+                    selected_thumbnail_package = COALESCE(?, selected_thumbnail_package),
+                    selected_description = COALESCE(?, selected_description),
+                    notes = COALESCE(?, notes),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (selected_title, selected_thumbnail_package, selected_description, notes, now, link_id),
+            )
+            return cursor.rowcount > 0
+
+    # --- Stage B: Age-Based Performance Snapshots ---
+
+    def record_performance_snapshot(
+        self,
+        youtube_video_id: str,
+        age_hours: float,
+        views: int | None = None,
+        watch_time_minutes: float | None = None,
+        avg_view_duration_seconds: float | None = None,
+        avg_view_percentage: float | None = None,
+        likes: int | None = None,
+        comments: int | None = None,
+        shares: int | None = None,
+        subscribers_gained: int | None = None,
+        impressions: int | None = None,
+        impressions_ctr: float | None = None,
+        snapshot_window: str | None = None,
+    ) -> int:
+        captured_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO video_performance_snapshots (
+                    youtube_video_id, age_hours, views, watch_time_minutes,
+                    avg_view_duration_seconds, avg_view_percentage, likes, comments,
+                    shares, subscribers_gained, impressions, impressions_ctr, snapshot_window, captured_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    youtube_video_id,
+                    age_hours,
+                    views,
+                    watch_time_minutes,
+                    avg_view_duration_seconds,
+                    avg_view_percentage,
+                    likes,
+                    comments,
+                    shares,
+                    subscribers_gained,
+                    impressions,
+                    impressions_ctr,
+                    snapshot_window,
+                    captured_at,
+                ),
+            )
+            return cursor.lastrowid or 0
+
+    def has_snapshot_window(self, youtube_video_id: str, snapshot_window: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM video_performance_snapshots WHERE youtube_video_id = ? AND snapshot_window = ? LIMIT 1",
+                (youtube_video_id, snapshot_window),
+            ).fetchone()
+        return bool(row)
+
+    def performance_snapshots(self, youtube_video_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT age_hours, views, watch_time_minutes, avg_view_duration_seconds,
+                          avg_view_percentage, likes, comments, shares, subscribers_gained,
+                          impressions, impressions_ctr, snapshot_window, captured_at
+                   FROM video_performance_snapshots WHERE youtube_video_id = ?
+                   ORDER BY captured_at ASC""",
+                (youtube_video_id,),
+            ).fetchall()
+        keys = ("age_hours", "views", "watch_time_minutes", "avg_view_duration_seconds",
+                "avg_view_percentage", "likes", "comments", "shares", "subscribers_gained",
+                "impressions", "impressions_ctr", "snapshot_window", "captured_at")
+        return [dict(zip(keys, row)) for row in rows]
+
+    def latest_performance_snapshot(self, youtube_video_id: str) -> dict[str, Any] | None:
+        snapshots = self.performance_snapshots(youtube_video_id)
+        return snapshots[-1] if snapshots else None
+
+    # --- Stage C: Evidence & Cohort Calculation Engine ---
+
+    def cohort_analytics(self, format_filter: str | None = None, language_filter: str | None = None) -> dict[str, Any]:
+        with self._connect() as connection:
+            query = """
+                SELECT p.youtube_video_id, p.format, p.language,
+                       COALESCE(s.views, o.views, 0) as views,
+                       COALESCE(s.likes, o.likes, 0) as likes,
+                       COALESCE(s.avg_view_percentage, o.average_view_percentage, 0) as avg_view_percentage
+                FROM published_video_links p
+                LEFT JOIN owned_video_snapshots o ON p.youtube_video_id = o.video_id
+                LEFT JOIN (
+                    SELECT youtube_video_id, views, likes, avg_view_percentage,
+                           ROW_NUMBER() OVER(PARTITION BY youtube_video_id ORDER BY captured_at DESC) as rn
+                    FROM video_performance_snapshots
+                ) s ON p.youtube_video_id = s.youtube_video_id AND s.rn = 1
+                WHERE 1=1
+            """
+            params: list[Any] = []
+            if format_filter:
+                query += " AND p.format = ?"
+                params.append(format_filter)
+            if language_filter:
+                query += " AND p.language = ?"
+                params.append(language_filter)
+
+            rows = connection.execute(query, params).fetchall()
+            count = len(rows)
+
+            if count == 0:
+                confidence = "Collecting evidence"
+                confidence_level = "none"
+            elif count < 5:
+                confidence = f"Collecting evidence ({count}/5 linked videos)"
+                confidence_level = "low"
+            elif count < 10:
+                confidence = f"Directional observation ({count} linked videos)"
+                confidence_level = "medium-low"
+            elif count < 20:
+                confidence = f"Moderate-confidence pattern ({count} linked videos)"
+                confidence_level = "moderate"
+            else:
+                confidence = f"Evidence-based recommendation ({count} linked videos)"
+                confidence_level = "high"
+
+            views_list = sorted([r[3] for r in rows if r[3] is not None])
+            retention_list = sorted([r[5] for r in rows if r[5] is not None])
+            likes_list = sorted([r[4] for r in rows if r[4] is not None])
+            median_views = _median(views_list)
+            median_retention = _median(retention_list)
+            median_likes = _median(likes_list)
+
+            recommendation = "Collect linked-video snapshots before using personal performance patterns."
+            if count >= 5 and median_retention is not None:
+                recommendation = (
+                    f"Use this {format_filter or 'format'} / {language_filter or 'language'} cohort as a comparison baseline. "
+                    f"Median retention at the latest comparable snapshot is {median_retention:.1f}%."
+                )
+
+            return {
+                "format": format_filter or "all",
+                "language": language_filter or "all",
+                "sample_size": count,
+                "confidence_label": confidence,
+                "confidence_level": confidence_level,
+                "median_views": median_views,
+                "median_retention_percentage": median_retention,
+                "median_likes": median_likes,
+                "total_linked": count,
+                "recommendation": recommendation,
+            }
+
+    # --- Stage D: Package Experiments ---
+
+    def record_package_experiment(
+        self,
+        youtube_video_id: str,
+        old_title: str | None = None,
+        new_title: str | None = None,
+        old_thumbnail: str | None = None,
+        new_thumbnail: str | None = None,
+        reason: str | None = None,
+        performance_before_json: str | None = None,
+    ) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO package_experiments (
+                    youtube_video_id, changed_at, old_title, new_title,
+                    old_thumbnail, new_thumbnail, reason, performance_before_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    youtube_video_id,
+                    now,
+                    old_title,
+                    new_title,
+                    old_thumbnail,
+                    new_thumbnail,
+                    reason,
+                    performance_before_json,
+                ),
+            )
+            return cursor.lastrowid or 0
+
+    def get_package_experiments(self, youtube_video_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, youtube_video_id, changed_at, old_title, new_title,
+                       old_thumbnail, new_thumbnail, reason, performance_before_json, performance_after_json
+                FROM package_experiments
+                WHERE youtube_video_id = ?
+                ORDER BY changed_at DESC
+                """,
+                (youtube_video_id,),
+            ).fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "youtube_video_id": r[1],
+                    "changed_at": r[2],
+                    "old_title": r[3],
+                    "new_title": r[4],
+                    "old_thumbnail": r[5],
+                    "new_thumbnail": r[6],
+                    "reason": r[7],
+                    "performance_before": _json_value(r[8]),
+                    "performance_after": _json_value(r[9]),
+                }
+                for r in rows
+            ]
+
+    def complete_due_experiment_snapshots(self, youtube_video_id: str, after: dict[str, Any]) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE package_experiments SET performance_after_json = ?
+                   WHERE youtube_video_id = ? AND performance_after_json IS NULL
+                   AND changed_at <= ?""",
+                (json.dumps(after), youtube_video_id, now),
+            )
+        return cursor.rowcount
 
     def system_status(self) -> dict[str, Any]:
         try:
@@ -559,6 +1024,25 @@ def _to_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _median(values: list[float | int]) -> float | None:
+    if not values:
+        return None
+    middle = len(values) // 2
+    if len(values) % 2:
+        return float(values[middle])
+    return round((float(values[middle - 1]) + float(values[middle])) / 2, 2)
+
+
+def _json_value(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
 
 
 def _top_counts(values: list[Any]) -> list[Any]:

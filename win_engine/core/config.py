@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
     app_name: str = "YouTube Win-Engine"
-    app_version: str = "0.8.0"
+    app_version: str = "0.9.0"
     app_environment: str = "development"
     admin_api_token: str | None = None
     rate_limit_window_seconds: int = 60
