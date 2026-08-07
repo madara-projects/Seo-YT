@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import time
 
 from fastapi import APIRouter
@@ -10,7 +12,7 @@ from google.auth.exceptions import RefreshError
 
 from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.core.config import get_settings
-from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse
+from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, LinkVideoRequest, UpdatePublishedVideoRequest, RecordExperimentRequest
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.ingestion.research_service import ResearchService
@@ -24,8 +26,17 @@ _APP_START = time.time()
 
 
 @router.get("/", response_class=HTMLResponse)
+@router.get("/app", response_class=HTMLResponse)
+@router.get("/dashboard_view", response_class=HTMLResponse)
 def dashboard():
-    return DASHBOARD_HTML
+    return HTMLResponse(
+        content=DASHBOARD_HTML,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @router.get("/health")
@@ -207,3 +218,143 @@ def reset_database(request: Request):
     store = HistoryStore(settings.database_path)
     store.reset_database()
     return {"status": "cleared", "message": "All historical test records wiped cleanly."}
+
+
+# --- Stage A: Published Video Linking Endpoints ---
+
+@router.post("/api/history/runs/{run_id}/link-video")
+def link_published_video(run_id: int, payload: LinkVideoRequest):
+    settings = get_settings()
+    store = HistoryStore(settings.database_path)
+    run = store.history_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Saved SEO package not found.")
+
+    clean_vid = _extract_youtube_video_id(payload.youtube_video_id)
+    if not clean_vid:
+        raise HTTPException(status_code=422, detail="Enter a valid 11-character YouTube video ID or video URL.")
+    try:
+        owned_video = YouTubeChannelService(settings).verify_owned_video(clean_vid)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    pub_at = payload.published_at or owned_video.get("published_at")
+    if not pub_at:
+        raise HTTPException(status_code=400, detail="YouTube did not return a publication time for this video.")
+    saved_package = run.get("package") if isinstance(run.get("package"), dict) else {}
+    saved_brief = saved_package.get("creator_brief") if isinstance(saved_package.get("creator_brief"), dict) else {}
+    selected_title = payload.selected_title or saved_package.get("title") or run.get("title")
+    selected_description = payload.selected_description or saved_package.get("description")
+    selected_tags = payload.selected_tags or saved_package.get("tags") or []
+    selected_hashtags = payload.selected_hashtags or saved_package.get("hashtags") or []
+    format_value = payload.format or saved_brief.get("video_format") or run.get("content_angle")
+    language_value = payload.language or saved_brief.get("language")
+    region_value = payload.region or saved_brief.get("region")
+    link_id = store.link_published_video(
+        analysis_run_id=run_id,
+        youtube_video_id=clean_vid,
+        published_at=pub_at,
+        selected_title=str(selected_title) if selected_title else None,
+        selected_thumbnail_package=payload.selected_thumbnail_package,
+        selected_description=str(selected_description) if selected_description else None,
+        selected_tags_json=json.dumps(selected_tags),
+        selected_hashtags_json=json.dumps(selected_hashtags),
+        format_val=str(format_value) if format_value else None,
+        language=str(language_value) if language_value else None,
+        region=str(region_value) if region_value else None,
+        notes=payload.notes,
+    )
+
+    return {
+        "status": "linked",
+        "link_id": link_id,
+        "analysis_run_id": run_id,
+        "youtube_video_id": clean_vid,
+        "published_at": pub_at,
+    }
+
+
+@router.get("/api/published-videos")
+def get_published_video_links():
+    store = HistoryStore(get_settings().database_path)
+    links = store.published_video_links_list()
+    return {"links": links, "total": len(links)}
+
+
+@router.get("/api/published-videos/{link_id}/snapshots")
+def get_published_video_snapshots(link_id: int):
+    store = HistoryStore(get_settings().database_path)
+    link = store.published_video_link(link_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Published video link not found.")
+    return {"link": link, "snapshots": store.performance_snapshots(link["youtube_video_id"])}
+
+
+@router.post("/api/published-videos/{link_id}/refresh")
+def refresh_published_video(link_id: int):
+    settings = get_settings()
+    store = HistoryStore(settings.database_path)
+    link = store.published_video_link(link_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Published video link not found.")
+    try:
+        return YouTubeChannelService(settings).refresh_linked_video_performance(link)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/api/published-videos/{link_id}")
+def update_published_video_link(link_id: int, payload: UpdatePublishedVideoRequest):
+    store = HistoryStore(get_settings().database_path)
+    success = store.update_published_video_link(
+        link_id=link_id,
+        selected_title=payload.selected_title,
+        selected_thumbnail_package=payload.selected_thumbnail_package,
+        selected_description=payload.selected_description,
+        notes=payload.notes,
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Published video link not found.")
+    return {"status": "updated", "link_id": link_id}
+
+
+# --- Stage C: Cohort Evidence Endpoints ---
+
+@router.get("/api/learning/cohorts")
+def get_cohort_analytics(format: str | None = None, language: str | None = None):
+    store = HistoryStore(get_settings().database_path)
+    return store.cohort_analytics(format_filter=format, language_filter=language)
+
+
+# --- Stage D: Package Experiments Endpoints ---
+
+@router.post("/api/experiments")
+def record_experiment(payload: RecordExperimentRequest):
+    store = HistoryStore(get_settings().database_path)
+    if not store.latest_performance_snapshot(payload.youtube_video_id):
+        raise HTTPException(status_code=400, detail="Refresh this linked video before recording an experiment so its baseline is preserved.")
+    exp_id = store.record_package_experiment(
+        youtube_video_id=payload.youtube_video_id,
+        old_title=payload.old_title,
+        new_title=payload.new_title,
+        old_thumbnail=payload.old_thumbnail,
+        new_thumbnail=payload.new_thumbnail,
+        reason=payload.reason,
+        performance_before_json=json.dumps(payload.performance_before or store.latest_performance_snapshot(payload.youtube_video_id)),
+    )
+    return {"status": "recorded", "experiment_id": exp_id}
+
+
+@router.get("/api/experiments/{youtube_video_id}")
+def get_experiments(youtube_video_id: str):
+    store = HistoryStore(get_settings().database_path)
+    experiments = store.get_package_experiments(youtube_video_id)
+    return {"experiments": experiments, "count": len(experiments)}
+
+
+def _extract_youtube_video_id(value: str) -> str | None:
+    candidate = value.strip()
+    match = re.search(r"(?:youtu\.be/|[?&]v=|/shorts/|/embed/)([A-Za-z0-9_-]{11})", candidate)
+    if match:
+        return match.group(1)
+    return candidate if re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate) else None

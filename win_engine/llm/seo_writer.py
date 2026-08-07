@@ -249,6 +249,8 @@ Constraints:
 - the title, description, and tags must accurately match the creator brief and real video
 - description MUST be detailed and comprehensive (150-300 words), structured with an engaging opening hook, clear bullet points of takeaways or timestamps, subscriber call to action, and top hashtags
 - title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
+- return exactly five distinct variants. Variant 1 is SEARCH (main topic + clear outcome), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE (a personal proof, story, or channel-relevant angle). Variants 4-5 are additional truthful alternatives.
+- thumbnail text must add a short new idea; it must not merely repeat the title. Never use false guarantees, unrelated trends, or misleading claims.
 """
 
 

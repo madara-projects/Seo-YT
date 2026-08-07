@@ -10,40 +10,97 @@ DASHBOARD_HTML = """<!doctype html>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
-    :root {
-      --bg: #070709;
-      --bg-gradient: radial-gradient(900px 600px at 50% -100px, rgba(139, 92, 246, 0.14), transparent 70%),
-                     radial-gradient(700px 500px at 0% 40%, rgba(244, 63, 94, 0.08), transparent 60%),
-                     radial-gradient(700px 500px at 100% 80%, rgba(6, 182, 212, 0.06), transparent 60%);
+    /* Default theme: calm, focused light workspace. */
+    :root, [data-theme="light"] {
+      --bg: #f7f8fb;
+      --bg-gradient: radial-gradient(800px 500px at 50% -100px, rgba(229, 9, 20, 0.10), transparent 70%),
+                     radial-gradient(700px 500px at 100% 80%, rgba(254, 226, 226, 0.72), transparent 65%);
       --sidebar-width: 260px;
-      --panel: rgba(18, 18, 24, 0.75);
-      --panel-solid: #121218;
-      --panel-hover: rgba(28, 28, 38, 0.85);
-      --border: rgba(255, 255, 255, 0.08);
-      --border-bright: rgba(255, 255, 255, 0.16);
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-sub: #64748b;
-      
-      --accent: #8b5cf6;
-      --accent-rose: #f43f5e;
-      --accent-cyan: #06b6d4;
-      --accent-grad: linear-gradient(135deg, #8b5cf6 0%, #f43f5e 50%, #06b6d4 100%);
-      --accent-grad-hover: linear-gradient(135deg, #9d7aea 0%, #fb7185 50%, #22d3ee 100%);
-      
+      --panel: rgba(255, 255, 255, 0.92);
+      --panel-solid: #ffffff;
+      --panel-hover: #fff5f5;
+      --border: #e7e9ef;
+      --border-bright: rgba(229, 9, 20, 0.34);
+      --text: #17181c;
+      --text-muted: #606774;
+      --text-sub: #8a919e;
+
+      --accent: #e50914;
+      --accent-rose: #b91c1c;
+      --accent-cyan: #be123c;
+      --accent-grad: linear-gradient(135deg, #e50914 0%, #b91c1c 100%);
+      --accent-grad-hover: linear-gradient(135deg, #f81d28 0%, #dc2626 100%);
+      --accent-shadow: rgba(229, 9, 20, 0.25);
+
       --ok: #10b981;
       --ok-bg: rgba(16, 185, 129, 0.12);
       --warn: #f59e0b;
       --warn-bg: rgba(245, 158, 11, 0.12);
       --bad: #ef4444;
       --bad-bg: rgba(239, 68, 68, 0.12);
-      
+
       --radius-lg: 18px;
       --radius: 12px;
       --radius-sm: 8px;
       --mono: "JetBrains Mono", monospace;
       --sans: "Plus Jakarta Sans", "Inter", system-ui, sans-serif;
+      color-scheme: light;
+    }
+
+    /* Reserved dark-mode palette. It can be enabled later without changing page markup. */
+    [data-theme="dark"] {
+      --bg: #101114;
+      --bg-gradient: radial-gradient(800px 500px at 50% -100px, rgba(229, 9, 20, 0.12), transparent 70%);
+      --panel: rgba(26, 27, 31, 0.92);
+      --panel-solid: #1a1b1f;
+      --panel-hover: #25262c;
+      --border: #32343b;
+      --border-bright: rgba(229, 9, 20, 0.4);
+      --text: #f8fafc;
+      --text-muted: #a9afb9;
+      --text-sub: #7f8794;
       color-scheme: dark;
+    }
+
+    [data-theme="cyber"] {
+      --bg: #0c0608;
+      --bg-gradient: radial-gradient(900px 600px at 50% -100px, rgba(255, 42, 95, 0.22), transparent 70%),
+                     radial-gradient(700px 500px at 100% 80%, rgba(255, 94, 0, 0.16), transparent 60%);
+      --panel: rgba(24, 14, 20, 0.85);
+      --panel-solid: #191016;
+      --panel-hover: rgba(36, 20, 30, 0.9);
+      --border-bright: rgba(255, 42, 95, 0.35);
+      --accent: #ff2a5f;
+      --accent-grad: linear-gradient(135deg, #ff2a5f 0%, #ff5e00 100%);
+      --accent-grad-hover: linear-gradient(135deg, #ff4d79 0%, #ff7726 100%);
+      --accent-shadow: rgba(255, 42, 95, 0.45);
+    }
+
+    [data-theme="obsidian"] {
+      --bg: #030304;
+      --bg-gradient: radial-gradient(900px 600px at 50% -100px, rgba(230, 0, 38, 0.22), transparent 70%);
+      --panel: rgba(14, 12, 14, 0.95);
+      --panel-solid: #0f0d0e;
+      --panel-hover: rgba(24, 20, 22, 0.95);
+      --border-bright: rgba(230, 0, 38, 0.4);
+      --accent: #e60026;
+      --accent-grad: linear-gradient(135deg, #e60026 0%, #800014 100%);
+      --accent-grad-hover: linear-gradient(135deg, #ff1a3d 0%, #990018 100%);
+      --accent-shadow: rgba(230, 0, 38, 0.55);
+    }
+
+    [data-theme="emerald"] {
+      --bg: #040a08;
+      --bg-gradient: radial-gradient(900px 600px at 50% -100px, rgba(16, 185, 129, 0.18), transparent 70%),
+                     radial-gradient(700px 500px at 100% 80%, rgba(6, 182, 212, 0.12), transparent 60%);
+      --panel: rgba(12, 22, 18, 0.85);
+      --panel-solid: #0d1713;
+      --panel-hover: rgba(18, 34, 27, 0.9);
+      --border-bright: rgba(16, 185, 129, 0.35);
+      --accent: #10b981;
+      --accent-grad: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
+      --accent-grad-hover: linear-gradient(135deg, #34d399 0%, #22d3ee 100%);
+      --accent-shadow: rgba(16, 185, 129, 0.45);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -61,7 +118,7 @@ DASHBOARD_HTML = """<!doctype html>
     /* Left Sidebar SaaS Navigation */
     aside.sidebar {
       width: var(--sidebar-width); height: 100vh; flex-shrink: 0;
-      background: rgba(10, 10, 14, 0.95);
+      background: rgba(255, 255, 255, 0.90);
       backdrop-filter: blur(20px);
       border-right: 1px solid var(--border);
       display: flex; flex-direction: column; justify-content: space-between;
@@ -71,7 +128,7 @@ DASHBOARD_HTML = """<!doctype html>
     .brand-icon {
       width: 36px; height: 36px; border-radius: 10px;
       background: var(--accent-grad); display: grid; place-items: center;
-      box-shadow: 0 0 16px rgba(139, 92, 246, 0.4); flex-shrink: 0;
+      box-shadow: 0 0 16px var(--accent-shadow); flex-shrink: 0;
     }
     .brand-title h1 { font-size: 15px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
     .brand-title p { font-size: 11px; color: var(--text-sub); font-weight: 500; }
@@ -79,13 +136,19 @@ DASHBOARD_HTML = """<!doctype html>
     .nav-menu { display: flex; flex-direction: column; gap: 6px; margin-top: 20px; }
     .nav-item {
       display: flex; align-items: center; gap: 12px;
-      padding: 11px 14px; border-radius: var(--radius-sm);
+      padding: 12px 16px; border-radius: var(--radius-sm);
       color: var(--text-muted); font-size: 13.5px; font-weight: 600;
-      cursor: pointer; transition: all 0.2s ease; text-decoration: none;
-      border: 1px solid transparent;
+      cursor: pointer; transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); text-decoration: none;
+      border: 1px solid transparent; position: relative;
     }
     .nav-item:hover { color: var(--text); background: var(--panel-hover); border-color: var(--border); }
-    .nav-item.active { color: #fff; background: var(--accent); box-shadow: 0 4px 16px rgba(139, 92, 246, 0.4); }
+    .nav-item.active {
+      color: var(--accent);
+      background: linear-gradient(90deg, rgba(229, 9, 20, 0.18) 0%, rgba(229, 9, 20, 0.04) 100%);
+      border-color: rgba(229, 9, 20, 0.3);
+      box-shadow: 0 4px 16px rgba(229, 9, 20, 0.15);
+      border-left: 3px solid var(--accent);
+    }
     .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
 
     .sidebar-footer { padding-top: 16px; border-top: 1px solid var(--border); }
@@ -100,16 +163,17 @@ DASHBOARD_HTML = """<!doctype html>
     main.app-container {
       flex-grow: 1; height: 100vh; overflow-y: auto;
       display: flex; flex-direction: column;
+      background: var(--bg);
     }
 
     .top-bar {
       position: sticky; top: 0; z-index: 90;
-      background: rgba(7, 7, 9, 0.85); backdrop-filter: blur(20px);
+      background: rgba(255, 255, 255, 0.90); backdrop-filter: blur(20px);
       border-bottom: 1px solid var(--border); padding: 16px 32px;
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
     }
-    .page-header-title h2 { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
-    .page-header-title p { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
+    .page-header-title h2 { font-size: 19px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
+    .page-header-title p { font-size: 12.5px; color: var(--text-sub); margin-top: 2px; }
 
     .top-actions { display: flex; align-items: center; gap: 10px; }
 
@@ -123,7 +187,8 @@ DASHBOARD_HTML = """<!doctype html>
     /* Glassmorphism Components */
     .glass-card {
       background: var(--panel); backdrop-filter: blur(16px);
-      border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 22px;
+      border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
     }
 
     /* Buttons */
@@ -131,23 +196,23 @@ DASHBOARD_HTML = """<!doctype html>
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
       padding: 10px 18px; border-radius: var(--radius-sm); font-size: 13.5px; font-weight: 600;
       border: 1px solid var(--border); background: var(--panel-solid); color: var(--text);
-      cursor: pointer; transition: all 0.2s ease; text-decoration: none;
+      cursor: pointer; transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); text-decoration: none;
     }
     .btn:hover { background: var(--panel-hover); border-color: var(--border-bright); transform: translateY(-1px); }
     .btn-primary {
       background: var(--accent-grad); border: none; color: #fff; font-weight: 700;
-      box-shadow: 0 4px 20px rgba(139, 92, 246, 0.35); padding: 11px 22px; font-size: 14px;
+      box-shadow: 0 4px 20px var(--accent-shadow); padding: 11px 22px; font-size: 14px;
     }
-    .btn-primary:hover { background: var(--accent-grad-hover); box-shadow: 0 6px 25px rgba(244, 63, 94, 0.45); transform: translateY(-2px); }
+    .btn-primary:hover { background: var(--accent-grad-hover); box-shadow: 0 6px 25px var(--accent-shadow); transform: translateY(-2px); }
 
     /* Form Controls */
     .input-box {
       width: 100%; min-height: 140px; max-height: 380px; resize: vertical;
-      background: rgba(10, 10, 15, 0.6); border: 1px solid var(--border);
+      background: var(--panel-solid); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 16px; color: var(--text);
-      font-family: var(--sans); font-size: 14px; line-height: 1.6; outline: none; transition: border-color 0.2s;
+      font-family: var(--sans); font-size: 14px; line-height: 1.6; outline: none; transition: border-color 0.2s, box-shadow 0.2s;
     }
-    .input-box:focus { border-color: var(--accent); box-shadow: 0 0 15px rgba(139, 92, 246, 0.2); }
+    .input-box:focus { border-color: var(--accent); box-shadow: 0 0 18px var(--accent-shadow); }
 
     /* Bento Cards & Grids */
     .bento-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
@@ -155,7 +220,9 @@ DASHBOARD_HTML = """<!doctype html>
       grid-column: span 12; padding: 20px;
       background: var(--panel); border: 1px solid var(--border);
       border-radius: var(--radius-lg); position: relative; overflow: hidden;
+      transition: border-color 0.2s ease, transform 0.2s ease;
     }
+    .bento-card:hover { border-color: var(--border-bright); }
     .span-6 { grid-column: span 6; }
     .span-4 { grid-column: span 4; }
     .span-3 { grid-column: span 3; }
@@ -173,32 +240,32 @@ DASHBOARD_HTML = """<!doctype html>
     .chip {
       display: inline-flex; align-items: center; gap: 6px;
       padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
-      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border); color: var(--text-muted);
+      background: #f5f6f8; border: 1px solid var(--border); color: var(--text-muted);
     }
     .chip-ok { background: var(--ok-bg); color: var(--ok); border-color: rgba(16, 185, 129, 0.3); }
     .chip-warn { background: var(--warn-bg); color: var(--warn); border-color: rgba(245, 158, 11, 0.3); }
     .chip-bad { background: var(--bad-bg); color: var(--bad); border-color: rgba(239, 68, 68, 0.3); }
-    .chip-accent { background: rgba(139, 92, 246, 0.15); color: var(--accent); border-color: rgba(139, 92, 246, 0.3); }
+    .chip-accent { background: rgba(229, 9, 20, 0.15); color: var(--text); border-color: rgba(229, 9, 20, 0.35); }
 
     .tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .tag-item {
       font-family: var(--mono); font-size: 12px; padding: 4px 10px; border-radius: var(--radius-sm);
-      background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); color: var(--text-muted);
+      background: #f7f8fa; border: 1px solid var(--border); color: var(--text-muted);
     }
 
     /* Tabs */
     .tabs-bar {
       display: flex; gap: 6px; padding: 4px; border-radius: var(--radius);
-      background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); width: fit-content;
+      background: #f4f5f7; border: 1px solid var(--border); width: fit-content;
     }
     .tab-btn {
       padding: 8px 18px; border-radius: var(--radius-sm); border: none; background: transparent;
       color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
     }
     .tab-btn:hover { color: var(--text); }
-    .tab-btn.active { background: var(--accent); color: #fff; box-shadow: 0 4px 14px rgba(139, 92, 246, 0.4); }
+    .tab-btn.active { background: var(--accent); color: #fff; box-shadow: 0 4px 14px var(--accent-shadow); }
 
-    .progress-bar { height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); overflow: hidden; margin-top: 10px; }
+    .progress-bar { height: 6px; border-radius: 999px; background: #eceef2; overflow: hidden; margin-top: 10px; }
     .progress-fill { height: 100%; border-radius: 999px; background: var(--accent-grad); transition: width 0.5s ease; }
 
     .kv-list { display: flex; flex-direction: column; gap: 8px; }
@@ -211,13 +278,13 @@ DASHBOARD_HTML = """<!doctype html>
       padding: 14px 18px; border-radius: var(--radius); font-size: 13px;
       display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px;
     }
-    .alert-err { background: var(--bad-bg); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; }
+    .alert-err { background: var(--bad-bg); border: 1px solid rgba(239, 68, 68, 0.3); color: #b91c1c; }
 
     /* Table styling for history widget */
     .history-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
     .history-table th { text-align: left; font-size: 11px; color: var(--text-sub); text-transform: uppercase; padding: 8px 12px; border-bottom: 1px solid var(--border); }
     .history-table td { font-size: 13px; padding: 12px; border-bottom: 1px dashed var(--border); color: var(--text); }
-    .history-table tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    .history-table tr:hover td { background: #fff8f8; }
 
     /* Streamlined Core Inputs Grid */
     .core-inputs-grid {
@@ -235,7 +302,7 @@ DASHBOARD_HTML = """<!doctype html>
     /* Accordion Brief */
     details.accordion {
       border: 1px solid var(--border); border-radius: var(--radius);
-      background: rgba(255, 255, 255, 0.02); overflow: hidden; margin-top: 16px;
+      background: #fafbfc; overflow: hidden; margin-top: 16px;
     }
     details.accordion summary {
       padding: 12px 16px; font-size: 12.5px; font-weight: 700; cursor: pointer;
@@ -254,6 +321,31 @@ DASHBOARD_HTML = """<!doctype html>
     .hidden { display: none !important; }
 
     .spin { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spinner 0.7s linear infinite; }
+    .output-box { background: #fafbfc !important; color: var(--text) !important; border-color: var(--border) !important; }
+    .tag-list[style] { background: #fafbfc !important; }
+    .input-box[style] { background: var(--panel-solid) !important; border-color: var(--border) !important; }
+    .hero-card { background: linear-gradient(135deg, #fff7f7 0%, #ffffff 70%) !important; border-color: rgba(229, 9, 20, 0.24) !important; }
+    .hero-card h1[style], .glass-card h1[style] { color: var(--text) !important; }
+    #outputContent [style*="rgba(255,255,255,0.02)"] { background: #fafbfc !important; }
+    #themeSelector option { background: #ffffff !important; color: #17181c !important; }
+    #themeSelector option:not([value="light"]) { display: none; }
+    pre { background: #fafbfc; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; }
+    [data-theme="light"] .sidebar-footer .status-badge { color: #991b1b !important; }
+    [data-theme="dark"] aside.sidebar, [data-theme="dark"] .top-bar { background: rgba(16, 17, 20, 0.94); }
+    @media (max-width: 700px) {
+      body { display: block; overflow: auto; }
+      aside.sidebar { width: 100%; height: auto; padding: 12px; position: sticky; top: 0; }
+      .sidebar-brand { padding-bottom: 12px; }
+      .nav-menu { flex-direction: row; overflow-x: auto; margin-top: 12px; }
+      .nav-item { flex: 0 0 auto; padding: 9px 12px; font-size: 12px; }
+      .sidebar-footer { display: none; }
+      main.app-container { height: auto; min-height: 100vh; }
+      .top-bar { padding: 14px 16px; }
+      .top-actions .btn-primary { display: none; }
+      .content-viewport { padding: 16px; }
+      .brief-grid { grid-template-columns: 1fr; }
+      .brief-field.wide { grid-column: span 1; }
+    }
     @keyframes spinner { to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -262,19 +354,19 @@ DASHBOARD_HTML = """<!doctype html>
   <aside class="sidebar">
     <div>
       <div class="sidebar-brand">
-        <div class="brand-icon">
+        <div class="brand-icon" style="background:var(--accent-grad);box-shadow:0 4px 14px var(--accent-shadow)">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><path d="M21.6 7.2a2.7 2.7 0 0 0-1.9-1.9C18 5 12 5 12 5s-6 0-7.7.3A2.7 2.7 0 0 0 2.4 7.2 28 28 0 0 0 2 12a28 28 0 0 0 .4 4.8 2.7 2.7 0 0 0 1.9 1.9C6 19 12 19 12 19s6 0 7.7-.3a2.7 2.7 0 0 0 1.9-1.9A28 28 0 0 0 22 12a28 28 0 0 0-.4-4.8ZM10 15V9l5 3-5 3Z"/></svg>
         </div>
         <div class="brand-title">
-          <h1>YouTube SEO Studio</h1>
-          <p>SaaS Growth Co-Pilot</p>
+          <h1 style="display:flex;align-items:center;gap:6px">YouTube Studio <span style="font-size:10px;padding:2px 6px;background:var(--accent);color:#fff;border-radius:4px;font-weight:800;letter-spacing:0.04em">PRO v3.5</span></h1>
+          <p style="color:var(--accent);font-weight:600">AI Personal Growth Engine</p>
         </div>
       </div>
 
       <nav class="nav-menu">
         <a class="nav-item active" href="#dashboard" id="nav-dashboard" data-page="dashboard" onclick="switchPage('dashboard'); return false;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
-          Dashboard
+          Dashboard Overview
         </a>
         <a class="nav-item" href="#creator" id="nav-creator" data-page="creator" onclick="switchPage('creator'); return false;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/></svg>
@@ -296,7 +388,7 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
 
     <div class="sidebar-footer">
-      <div class="status-badge"><span class="dot"></span> Gemini AI Ready</div>
+      <div class="status-badge" style="background:rgba(229,9,20,0.12);border:1px solid rgba(229,9,20,0.3);color:#fff"><span class="dot" style="background:var(--ok)"></span> Gemini 3.5 Flash Active</div>
     </div>
   </aside>
 
@@ -308,144 +400,213 @@ DASHBOARD_HTML = """<!doctype html>
         <p id="topSub">Welcome back, creator! Track your SEO performance and generate new packages.</p>
       </div>
       <div class="top-actions">
+        <div style="display:flex;align-items:center;gap:8px;background:var(--panel-solid);border:1px solid var(--border);padding:4px 10px;border-radius:var(--radius-sm)">
+          <span style="font-size:11.5px;font-weight:700;color:var(--text-sub);text-transform:uppercase;letter-spacing:0.05em">Theme:</span>
+          <select id="themeSelector" style="background:transparent;border:none;color:var(--text);font-size:12.5px;font-weight:600;outline:none;cursor:pointer">
+            <option value="light">Light workspace</option>
+            <option value="red" style="background:#151114;color:#fff">🔴 Crimson Red (YouTube)</option>
+            <option value="cyber" style="background:#151114;color:#fff">⚡ Cyber Flame</option>
+            <option value="obsidian" style="background:#151114;color:#fff">🌌 Obsidian Blood Red</option>
+            <option value="emerald" style="background:#151114;color:#fff">🟢 Emerald Dark</option>
+          </select>
+        </div>
         <a class="btn btn-primary" href="#creator" onclick="switchPage('creator'); return false;">⚡ New SEO Analysis</a>
       </div>
     </div>
 
     <div class="content-viewport">
-      <!-- PAGE 1: REWORKED DASHBOARD WORKSPACE -->
+      <!-- PAGE 1: COMPLETELY REDESIGNED DASHBOARD WORKSPACE -->
       <section class="page-view active" id="view-dashboard">
         <div class="bento-grid">
-          <!-- WIDGET 1: Hero Quick AI Package Launcher -->
-          <div class="bento-card span-8" style="background:linear-gradient(135deg, rgba(139, 92, 246, 0.14), rgba(244, 63, 94, 0.09))">
-            <div class="card-title">
-              <span>⚡ Quick Script Draft &amp; AI Package Launcher</span>
-              <span class="chip chip-accent">Gemini 3.5 Flash Active</span>
-            </div>
-            <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">Have a video idea? Type it below for instant SEO packaging.</div>
-            <textarea id="dashQuickScript" class="input-box" style="min-height:90px" placeholder="e.g. How I automated my YouTube SEO workflow using Python and AI..."></textarea>
-            
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-top:14px">
-              <div style="display:flex;gap:10px">
-                <select id="dashQuickLang" style="background:var(--panel-solid);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px;color:var(--text);font-size:12.5px">
-                  <option value="english">English</option>
-                  <option value="tamil">Tamil (தமிழ்)</option>
-                  <option value="tanglish">Tanglish</option>
-                </select>
-                <select id="dashQuickRegion" style="background:var(--panel-solid);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px;color:var(--text);font-size:12.5px">
-                  <option value="global">Global</option>
-                  <option value="in">India (IN)</option>
-                </select>
+
+          <!-- HERO STUDIO HEADER BANNER (SPAN 12) -->
+          <div class="bento-card span-12 hero-card" style="padding:24px 28px">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px">
+              <div>
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                  <span class="chip chip-accent" style="font-weight:700;font-size:11.5px">⚡ Studio AI Command v3.5</span>
+                  <span class="chip chip-ok" style="font-weight:600;font-size:11.5px"><span class="dot"></span> YouTube Channel Synced</span>
+                </div>
+                <h1 style="font-size:22px;font-weight:800;letter-spacing:-0.02em;color:#fff">YouTube Creator SEO Growth Studio</h1>
+                <p style="font-size:13px;color:var(--text-muted);margin-top:4px;max-width:650px">
+                  Turn video ideas into upload-ready SEO titles, rich descriptions, tags, and AI retention strategies using live YouTube market research.
+                </p>
               </div>
-              <button class="btn btn-primary" id="dashQuickLaunchBtn">⚡ Generate Package Now</button>
+
+              <div style="display:flex;gap:10px">
+                <a class="btn btn-primary" href="#creator" onclick="switchPage('creator'); return false;" style="padding:12px 24px;font-size:14px">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  Open Full Studio Workspace
+                </a>
+              </div>
             </div>
           </div>
 
-          <!-- WIDGET 2: Connected Channel KPI Card -->
-          <div class="bento-card span-4">
-            <div class="card-title"><span>Connected Channel</span><span class="chip chip-ok">Live Sync</span></div>
-            <div class="metric-value" style="font-size:22px" id="dashChannelName">Madara YT</div>
-            <div class="metric-sub" style="margin-top:6px" id="dashChannelStats">Last 28 days: 20 views · 4 minutes watched</div>
-            <div class="metric-sub" style="margin-top:8px;color:var(--accent)">Snapshot learning active for winning titles.</div>
-            <div style="margin-top:16px">
-              <a class="btn" href="#analytics" style="padding:6px 12px;font-size:12px">View Full Analytics →</a>
+          <!-- QUICK SCRIPT LAUNCHER STUDIO CARD (SPAN 12) -->
+          <div class="bento-card span-12" style="border-top:3px solid var(--accent)">
+            <div class="card-title">
+              <span style="display:flex;align-items:center;gap:8px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--accent)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                Instant Video SEO Package Generator
+              </span>
+              <span style="font-size:11.5px;color:var(--text-sub);font-family:var(--mono)">Powered by Gemini 3.5 Flash</span>
+            </div>
+
+            <textarea id="dashQuickScript" class="input-box" style="min-height:100px;background:rgba(10, 10, 14, 0.7);border-color:rgba(255,255,255,0.1)" placeholder="Paste your video script excerpt, raw idea, or quote here (e.g. The biggest betrayal is knowing that if you didn't find out, they would have never told you...)..."></textarea>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-top:16px">
+              <div style="display:flex;gap:12px;flex-wrap:wrap">
+                <div class="field-group" style="margin:0">
+                  <select id="dashQuickLang" style="background:var(--panel-solid);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 14px;color:var(--text);font-size:13px;font-weight:600">
+                    <option value="english">🌐 Language: English</option>
+                    <option value="tamil">🇮🇳 Language: Tamil (தமிழ்)</option>
+                    <option value="tanglish">⚡ Language: Tanglish</option>
+                  </select>
+                </div>
+                <div class="field-group" style="margin:0">
+                  <select id="dashQuickRegion" style="background:var(--panel-solid);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 14px;color:var(--text);font-size:13px;font-weight:600">
+                    <option value="global">🌍 Target Region: Global</option>
+                    <option value="in">🇮🇳 Target Region: India (IN)</option>
+                  </select>
+                </div>
+              </div>
+
+              <button class="btn btn-primary" id="dashQuickLaunchBtn" style="padding:11px 26px;font-size:14px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                Generate SEO Package Now
+              </button>
             </div>
           </div>
 
-          <!-- WIDGET 3: 4 Bento KPI Metric Cards -->
-          <div class="bento-card span-3">
-            <div class="card-title"><span>28d Views</span></div>
-            <div class="metric-value" id="dashMetricViews">20</div>
-            <div class="metric-sub"><span style="color:var(--ok)">+14%</span> vs previous 28 days</div>
-          </div>
-          <div class="bento-card span-3">
-            <div class="card-title"><span>Watch Time</span></div>
-            <div class="metric-value" id="dashMetricWatch">4m</div>
-            <div class="metric-sub">Estimated minutes watched</div>
-          </div>
-          <div class="bento-card span-3">
-            <div class="card-title"><span>Avg Opportunity</span></div>
-            <div class="metric-value" style="color:var(--accent)" id="dashMetricOpp">78<span style="font-size:16px;color:var(--text-sub)">/100</span></div>
-            <div class="metric-sub">High viewer demand gap</div>
-          </div>
-          <div class="bento-card span-3">
-            <div class="card-title"><span>AI Status</span></div>
-            <div class="metric-value" style="font-size:18px">Gemini ⚡</div>
-            <div class="metric-sub">Gemini-powered SEO packages</div>
+          <!-- 4 KEY KPI ANALYTICS CARDS WITH RED TOP ACCENT LINES (SPAN 3 EACH) -->
+          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
+            <div class="card-title"><span>28d Views Milestone</span></div>
+            <div class="metric-value" id="dashMetricViews" style="color:var(--text);font-size:32px">--</div>
+            <div class="metric-sub" style="margin-top:8px">Connect and refresh your channel to load actual data.</div>
           </div>
 
-          <!-- WIDGET 4: Recent Analyses History Feed -->
-          <div class="bento-card span-8">
-            <div class="card-title"><span>Recent Video Package History</span><span class="chip chip-accent">SQLite DB Sync</span></div>
-            <div id="dashHistoryWrap">
+          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
+            <div class="card-title"><span>Estimated Watch Time</span></div>
+            <div class="metric-value" id="dashMetricWatch" style="font-size:32px">--</div>
+            <div class="metric-sub" style="margin-top:8px">Not available until YouTube Analytics sync succeeds.</div>
+          </div>
+
+          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
+            <div class="card-title"><span>Avg Opportunity Score</span></div>
+            <div class="metric-value" style="color:var(--accent);font-size:32px" id="dashMetricOpp">--</div>
+            <div class="metric-sub" style="margin-top:8px">Calculated from your saved analyses.</div>
+          </div>
+
+          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
+            <div class="card-title"><span>AI Engine Status</span></div>
+            <div class="metric-value" style="font-size:20px;display:flex;align-items:center;gap:6px;margin-top:4px">
+              Gemini <span style="font-size:12px;padding:3px 8px" class="chip chip-ok">⚡ Active</span>
+            </div>
+            <div class="metric-sub" style="margin-top:8px">Gemini 3.5 Flash + Local DB</div>
+          </div>
+
+          <!-- RECENT VIDEO PACKAGE HISTORY TABLE (SPAN 7) -->
+          <div class="bento-card span-7">
+            <div class="card-title">
+              <span>Recent Video Package History Log</span>
+              <span class="chip chip-accent">SQLite DB Sync</span>
+            </div>
+            <div id="dashHistoryWrap" style="overflow-x:auto;margin-top:12px">
               <table class="history-table">
                 <thead>
                   <tr>
                     <th>Video Idea / Topic</th>
                     <th>Predicted CTR</th>
                     <th>Opportunity</th>
-                    <th>Language</th>
+                    <th>Date &amp; Time (IST)</th>
                     <th>Action</th>
                   </tr>
                 </thead>
                 <tbody id="dashHistoryBody">
                   <tr>
-                    <td colspan="5" style="color:var(--text-sub);text-align:center;padding:16px">No analysis runs yet. Generate a package above to populate your database.</td>
+                    <td colspan="5" style="color:var(--text-sub);text-align:center;padding:16px">Loading stored analysis history from SQLite database...</td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
 
-          <!-- WIDGET 5: Recommended Upload Timing Clock -->
-          <div class="bento-card span-4">
-            <div class="card-title"><span>Recommended Upload Schedule</span></div>
-            <div class="kv-list" style="margin-top:10px">
-              <div class="kv-item"><span class="kv-key">Best Days</span><span class="kv-val">Thursday &amp; Sunday</span></div>
-              <div class="kv-item"><span class="kv-key">Window (UTC)</span><span class="kv-val">14:00 - 17:00</span></div>
-              <div class="kv-item"><span class="kv-key">Window (IST)</span><span class="kv-val" style="color:var(--accent)">7:30 PM - 10:30 PM</span></div>
+          <!-- CONNECTED CHANNEL & UPLOAD SCHEDULER WIDGET (SPAN 5) -->
+          <div class="bento-card span-5" style="display:flex;flex-direction:column;justify-content:space-between">
+            <div>
+              <div class="card-title">
+                <span>Connected YouTube Channel</span>
+                <span class="chip chip-ok"><span class="dot"></span> Live Sync</span>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:14px;margin-top:10px">
+                <div style="width:46px;height:46px;border-radius:14px;background:var(--accent-grad);display:grid;place-items:center;font-weight:800;font-size:20px;color:#fff;box-shadow:0 4px 16px var(--accent-shadow)">
+                  M
+                </div>
+                <div>
+                  <div class="metric-value" style="font-size:22px" id="dashChannelName">No channel connected</div>
+                  <div class="metric-sub" style="font-size:12px;margin-top:2px" id="dashChannelStats">Last 28 days: 1,050 views · 24 likes</div>
+                </div>
+              </div>
+
+              <div style="margin-top:16px;padding:12px 14px;border-radius:var(--radius-sm);background:rgba(229, 9, 20, 0.08);border:1px solid rgba(229, 9, 20, 0.25);font-size:12.5px;color:var(--text-muted)">
+                🎯 <strong style="color:var(--text)">Snapshot Self-Learning Active:</strong> AI models future title suggestions using your channel's top video snapshots.
+              </div>
+
+              <div class="kv-list" style="margin-top:16px">
+                <div class="kv-item"><span class="kv-key">Best Posting Days</span><span class="kv-val" style="color:var(--text)">Collecting evidence</span></div>
+                <div class="kv-item"><span class="kv-key">Peak Window (IST)</span><span class="kv-val" style="color:var(--accent);font-weight:700">Not available yet</span></div>
+              </div>
             </div>
-            <div class="metric-sub" style="margin-top:12px">Upload 2 hours before peak viewer activity for indexing.</div>
+
+            <div style="margin-top:16px">
+              <a class="btn" href="#analytics" onclick="switchPage('analytics'); return false;" style="width:100%;justify-content:center;font-size:13px;padding:10px">
+                View Full Channel Analytics &rarr;
+              </a>
+            </div>
           </div>
 
-          <!-- WIDGET 6: High-Opportunity Niche Topics -->
+          <!-- HIGH-OPPORTUNITY NICHE SEARCH TRENDS (SPAN 6) -->
           <div class="bento-card span-6">
-            <div class="card-title"><span>High-Opportunity Niche Search Trends</span><span class="chip chip-ok">Live Gaps</span></div>
-            <div class="kv-list" style="margin-top:10px">
+            <div class="card-title"><span>High-Opportunity Niche Search Trends</span><span class="chip chip-ok">Live Gap Radar</span></div>
+            <div class="kv-list" style="margin-top:12px">
               <div class="kv-item">
                 <div>
-                  <div style="font-size:13.5px;font-weight:700">AI Productivity Tools 2026</div>
-                  <div style="font-size:11.5px;color:var(--text-sub)">Low competition gap · High search intent</div>
+                  <div style="font-size:14px;font-weight:700;color:var(--text)">AI Productivity Tools 2026</div>
+                  <div style="font-size:12px;color:var(--text-sub)">Low competition gap · High search intent</div>
                 </div>
-                <span class="chip chip-accent">+48% search</span>
+                <span class="chip chip-accent" style="font-weight:700">+48% search</span>
               </div>
               <div class="kv-item">
                 <div>
-                  <div style="font-size:13.5px;font-weight:700">Tamil Tech &amp; Coding Routines</div>
-                  <div style="font-size:11.5px;color:var(--text-sub)">High retention subscriber niche</div>
+                  <div style="font-size:14px;font-weight:700;color:var(--text)">Tamil Tech &amp; Coding Routines</div>
+                  <div style="font-size:12px;color:var(--text-sub)">High retention subscriber niche</div>
                 </div>
-                <span class="chip chip-ok">+32% views</span>
+                <span class="chip chip-ok" style="font-weight:700">+32% views</span>
               </div>
               <div class="kv-item">
                 <div>
-                  <div style="font-size:13.5px;font-weight:700">Python Automation Hacks</div>
-                  <div style="font-size:11.5px;color:var(--text-sub)">Evergreen how-to keyword cluster</div>
+                  <div style="font-size:14px;font-weight:700;color:var(--text)">Python Automation Hacks</div>
+                  <div style="font-size:12px;color:var(--text-sub)">Evergreen how-to keyword cluster</div>
                 </div>
-                <span class="chip chip-accent">+54% search</span>
+                <span class="chip chip-accent" style="font-weight:700">+54% search</span>
               </div>
             </div>
           </div>
 
-          <!-- WIDGET 7: AI Self-Learning Winning Formulas -->
+          <!-- AI SELF-LEARNING WINNING FORMULAS (SPAN 6) -->
           <div class="bento-card span-6">
             <div class="card-title"><span>AI Self-Learning Winning Formulas</span></div>
-            <div class="kv-list" style="margin-top:10px">
-              <div class="kv-item"><span class="kv-key">Top Title Pattern</span><span class="kv-val">"How I [Result] in [Timeframe]"</span></div>
-              <div class="kv-item"><span class="kv-key">Best Content Angle</span><span class="kv-val">Tutorial / Step-by-Step</span></div>
-              <div class="kv-item"><span class="kv-key">Retention Booster</span><span class="kv-val" style="color:var(--ok)">Hook in first 15 sec (+34% retention)</span></div>
+            <div class="kv-list" style="margin-top:12px">
+              <div class="kv-item"><span class="kv-key">Top Title Pattern</span><span class="kv-val" style="color:var(--text)">"How I [Result] in [Timeframe]"</span></div>
+              <div class="kv-item"><span class="kv-key">Best Content Angle</span><span class="kv-val" style="color:var(--text)">Tutorial / Step-by-Step</span></div>
+              <div class="kv-item"><span class="kv-key">Retention Booster</span><span class="kv-val" style="color:var(--ok);font-weight:700">Hook in first 15 sec (+34% retention)</span></div>
             </div>
-            <div class="metric-sub" style="margin-top:12px">Learned dynamically from published video retention snapshots.</div>
+            <div class="metric-sub" style="margin-top:16px;padding:10px 12px;background:rgba(255,255,255,0.03);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px">
+              🤖 Learned dynamically from your published video performance snapshots.
+            </div>
           </div>
+
         </div>
       </section>
 
@@ -458,7 +619,7 @@ DASHBOARD_HTML = """<!doctype html>
               <span class="chip chip-accent">Gemini 3.5 Flash First</span>
             </div>
             <textarea id="scriptInput" class="input-box" placeholder="Paste your video script, topic title, or raw content idea here..."></textarea>
-            
+
             <!-- Streamlined Core Controls (Only 3 selections required) -->
             <div class="core-inputs-grid">
               <div class="field-group">
@@ -536,15 +697,15 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="bento-grid">
           <div class="bento-card span-8">
             <div class="card-title"><span>Connected Channel Performance</span><span class="chip chip-ok">Live Sync</span></div>
-            <div class="metric-value" id="anaChannelName">Madara YT</div>
-            <div class="metric-sub" id="anaChannelStats" style="margin-top:8px">Last 28 days: 20 views · 4 minutes watched</div>
-            <div class="metric-sub" id="anaRecommendation" style="margin-top:8px;color:var(--accent)">Snapshot learning active for winning titles.</div>
+            <div class="metric-value" id="anaChannelName">No channel connected</div>
+            <div class="metric-sub" id="anaChannelStats" style="margin-top:8px">Connect YouTube to read your actual 28-day analytics.</div>
+            <div class="metric-sub" id="anaRecommendation" style="margin-top:8px;color:var(--accent)">Learning begins after linked videos receive real snapshots.</div>
           </div>
 
           <div class="bento-card span-4">
             <div class="card-title"><span>Winning Patterns Engine</span></div>
-            <div class="metric-value" style="font-size:20px" id="anaWinningAngle">Story / Shorts</div>
-            <div class="metric-sub" style="margin-top:6px" id="anaObservation">Accumulating video history to refine predictions.</div>
+            <div class="metric-value" style="font-size:20px" id="anaWinningAngle">Collecting evidence</div>
+            <div class="metric-sub" style="margin-top:6px" id="anaObservation">No personal winner is claimed until enough linked videos are measured.</div>
           </div>
 
           <div class="bento-card span-12">
@@ -554,6 +715,12 @@ DASHBOARD_HTML = """<!doctype html>
               <div class="kv-item"><span class="kv-key">Average Title Score</span><span class="kv-val" id="anaAvgTitle">8.8 / 10</span></div>
               <div class="kv-item"><span class="kv-key">Average Opportunity Score</span><span class="kv-val" id="anaAvgOpp">61.4 / 100</span></div>
             </div>
+          </div>
+
+          <div class="bento-card span-12">
+            <div class="card-title"><span>Published Package Performance</span><span class="chip chip-accent">Manual 24h / 7d / 28d refresh</span></div>
+            <div class="metric-sub" style="margin:8px 0 12px">Link a generated package to an owned video, then refresh when a scheduled snapshot is due. Only metrics returned by YouTube are stored.</div>
+            <div style="overflow-x:auto"><table class="history-table"><thead><tr><th>Published title / video</th><th>Snapshot</th><th>Views</th><th>Retention</th><th>Action</th></tr></thead><tbody id="publishedVideoBody"><tr><td colspan="5" style="color:var(--text-sub);text-align:center;padding:16px">No linked videos yet.</td></tr></tbody></table></div>
           </div>
 
           <!-- FULL GENERATION HISTORY LOG -->
@@ -636,6 +803,29 @@ DASHBOARD_HTML = """<!doctype html>
   <script>
     const $ = (id) => document.getElementById(id);
 
+    // Theme infrastructure is retained for a future dark-mode release.
+    function setTheme(themeKey) {
+      const safeTheme = themeKey === "dark" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", safeTheme);
+      try { localStorage.setItem("yt_seo_theme", safeTheme); } catch (_) {}
+      const sel = $("themeSelector");
+      if (sel) sel.value = safeTheme;
+    }
+
+    const savedTheme = (function() { try { return localStorage.getItem("yt_seo_theme") || "light"; } catch(_) { return "light"; } })();
+    setTheme(savedTheme);
+
+    window.addEventListener("DOMContentLoaded", () => {
+      const sel = $("themeSelector");
+      if (sel) {
+        Array.from(sel.options).forEach((option) => {
+          if (option.value !== "light") option.remove();
+        });
+        sel.value = savedTheme;
+        sel.addEventListener("change", (e) => setTheme(e.target.value));
+      }
+    });
+
     // Multi-Page SPA Hash Router
     const pages = {
       dashboard: { title: "Dashboard Overview", sub: "Welcome back! Track performance and launch new analyses.", navId: "nav-dashboard", viewId: "view-dashboard" },
@@ -673,6 +863,7 @@ DASHBOARD_HTML = """<!doctype html>
       if (appContainer) appContainer.scrollTop = 0;
 
       if (pageKey === "dashboard") loadHistoryFeed();
+      if (pageKey === "analytics") { loadHistoryFeed(); loadPublishedVideos(); loadCohortLearning(); }
       if (pageKey === "history") loadSavedHistory();
     }
 
@@ -719,6 +910,9 @@ DASHBOARD_HTML = """<!doctype html>
           if ($("dashMetricViews")) $("dashMetricViews").textContent = vStr;
           if ($("dashChannelStats")) $("dashChannelStats").textContent = `Channel performance: ${vStr} views · ${lStr} likes (1k+ milestone!)`;
           if ($("anaChannelStats")) $("anaChannelStats").textContent = `Channel performance: ${vStr} views · ${lStr} likes (1k+ milestone!)`;
+        } else {
+          if ($("dashChannelStats")) $("dashChannelStats").textContent = "No synced channel performance yet.";
+          if ($("anaChannelStats")) $("anaChannelStats").textContent = "Connect and refresh YouTube Analytics to load actual performance.";
         }
 
         if (scorecard.total_runs !== undefined) {
@@ -726,6 +920,7 @@ DASHBOARD_HTML = """<!doctype html>
           if ($("anaTotalRuns")) $("anaTotalRuns").textContent = num(scorecard.total_runs);
           if ($("anaAvgTitle")) $("anaAvgTitle").textContent = (scorecard.avg_title_score || 8.8) + " / 10";
           if ($("anaAvgOpp")) $("anaAvgOpp").textContent = (scorecard.avg_opportunity_score || 61.4) + " / 100";
+          if ($("dashMetricOpp")) $("dashMetricOpp").textContent = scorecard.avg_opportunity_score === null || scorecard.avg_opportunity_score === undefined ? "--" : num(scorecard.avg_opportunity_score) + " / 100";
         }
 
         const dashBody = $("dashHistoryBody");
@@ -742,11 +937,14 @@ DASHBOARD_HTML = """<!doctype html>
           const dtStr = run.created_at ? new Date(run.created_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : "Recently";
           return `
             <tr>
-              <td style="font-weight:600;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(run.title)}">${esc(run.title || run.query || "Untitled Video Analysis")}</td>
+              <td style="font-weight:600;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(run.title)}">${esc(run.title || run.query || "Untitled Video Analysis")}</td>
               <td><span class="chip chip-ok">High CTR</span></td>
               <td><span style="font-weight:700;color:var(--accent)">${num(run.opportunity_score || 78)}</span> / 100</td>
               <td style="font-size:12px;color:var(--text-sub)">${dtStr}</td>
-              <td><a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Inspect</a></td>
+              <td style="display:flex;gap:6px">
+                <a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Inspect</a>
+                <button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)" onclick="linkVideoPrompt(${Number(run.id)})">🔗 Link</button>
+              </td>
             </tr>`;
         }).join("");
 
@@ -755,10 +953,13 @@ DASHBOARD_HTML = """<!doctype html>
           return `
             <tr>
               <td style="font-size:12px;color:var(--text-sub)">${dtStr} IST</td>
-              <td style="font-weight:600;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(run.title)}">${esc(run.title || run.query || "Untitled Video Analysis")}</td>
+              <td style="font-weight:600;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(run.title)}">${esc(run.title || run.query || "Untitled Video Analysis")}</td>
               <td><span style="font-weight:700;color:var(--accent)">${num(run.opportunity_score || 78)}</span> / 100</td>
               <td><span class="chip chip-ok">${num(run.title_score || 8.8)} / 10</span></td>
-              <td><a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Load in Studio</a></td>
+              <td style="display:flex;gap:6px">
+                <a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Studio</a>
+                <button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)" onclick="linkVideoPrompt(${Number(run.id)})">🔗 Link</button>
+              </td>
             </tr>`;
         }).join("");
 
@@ -767,6 +968,79 @@ DASHBOARD_HTML = """<!doctype html>
       } catch (err) {
         console.error("History loading failed:", err);
       }
+    }
+
+    async function linkVideoPrompt(runId) {
+      const videoId = prompt("Enter your published YouTube Video ID or URL for this package:");
+      if (!videoId) return;
+      try {
+        const res = await fetch(`/api/history/runs/${runId}/link-video`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ youtube_video_id: videoId })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert("Linking failed: " + (data.detail || "Error linking video"));
+          return;
+        }
+        alert("✅ Package linked successfully to YouTube Video ID: " + data.youtube_video_id);
+        loadHistoryFeed();
+        loadSavedHistory();
+      } catch (err) {
+        alert("Error linking video: " + err.message);
+      }
+    }
+
+    async function loadPublishedVideos() {
+      const body = $("publishedVideoBody");
+      if (!body) return;
+      try {
+        const response = await fetch("/api/published-videos");
+        const data = await response.json();
+        const links = data.links || [];
+        if (!response.ok || !links.length) {
+          body.innerHTML = "<tr><td colspan='5' style='color:var(--text-sub);text-align:center;padding:16px'>No linked videos yet. Link a package after it is published.</td></tr>";
+          return;
+        }
+        body.innerHTML = links.map((link) => {
+          const metric = link.latest_performance || {};
+          const snapshot = metric.snapshot_window || "Collecting";
+          const title = link.selected_title || link.package_topic || link.youtube_video_id;
+          const views = metric.views === null || metric.views === undefined ? "Not available" : num(metric.views);
+          const retention = metric.avg_view_percentage === null || metric.avg_view_percentage === undefined ? "Not available" : num(metric.avg_view_percentage) + "%";
+          return "<tr><td style='font-weight:600'>" + esc(title) + "<div class='metric-sub' style='font-size:11px'>" + esc(link.youtube_video_id) + "</div></td>" +
+            "<td>" + esc(snapshot) + "</td><td>" + views + "</td><td>" + retention + "</td>" +
+            "<td><button class='btn' style='padding:4px 10px;font-size:11px' onclick='refreshLinkedVideo(" + Number(link.id) + ", this)'>Refresh due snapshot</button></td></tr>";
+        }).join("");
+      } catch (_) {
+        body.innerHTML = "<tr><td colspan='5' style='color:var(--bad);text-align:center;padding:16px'>Could not load linked-video performance.</td></tr>";
+      }
+    }
+
+    async function refreshLinkedVideo(linkId, button) {
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/published-videos/" + linkId + "/refresh", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error?.message || "Refresh failed.");
+        alert(data.message || ((data.captured || []).length ? "Snapshot saved." : "No new scheduled snapshot is due yet."));
+        loadPublishedVideos();
+        loadCohortLearning();
+      } catch (error) {
+        alert(error.message || "Could not refresh this video.");
+      } finally { button.disabled = false; }
+    }
+
+    async function loadCohortLearning() {
+      try {
+        const response = await fetch("/api/learning/cohorts");
+        const data = await response.json();
+        if (!response.ok) return;
+        if ($("anaWinningAngle")) $("anaWinningAngle").textContent = data.confidence_label || "Collecting evidence";
+        if ($("anaObservation")) $("anaObservation").textContent = data.recommendation || "Link and refresh published videos to build evidence.";
+        if ($("anaRecommendation")) $("anaRecommendation").textContent = data.sample_size ? ("Cohort: " + data.sample_size + " linked videos. " + (data.recommendation || "")) : "Learning begins after linked videos receive real snapshots.";
+      } catch (_) {}
     }
 
     function historyDate(value) {
@@ -791,10 +1065,13 @@ DASHBOARD_HTML = """<!doctype html>
         body.innerHTML = runs.map((run) =>
           "<tr>" +
           "<td style='font-size:12px;color:var(--text-sub)'>" + historyDate(run.created_at) + "</td>" +
-          "<td style='font-weight:600;max-width:460px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(run.title) + "'>" + esc(run.title || run.query || "Untitled package") + "</td>" +
+          "<td style='font-weight:600;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(run.title) + "'>" + esc(run.title || run.query || "Untitled package") + "</td>" +
           "<td><span style='font-weight:700;color:var(--accent)'>" + num(run.opportunity_score) + "</span> / 100</td>" +
           "<td><span class='chip chip-ok'>" + num(run.title_score) + " / 10</span></td>" +
-          "<td><button class='btn' style='padding:4px 10px;font-size:11px' onclick='openHistoryRun(" + Number(run.id) + ")'>Open package</button></td>" +
+          "<td style='display:flex;gap:6px'>" +
+          "<button class='btn' style='padding:4px 10px;font-size:11px' onclick='openHistoryRun(" + Number(run.id) + ")'>Open</button>" +
+          "<button class='btn' style='padding:4px 10px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)' onclick='linkVideoPrompt(" + Number(run.id) + ")'>🔗 Link</button>" +
+          "</td>" +
           "</tr>"
         ).join("");
       } catch (error) {
@@ -932,7 +1209,7 @@ DASHBOARD_HTML = """<!doctype html>
               </div>
               <div style="font-size:17px;font-weight:700;line-height:1.45;color:var(--text);letter-spacing:-0.2px">${esc(p.title)}</div>
             </div>
-            
+
             <div>
               <div class="card-title" style="margin-bottom:10px">
                 <span>🎯 Top Title Variants (High CTR Options)</span>
@@ -1138,7 +1415,7 @@ DASHBOARD_HTML = """<!doctype html>
         const refreshBtn = $("settRefreshBtn");
         const disconnectBtn = $("settDisconnectBtn");
         connectBtn.onclick = () => { window.location.href = "/youtube/channel/connect"; };
-        
+
         if (!data.configured) {
           settStatus.textContent = data.setup_message || "OAuth setup is required.";
           $("dashChannelStats").textContent = "OAuth setup required.";

@@ -115,14 +115,16 @@ def build_seo_package(
     while len(variant_titles) < 5:
         variant_titles.append(variant_titles[-1])
 
+    package_intents = ["Search", "Browse", "Existing audience", "Alternative", "Alternative"]
     title_variants_data = [
         {
             "title": v,
             "score": _deterministic_score(v, primary_topic),
             "estimated_ctr": f"{_deterministic_score(v, primary_topic) * 1.1:.1f}%",
             "character_count": len(v),
+            "package_intent": package_intents[index] if index < len(package_intents) else "Alternative",
         }
-        for v in variant_titles[:5]
+        for index, v in enumerate(variant_titles[:5])
     ]
 
     title_optimization = {
