@@ -4,7 +4,11 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
+
+_INITIALIZED_DATABASES: set[str] = set()
+_INITIALIZATION_LOCK = Lock()
 
 
 class HistoryStore:
@@ -16,7 +20,18 @@ class HistoryStore:
         self._memory_connection: sqlite3.Connection | None = None
         if database_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
-        self._initialize()
+            self._initialize()
+        else:
+            database_key = str(self._database_path.resolve()) if self._database_path else database_path
+            if database_key not in _INITIALIZED_DATABASES:
+                with _INITIALIZATION_LOCK:
+                    if database_key not in _INITIALIZED_DATABASES:
+                        self._initialize()
+                        _INITIALIZED_DATABASES.add(database_key)
+
+    @property
+    def database_path(self) -> str:
+        return self._database_path_raw
 
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
@@ -324,6 +339,16 @@ class HistoryStore:
             for row in rows
         ]
 
+    def recent_generated_titles(self, limit: int = 10) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT title FROM analysis_runs
+                   WHERE title IS NOT NULL AND TRIM(title) != ''
+                   ORDER BY created_at DESC LIMIT ?""",
+                (max(1, min(limit, 50)),),
+            ).fetchall()
+        return [str(row[0]).strip() for row in rows if row[0] and str(row[0]).strip()]
+
     def history_run(self, run_id: int) -> dict[str, Any] | None:
         """Return a saved SEO package and its historical metadata."""
         with self._connect() as connection:
@@ -396,27 +421,23 @@ class HistoryStore:
                     sync_info = {
                         "synced_at": sync_row[0],
                         "channel": payload.get("channel", {}),
+                        "period": payload.get("period", {}),
                         "current_28_days": payload.get("current_28_days", {}),
                     }
                 except Exception:
                     pass
 
-            row = connection.execute(
-                """
-                SELECT SUM(views), SUM(likes), COUNT(*), MAX(views)
-                FROM owned_video_snapshots
-                """
-            ).fetchone()
             latest = connection.execute(
                 """
-                SELECT s.video_id, s.title, s.views, s.likes, s.captured_at, s.published_at, s.watch_minutes
+                SELECT s.video_id, s.title, s.views, s.likes, s.captured_at, s.published_at,
+                       s.watch_minutes, s.comments, s.average_view_percentage
                 FROM owned_video_snapshots s
                 INNER JOIN (
                     SELECT video_id, MAX(captured_at) AS max_cap
                     FROM owned_video_snapshots
                     GROUP BY video_id
                 ) latest ON s.video_id = latest.video_id AND s.captured_at = latest.max_cap
-                ORDER BY s.views DESC
+                ORDER BY COALESCE(s.published_at, '') DESC, s.video_id ASC
                 """
             ).fetchall()
 
@@ -428,27 +449,33 @@ class HistoryStore:
                 """
             ).fetchone()
 
-        video_count = len(latest)
-        total_views = sum(int(r[2] or 0) for r in latest)
-        total_likes = sum(int(r[3] or 0) for r in latest)
+        snapshot_video_count = len(latest)
+        snapshot_views = sum(int(r[2] or 0) for r in latest)
+        snapshot_likes = sum(int(r[3] or 0) for r in latest)
         max_views = max((int(r[2] or 0) for r in latest), default=0)
 
         sync_channel = sync_info.get("channel", {}) if sync_info else {}
         real_channel_views = sync_channel.get("real_total_views")
+        subscriber_count = sync_channel.get("subscribers")
+        channel_video_count = sync_channel.get("video_count")
         sync_28d_views = sync_info.get("current_28_days", {}).get("views") if sync_info else None
         sync_28d_likes = sync_info.get("current_28_days", {}).get("likes") if sync_info else None
         sync_28d_watch = sync_info.get("current_28_days", {}).get("estimatedMinutesWatched") if sync_info else None
 
-        effective_views = real_channel_views if real_channel_views else (sync_28d_views if (sync_28d_views is not None and sync_28d_views > total_views) else total_views)
-        effective_likes = sync_28d_likes if (sync_28d_likes is not None and sync_28d_likes > total_likes) else total_likes
+        views_28_days = int(sync_28d_views) if sync_28d_views is not None else snapshot_views
+        likes_28_days = int(sync_28d_likes) if sync_28d_likes is not None else snapshot_likes
         effective_watch = sync_28d_watch if sync_28d_watch is not None else (int(linked_row[2] or 0) if linked_row else 0)
 
         return {
             "channel": channel_info,
             "latest_sync": sync_info,
-            "total_views": effective_views,
-            "total_likes": effective_likes,
-            "video_count": video_count,
+            "total_views": views_28_days,
+            "total_likes": likes_28_days,
+            "views_28_days": views_28_days,
+            "likes_28_days": likes_28_days,
+            "lifetime_views": int(real_channel_views) if real_channel_views is not None else None,
+            "subscribers": int(subscriber_count) if subscriber_count is not None else None,
+            "video_count": int(channel_video_count) if channel_video_count is not None else snapshot_video_count,
             "max_views": max_views,
             "estimated_watch_minutes": effective_watch,
             "linked_videos_count": int(linked_row[0] or 0) if linked_row else 0,
@@ -460,6 +487,8 @@ class HistoryStore:
                     "likes": r[3],
                     "captured_at": r[4],
                     "published_at": r[5],
+                    "comments": r[7],
+                    "average_view_percentage": r[8],
                 }
                 for r in latest
             ],

@@ -98,7 +98,7 @@ def generate_seo_suggestions(
         if not _is_junk_tag(str(s.get("keyword", "")))
     ]
 
-    # ---- Multi-language packages (English + Tamil + Tanglish) ----------
+    # ---- Selected-language package -------------------------------------
     def _lock_pkg(p: dict[str, Any], lang: str) -> dict[str, Any]:
         if not isinstance(p, dict):
             return {}
@@ -135,6 +135,10 @@ def generate_seo_suggestions(
         lang for lang in (seo_package.get("fallback_languages") or []) if lang != "english"
     ]
     generation_source = str(seo_package.get("generation_source") or "fallback")
+    if generation_source == "fallback":
+        research_warnings.append(
+            "Gemini was unavailable, so this run used the content-specific local fallback."
+        )
     if non_english_fallback:
         provider_hint = "Gemini" if generation_source == "fallback" else "the configured AI provider"
         research_warnings.append(

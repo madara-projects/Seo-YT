@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     oauth_token_encryption_key: str | None = None
 
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="WIN_ENGINE_", extra="ignore")
 

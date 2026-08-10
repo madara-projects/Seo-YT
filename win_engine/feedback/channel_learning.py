@@ -10,7 +10,7 @@ from typing import Any
 def save_video_snapshots(database_path: str, videos: list[dict[str, Any]]) -> None:
     now = datetime.now(timezone.utc).isoformat()
     rows = [
-        (v.get("video_id"), now, v.get("published_at"), v.get("title"), _num(v.get("views")), _num(v.get("estimatedMinutesWatched")), _num(v.get("averageViewDuration")), _num(v.get("averageViewPercentage")), _num(v.get("likes")), _num(v.get("comments")), _num(v.get("shares")), _num(v.get("subscribersGained")))
+        (v.get("video_id"), now, v.get("published_at"), v.get("title"), _num(v.get("views")), _optional_num(v.get("estimatedMinutesWatched")), _optional_num(v.get("averageViewDuration")), _optional_num(v.get("averageViewPercentage")), _num(v.get("likes")), _num(v.get("comments")), _optional_num(v.get("shares")), _optional_num(v.get("subscribersGained")))
         for v in videos if v.get("video_id")
     ]
     if not rows:
@@ -40,3 +40,12 @@ def _num(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _optional_num(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

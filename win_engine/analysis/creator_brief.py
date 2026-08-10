@@ -93,11 +93,29 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
 
     brief = creator_brief or {}
     content = str(brief.get("content") or "").strip()
-    
+
+    quote_match = re.search(r'["“”]([^"“”]{6,})["“”]', content)
+    if quote_match:
+        quote_stopwords = {
+            "some", "look", "looks", "because", "they", "theyre", "they're",
+            "this", "that", "these", "those", "with", "from", "have", "has",
+            "were", "will", "would", "could", "should", "about", "into", "your",
+        }
+        quote_words = [
+            word.lower()
+            for word in re.findall(r"[A-Za-z][A-Za-z'-]*", quote_match.group(1))
+            if len(word) >= 4 and word.lower() not in quote_stopwords
+        ]
+        if quote_words:
+            return " ".join(dict.fromkeys(quote_words))[:80]
+
     # Strip camera / background / visual setup headers
-    clean_content = re.sub(r"(?i)background\s*visuals?:?[^\n]*", "", content)
-    clean_content = re.sub(r"(?i)background\s*:?[^\n]*", "", clean_content)
-    clean_content = re.sub(r"(?i)visuals?:?[^\n]*", "", clean_content)
+    clean_content = re.sub(
+        r"(?i)\bbackground\s*visuals?\s*(?:is|:)?\s*[^.;,\n]*?(?=\s+and\s+|[.;,]|$)",
+        " ",
+        content,
+        count=1,
+    )
     clean_content = re.sub(r"(?i)quote\s*on\s*screen:?", "", clean_content)
 
     quote_stopwords = _TOPIC_STOPWORDS.union({

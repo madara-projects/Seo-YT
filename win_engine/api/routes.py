@@ -165,6 +165,7 @@ def analyze_script(payload: AnalyzeRequest):
 
     context = {
         "language": payload.language,
+        "video_language": payload.video_language,
         "region": payload.region,
         "audience_type": payload.audience_type,
         "creator_brief": creator_brief,

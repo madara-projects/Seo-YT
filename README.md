@@ -1,13 +1,13 @@
 # 🚀 YouTube SEO Analyzer & Growth Engine
 
 <p align="center">
-  <b>A local-first, AI-powered YouTube SEO & Channel Strategy Engine built with FastAPI, Google Gemini 3.5 Flash, and SQLite.</b>
+  <b>A local-first, AI-powered YouTube SEO & Channel Strategy Engine built with FastAPI, Google Gemini, and SQLite.</b>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python" alt="Python Version" />
   <img src="https://img.shields.io/badge/Framework-FastAPI-009688?style=for-the-badge&logo=fastapi" alt="FastAPI" />
-  <img src="https://img.shields.io/badge/AI_Engine-Gemini_3.5_Flash-8E44AD?style=for-the-badge&logo=google" alt="Gemini AI" />
+  <img src="https://img.shields.io/badge/AI_Engine-Google_Gemini-8E44AD?style=for-the-badge&logo=google" alt="Gemini AI" />
   <img src="https://img.shields.io/badge/Database-SQLite_WAL-003B57?style=for-the-badge&logo=sqlite" alt="SQLite" />
   <img src="https://img.shields.io/badge/Container-Docker-2496ED?style=for-the-badge&logo=docker" alt="Docker" />
 </p>
@@ -23,8 +23,8 @@
 ## ✨ Key Features & Capabilities
 
 - 🎯 **High-CTR Title Suite**: Generates a primary recommended title plus 5 distinct, scored title variants (How-to, Curiosity Gap, Result-Driven, Beginner, and Question styles).
-- 📝 **Rich Description Engine**: Produces 150–300 word structured YouTube descriptions featuring opening hooks, bulleted key takeaways, chapter scaffolds, subscriber call-to-actions, and hashtags.
-- 🌐 **Multi-Language & Regional Support**: Full generation support for **English**, **Tamil**, and **Tanglish** (Tamil-English blend), tailored for global or India-specific audiences.
+- 📝 **Video-Specific Description Engine**: Produces natural descriptions based on the actual video, without forcing the same hook, chapter, bullet, or call-to-action template onto every topic.
+- 🌐 **Multi-Language & Regional Support**: Supports **English**, **Tamil**, and **Tanglish** (Tamil-English blend), generating the selected language per run to conserve Gemini quota.
 - 📊 **Channel Self-Learning System**: Automatically records video performance snapshots (e.g. 1,000+ view milestones) in SQLite and injects top channel winners into AI prompts to continuously refine title recommendations.
 - 🔍 **Live Competitor & Gap Analysis**: Analyzes competitor view counts, published dates, and keyword density to calculate topic **Opportunity Scores (0–100)** and **Content Retention Audit Signals**.
 - 🎨 **Bento Grid Studio Dashboard**: Built-in zero-dependency SPA UI with tabbed views (**Dashboard**, **SEO Creator Studio**, **Channel Analytics**, **Settings & APIs**) and fail-proof 1-click copy buttons for titles, descriptions, and tags.
@@ -46,7 +46,7 @@
                              │                        │
                              v                        v
   ┌────────────────────────────────────┐    ┌───────────────────────────────────┐
-  │   YouTube Data API v3 Research     │    │  Google Gemini 3.5 Flash Engine   │
+  │   YouTube Data API v3 Research     │    │     Google Gemini AI Engine       │
   │ • Outlier Competitor Scoring       │    │ • Topic-Lock Title Suite          │
   │ • Opportunity Score (0-100)        │    │ • Structured 200w Descriptions    │
   │ • Keyword & Entity Extraction      │    │ • Multi-Lang (Eng/Tamil/Tanglish) │
@@ -163,7 +163,7 @@ Seo-YT/
 │   ├── feedback/               # SQLite history store & channel self-learning
 │   ├── generation/             # Strategy engine & SEO package builders
 │   ├── ingestion/              # YouTube research client & caching
-│   └── llm/                    # Gemini 3.5 Flash client & prompt strategies
+│   └── llm/                    # Google Gemini client & prompt strategies
 ```
 
 ---

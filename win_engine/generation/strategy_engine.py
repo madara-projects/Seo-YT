@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -17,6 +18,7 @@ from win_engine.analysis.strategy_layer import (
 )
 from win_engine.analysis.thumbnail_classifier import build_thumbnail_strategy
 from win_engine.feedback.history_store import HistoryStore
+from win_engine.feedback.channel_learning import learning_summary as channel_performance_learning
 from win_engine.feedback.learning_engine import build_feedback_package
 from win_engine.generation.automation_engine import build_automation_workflow
 from win_engine.generation.expansion_engine import (
@@ -28,6 +30,7 @@ from win_engine.llm.seo_writer import write_multilang_packages_with_source
 
 
 _TOPIC_STOPWORDS = {"video", "youtube", "will", "what", "days", "today", "going"}
+logger = logging.getLogger(__name__)
 
 
 def build_seo_package(
@@ -75,10 +78,25 @@ def build_seo_package(
 
     region = str(language_context.get("region", "global"))
     audience_type = str(language_context.get("audience_type", "general"))
-    channel_learning = history_store.learning_summary()
-    # Always generate English + Tamil + Tanglish so the creator gets all three
-    # from a single request. One reachability check inside the helper.
-    _LANGS = ["english", "tamil", "tanglish"]
+    selected_language = str(language_context.get("language") or "english").strip().lower()
+    if selected_language == "auto":
+        selected_language = str(language_context.get("video_language") or "english").strip().lower()
+    if selected_language not in {"english", "tamil", "tanglish", "hindi"}:
+        selected_language = "english"
+
+    try:
+        channel_learning = channel_performance_learning(history_store.database_path)
+    except Exception as exc:
+        logger.warning("Channel performance learning is unavailable: %s", type(exc).__name__)
+        channel_learning = {}
+    channel_learning["recent_titles"] = history_store.recent_generated_titles(limit=10)
+    channel_learning["cohort"] = history_store.cohort_analytics(
+        format_filter=str((creator_brief or {}).get("video_format") or "").strip() or None,
+        language_filter=selected_language,
+    )
+    # Generate only the selected language. Additional languages must be explicit
+    # creator actions so a single video does not consume three Gemini requests.
+    _LANGS = [selected_language]
     multilang_raw, generation_source = write_multilang_packages_with_source(
         script,
         competitors=competitors,
@@ -92,21 +110,23 @@ def build_seo_package(
     fallback_languages = [lang for lang in _LANGS if not multilang_raw.get(lang)]
 
     def _resolve(lang: str) -> dict[str, Any]:
-        p = multilang_raw.get(lang) or _fallback_package(primary_topic, keyword_signals, creator_brief)
+        p = multilang_raw.get(lang) or _content_specific_fallback(primary_topic, keyword_signals, creator_brief)
         video_fmt = str((creator_brief or {}).get("video_format") or "").lower()
         script_lower = (script or "").lower()
-        if video_fmt in {"youtube_shorts", "shorts", "quote", "reels"} or any(w in script_lower for w in ["short", "shorts", "quote", "reel", "betrayal", "sunset"]):
+        is_short_form = video_fmt in {"youtube_shorts", "shorts", "quote", "reels"} or bool(
+            re.search(r"\b(?:short|shorts|reel|reels|quote)\b", script_lower)
+        )
+        if is_short_form:
             existing_tags = [str(t).strip().lower() for t in (p.get("tags") or []) if str(t).strip()]
-            for essential in ["shorts", "yt", "youtube shorts", "viral shorts"]:
-                if essential not in existing_tags:
-                    existing_tags.append(essential)
-            p["tags"] = existing_tags[:12]
+            required_tags = ["shorts", "yt", "youtube shorts", "viral shorts"]
+            topic_tags = [tag for tag in existing_tags if tag not in required_tags]
+            p["tags"] = topic_tags[: 12 - len(required_tags)] + required_tags
         return p
 
     multilang = {lang: _resolve(lang) for lang in _LANGS}
 
-    # The English package backs the top-level fields and all downstream analysis.
-    pkg = multilang["english"]
+    # The selected-language package backs the top-level fields and downstream analysis.
+    pkg = multilang[selected_language]
 
     title = pkg["title"]
     description = pkg["description"]
@@ -291,104 +311,106 @@ def _deterministic_score(title: str, topic: str) -> float:
     return round(min(score, 9.5), 1)
 
 
-def _fallback_package(
+def _quoted_text(content: str) -> str:
+    match = re.search(r'["“”]([^"“”]{6,})["“”]', content or "")
+    return re.sub(r"\s+", " ", match.group(1)).strip(" .") if match else ""
+
+
+def _fit_title(body: str, suffix: str = "", max_chars: int = 70) -> str:
+    clean = re.sub(r"\s+", " ", body).strip(" .:-")
+    available = max_chars - len(suffix)
+    if len(clean) > available:
+        shortened = clean[: max(1, available - 1)].rsplit(" ", 1)[0].rstrip(" .,:;-")
+        clean = (shortened or clean[: max(1, available - 1)]).rstrip() + "…"
+    return clean + suffix
+
+
+def _content_specific_fallback(
     primary_topic: str,
     keyword_signals: list[dict[str, Any]],
     creator_brief: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Deterministic minimal SEO package used when primary AI is offline."""
-    pretty = (primary_topic or "your topic").strip().title()
+    """Honest, content-specific package used only when Gemini is unavailable."""
     brief = creator_brief or {}
-    video_fmt = str(brief.get("video_format") or "").lower()
-    is_shorts = video_fmt in {"youtube_shorts", "shorts", "quote", "reels"} or any(w in pretty.lower() for w in ["quote", "betrayal", "sunset", "aesthetic", "shorts", "flower", "garden", "love", "heart"])
-    is_vlog = video_fmt in {"vlog", "story"}
+    topic = (primary_topic or "the video topic").strip()
+    pretty = topic.title()
+    content = str(brief.get("content") or "").strip()
+    quote = _quoted_text(content)
+    video_format = str(brief.get("video_format") or "").lower()
+    is_shorts = video_format in {"youtube_shorts", "shorts", "quote", "reels"}
     promise = str(brief.get("viewer_promise") or "").strip()
+    audience = str(brief.get("target_audience") or "").strip()
+    unique_angle = str(brief.get("unique_angle") or "").strip()
+    proof = str(brief.get("proof") or "").strip()
 
-    clean_pretty = re.sub(r"(?i)\b(background|visuals|screen|sunset|beach|calm|ocean|waves|format|vertical)\b", "", pretty).strip()
-    if not clean_pretty:
-        clean_pretty = "Overgiving & Love"
-    clean_pretty = clean_pretty.title()
-
-    if is_shorts:
+    suffix = " #Shorts" if is_shorts else ""
+    if quote:
         variants = [
-            f"Why Do We Give Our Whole Garden For One Flower? 💔 #Shorts",
-            f"When You Love Too Hard & Give Everything #Shorts",
-            f"The Hardest Truth About Loving The Wrong Person 💔 #Shorts",
-            f"Read This Before You Give Your Whole Heart... #Shorts",
-            f"Why Do Generous Hearts Always Give Too Much? #Shorts #Quotes",
+            _fit_title(quote, suffix),
+            _fit_title(f"The Meaning Behind: {quote}", suffix),
+            _fit_title(f"Read This Twice: {quote}", suffix),
+            _fit_title(f"{pretty}: A Quiet Reminder", suffix),
+            _fit_title(f"A Quote About {pretty}", suffix),
         ]
-        description = (
-            f"✨ \"Why do we give our entire garden to someone who only offers a single flower?\"\n\n"
-            f"A powerful reflection on emotional overgiving, relationship boundaries, and personal self-worth. "
-            f"Sometimes the hardest truths are the ones we learn quietly. Watch until the very end for the full realization.\n\n"
-            + (f"💡 Key Takeaway: {promise}\n\n" if promise else "") +
-            f"📌 Don't forget to Like, Share & Subscribe for daily life perspective & quote shorts!\n\n"
-            f"----------------------------------------\n"
-            f"#Shorts #Quotes #LifeLessons #RelationshipAdvice #SelfLove #ShortsFeed #ViralQuotes"
+        visual_match = re.search(
+            r"(?i)\bbackground\s*visuals?\s*(?:is|:)?\s*(.*?)(?=\s+and\s+.*(?:screen|quote)|[.;]|$)",
+            content,
         )
-    elif is_vlog:
-        variants = [
-            f"The Real {pretty}",
-            f"Inside My {pretty}",
-            f"My Honest {pretty}",
-            f"What {pretty} Is Really Like",
-            f"A Realistic {pretty}",
-        ]
+        visual = re.sub(r"\s+", " ", visual_match.group(1)).strip(" .") if visual_match else "the accompanying visual"
+        if visual and not re.match(r"(?i)^(?:a|an|the)\s", visual):
+            visual = "a " + visual
         description = (
-            f"Welcome back to the channel! In today's video, I'm taking you inside {pretty.lower()}.\n\n"
-            f"🎥 What's inside this video:\n"
-            f"- Real behind-the-scenes footage and my unfiltered experience\n"
-            f"- The key moments and lessons I learned along the way\n"
-            f"- Honest thoughts and daily perspective\n\n"
-            + (f"💡 Main Promise: {promise}\n\n" if promise else "") +
-            f"🔔 Subscribe to follow along for more real vlogs and weekly content!\n"
-            f"💬 Let me know your thoughts in the comments below.\n\n"
-            f"----------------------------------------\n"
-            f"#Vlog #DailyVlog #Storytime #{pretty.replace(' ', '')}"
+            f'“{quote}”\n\n'
+            f"This Short pairs the on-screen quote with {visual}, creating a quiet moment to reflect on {topic}. "
+            f"The words are the focus, while the visual supports their mood without changing their meaning."
         )
     else:
         variants = [
-            f"{pretty}: Complete Guide & Breakdown",
-            f"{pretty}: Real Methods That Work",
-            f"{pretty} for Beginners — Honest Guide",
-            f"What I Learned About {pretty}",
-            f"{pretty} Tips That Actually Help",
+            _fit_title(f"{pretty}: What You Need to Know", suffix),
+            _fit_title(f"The Honest Truth About {pretty}", suffix),
+            _fit_title(f"What {pretty} Really Means", suffix),
+            _fit_title(f"A Different Way to See {pretty}", suffix),
+            _fit_title(f"The Most Useful Lesson From {pretty}", suffix),
         ]
-        description = (
-            f"In this comprehensive breakdown, we cover everything you need to know about {pretty.lower()}.\n\n"
-            f"📌 What You Will Learn:\n"
-            f"• Core fundamentals & exact step-by-step framework\n"
-            f"• Common mistakes most creators make and how to avoid them\n"
-            f"• Practical strategies that deliver real, measurable results\n\n"
-            + (f"💡 Key Takeaway: {promise}\n\n" if promise else "") +
-            f"⏱️ Timestamps:\n"
-            f"00:00 - Introduction\n"
-            f"01:15 - Core Concepts & Setup\n"
-            f"04:30 - Step-by-Step Breakdown\n"
-            f"08:45 - Key Tips & Pitfalls\n"
-            f"11:20 - Summary & Next Steps\n\n"
-            f"🔔 If you found this helpful, hit the LIKE button and SUBSCRIBE for more in-depth guides!\n"
-            f"💬 Leave a comment below with any questions."
-        )
+        rotation = sum(ord(char) for char in topic.casefold()) % len(variants)
+        variants = variants[rotation:] + variants[:rotation]
+        description_parts = [
+            f"This video focuses on {topic}.",
+            promise or "It explains the idea using the actual details shown in the video.",
+        ]
+        if unique_angle:
+            description_parts.append(f"Its distinct angle is {unique_angle}.")
+        if proof:
+            description_parts.append(f"The video supports this with {proof}.")
+        if audience:
+            description_parts.append(f"It is intended for {audience}.")
+        description = "\n\n".join(description_parts)
 
     tags: list[str] = []
     seen: set[str] = set()
-    if primary_topic:
-        tags.append(primary_topic.lower())
-        seen.add(primary_topic.lower())
-    for signal in keyword_signals or []:
-        kw = str(signal.get("keyword", "")).strip().lower()
-        if not kw or kw in seen:
-            continue
-        tags.append(kw)
-        seen.add(kw)
-        if len(tags) >= 10:
-            break
+    quote_words = [word.lower() for word in re.findall(r"[A-Za-z]{4,}", quote)]
+    quote_tags = []
+    if quote_words:
+        meaningful = [word for word in quote_words if word not in {"some", "look", "looks", "because", "they", "theyre"}]
+        quote_tags = [
+            f"{meaningful[0]} quote" if meaningful else "",
+            " ".join(meaningful[-2:]) if len(meaningful) >= 2 else "",
+            f"{meaningful[-1]} quote" if meaningful else "",
+            "emotional quotes",
+            "life reflections",
+            "aesthetic quote shorts",
+        ]
+    candidates = [topic, *quote_tags] if quote else [topic, *[str(item.get("keyword") or "") for item in keyword_signals or []]]
+    for candidate in candidates:
+        cleaned = candidate.strip().lower()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            tags.append(cleaned)
 
     return {
         "title": variants[0],
         "variants": variants,
         "description": description,
-        "tags": tags[:10],
-        "hashtags": ["#Shorts", "#Quotes", "#LifeLessons"] if is_shorts else ["#YouTube", f"#{pretty.replace(' ', '')}"],
+        "tags": tags[:8],
+        "hashtags": ["#Shorts", "#Quotes", "#LifeLessons"] if is_shorts else [f"#{re.sub(r'[^A-Za-z0-9]', '', pretty)}"],
     }
