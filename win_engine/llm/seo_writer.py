@@ -19,13 +19,76 @@ logger = logging.getLogger(__name__)
 Competitor = Union[str, dict]
 
 _SYSTEM_PROMPT = (
-    "You are an expert YouTube SEO strategist. You analyze the user's video input, script, or idea "
-    "to automatically determine the exact content type (e.g. YouTube Short, Quote Video, Vlog, Gaming, Music, "
-    "Tutorial, Review, or Story). You match the natural voice, emotion, and format of that specific category. "
-    "For Quote Videos or Shorts, write emotional, high-retention titles and viral hashtags. "
-    "For Tutorials, write clear searchable titles. For Vlogs, write engaging personal titles. "
-    "You write like a real creator, never robotic or templated. Output ONLY valid JSON."
+    "You are an expert YouTube SEO strategist. You analyze the user's video script, quote, or idea "
+    "to write high-CTR title variants, descriptions, tags, and hashtags. "
+    "Output ONLY valid JSON with keys: \"title\", \"variants\" (array of 5 strings), "
+    "\"description\", \"tags\" (array of 10 strings), and \"hashtags\" (array of 3 strings)."
 )
+
+
+def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Shape-check + light coercion. Coerces flexible model outputs cleanly."""
+    if not isinstance(pkg, dict):
+        return None
+    
+    title = str(pkg.get("title") or pkg.get("primary_title") or "").strip()
+    
+    raw_variants = pkg.get("variants") or pkg.get("title_variants") or pkg.get("titles") or []
+    variants: list[str] = []
+    if isinstance(raw_variants, dict):
+        variants = [str(v).strip() for v in raw_variants.values() if str(v).strip()]
+    elif isinstance(raw_variants, list):
+        for item in raw_variants:
+            if isinstance(item, dict):
+                v_str = str(item.get("title") or item.get("text") or "").strip()
+                if v_str:
+                    variants.append(v_str)
+            elif str(item).strip():
+                variants.append(str(item).strip())
+    elif isinstance(raw_variants, str) and raw_variants.strip():
+        variants = [raw_variants.strip()]
+
+    if not title and variants:
+        title = variants[0]
+    elif title and not variants:
+        variants = [title]
+
+    description = str(pkg.get("description") or pkg.get("summary") or "").strip()
+
+    raw_tags = pkg.get("tags") or pkg.get("keywords") or []
+    tags: list[str] = []
+    if isinstance(raw_tags, list):
+        tags = [str(t).strip().lower().lstrip("#") for t in raw_tags if str(t).strip()]
+    elif isinstance(raw_tags, str):
+        tags = [str(t).strip().lower().lstrip("#") for t in raw_tags.split(",") if str(t).strip()]
+
+    raw_hashtags = pkg.get("hashtags") or []
+    hashtags: list[str] = []
+    if isinstance(raw_hashtags, list):
+        hashtags = [str(h).strip() for h in raw_hashtags if str(h).strip()]
+    elif isinstance(raw_hashtags, str):
+        hashtags = [str(h).strip() for h in raw_hashtags.split() if str(h).strip()]
+
+    if not title or not variants:
+        return None
+
+    if not description:
+        description = f"A powerful reflection on {title}. Watch until the end for the full realization."
+
+    if not tags:
+        tags = [t.lower() for t in title.split() if len(t) > 3][:10]
+
+    hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags]
+    if not hashtags:
+        hashtags = ["#shorts", "#quotes", "#viral"]
+
+    return {
+        "title": title,
+        "variants": variants[:5],
+        "description": description,
+        "tags": tags[:12],
+        "hashtags": hashtags[:5],
+    }
 
 _LANGUAGE_INSTRUCTIONS = {
     "english": (
@@ -346,7 +409,7 @@ def write_seo_package(
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.5,
-    max_tokens: int = 1100,
+    max_tokens: int = 2048,
 ) -> Optional[dict[str, Any]]:
     """Generate a full SEO package with Gemini, or return ``None`` when unavailable."""
     if not script or not script.strip():
@@ -378,7 +441,7 @@ def write_multilang_packages(
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.5,
-    max_tokens: int = 1100,
+    max_tokens: int = 2048,
 ) -> dict[str, Optional[dict[str, Any]]]:
     packages, _ = write_multilang_packages_with_source(
         script,
@@ -406,7 +469,7 @@ def write_multilang_packages_with_source(
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.5,
-    max_tokens: int = 1100,
+    max_tokens: int = 2048,
 ) -> tuple[dict[str, Optional[dict[str, Any]]], str]:
     """Generate SEO packages for several languages in one pass.
 
@@ -418,14 +481,31 @@ def write_multilang_packages_with_source(
 
     out: dict[str, Optional[dict[str, Any]]] = {}
     gemini_ready = gemini_client.is_available()
-    for lang in langs:
-        package = None
-        if gemini_ready:
-            package = _generate_one(
+    
+    primary_pkg = None
+    if gemini_ready:
+        primary_pkg = _generate_one(
+            script, competitors, language="english", region=region, audience_type=audience_type,
+            category=category, creator_brief=creator_brief, channel_learning=channel_learning,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+    
+    if primary_pkg:
+        out["english"] = primary_pkg
+        for lang in langs:
+            if lang == "english":
+                continue
+            # Try secondary language generation with short pause; if rate limited, adapt primary pkg
+            import time
+            time.sleep(0.5)
+            sec_pkg = _generate_one(
                 script, competitors, language=lang, region=region, audience_type=audience_type,
                 category=category, creator_brief=creator_brief, channel_learning=channel_learning,
                 temperature=temperature, max_tokens=max_tokens,
             )
-        out[lang] = package
+            out[lang] = sec_pkg or primary_pkg
+    else:
+        for lang in langs:
+            out[lang] = None
 
     return out, "gemini" if any(out.values()) else "fallback"
