@@ -92,23 +92,26 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
     """Make a compact topic for fallbacks and topic locking from the creator's own words."""
 
     brief = creator_brief or {}
-    sources = [brief.get("content"), brief.get("unique_angle"), brief.get("viewer_promise")]
-    candidates: list[str] = []
-    for source in sources:
-        for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", str(source or "").lower()):
-            if len(word) < 3 or word in _TOPIC_STOPWORDS or word in candidates:
-                continue
-            candidates.append(word)
+    content = str(brief.get("content") or "").strip()
+    
+    # Strip camera / background / visual setup headers
+    clean_content = re.sub(r"(?i)background\s*visuals?:?[^\n]*", "", content)
+    clean_content = re.sub(r"(?i)background\s*:?[^\n]*", "", clean_content)
+    clean_content = re.sub(r"(?i)visuals?:?[^\n]*", "", clean_content)
+    clean_content = re.sub(r"(?i)quote\s*on\s*screen:?", "", clean_content)
 
-    # Preserve the first two concrete words from the unique angle, then make a
-    # creator / routine context explicit before less useful words such as "job".
-    selected = candidates[:2]
-    for word in ("creator", "routine", "vlog", "review", "tutorial"):
-        if word in candidates and word not in selected:
-            selected.append(word)
-    for word in candidates:
-        if word not in selected:
-            selected.append(word)
-        if len(selected) >= 4:
-            break
-    return " ".join(selected[:4])
+    quote_stopwords = _TOPIC_STOPWORDS.union({
+        "background", "visuals", "screen", "vertical", "format", "sunset", "beach",
+        "calm", "ocean", "waves", "poignant", "aesthetic", "atmospheric", "cinematic",
+        "overlay", "mood", "authentic", "photo", "image", "video", "shorts", "reels"
+    })
+
+    candidates: list[str] = []
+    for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", clean_content.lower()):
+        if len(word) < 3 or word in quote_stopwords or word in candidates:
+            continue
+        candidates.append(word)
+
+    if not candidates:
+        return "deep quote"
+    return " ".join(candidates[:3])

@@ -34,7 +34,7 @@ def generate(
     prompt: str,
     system: str = "",
     *,
-    max_tokens: int = 1100,
+    max_tokens: int = 2048,
     temperature: float = 0.5,
 ) -> str:
     """Return generated text, or an empty string when Gemini cannot be used."""
@@ -42,7 +42,12 @@ def generate(
         return ""
 
     key = _get_key()
-    model = _get_model()
+    primary_model = _get_model()
+    models_to_try = [primary_model]
+    for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]:
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
+
     timeout = float(os.environ.get("WIN_ENGINE_GEMINI_TIMEOUT_SECONDS", "30"))
 
     payload = {
@@ -57,17 +62,29 @@ def generate(
     if payload["systemInstruction"] is None:
         del payload["systemInstruction"]
 
-    try:
-        response = httpx.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": key},
-            json=payload,
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        candidates = response.json().get("candidates") or []
-        parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
-        return "".join(str(part.get("text") or "") for part in parts).strip()
-    except Exception as exc:  # noqa: BLE001 - optional provider must never break generation
-        logger.warning("Gemini generate failed: %s", exc)
-        return ""
+    import time
+
+    for model in models_to_try:
+        for attempt in range(3):
+            try:
+                response = httpx.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    headers={"x-goog-api-key": key},
+                    json=payload,
+                    timeout=timeout,
+                )
+                if response.status_code == 429:
+                    logger.warning("Gemini 429 rate limit on %s (attempt %d/3). Retrying in 2s...", model, attempt + 1)
+                    time.sleep(2.0)
+                    continue
+                response.raise_for_status()
+                candidates = response.json().get("candidates") or []
+                parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+                out_text = "".join(str(part.get("text") or "") for part in parts).strip()
+                if out_text:
+                    return out_text
+            except Exception as exc:
+                logger.warning("Gemini model %s attempt %d failed: %s", model, attempt + 1, exc)
+                time.sleep(1.0)
+
+    return ""

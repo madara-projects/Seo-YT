@@ -201,13 +201,24 @@ def infer_category(text: str, hint: str | None = None) -> str:
 # Fix 1 — main topic extraction
 # ---------------------------------------------------------------------------
 def extract_main_topic(text: str) -> str:
-    """Pull the main topic phrase. Prefers longest known category term; falls
-    back to the most frequent meaningful word."""
+    """Pull the main topic phrase. Prefers quote sentiment over camera/visual setup headers."""
     if not text:
         return ""
-    lowered = text.lower()
+    
+    clean_text = text
+    clean_text = re.sub(r"(?i)background\s*visuals?:?[^\n]*", "", clean_text)
+    clean_text = re.sub(r"(?i)visuals?:?[^\n]*", "", clean_text)
+    clean_text = re.sub(r"(?i)quote\s*on\s*screen:?", "", clean_text)
+    
+    quote_match = re.search(r'"([^"]+)"', text)
+    if quote_match and len(quote_match.group(1).strip()) > 5:
+        quote_body = quote_match.group(1).strip()
+        quote_words = [w.lower() for w in re.findall(r"[A-Za-z]{4,}", quote_body) if w.lower() not in _STOPWORDS and w.lower() not in {"always", "someone", "entire", "offers"}]
+        if quote_words:
+            return " ".join(quote_words[:3])
 
-    # 1) Longest matched category phrase wins (e.g. "free fire" > "diamonds")
+    lowered = (clean_text or text).lower()
+
     matches = [
         term
         for terms in CATEGORY_KEYWORDS.values()
@@ -217,11 +228,12 @@ def extract_main_topic(text: str) -> str:
     if matches:
         return max(matches, key=len)
 
-    # 2) Most common meaningful word
-    words = [w for w in re.findall(r"[A-Za-z]{4,}", lowered) if w not in _STOPWORDS]
+    words = [w for w in re.findall(r"[A-Za-z]{4,}", lowered) if w not in _STOPWORDS and w not in {"background", "visuals", "screen", "vertical", "format"}]
     if not words:
-        return ""
-    return Counter(words).most_common(1)[0][0]
+        return "deep quote"
+    
+    top_words = [pair[0] for pair in Counter(words).most_common(3)]
+    return " ".join(top_words)
 
 
 # ---------------------------------------------------------------------------

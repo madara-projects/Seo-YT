@@ -274,6 +274,14 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
     }
 
 
+@router.delete("/api/history/runs/{run_id}")
+def delete_history_run(run_id: int):
+    store = HistoryStore(get_settings().database_path)
+    if not store.delete_analysis_run(run_id):
+        raise HTTPException(status_code=404, detail="Analysis run not found.")
+    return {"status": "deleted", "run_id": run_id}
+
+
 @router.get("/api/published-videos")
 def get_published_video_links():
     store = HistoryStore(get_settings().database_path)

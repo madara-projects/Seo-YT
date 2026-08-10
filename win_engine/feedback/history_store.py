@@ -348,6 +348,12 @@ class HistoryStore:
             "opportunity_score": round(float(row[9] or 0), 2), "package": package,
         }
 
+    def delete_analysis_run(self, run_id: int) -> bool:
+        """Delete a recorded analysis run from the SQLite database."""
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM analysis_runs WHERE id = ?", (run_id,))
+            return cursor.rowcount > 0
+
     def record_owned_snapshot(self, title: str, views: int, likes: int) -> None:
         """Record performance snapshot of creator's video for self-learning."""
         with self._connect() as connection:
@@ -367,8 +373,34 @@ class HistoryStore:
             )
 
     def owned_performance_summary(self) -> dict[str, Any]:
-        """Aggregate metrics of creator's video snapshots recorded in database."""
+        """Aggregate metrics of creator's video snapshots and connected channel syncs recorded in database."""
         with self._connect() as connection:
+            ch_row = connection.execute(
+                "SELECT channel_id, channel_title, connected_at FROM youtube_channel_connection WHERE id = 1"
+            ).fetchone()
+            channel_info = None
+            if ch_row:
+                channel_info = {
+                    "id": ch_row[0],
+                    "title": ch_row[1],
+                    "connected_at": ch_row[2],
+                }
+
+            sync_row = connection.execute(
+                "SELECT synced_at, payload_json FROM youtube_channel_syncs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            sync_info = None
+            if sync_row:
+                try:
+                    payload = json.loads(sync_row[1])
+                    sync_info = {
+                        "synced_at": sync_row[0],
+                        "channel": payload.get("channel", {}),
+                        "current_28_days": payload.get("current_28_days", {}),
+                    }
+                except Exception:
+                    pass
+
             row = connection.execute(
                 """
                 SELECT SUM(views), SUM(likes), COUNT(*), MAX(views)
@@ -377,28 +409,57 @@ class HistoryStore:
             ).fetchone()
             latest = connection.execute(
                 """
-                SELECT title, views, likes, captured_at
-                FROM owned_video_snapshots
-                ORDER BY captured_at DESC
-                LIMIT 5
+                SELECT s.video_id, s.title, s.views, s.likes, s.captured_at, s.published_at, s.watch_minutes
+                FROM owned_video_snapshots s
+                INNER JOIN (
+                    SELECT video_id, MAX(captured_at) AS max_cap
+                    FROM owned_video_snapshots
+                    GROUP BY video_id
+                ) latest ON s.video_id = latest.video_id AND s.captured_at = latest.max_cap
+                ORDER BY s.views DESC
                 """
             ).fetchall()
-        total_views = int(row[0] or 0) if row and row[0] is not None else 0
-        total_likes = int(row[1] or 0) if row and row[1] is not None else 0
-        video_count = int(row[2] or 0) if row and row[2] is not None else 0
-        max_views = int(row[3] or 0) if row and row[3] is not None else 0
+
+            linked_row = connection.execute(
+                """
+                SELECT COUNT(DISTINCT l.youtube_video_id), SUM(s.views), SUM(s.watch_time_minutes)
+                FROM published_video_links l
+                LEFT JOIN video_performance_snapshots s ON l.youtube_video_id = s.youtube_video_id
+                """
+            ).fetchone()
+
+        video_count = len(latest)
+        total_views = sum(int(r[2] or 0) for r in latest)
+        total_likes = sum(int(r[3] or 0) for r in latest)
+        max_views = max((int(r[2] or 0) for r in latest), default=0)
+
+        sync_channel = sync_info.get("channel", {}) if sync_info else {}
+        real_channel_views = sync_channel.get("real_total_views")
+        sync_28d_views = sync_info.get("current_28_days", {}).get("views") if sync_info else None
+        sync_28d_likes = sync_info.get("current_28_days", {}).get("likes") if sync_info else None
+        sync_28d_watch = sync_info.get("current_28_days", {}).get("estimatedMinutesWatched") if sync_info else None
+
+        effective_views = real_channel_views if real_channel_views else (sync_28d_views if (sync_28d_views is not None and sync_28d_views > total_views) else total_views)
+        effective_likes = sync_28d_likes if (sync_28d_likes is not None and sync_28d_likes > total_likes) else total_likes
+        effective_watch = sync_28d_watch if sync_28d_watch is not None else (int(linked_row[2] or 0) if linked_row else 0)
 
         return {
-            "total_views": total_views,
-            "total_likes": total_likes,
+            "channel": channel_info,
+            "latest_sync": sync_info,
+            "total_views": effective_views,
+            "total_likes": effective_likes,
             "video_count": video_count,
             "max_views": max_views,
+            "estimated_watch_minutes": effective_watch,
+            "linked_videos_count": int(linked_row[0] or 0) if linked_row else 0,
             "videos": [
                 {
-                    "title": r[0],
-                    "views": r[1],
-                    "likes": r[2],
-                    "captured_at": r[3],
+                    "video_id": r[0],
+                    "title": r[1],
+                    "views": r[2],
+                    "likes": r[3],
+                    "captured_at": r[4],
+                    "published_at": r[5],
                 }
                 for r in latest
             ],
