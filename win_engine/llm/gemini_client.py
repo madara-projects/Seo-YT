@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 import httpx
 from win_engine.core.config import get_settings
@@ -34,19 +33,15 @@ def generate(
     prompt: str,
     system: str = "",
     *,
-    max_tokens: int = 2048,
-    temperature: float = 0.5,
+    max_tokens: int = 1200,
+    temperature: float = 0.7,
 ) -> str:
     """Return generated text, or an empty string when Gemini cannot be used."""
     if not is_available():
         return ""
 
     key = _get_key()
-    primary_model = _get_model()
-    models_to_try = [primary_model]
-    for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]:
-        if fallback not in models_to_try:
-            models_to_try.append(fallback)
+    model = _get_model()
 
     timeout = float(os.environ.get("WIN_ENGINE_GEMINI_TIMEOUT_SECONDS", "30"))
 
@@ -55,7 +50,7 @@ def generate(
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
-            "maxOutputTokens": min(max(max_tokens, 256), 2048),
+            "maxOutputTokens": min(max(max_tokens, 256), 1200),
             "responseMimeType": "application/json",
         },
     }
@@ -64,27 +59,41 @@ def generate(
 
     import time
 
-    for model in models_to_try:
-        for attempt in range(3):
-            try:
-                response = httpx.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                    headers={"x-goog-api-key": key},
-                    json=payload,
-                    timeout=timeout,
-                )
-                if response.status_code == 429:
-                    logger.warning("Gemini 429 rate limit on %s (attempt %d/3). Retrying in 2s...", model, attempt + 1)
-                    time.sleep(2.0)
+    for attempt in range(2):
+        try:
+            response = httpx.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                headers={"x-goog-api-key": key},
+                json=payload,
+                timeout=timeout,
+            )
+            if response.status_code == 429:
+                logger.warning("Gemini quota or rate limit reached for %s; generation stopped without retrying.", model)
+                return ""
+            if response.status_code in {400, 401, 403, 404}:
+                logger.warning("Gemini request rejected for model %s with HTTP %d; not retrying.", model, response.status_code)
+                return ""
+            if response.status_code == 408 or response.status_code >= 500:
+                if attempt == 0:
+                    time.sleep(1.5)
                     continue
-                response.raise_for_status()
-                candidates = response.json().get("candidates") or []
-                parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
-                out_text = "".join(str(part.get("text") or "") for part in parts).strip()
-                if out_text:
-                    return out_text
-            except Exception as exc:
-                logger.warning("Gemini model %s attempt %d failed: %s", model, attempt + 1, exc)
-                time.sleep(1.0)
+                logger.warning("Gemini transient failure for model %s after one retry (HTTP %d).", model, response.status_code)
+                return ""
+            response.raise_for_status()
+            candidates = response.json().get("candidates") or []
+            parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+            out_text = "".join(str(part.get("text") or "") for part in parts).strip()
+            if out_text:
+                return out_text
+            return ""
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            if attempt == 0:
+                time.sleep(1.5)
+                continue
+            logger.warning("Gemini network request failed after one retry: %s", type(exc).__name__)
+            return ""
+        except Exception as exc:
+            logger.warning("Gemini request failed without retry: %s", type(exc).__name__)
+            return ""
 
     return ""

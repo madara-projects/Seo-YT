@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import sqlite3
 import time
@@ -25,6 +26,7 @@ _SCOPES = [
 ]
 _PENDING_STATES: dict[str, float] = {}
 _OAUTH_STATE_TTL_SECONDS = 600
+logger = logging.getLogger(__name__)
 
 
 class YouTubeChannelService:
@@ -105,7 +107,7 @@ class YouTubeChannelService:
             try:
                 playlist_items = youtube.playlistItems().list(
                     playlistId=uploads_playlist_id,
-                    part="snippet",
+                    part="snippet,contentDetails",
                     maxResults=50
                 ).execute().get("items", [])
                 
@@ -115,20 +117,7 @@ class YouTubeChannelService:
                         part="snippet,statistics",
                         id=",".join(v_ids[:50])
                     ).execute().get("items", [])
-                    
-                    for v in details:
-                        v_snip = v.get("snippet") or {}
-                        v_stats = v.get("statistics") or {}
-                        uploaded_video_rows.append({
-                            "video": v.get("id"),
-                            "video_id": v.get("id"),
-                            "title": v_snip.get("title"),
-                            "published_at": v_snip.get("publishedAt"),
-                            "views": _optional_int(v_stats.get("viewCount")) or 0,
-                            "likes": _optional_int(v_stats.get("likeCount")) or 0,
-                            "comments": _optional_int(v_stats.get("commentCount")) or 0,
-                            "averageViewPercentage": 65.0,
-                        })
+                    uploaded_video_rows = _ordered_upload_rows(playlist_items, details)
             except Exception as exc:
                 logger.warning("Failed to fetch channel uploads: %s", exc)
 
@@ -145,11 +134,6 @@ class YouTubeChannelService:
         except Exception as exc:
             logger.warning("YouTube Analytics query fallback: %s", exc)
 
-        if not current.get("views") or current.get("views") < real_total_views:
-            current["views"] = real_total_views
-        if not current.get("likes") and uploaded_video_rows:
-            current["likes"] = sum(r.get("likes", 0) for r in uploaded_video_rows)
-
         if uploaded_video_rows:
             save_video_snapshots(self.settings.database_path, uploaded_video_rows)
 
@@ -164,7 +148,8 @@ class YouTubeChannelService:
             "period": {"start": start.isoformat(), "end": (today - timedelta(days=1)).isoformat()},
             "current_28_days": current,
             "previous_28_days": previous,
-            "top_videos": {"rows": uploaded_video_rows},
+            "recent_videos": {"sort": "published_at_desc", "rows": uploaded_video_rows},
+            "top_videos": {"sort": "published_at_desc", "rows": uploaded_video_rows},
             "video_learning": learning_summary(self.settings.database_path),
         }
         self._save_sync(payload)
@@ -298,12 +283,6 @@ class YouTubeChannelService:
             return {"rows": [dict(zip(headers, row)) for row in rows]}
         return dict(zip(headers, rows[0])) if rows else {}
 
-    def _enrich_videos(self, youtube, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        ids = [str(row.get("video") or "") for row in rows if row.get("video")]
-        details = youtube.videos().list(part="snippet", id=",".join(ids), maxResults=50).execute().get("items", []) if ids else []
-        metadata = {item.get("id"): item.get("snippet") or {} for item in details}
-        return [{**row, "video_id": row.get("video"), "title": metadata.get(row.get("video"), {}).get("title"), "published_at": metadata.get(row.get("video"), {}).get("publishedAt")} for row in rows]
-
     def _flow(self, state: str) -> Flow:
         return Flow.from_client_config({"web": {"client_id": self.settings.youtube_oauth_client_id, "client_secret": self.settings.youtube_oauth_client_secret, "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token", "redirect_uris": [self.settings.youtube_oauth_redirect_uri]}}, scopes=_SCOPES, redirect_uri=self.settings.youtube_oauth_redirect_uri, state=state)
 
@@ -356,6 +335,46 @@ class YouTubeChannelService:
     def _require_configured(self) -> None:
         if not self._is_configured():
             raise ValueError("YouTube OAuth is not configured. Check the local .env setup instructions.")
+
+
+def _ordered_upload_rows(
+    playlist_items: list[dict[str, Any]],
+    video_details: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Join unordered videos.list results to uploads and return newest first."""
+    details_by_id = {str(item.get("id") or ""): item for item in video_details if item.get("id")}
+    rows: list[dict[str, Any]] = []
+    for playlist_item in playlist_items:
+        playlist_snippet = playlist_item.get("snippet") or {}
+        content_details = playlist_item.get("contentDetails") or {}
+        video_id = str(
+            content_details.get("videoId")
+            or (playlist_snippet.get("resourceId") or {}).get("videoId")
+            or ""
+        )
+        detail = details_by_id.get(video_id) or {}
+        snippet = detail.get("snippet") or playlist_snippet
+        statistics = detail.get("statistics") or {}
+        published_at = str(
+            snippet.get("publishedAt")
+            or content_details.get("videoPublishedAt")
+            or playlist_snippet.get("publishedAt")
+            or ""
+        )
+        if not video_id:
+            continue
+        rows.append({
+            "video": video_id,
+            "video_id": video_id,
+            "title": str(snippet.get("title") or playlist_snippet.get("title") or "YouTube Upload"),
+            "published_at": published_at,
+            "views": _optional_int(statistics.get("viewCount")) or 0,
+            "likes": _optional_int(statistics.get("likeCount")) or 0,
+            "comments": _optional_int(statistics.get("commentCount")) or 0,
+            "averageViewPercentage": None,
+        })
+    rows.sort(key=lambda row: (str(row.get("published_at") or ""), str(row.get("video_id") or "")), reverse=True)
+    return rows
 
 
 def _parse_timestamp(value: str) -> datetime | None:

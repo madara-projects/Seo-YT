@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from difflib import SequenceMatcher
 from typing import Any, Optional, Union
 
 from win_engine.llm import gemini_client
@@ -25,70 +26,6 @@ _SYSTEM_PROMPT = (
     "\"description\", \"tags\" (array of 10 strings), and \"hashtags\" (array of 3 strings)."
 )
 
-
-def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Shape-check + light coercion. Coerces flexible model outputs cleanly."""
-    if not isinstance(pkg, dict):
-        return None
-    
-    title = str(pkg.get("title") or pkg.get("primary_title") or "").strip()
-    
-    raw_variants = pkg.get("variants") or pkg.get("title_variants") or pkg.get("titles") or []
-    variants: list[str] = []
-    if isinstance(raw_variants, dict):
-        variants = [str(v).strip() for v in raw_variants.values() if str(v).strip()]
-    elif isinstance(raw_variants, list):
-        for item in raw_variants:
-            if isinstance(item, dict):
-                v_str = str(item.get("title") or item.get("text") or "").strip()
-                if v_str:
-                    variants.append(v_str)
-            elif str(item).strip():
-                variants.append(str(item).strip())
-    elif isinstance(raw_variants, str) and raw_variants.strip():
-        variants = [raw_variants.strip()]
-
-    if not title and variants:
-        title = variants[0]
-    elif title and not variants:
-        variants = [title]
-
-    description = str(pkg.get("description") or pkg.get("summary") or "").strip()
-
-    raw_tags = pkg.get("tags") or pkg.get("keywords") or []
-    tags: list[str] = []
-    if isinstance(raw_tags, list):
-        tags = [str(t).strip().lower().lstrip("#") for t in raw_tags if str(t).strip()]
-    elif isinstance(raw_tags, str):
-        tags = [str(t).strip().lower().lstrip("#") for t in raw_tags.split(",") if str(t).strip()]
-
-    raw_hashtags = pkg.get("hashtags") or []
-    hashtags: list[str] = []
-    if isinstance(raw_hashtags, list):
-        hashtags = [str(h).strip() for h in raw_hashtags if str(h).strip()]
-    elif isinstance(raw_hashtags, str):
-        hashtags = [str(h).strip() for h in raw_hashtags.split() if str(h).strip()]
-
-    if not title or not variants:
-        return None
-
-    if not description:
-        description = f"A powerful reflection on {title}. Watch until the end for the full realization."
-
-    if not tags:
-        tags = [t.lower() for t in title.split() if len(t) > 3][:10]
-
-    hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags]
-    if not hashtags:
-        hashtags = ["#shorts", "#quotes", "#viral"]
-
-    return {
-        "title": title,
-        "variants": variants[:5],
-        "description": description,
-        "tags": tags[:12],
-        "hashtags": hashtags[:5],
-    }
 
 _LANGUAGE_INSTRUCTIONS = {
     "english": (
@@ -154,23 +91,6 @@ _NICHE_GUIDANCE = {
         "human creator voice; avoid generic filler."
     ),
 }
-
-# Compact few-shot examples — a 7B model follows examples far better than prose.
-_FEWSHOT = {
-    "tamil": (
-        'Example tone (Tamil): title "ஆபீஸ் வாழ்க்கை உண்மை — யாரும் சொல்லாத விஷயங்கள்", '
-        'variant "9-5 ஜாப் ல நான் கத்துக்கிட்ட 5 விஷயங்கள்".'
-    ),
-    "tanglish": (
-        'Example tone (Tanglish): title "Office Life Reality — Yaarum Sollatha Truth", '
-        'variant "Semma Boring 9-5 Job ah Interesting Aakkura 5 Tips".'
-    ),
-    "english": (
-        'Example tone (English): title "Office Life Honestly — What Nobody Tells You", '
-        'variant "5 Things I Learned in My First Year at a 9-5".'
-    ),
-}
-
 
 def _language_instruction(language: str) -> str:
     key = (language or "english").lower()
@@ -276,6 +196,16 @@ def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) ->
     rec = channel_learning.get("recommendation")
     if rec and str(rec).strip():
         lines.append(f"- Channel Insight: {str(rec).strip()}")
+    recent_titles = channel_learning.get("recent_titles") or []
+    if recent_titles:
+        lines.append("- Avoid repeating these recent generated titles or their sentence patterns:")
+        lines.extend(f"  - {str(title).strip()}" for title in recent_titles[:10] if str(title).strip())
+    cohort = channel_learning.get("cohort") or {}
+    if isinstance(cohort, dict) and cohort.get("sample_size"):
+        lines.append(
+            f"- Personal evidence: {cohort.get('confidence_label', 'Collecting evidence')}; "
+            f"sample size {cohort.get('sample_size')}."
+        )
     if not lines:
         return ""
     return "\nChannel learning signals (past performance on this channel):\n" + "\n".join(lines) + "\n"
@@ -291,9 +221,6 @@ def _build_user_prompt(
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
 ) -> str:
-    fewshot_key = (language or "english").lower()
-    fewshot_key = _LANGUAGE_ALIASES.get(fewshot_key, fewshot_key)
-    fewshot = _FEWSHOT.get(fewshot_key, _FEWSHOT["english"])
     return f"""Video script or idea:
 \"\"\"
 {script.strip()}
@@ -305,14 +232,17 @@ def _build_user_prompt(
 Target language: {language}
 Target region: {region}
 Audience type: {audience_type}
-{fewshot}
 
 Constraints:
 - {_language_instruction(language)}
 - the title, description, and tags must accurately match the creator brief and real video
-- description MUST be detailed and comprehensive (150-300 words), structured with an engaging opening hook, clear bullet points of takeaways or timestamps, subscriber call to action, and top hashtags
+- write a video-specific description, normally 100-220 words. Put the exact topic and truthful viewer payoff in the first two lines
+- choose a description structure that fits this video. Do not reuse a universal hook, bullet list, chapter template, CTA, or "watch until the end" wording
+- include chapters only when real timestamps or a sufficiently detailed script supports them
+- tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Do not add generic viral/trending filler
 - title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
 - return exactly five distinct variants. Variant 1 is SEARCH (main topic + clear outcome), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE (a personal proof, story, or channel-relevant angle). Variants 4-5 are additional truthful alternatives.
+- each variant must use a materially different sentence structure and psychological angle. Do not repeat recent-title patterns supplied above
 - thumbnail text must add a short new idea; it must not merely repeat the title. Never use false guarantees, unrelated trends, or misleading claims.
 """
 
@@ -342,10 +272,10 @@ def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Shape-check + light coercion. Returns None on missing required fields."""
     try:
         title = str(pkg["title"]).strip()
-        variants = [str(v).strip() for v in pkg["variants"] if str(v).strip()]
+        variants = _unique_text([str(v).strip() for v in pkg["variants"] if str(v).strip()])
         description = str(pkg["description"]).strip()
-        tags = [str(t).strip().lower().lstrip("#") for t in pkg["tags"] if str(t).strip()]
-        hashtags = [str(h).strip() for h in pkg["hashtags"] if str(h).strip()]
+        tags = _unique_text([str(t).strip().lower().lstrip("#") for t in pkg["tags"] if str(t).strip()])
+        hashtags = _unique_text([str(h).strip() for h in pkg["hashtags"] if str(h).strip()])
     except (KeyError, TypeError, AttributeError):
         return None
     if not title or not description or not variants or not tags:
@@ -358,6 +288,34 @@ def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
         "tags": tags[:10],
         "hashtags": hashtags[:3],
     }
+
+
+def _unique_text(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = re.sub(r"\s+", " ", value).strip().casefold()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(value.strip())
+    return out
+
+
+def _title_similarity(left: str, right: str) -> float:
+    a = re.sub(r"[\W_]+", " ", left.casefold(), flags=re.UNICODE)
+    b = re.sub(r"[\W_]+", " ", right.casefold(), flags=re.UNICODE)
+    return SequenceMatcher(None, " ".join(a.split()), " ".join(b.split())).ratio()
+
+
+def _prefer_fresh_titles(pkg: dict[str, Any], channel_learning: Optional[dict[str, Any]]) -> dict[str, Any]:
+    recent = [str(item).strip() for item in (channel_learning or {}).get("recent_titles", []) if str(item).strip()]
+    candidates = _unique_text([str(pkg.get("title") or ""), *(pkg.get("variants") or [])])
+    fresh = [title for title in candidates if not any(_title_similarity(title, old) >= 0.86 for old in recent)]
+    ordered = fresh + [title for title in candidates if title not in fresh]
+    if ordered:
+        pkg["title"] = ordered[0]
+        pkg["variants"] = _unique_text(ordered)[:5]
+    return pkg
 
 
 def _generate_one(
@@ -395,7 +353,8 @@ def _generate_one(
     parsed = _extract_json(raw)
     if parsed is None:
         return None
-    return _validate(parsed)
+    validated = _validate(parsed)
+    return _prefer_fresh_titles(validated, channel_learning) if validated else None
 
 
 def write_seo_package(
@@ -408,8 +367,8 @@ def write_seo_package(
     category: Optional[str] = None,
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
-    temperature: float = 0.5,
-    max_tokens: int = 2048,
+    temperature: float = 0.75,
+    max_tokens: int = 1200,
 ) -> Optional[dict[str, Any]]:
     """Generate a full SEO package with Gemini, or return ``None`` when unavailable."""
     if not script or not script.strip():
@@ -440,8 +399,8 @@ def write_multilang_packages(
     category: Optional[str] = None,
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
-    temperature: float = 0.5,
-    max_tokens: int = 2048,
+    temperature: float = 0.75,
+    max_tokens: int = 1200,
 ) -> dict[str, Optional[dict[str, Any]]]:
     packages, _ = write_multilang_packages_with_source(
         script,
@@ -468,8 +427,8 @@ def write_multilang_packages_with_source(
     category: Optional[str] = None,
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
-    temperature: float = 0.5,
-    max_tokens: int = 2048,
+    temperature: float = 0.75,
+    max_tokens: int = 1200,
 ) -> tuple[dict[str, Optional[dict[str, Any]]], str]:
     """Generate SEO packages for several languages in one pass.
 
@@ -481,31 +440,18 @@ def write_multilang_packages_with_source(
 
     out: dict[str, Optional[dict[str, Any]]] = {}
     gemini_ready = gemini_client.is_available()
-    
-    primary_pkg = None
-    if gemini_ready:
-        primary_pkg = _generate_one(
-            script, competitors, language="english", region=region, audience_type=audience_type,
-            category=category, creator_brief=creator_brief, channel_learning=channel_learning,
-            temperature=temperature, max_tokens=max_tokens,
-        )
-    
-    if primary_pkg:
-        out["english"] = primary_pkg
-        for lang in langs:
-            if lang == "english":
-                continue
-            # Try secondary language generation with short pause; if rate limited, adapt primary pkg
-            import time
-            time.sleep(0.5)
-            sec_pkg = _generate_one(
-                script, competitors, language=lang, region=region, audience_type=audience_type,
-                category=category, creator_brief=creator_brief, channel_learning=channel_learning,
-                temperature=temperature, max_tokens=max_tokens,
-            )
-            out[lang] = sec_pkg or primary_pkg
-    else:
-        for lang in langs:
-            out[lang] = None
+    for lang in langs:
+        out[lang] = _generate_one(
+            script,
+            competitors,
+            language=lang,
+            region=region,
+            audience_type=audience_type,
+            category=category,
+            creator_brief=creator_brief,
+            channel_learning=channel_learning,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ) if gemini_ready else None
 
     return out, "gemini" if any(out.values()) else "fallback"

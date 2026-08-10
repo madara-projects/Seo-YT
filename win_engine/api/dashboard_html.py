@@ -159,7 +159,7 @@ DASHBOARD_HTML = """<!doctype html>
       font-family: var(--sans);
       background: var(--bg);
       background-image: var(--bg-gradient);
-      background-attachment: fixed;
+      background-attachment: scroll;
       color: var(--text);
       -webkit-font-smoothing: antialiased;
       display: flex; overflow: hidden;
@@ -181,8 +181,7 @@ DASHBOARD_HTML = """<!doctype html>
     /* Left Sidebar SaaS Navigation */
     aside.sidebar {
       width: var(--sidebar-width); height: 100vh; flex-shrink: 0;
-      background: var(--panel);
-      backdrop-filter: blur(24px);
+      background: var(--panel-solid);
       border-right: 1px solid var(--border);
       display: flex; flex-direction: column; justify-content: space-between;
       padding: 20px 16px; z-index: 100;
@@ -231,7 +230,7 @@ DASHBOARD_HTML = """<!doctype html>
 
     .top-bar {
       position: sticky; top: 0; z-index: 90;
-      background: var(--panel); backdrop-filter: blur(24px);
+      background: var(--panel-solid);
       border-bottom: 1px solid var(--border); padding: 16px 32px;
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
     }
@@ -243,13 +242,13 @@ DASHBOARD_HTML = """<!doctype html>
     /* Page Views Layout */
     .content-viewport { padding: 32px; max-width: 1440px; width: 100%; margin: 0 auto; }
     .page-view { display: none; }
-    .page-view.active { display: block; animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
+    .page-view.active { display: block; animation: fadeIn 0.18s ease-out both; }
 
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 
     /* Glassmorphism Components */
     .glass-card {
-      background: var(--panel); backdrop-filter: blur(20px);
+      background: var(--panel-solid);
       border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     }
@@ -281,12 +280,12 @@ DASHBOARD_HTML = """<!doctype html>
     .bento-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; }
     .bento-card {
       grid-column: span 12; padding: 22px;
-      background: var(--panel); backdrop-filter: blur(20px); border: 1px solid var(--border);
+      background: var(--panel-solid); border: 1px solid var(--border);
       border-radius: var(--radius-lg); position: relative; overflow: hidden;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-      transition: border-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+      transition: border-color 0.15s ease;
     }
-    .bento-card:hover { border-color: var(--border-bright); transform: translateY(-2px); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.3); }
+    .bento-card:hover { border-color: var(--border-bright); }
     .span-6 { grid-column: span 6; }
     .span-4 { grid-column: span 4; }
     .span-3 { grid-column: span 3; }
@@ -459,7 +458,7 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
 
     <div class="sidebar-footer">
-      <div class="status-badge"><span class="dot"></span> Gemini 3.5 Flash Active</div>
+      <div class="status-badge"><span class="dot"></span> Google Gemini Configured</div>
     </div>
   </aside>
 
@@ -519,7 +518,7 @@ DASHBOARD_HTML = """<!doctype html>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--accent)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                 Instant Video SEO Package Generator
               </span>
-              <span style="font-size:11.5px;color:var(--text-muted);font-family:var(--mono)">Powered by Gemini 3.5 Flash</span>
+              <span style="font-size:11.5px;color:var(--text-muted);font-family:var(--mono)">Powered by Google Gemini</span>
             </div>
 
             <!-- Starter Template Chips -->
@@ -561,15 +560,6 @@ DASHBOARD_HTML = """<!doctype html>
           <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
             <div class="card-title"><span>28d Views Milestone</span></div>
             <div class="metric-value" id="dashMetricViews" style="color:var(--text);font-size:32px">--</div>
-<<<<<<< Updated upstream
-            <div class="metric-sub">Connect &amp; refresh your channel for actual stats.</div>
-          </div>
-
-          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
-            <div class="card-title"><span>Total Packages Generated</span></div>
-            <div class="metric-value" id="dashTotalRuns" style="font-size:32px">0</div>
-            <div class="metric-sub">Stored permanently in SQLite DB.</div>
-=======
             <div class="metric-sub" id="dashMetricViewsSub" style="margin-top:8px">Connect and refresh your channel to load actual data.</div>
           </div>
 
@@ -577,17 +567,12 @@ DASHBOARD_HTML = """<!doctype html>
             <div class="card-title"><span>Estimated Watch Time</span></div>
             <div class="metric-value" id="dashMetricWatch" style="font-size:32px">--</div>
             <div class="metric-sub" id="dashMetricWatchSub" style="margin-top:8px">Not available until YouTube Analytics sync succeeds.</div>
->>>>>>> Stashed changes
           </div>
 
           <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
             <div class="card-title"><span>Avg Opportunity Score</span></div>
             <div class="metric-value" style="color:var(--accent);font-size:32px" id="dashMetricOpp">--</div>
-<<<<<<< Updated upstream
-            <div class="metric-sub">Calculated from saved market analyses.</div>
-=======
             <div class="metric-sub" id="dashMetricOppSub" style="margin-top:8px">Calculated from your saved analyses.</div>
->>>>>>> Stashed changes
           </div>
 
           <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
@@ -595,7 +580,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div class="metric-value" style="font-size:20px;display:flex;align-items:center;gap:6px;margin-top:4px">
               Gemini <span style="font-size:12px;padding:3px 8px" class="chip chip-ok">⚡ Active</span>
             </div>
-            <div class="metric-sub">Gemini 3.5 Flash Engine</div>
+            <div class="metric-sub">Google Gemini Engine</div>
           </div>
 
           <!-- RECENT VIDEO PACKAGE HISTORY TABLE (SPAN 7) -->
@@ -633,11 +618,7 @@ DASHBOARD_HTML = """<!doctype html>
               </div>
 
               <div style="display:flex;align-items:center;gap:14px;margin-top:10px">
-<<<<<<< Updated upstream
-                <div style="width:48px;height:48px;border-radius:14px;background:var(--accent-grad);display:grid;place-items:center;font-weight:800;font-size:20px;color:#fff;box-shadow:0 4px 18px var(--accent-shadow)">
-=======
                 <div id="dashChannelAvatar" style="width:46px;height:46px;border-radius:14px;background:var(--accent-grad);display:grid;place-items:center;font-weight:800;font-size:20px;color:#fff;box-shadow:0 4px 16px var(--accent-shadow)">
->>>>>>> Stashed changes
                   M
                 </div>
                 <div>
@@ -713,7 +694,7 @@ DASHBOARD_HTML = """<!doctype html>
           <div class="bento-card span-12">
             <div class="card-title">
               <span>Script, Topic or Idea Input</span>
-              <span class="chip chip-accent">Gemini 3.5 Flash First</span>
+              <span class="chip chip-accent">Google Gemini First</span>
             </div>
 
             <!-- Starter Template Chips -->
@@ -802,20 +783,48 @@ DASHBOARD_HTML = """<!doctype html>
       <!-- PAGE 3: CHANNEL ANALYTICS & HISTORY -->
       <section class="page-view" id="view-analytics">
         <div class="bento-grid">
-          <div class="bento-card span-8">
-            <div class="card-title"><span>Connected Channel Performance</span><span class="chip chip-ok">Live Sync</span></div>
+          <div class="bento-card span-12">
+            <div class="card-title">
+              <span>Connected Channel Performance</span>
+              <button class="btn" id="anaRefreshBtn" style="padding:6px 12px;font-size:12px">Refresh from YouTube</button>
+            </div>
             <div class="metric-value" id="anaChannelName">No channel connected</div>
-            <div class="metric-sub" id="anaChannelStats" style="margin-top:8px">Connect YouTube to read your actual 28-day analytics.</div>
+            <div class="metric-sub" id="anaChannelStats" style="margin-top:8px">Connect YouTube to read current channel and 28-day analytics.</div>
+            <div class="metric-sub" id="anaSyncStatus" style="margin-top:6px">No YouTube sync has completed.</div>
             <div class="metric-sub" id="anaRecommendation" style="margin-top:8px;color:var(--accent)">Learning begins after linked videos receive real snapshots.</div>
           </div>
 
-          <div class="bento-card span-4">
+          <div class="bento-card span-3">
+            <div class="card-title">Subscribers</div>
+            <div class="metric-value" id="anaSubscribers">--</div>
+            <div class="metric-sub">Current channel count</div>
+          </div>
+
+          <div class="bento-card span-3">
+            <div class="card-title">Lifetime Views</div>
+            <div class="metric-value" id="anaLifetimeViews">--</div>
+            <div class="metric-sub">Current Data API count</div>
+          </div>
+
+          <div class="bento-card span-3">
+            <div class="card-title">Views — Last 28 Days</div>
+            <div class="metric-value" id="ana28dViews">--</div>
+            <div class="metric-sub">Through YouTube's last fully processed day</div>
+          </div>
+
+          <div class="bento-card span-3">
+            <div class="card-title">Watch Time — Last 28 Days</div>
+            <div class="metric-value" id="anaWatchTime">--</div>
+            <div class="metric-sub">YouTube Analytics estimate</div>
+          </div>
+
+          <div class="bento-card span-6">
             <div class="card-title"><span>Winning Patterns Engine</span></div>
             <div class="metric-value" style="font-size:20px" id="anaWinningAngle">Collecting evidence</div>
             <div class="metric-sub" style="margin-top:6px" id="anaObservation">No personal winner is claimed until enough linked videos are measured.</div>
           </div>
 
-          <div class="bento-card span-12">
+          <div class="bento-card span-6">
             <div class="card-title">Historical Scorecard &amp; Self-Learning Metrics</div>
             <div class="kv-list" style="margin-top:14px">
               <div class="kv-item"><span class="kv-key">Stored Database Runs</span><span class="kv-val" id="anaTotalRuns">0</span></div>
@@ -825,9 +834,9 @@ DASHBOARD_HTML = """<!doctype html>
           </div>
 
           <div class="bento-card span-12">
-            <div class="card-title"><span>Published Package Performance</span><span class="chip chip-accent">Manual 24h / 7d / 28d refresh</span></div>
-            <div class="metric-sub" style="margin:8px 0 12px">Link a generated package to an owned video, then refresh when a scheduled snapshot is due. Only metrics returned by YouTube are stored.</div>
-            <div style="overflow-x:auto"><table class="history-table"><thead><tr><th>Published title / video</th><th>Snapshot</th><th>Views</th><th>Retention</th><th>Action</th></tr></thead><tbody id="publishedVideoBody"><tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">No linked videos yet.</td></tr></tbody></table></div>
+            <div class="card-title"><span>Channel Videos &amp; Linked Packages</span><span class="chip chip-accent">Newest uploads first</span></div>
+            <div class="metric-sub" style="margin:8px 0 12px">Video views, likes, and comments come from the current YouTube Data API response. Retention appears only when YouTube Analytics provides a real value.</div>
+            <div style="overflow-x:auto"><table class="history-table"><thead><tr><th>Published title / video</th><th>Published / snapshot</th><th>Views</th><th>Engagement / retention</th><th>Action</th></tr></thead><tbody id="publishedVideoBody"><tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">Loading current channel videos…</td></tr></tbody></table></div>
           </div>
 
           <!-- FULL GENERATION HISTORY LOG -->
@@ -888,7 +897,7 @@ DASHBOARD_HTML = """<!doctype html>
           <div class="bento-card span-6">
             <div class="card-title">AI &amp; API Provider Status</div>
             <div class="kv-list" style="margin-top:14px">
-              <div class="kv-item"><span class="kv-key">Primary AI Engine</span><span class="kv-val"><span class="chip chip-accent">Gemini 3.5 Flash</span></span></div>
+              <div class="kv-item"><span class="kv-key">Primary AI Engine</span><span class="kv-val"><span class="chip chip-accent">Google Gemini</span></span></div>
               <div class="kv-item"><span class="kv-key">Offline Fallback</span><span class="kv-val"><span class="chip">Local template</span></span></div>
               <div class="kv-item"><span class="kv-key">YouTube Data API v3 Pool</span><span class="kv-val"><span class="chip chip-ok">Active</span></span></div>
               <div class="kv-item"><span class="kv-key">SQLite Local DB</span><span class="kv-val"><span class="chip chip-ok">win_engine.db</span></span></div>
@@ -909,6 +918,28 @@ DASHBOARD_HTML = """<!doctype html>
 
   <script>
     const $ = (id) => document.getElementById(id);
+    let historySummaryCache = null;
+    let historySummaryFetchedAt = 0;
+    let historySummaryRequest = null;
+
+    async function getHistorySummary(force = false) {
+      const cacheFresh = historySummaryCache && (Date.now() - historySummaryFetchedAt < 15000);
+      if (!force && cacheFresh) return historySummaryCache;
+      if (historySummaryRequest) return historySummaryRequest;
+      historySummaryRequest = fetch("/api/history", { cache: "no-store" }).then(async (response) => {
+        if (!response.ok) throw new Error("History request failed");
+        historySummaryCache = await response.json();
+        historySummaryFetchedAt = Date.now();
+        return historySummaryCache;
+      }).finally(() => { historySummaryRequest = null; });
+      return historySummaryRequest;
+    }
+
+    function invalidateDashboardCache() {
+      historySummaryCache = null;
+      historySummaryFetchedAt = 0;
+      historySummaryRequest = null;
+    }
 
     // Toast notification display helper
     function showToast(msg) {
@@ -964,7 +995,7 @@ DASHBOARD_HTML = """<!doctype html>
       settings: { title: "Settings &amp; Integrations", sub: "Configure YouTube OAuth, AI provider endpoints, and live diagnostics.", navId: "nav-settings", viewId: "view-settings" },
     };
 
-    function switchPage(key) {
+    function switchPage(key, updateHistory = true) {
       const pageKey = pages[key] ? key : "dashboard";
       const current = pages[pageKey];
 
@@ -981,9 +1012,9 @@ DASHBOARD_HTML = """<!doctype html>
       if (viewEl) viewEl.classList.add("active");
 
       try {
-        if (history.pushState) {
+        if (updateHistory && window.location.hash !== "#" + pageKey && history.pushState) {
           history.pushState(null, null, "#" + pageKey);
-        } else {
+        } else if (updateHistory && window.location.hash !== "#" + pageKey) {
           window.location.hash = pageKey;
         }
       } catch (_) {}
@@ -992,12 +1023,15 @@ DASHBOARD_HTML = """<!doctype html>
       if (appContainer) appContainer.scrollTop = 0;
 
       if (pageKey === "dashboard") loadHistoryFeed();
-      if (pageKey === "analytics") { loadHistoryFeed(); loadPublishedVideos(); loadCohortLearning(); }
+      if (pageKey === "analytics") loadAnalyticsPage();
       if (pageKey === "history") loadSavedHistory();
     }
 
+    let oauthRedirectHandled = false;
     async function checkOAuthRedirect() {
+      if (oauthRedirectHandled) return;
       if (window.location.search.includes("youtube=connected")) {
+        oauthRedirectHandled = true;
         console.log("YouTube OAuth connected! Auto-syncing channel analytics...");
         try {
           await fetch("/youtube/channel/refresh", { method: "POST" });
@@ -1006,21 +1040,25 @@ DASHBOARD_HTML = """<!doctype html>
           const cleanUrl = window.location.pathname + window.location.hash;
           window.history.replaceState({}, document.title, cleanUrl);
         }
-        loadHistoryFeed();
-        loadPublishedVideos();
-        loadCohortLearning();
+        invalidateDashboardCache();
+        loadAnalyticsPage(true);
       }
     }
 
+    let lastRoutedHash = "";
+    let lastRoutedAt = 0;
     function route() {
       const hash = (window.location.hash || "#dashboard").replace("#", "");
-      switchPage(hash);
+      const now = Date.now();
+      if (hash === lastRoutedHash && now - lastRoutedAt < 100) return;
+      lastRoutedHash = hash;
+      lastRoutedAt = now;
+      switchPage(hash, false);
       checkOAuthRedirect();
     }
 
     window.addEventListener("hashchange", route);
     window.addEventListener("popstate", route);
-    window.addEventListener("load", route);
 
     // Quick Launch Handler from Dashboard
     const dashQuickScript = $("dashQuickScript");
@@ -1040,17 +1078,16 @@ DASHBOARD_HTML = """<!doctype html>
     }
 
     // Load Real Recent Runs from SQLite via API
-    async function loadHistoryFeed() {
+    async function loadHistoryFeed(force = false) {
       try {
-        const r = await fetch("/api/history");
-        if (!r.ok) return;
-        const data = await r.json();
+        const data = await getHistorySummary(force);
         const runs = (data.learning || {}).recent_runs || [];
         const scorecard = data.scorecard || {};
         const owned = data.owned_performance || {};
 
         const ch = owned.channel || {};
         const sync = owned.latest_sync || {};
+        const syncPeriod = sync.period || {};
         const chTitle = ch.title || (sync.channel || {}).title || "";
         const isConnected = !!(ch.id || chTitle);
 
@@ -1075,6 +1112,15 @@ DASHBOARD_HTML = """<!doctype html>
         if ($("dashMetricWatchSub")) {
           $("dashMetricWatchSub").textContent = isConnected ? "Total estimated watch time from 28-day sync." : "Not available until YouTube Analytics sync succeeds.";
         }
+        if ($("anaSubscribers")) $("anaSubscribers").textContent = owned.subscribers === null || owned.subscribers === undefined ? "--" : num(owned.subscribers);
+        if ($("anaLifetimeViews")) $("anaLifetimeViews").textContent = owned.lifetime_views === null || owned.lifetime_views === undefined ? "--" : num(owned.lifetime_views);
+        if ($("ana28dViews")) $("ana28dViews").textContent = isConnected ? num(owned.views_28_days || 0) : "--";
+        if ($("anaWatchTime")) $("anaWatchTime").textContent = watchStr;
+        if ($("anaSyncStatus")) {
+          const synced = sync.synced_at ? historyDate(sync.synced_at) : "Never";
+          const period = syncPeriod.start && syncPeriod.end ? ` · Analytics period ${syncPeriod.start} to ${syncPeriod.end}` : "";
+          $("anaSyncStatus").textContent = `Last synced: ${synced}${period}`;
+        }
 
         // 3. Avg Opportunity Score Card
         if (scorecard.total_runs !== undefined) {
@@ -1090,13 +1136,13 @@ DASHBOARD_HTML = """<!doctype html>
 
         // 4. Connected Channel Card
         if (isConnected) {
-          const vStr = num(totalViews);
-          const lStr = num(owned.total_likes || 0);
+          const lifetimeViews = owned.lifetime_views === null || owned.lifetime_views === undefined ? "--" : num(owned.lifetime_views);
+          const subscribers = owned.subscribers === null || owned.subscribers === undefined ? "--" : num(owned.subscribers);
           const linkedCount = owned.linked_videos_count || 0;
           if ($("dashChannelName")) $("dashChannelName").textContent = chTitle;
           if ($("anaChannelName")) $("anaChannelName").textContent = chTitle;
           if ($("dashChannelAvatar")) $("dashChannelAvatar").textContent = chTitle.charAt(0).toUpperCase();
-          const statsText = `28d channel stats: ${vStr} views · ${lStr} likes · ${linkedCount} linked ${linkedCount === 1 ? 'video' : 'videos'}`;
+          const statsText = `${subscribers} subscribers · ${lifetimeViews} lifetime views · ${num(totalViews)} views in the last 28 processed days · ${linkedCount} linked ${linkedCount === 1 ? 'video' : 'videos'}`;
           if ($("dashChannelStats")) $("dashChannelStats").textContent = statsText;
           if ($("anaChannelStats")) $("anaChannelStats").textContent = statsText;
         } else {
@@ -1125,14 +1171,9 @@ DASHBOARD_HTML = """<!doctype html>
               <td><span style="font-weight:700;color:var(--accent)">${num(run.opportunity_score || 78)}</span> / 100</td>
               <td style="font-size:12px;color:var(--text-muted)">${dtStr}</td>
               <td style="display:flex;gap:6px">
-<<<<<<< Updated upstream
-                <a href="#creator" class="btn" style="padding:4px 10px;font-size:11px" onclick="switchPage('creator'); return false;">Inspect</a>
-                <button class="btn" style="padding:4px 10px;font-size:11px;background:rgba(229,9,20,0.20);border-color:rgba(229,9,20,0.4)" onclick="linkVideoPrompt(${Number(run.id)})">🔗 Link</button>
-=======
                 <a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Inspect</a>
                 <button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)" onclick="linkVideoPrompt(${Number(run.id)})">🔗 Link</button>
                 <button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#ef4444" onclick="deleteHistoryRun(${Number(run.id)})">🗑️ Delete</button>
->>>>>>> Stashed changes
               </td>
             </tr>`;
         }).join("");
@@ -1171,7 +1212,8 @@ DASHBOARD_HTML = """<!doctype html>
         }
         alert("🗑️ Saved package deleted successfully.");
         if ($("historyDetail")) $("historyDetail").classList.add("hidden");
-        loadHistoryFeed();
+        invalidateDashboardCache();
+        loadHistoryFeed(true);
         loadSavedHistory();
       } catch (err) {
         alert("Error deleting package: " + err.message);
@@ -1193,25 +1235,30 @@ DASHBOARD_HTML = """<!doctype html>
           return;
         }
         showToast("✅ Package linked to YouTube Video ID!");
-        loadHistoryFeed();
+        invalidateDashboardCache();
+        loadHistoryFeed(true);
         loadSavedHistory();
       } catch (err) {
         alert("Error linking video: " + err.message);
       }
     }
 
-    async function loadPublishedVideos() {
+    async function loadPublishedVideos(force = false) {
       const body = $("publishedVideoBody");
       if (!body) return;
       try {
-        const [pubRes, histRes] = await Promise.all([
-          fetch("/api/published-videos"),
-          fetch("/api/history")
+        const [pubRes, histData] = await Promise.all([
+          fetch("/api/published-videos", { cache: "no-store" }),
+          getHistorySummary(force)
         ]);
         const pubData = pubRes.ok ? await pubRes.json() : {};
-        const histData = histRes.ok ? await histRes.json() : {};
-        const links = pubData.links || [];
-        const uploadedVideos = ((histData.owned_performance || {}).videos) || [];
+        const links = (pubData.links || []).slice().sort((left, right) =>
+          String(right.published_at || "").localeCompare(String(left.published_at || "")) || Number(right.id || 0) - Number(left.id || 0)
+        );
+        const uploadedVideos = (((histData.owned_performance || {}).videos) || []).slice().sort((left, right) =>
+          String(right.published_at || "").localeCompare(String(left.published_at || "")) || String(left.video_id || "").localeCompare(String(right.video_id || ""))
+        );
+        const linksByVideo = new Map(links.map((link) => [String(link.youtube_video_id || ""), link]));
 
         if (!links.length && !uploadedVideos.length) {
           body.innerHTML = "<tr><td colspan='5' style='color:var(--text-sub);text-align:center;padding:16px'>No linked or uploaded videos found yet. Connect YouTube in Settings to sync your channel videos.</td></tr>";
@@ -1219,38 +1266,42 @@ DASHBOARD_HTML = """<!doctype html>
         }
 
         let html = "";
-        
-        // 1. Render Linked Packages
-        if (links.length > 0) {
-          html += links.map((link) => {
-            const metric = link.latest_performance || {};
-            const snapshot = metric.snapshot_window || "Live Sync";
-            const title = link.selected_title || link.package_topic || link.youtube_video_id;
-            const views = metric.views === null || metric.views === undefined ? "Live" : num(metric.views);
-            const retention = metric.avg_view_percentage === null || metric.avg_view_percentage === undefined ? "65%" : num(metric.avg_view_percentage) + "%";
-            return "<tr><td style='font-weight:600'><span class='chip chip-accent' style='font-size:10px;margin-right:6px'>Linked Package</span> " + esc(title) + "<div class='metric-sub' style='font-size:11px'>ID: " + esc(link.youtube_video_id) + "</div></td>" +
-              "<td><span class='chip chip-ok'>" + esc(snapshot) + "</span></td><td><strong>" + views + "</strong></td><td>" + retention + "</td>" +
-              "<td><button class='btn' style='padding:4px 10px;font-size:11px' onclick='refreshLinkedVideo(" + Number(link.id) + ", this)'>Refresh Snapshot</button></td></tr>";
-          }).join("");
-        }
-
-        // 2. Render Real Uploaded Videos from YouTube Channel
         if (uploadedVideos.length > 0) {
           html += uploadedVideos.map((v) => {
             const title = v.title || v.video_id || "YouTube Upload";
             const views = num(v.views || 0);
             const likes = num(v.likes || 0);
-            const pubAt = v.published_at ? new Date(v.published_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', year:'numeric' }) : "Uploaded";
+            const comments = num(v.comments || 0);
+            const retention = v.average_view_percentage === null || v.average_view_percentage === undefined ? "Not collected" : num(v.average_view_percentage) + "% retention";
+            const pubAt = v.published_at ? new Date(v.published_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', year:'numeric' }) : "Unknown date";
             const vidId = v.video_id || "";
+            const linked = linksByVideo.get(String(vidId));
+            if (linked) linksByVideo.delete(String(vidId));
             const ytLink = vidId ? `https://www.youtube.com/watch?v=${vidId}` : "#";
-            return "<tr><td style='font-weight:600'><span class='chip chip-ok' style='font-size:10px;margin-right:6px'>Channel Upload</span> " + esc(title) + "<div class='metric-sub' style='font-size:11px'>Published: " + pubAt + " · " + likes + " likes</div></td>" +
-              "<td><span class='chip chip-ok'>Real-Time</span></td><td><strong style='color:var(--accent);font-size:15px'>" + views + "</strong> views</td><td>65% avg</td>" +
-              "<td><a href='" + ytLink + "' target='_blank' class='btn' style='padding:4px 10px;font-size:11px'>Watch on YT ↗</a></td></tr>";
+            const refreshAction = linked ? "<button class='btn' style='padding:4px 8px;font-size:11px' onclick='refreshLinkedVideo(" + Number(linked.id) + ", this)'>Refresh snapshot</button>" : "";
+            return "<tr><td style='font-weight:600'><span class='chip chip-ok' style='font-size:10px;margin-right:6px'>Channel Upload</span> " + esc(title) + "<div class='metric-sub' style='font-size:11px'>ID: " + esc(vidId) + "</div></td>" +
+              "<td>" + pubAt + "</td><td><strong style='color:var(--accent);font-size:15px'>" + views + "</strong></td><td>" + likes + " likes · " + comments + " comments<div class='metric-sub' style='font-size:11px'>" + retention + "</div></td>" +
+              "<td style='display:flex;gap:6px;flex-wrap:wrap'><a href='" + ytLink + "' target='_blank' rel='noopener' class='btn' style='padding:4px 8px;font-size:11px'>Watch ↗</a>" + refreshAction + "</td></tr>";
+          }).join("");
+        }
+
+        const unmatchedLinks = Array.from(linksByVideo.values());
+        if (unmatchedLinks.length) {
+          html += unmatchedLinks.map((link) => {
+            const metric = link.latest_performance || {};
+            const title = link.selected_title || link.package_topic || link.youtube_video_id;
+            const views = metric.views === null || metric.views === undefined ? "Not collected" : num(metric.views);
+            const retention = metric.avg_view_percentage === null || metric.avg_view_percentage === undefined ? "Not collected" : num(metric.avg_view_percentage) + "%";
+            const published = link.published_at ? new Date(link.published_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', year:'numeric' }) : "Unknown date";
+            return "<tr><td style='font-weight:600'><span class='chip chip-accent' style='font-size:10px;margin-right:6px'>Linked Package</span> " + esc(title) + "<div class='metric-sub' style='font-size:11px'>ID: " + esc(link.youtube_video_id) + "</div></td>" +
+              "<td>" + published + " · " + esc(metric.snapshot_window || "No snapshot") + "</td><td><strong>" + views + "</strong></td><td>" + retention + " retention</td>" +
+              "<td><button class='btn' style='padding:4px 8px;font-size:11px' onclick='refreshLinkedVideo(" + Number(link.id) + ", this)'>Refresh snapshot</button></td></tr>";
           }).join("");
         }
 
         body.innerHTML = html;
-      } catch (_) {
+      } catch (error) {
+        console.error("Published video loading failed:", error);
         body.innerHTML = "<tr><td colspan='5' style='color:var(--bad);text-align:center;padding:16px'>Could not load channel video performance.</td></tr>";
       }
     }
@@ -1262,7 +1313,8 @@ DASHBOARD_HTML = """<!doctype html>
         const data = await response.json();
         if (!response.ok) throw new Error(data.error?.message || "Refresh failed.");
         showToast(data.message || ((data.captured || []).length ? "Snapshot saved." : "No snapshot due yet."));
-        loadPublishedVideos();
+        invalidateDashboardCache();
+        loadPublishedVideos(true);
         loadCohortLearning();
       } catch (error) {
         alert(error.message || "Could not refresh this video.");
@@ -1278,6 +1330,54 @@ DASHBOARD_HTML = """<!doctype html>
         if ($("anaObservation")) $("anaObservation").textContent = data.recommendation || "Link and refresh published videos to build evidence.";
         if ($("anaRecommendation")) $("anaRecommendation").textContent = data.sample_size ? ("Cohort: " + data.sample_size + " linked videos. " + (data.recommendation || "")) : "Learning begins after linked videos receive real snapshots.";
       } catch (_) {}
+    }
+
+    let latestChannelStatus = null;
+    let analyticsRefreshRequest = null;
+    let analyticsAutoRefreshAttempted = false;
+
+    async function refreshYouTubeAnalytics(button = null, silent = false) {
+      if (analyticsRefreshRequest) return analyticsRefreshRequest;
+      const buttons = [button, $("anaRefreshBtn"), $("settRefreshBtn")].filter(Boolean);
+      buttons.forEach((item) => { item.disabled = true; });
+      if ($("anaSyncStatus")) $("anaSyncStatus").textContent = "Refreshing current counts from YouTube…";
+      analyticsRefreshRequest = (async () => {
+        const response = await fetch("/youtube/channel/refresh", { method: "POST" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || data.error?.message || "YouTube refresh failed");
+        invalidateDashboardCache();
+        await Promise.all([
+          loadHistoryFeed(true),
+          loadPublishedVideos(true),
+          loadCohortLearning(),
+          loadChannelStatus(true),
+        ]);
+        if (!silent) showToast("YouTube analytics and video counts updated.");
+        return data;
+      })().catch((error) => {
+        if ($("anaSyncStatus")) $("anaSyncStatus").textContent = error.message || "YouTube refresh failed.";
+        if (!silent) alert(error.message || "YouTube refresh failed.");
+        return null;
+      }).finally(() => {
+        buttons.forEach((item) => { item.disabled = false; });
+        analyticsRefreshRequest = null;
+      });
+      return analyticsRefreshRequest;
+    }
+
+    async function loadAnalyticsPage(force = false) {
+      await Promise.all([
+        loadHistoryFeed(force),
+        loadPublishedVideos(force),
+        loadCohortLearning(),
+        loadChannelStatus(force),
+      ]);
+      const syncTime = latestChannelStatus?.latest_sync?.synced_at;
+      const stale = !syncTime || (Date.now() - new Date(syncTime).getTime() > 2 * 60 * 1000);
+      if (!analyticsAutoRefreshAttempted && latestChannelStatus?.connected && stale) {
+        analyticsAutoRefreshAttempted = true;
+        refreshYouTubeAnalytics($("anaRefreshBtn"), true);
+      }
     }
 
     function historyDate(value) {
@@ -1504,6 +1604,28 @@ DASHBOARD_HTML = """<!doctype html>
       const ctr = d.ctr_prediction || {};
       const ml = d.multilang || {};
       const genSrc = d.generation_source || "gemini";
+      const warnings = Array.isArray(d.research_warnings) ? d.research_warnings : [];
+      if (alertBox) {
+        const fallbackMessage = genSrc === "fallback" && !warnings.some((item) => String(item).toLowerCase().includes("gemini"))
+          ? "Gemini could not generate this package. A content-specific local package is shown; review it before publishing or retry when Gemini quota is available."
+          : "";
+        const messages = [fallbackMessage, ...warnings].filter(Boolean);
+        alertBox.innerHTML = messages.length
+          ? `<div class="alert-banner alert-warn"><div>${messages.map(esc).join("<br>")}</div></div>`
+          : "";
+      }
+      const languageLabels = {
+        english: "English",
+        tamil: "Tamil",
+        tanglish: "Tanglish",
+        hindi: "Hindi",
+      };
+      const availableLanguages = ["english", "tamil", "tanglish", "hindi"]
+        .filter((lang) => ml[lang] && ml[lang].title);
+      const primaryLanguage = availableLanguages[0] || "english";
+      const languageTabsHtml = availableLanguages.map((lang, index) =>
+        `<button class="tab-btn ${index === 0 ? "active" : ""}" data-lang="${lang}">${languageLabels[lang]}</button>`
+      ).join("");
 
       let html = `
         <!-- Hero Metrics -->
@@ -1524,7 +1646,7 @@ DASHBOARD_HTML = """<!doctype html>
 
           <div class="bento-card span-4" style="border-top:3px solid var(--accent)">
             <div class="card-title"><span>AI Strategy Engine</span>${chip(genSrc.toUpperCase(), "accent")}</div>
-            <div class="metric-value" style="font-size:22px">${genSrc === "gemini" ? "Gemini 3.5 Flash" : "Local fallback"}</div>
+            <div class="metric-value" style="font-size:22px">${genSrc === "gemini" ? "Google Gemini" : "Local fallback"}</div>
             <div class="metric-sub">Generated via ${genSrc === "gemini" ? "Google Gemini API" : "the built-in local fallback"}</div>
           </div>
         </div>
@@ -1534,12 +1656,11 @@ DASHBOARD_HTML = """<!doctype html>
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
             <div class="card-title" style="margin:0;font-size:13px;color:var(--text)">🚀 Upload-Ready Packages</div>
             <div class="tabs-bar" id="langTabs">
-              <button class="tab-btn active" data-lang="english">English</button>
-              <button class="tab-btn" data-lang="tamil">Tamil (தமிழ்)</button>
-              <button class="tab-btn" data-lang="tanglish">Tanglish</button>
+              ${languageTabsHtml}
             </div>
           </div>
-          <div id="langPanel">${pkgHtml(ml["english"], "english")}</div>
+          <div class="metric-sub" style="margin-top:8px">Only the selected output language is generated per run to preserve Gemini quota.</div>
+          <div id="langPanel">${pkgHtml(ml[primaryLanguage], primaryLanguage)}</div>
         </div>
 
         <!-- Strategy & Timing -->
@@ -1664,10 +1785,11 @@ DASHBOARD_HTML = """<!doctype html>
       }
     });
 
-    async function loadChannelStatus() {
+    async function loadChannelStatus(force = false) {
       try {
-        const r = await fetch("/youtube/channel/status");
+        const r = await fetch("/youtube/channel/status", { cache: force ? "reload" : "no-store" });
         const data = await r.json();
+        latestChannelStatus = data;
         const settStatus = $("settChannelStatus");
         const connectBtn = $("settConnectBtn");
         const refreshBtn = $("settRefreshBtn");
@@ -1681,7 +1803,7 @@ DASHBOARD_HTML = """<!doctype html>
           connectBtn.textContent = "Set up OAuth";
           refreshBtn.style.display = "none";
           disconnectBtn.style.display = "none";
-          return;
+          return data;
         }
         if (!data.connected) {
           settStatus.textContent = "Ready to connect with read-only permissions.";
@@ -1690,41 +1812,34 @@ DASHBOARD_HTML = """<!doctype html>
           connectBtn.textContent = "Connect Channel";
           refreshBtn.style.display = "none";
           disconnectBtn.style.display = "none";
-          return;
+          return data;
         }
         const channel = data.channel || {};
         const sync = (data.latest_sync || {}).data || {};
         const current = sync.current_28_days || {};
+        const liveChannel = sync.channel || {};
         const learning = sync.video_learning || {};
 
         const channelTitle = channel.title || "YouTube Channel";
-        const statsStr = `Last 28 days: ${num(current.views)} views · ${num(current.estimatedMinutesWatched)} minutes watched`;
+        const statsStr = `${num(liveChannel.subscribers)} subscribers · ${num(liveChannel.real_total_views)} lifetime views · ${num(current.views)} views in the last 28 processed days`;
         const recStr = learning.recommendation || "Refresh analytics to update learning.";
 
         $("dashChannelName").textContent = channelTitle;
         $("dashChannelStats").textContent = statsStr;
         $("anaChannelName").textContent = channelTitle;
         $("anaChannelStats").textContent = statsStr;
+        if ($("anaSubscribers")) $("anaSubscribers").textContent = num(liveChannel.subscribers);
+        if ($("anaLifetimeViews")) $("anaLifetimeViews").textContent = num(liveChannel.real_total_views);
+        if ($("ana28dViews")) $("ana28dViews").textContent = num(current.views);
+        if ($("anaWatchTime")) $("anaWatchTime").textContent = num(current.estimatedMinutesWatched) + " mins";
+        if ($("anaSyncStatus")) $("anaSyncStatus").textContent = data.latest_sync?.synced_at ? "Last synced: " + historyDate(data.latest_sync.synced_at) : "No completed YouTube sync.";
         $("anaRecommendation").textContent = recStr;
         settStatus.textContent = `Connected to ${channelTitle}. (${statsStr})`;
 
         connectBtn.style.display = "none";
         refreshBtn.style.display = "inline-flex";
         disconnectBtn.style.display = "inline-flex";
-        refreshBtn.onclick = async () => {
-          settStatus.textContent = "Refreshing YouTube analytics…";
-          const response = await fetch("/youtube/channel/refresh", {method:"POST"});
-          if (!response.ok) {
-            const error = await response.json().catch(() => ({}));
-            settStatus.textContent = error.error?.message || "Analytics refresh failed. Please try again.";
-            if (response.status === 401) {
-              connectBtn.style.display = "inline-flex";
-              connectBtn.textContent = "Reconnect Channel";
-            }
-            return;
-          }
-          await loadChannelStatus();
-        };
+        refreshBtn.onclick = () => refreshYouTubeAnalytics(refreshBtn);
         disconnectBtn.onclick = async () => {
           if (!confirm("Disconnect YouTube channel?")) return;
           const response = await fetch("/youtube/channel/disconnect", {method:"POST"});
@@ -1735,15 +1850,17 @@ DASHBOARD_HTML = """<!doctype html>
           }
           await loadChannelStatus();
         };
+        return data;
       } catch (error) {
         const settStatus = $("settChannelStatus");
         if (settStatus) settStatus.textContent = "Could not load channel settings. Refresh the page and try again.";
         console.error("Channel settings failed to load:", error);
+        return null;
       }
     }
-    loadChannelStatus();
-    loadHistoryFeed();
+    if ($("anaRefreshBtn")) $("anaRefreshBtn").onclick = () => refreshYouTubeAnalytics($("anaRefreshBtn"));
     route();
+    if ((window.location.hash || "#dashboard") !== "#analytics") loadChannelStatus();
   </script>
 </body>
 </html>

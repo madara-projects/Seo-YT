@@ -206,14 +206,26 @@ def extract_main_topic(text: str) -> str:
         return ""
     
     clean_text = text
-    clean_text = re.sub(r"(?i)background\s*visuals?:?[^\n]*", "", clean_text)
-    clean_text = re.sub(r"(?i)visuals?:?[^\n]*", "", clean_text)
+    clean_text = re.sub(
+        r"(?i)\bbackground\s*visuals?\s*(?:is|:)?\s*[^.;,\n]*?(?=\s+and\s+|[.;,]|$)",
+        " ",
+        clean_text,
+        count=1,
+    )
     clean_text = re.sub(r"(?i)quote\s*on\s*screen:?", "", clean_text)
     
     quote_match = re.search(r'"([^"]+)"', text)
     if quote_match and len(quote_match.group(1).strip()) > 5:
         quote_body = quote_match.group(1).strip()
-        quote_words = [w.lower() for w in re.findall(r"[A-Za-z]{4,}", quote_body) if w.lower() not in _STOPWORDS and w.lower() not in {"always", "someone", "entire", "offers"}]
+        quote_words = [
+            w.lower()
+            for w in re.findall(r"[A-Za-z]{4,}", quote_body)
+            if w.lower() not in _STOPWORDS
+            and w.lower() not in {
+                "always", "someone", "entire", "offers", "some", "look", "looks",
+                "because", "they", "theyre",
+            }
+        ]
         if quote_words:
             return " ".join(quote_words[:3])
 
@@ -356,31 +368,33 @@ def force_topic_in_description(description: str, topic: str) -> str:
 
 def force_topic_in_tags(tags: list[str], topic: str, category: str,
                         max_tags: int = 12, min_before_fallback: int = 6) -> list[str]:
-    """Drop junk tags, ensure topic is first, keep the model's real tags.
+    """Drop junk tags, ensure the real topic is first, and preserve model tags.
 
-    Generic category fallbacks are only added when the model gave us too few real
-    tags (< ``min_before_fallback``). Previously they were always appended, which
-    flooded good output with filler like "daily vlog, lifestyle, real life".
+    Generic category filler is intentionally not added. The separate Shorts rule
+    in the strategy engine still keeps shorts, yt, youtube shorts, and viral shorts.
     """
+    pinned = {"shorts", "yt", "youtube shorts", "viral shorts"}
+    required = list(dict.fromkeys(
+        str(tag).strip().lower()
+        for tag in (tags or [])
+        if str(tag).strip().lower() in pinned
+    ))
     out: list[str] = []
     seen: set[str] = set()
-    if topic:
+    reserved = min(len(required), max_tags)
+    if topic and max_tags > reserved:
         out.append(topic.lower())
         seen.add(topic.lower())
     for raw in tags or []:
         t = (raw or "").strip().lower()
-        if not t or t in seen or _is_junk_tag(t):
+        if t in pinned or not t or t in seen or _is_junk_tag(t) or len(out) >= max_tags - reserved:
             continue
         out.append(t)
         seen.add(t)
-    if len(out) < min_before_fallback:
-        for kw in CATEGORY_FALLBACK_KEYWORDS.get(category, []):
-            kwl = kw.lower()
-            if len(out) >= max_tags:
-                break
-            if kwl not in seen and not _is_junk_tag(kwl):
-                out.append(kwl)
-                seen.add(kwl)
+    for tag in required:
+        if tag not in seen and len(out) < max_tags:
+            out.append(tag)
+            seen.add(tag)
     return out[:max_tags]
 
 
