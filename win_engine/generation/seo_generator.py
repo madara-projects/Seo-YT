@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict
 
 from win_engine.analysis.intent_classifier import classify_intent
@@ -75,6 +76,12 @@ def generate_seo_suggestions(
     locked_description = force_topic_in_description(seo_package["description"], main_topic)
     locked_tags = force_topic_in_tags(seo_package["tags"], main_topic, category)
     locked_hashtags = force_hashtags(seo_package.get("hashtags") or [], main_topic, category)
+    locked_description = format_upload_ready_description(
+        locked_description,
+        locked_hashtags,
+        category=category,
+        topic=main_topic,
+    )
     locked_variants = [
         force_topic_in_title(v["title"], main_topic, category, variant_index=i)
         for i, v in enumerate(seo_package["title_variants"])
@@ -196,3 +203,51 @@ def generate_seo_suggestions(
     if isinstance(history_store, HistoryStore) and isinstance(history_run_id, int):
         history_store.update_analysis_payload(history_run_id, response["title"], response)
     return response
+
+
+def format_upload_ready_description(
+    description: str,
+    hashtags: list[str],
+    *,
+    category: str = "general",
+    topic: str = "",
+) -> str:
+    """Add restrained visual structure and the selected hashtags to a description."""
+
+    text = (description or "").strip()
+    if not text:
+        return text
+
+    # Gemini may put hashtags in its prose even though hashtags are returned
+    # separately. Remove hashtag-only lines so we can render one clean final line.
+    prose_lines = [
+        line for line in text.splitlines()
+        if not re.fullmatch(r"\s*(?:#[A-Za-z0-9_]+\s*)+", line)
+    ]
+    text = "\n".join(prose_lines).strip()
+
+    if not re.search(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", text):
+        lowered = f"{topic} {category}".lower()
+        if any(term in lowered for term in ("heartbreak", "unrequited", "sad", "betrayal")):
+            emoji = "💔"
+        else:
+            emoji = {
+                "gaming": "🎮", "cooking": "🍽️", "tech": "💻", "finance": "📈",
+                "fitness": "💪", "quotes": "💭", "shorts": "🎬", "youtube_shorts": "🎬",
+            }.get(category.lower(), "🎥")
+        text = f"{emoji} {text}"
+
+    selected: list[str] = []
+    existing = {match.casefold() for match in re.findall(r"#[A-Za-z0-9_]+", text)}
+    for raw in hashtags or []:
+        hashtag = str(raw or "").strip()
+        if not hashtag:
+            continue
+        if not hashtag.startswith("#"):
+            hashtag = f"#{hashtag.lstrip('#')}"
+        if hashtag.casefold() not in existing:
+            selected.append(hashtag)
+            existing.add(hashtag.casefold())
+    if selected:
+        text = f"{text}\n\n{' '.join(selected)}"
+    return text

@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from win_engine.analysis.ctr_prediction_v2 import get_enhanced_ctr_prediction
-
-
 def build_feedback_package(
     seo_package: dict[str, Any],
     research: dict[str, Any],
@@ -44,32 +41,15 @@ def _ctr_prediction(
     best_variant: dict[str, Any],
     seo_package: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build directional, niche-aware CTR guidance."""
-    title = best_variant.get("title", seo_package.get("title", ""))
-    
-    # Extract context from seo_package
-    primary_topic = seo_package.get("primary_topic", "")
-    gap_analysis = seo_package.get("opportunity_gap_analysis", {})
-    
-    # Get intent classification
-    script_analysis = seo_package.get("script_analysis", {})
-    intent = script_analysis.get("intent", "browse")
-    
-    prediction = get_enhanced_ctr_prediction(
-        title=title,
-        primary_topic=primary_topic,
-        intent=intent,
-        opportunity_gap_analysis=gap_analysis,
-    )
-    
-    # Format for backward compatibility
+    """Return honest pre-publication guidance without claiming measured CTR."""
+    quality_score = round(float(best_variant.get("score") or 0), 1)
     return {
-        "label": prediction.get("label", "MEDIUM"),
-        "predicted_ctr_percent": prediction.get("predicted_ctr_percent", 5.0),
-        "confidence": prediction.get("confidence", "moderate"),
-        "expected_band": prediction.get("expected_band", "around recent baseline"),
-        "reason": prediction.get("reasoning", "Niche-aware heuristic CTR guidance"),
-        "reasoning": prediction.get("reasoning", {}),
+        "label": "STRONG" if quality_score >= 8 else "WORKABLE" if quality_score >= 6 else "WEAK",
+        "title_quality_score": quality_score,
+        "actual_ctr_percent": None,
+        "confidence": "PRE-PUBLICATION",
+        "expected_band": "Actual CTR requires linked YouTube Analytics impressions.",
+        "reason": "Title quality heuristic only; this is not a CTR prediction.",
     }
 
 

@@ -236,7 +236,9 @@ Audience type: {audience_type}
 Constraints:
 - {_language_instruction(language)}
 - the title, description, and tags must accurately match the creator brief and real video
+- for an on-screen quote video, preserve the quote's actual meaning. Do not invent a betrayal, relationship status, motive, event, or claim (such as "just an option") that the quote does not state
 - write a video-specific description, normally 100-220 words. Put the exact topic and truthful viewer payoff in the first two lines
+- make the description easy to scan with short natural paragraphs and 1-3 restrained, topic-relevant emojis. Do not produce one dense wall of text
 - choose a description structure that fits this video. Do not reuse a universal hook, bullet list, chapter template, CTA, or "watch until the end" wording
 - include chapters only when real timestamps or a sufficiently detailed script supports them
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Do not add generic viral/trending filler

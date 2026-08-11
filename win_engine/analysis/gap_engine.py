@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from win_engine.ai_enhancement import find_content_similarity
@@ -181,37 +182,56 @@ def _opportunity_score(
     competition: dict[str, Any],
     top_opportunities: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    top_outlier = float(top_opportunities[0].get("outlier_score") or 0) if top_opportunities else 0.0
-    gap_bonus = min(len(keyword_gaps) * 12, 36)
-    small_channel_bonus = min(
-        sum(8 for item in top_opportunities[:3] if item.get("small_channel_outlier")),
-        16,
+    opportunities = [item for item in top_opportunities[:3] if isinstance(item, dict)]
+    velocity_scores = [
+        min(100.0, 25.0 * math.log10(1.0 + max(float(item.get("views_per_day") or 0), 0.0)))
+        for item in opportunities
+    ]
+    demand_score = sum(velocity_scores) / len(velocity_scores) if velocity_scores else 0.0
+    gap_score = min((len(keyword_gaps) / 6.0) * 100.0, 100.0)
+    competition_score = min(max(float(competition.get("score") or 0), 0.0), 100.0)
+    competition_room = 100.0 - competition_score
+    breakout_score = (
+        sum(1 for item in opportunities if item.get("small_channel_outlier")) / len(opportunities) * 100.0
+        if opportunities else 0.0
     )
-    competition_penalty = 30 if competition.get("label") == "SATURATED" else 15 if competition.get("label") == "COMPETITIVE" else 0
+    relevance_score = (
+        sum(min(len(item.get("matched_queries") or []) / 3.0, 1.0) for item in opportunities)
+        / len(opportunities) * 100.0
+        if opportunities else 0.0
+    )
 
-    # Base calculated score
-    score = (top_outlier / 5000) + gap_bonus + small_channel_bonus - competition_penalty
+    score = round(
+        (demand_score * 0.35)
+        + (competition_room * 0.25)
+        + (gap_score * 0.20)
+        + (breakout_score * 0.10)
+        + (relevance_score * 0.10),
+        2,
+    )
+    score = min(max(score, 0.0), 100.0)
 
-    # Shorts & Emotional Quote videos thrive on high Shorts feed virality; guarantee a healthy baseline
-    if score < 65.0:
-        score = 78.5 + (len(keyword_gaps) * 2.5)
-
-    score = min(round(score, 2), 98.0)
-    score = max(score, 45.0)
-
-    if score >= 65:
+    if score >= 70:
         label = "STRONG"
-    elif score >= 40:
+    elif score >= 45:
         label = "WORKABLE"
     else:
         label = "WEAK"
 
+    confidence = "HIGH" if len(opportunities) >= 3 and relevance_score >= 50 else "MEDIUM" if len(opportunities) >= 2 else "LOW"
+
     return {
         "score": score,
         "label": label,
-        "gap_bonus": gap_bonus,
-        "small_channel_bonus": small_channel_bonus,
-        "competition_penalty": competition_penalty,
+        "confidence": confidence,
+        "reason": "Weighted from current view velocity, competition room, keyword gaps, small-channel breakouts, and research relevance.",
+        "components": {
+            "demand_velocity": round(demand_score, 2),
+            "competition_room": round(competition_room, 2),
+            "keyword_gap": round(gap_score, 2),
+            "small_channel_breakout": round(breakout_score, 2),
+            "research_relevance": round(relevance_score, 2),
+        },
     }
 
 

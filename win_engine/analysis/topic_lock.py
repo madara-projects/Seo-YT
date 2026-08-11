@@ -371,9 +371,9 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
     """Drop junk tags, ensure the real topic is first, and preserve model tags.
 
     Generic category filler is intentionally not added. The separate Shorts rule
-    in the strategy engine still keeps shorts, yt, youtube shorts, and viral shorts.
+    in the strategy engine keeps only useful format tags.
     """
-    pinned = {"shorts", "yt", "youtube shorts", "viral shorts"}
+    pinned = {"shorts", "youtube shorts"}
     required = list(dict.fromkeys(
         str(tag).strip().lower()
         for tag in (tags or [])

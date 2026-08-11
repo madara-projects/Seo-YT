@@ -594,7 +594,7 @@ DASHBOARD_HTML = """<!doctype html>
                 <thead>
                   <tr>
                     <th>Video Idea / Topic</th>
-                    <th>Predicted CTR</th>
+                    <th>Title Quality</th>
                     <th>Opportunity</th>
                     <th>Date &amp; Time (IST)</th>
                     <th>Action</th>
@@ -849,7 +849,7 @@ DASHBOARD_HTML = """<!doctype html>
                     <th>Date &amp; Time (IST)</th>
                     <th>Primary Title / Topic</th>
                     <th>Opportunity Score</th>
-                    <th>Title CTR Score</th>
+                    <th>Title Quality Score</th>
                     <th>Action</th>
                   </tr>
                 </thead>
@@ -872,7 +872,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div class="metric-sub">Open a package to review its saved title, description, tags, thumbnails, and chapters.</div>
             <div style="overflow-x:auto;margin-top:14px">
               <table class="history-table">
-                <thead><tr><th>Date &amp; Time (IST)</th><th>Primary Title / Topic</th><th>Opportunity Score</th><th>Title CTR Score</th><th>Action</th></tr></thead>
+                <thead><tr><th>Date &amp; Time (IST)</th><th>Primary Title / Topic</th><th>Opportunity Score</th><th>Title Quality Score</th><th>Action</th></tr></thead>
                 <tbody id="historyPageBody"><tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">Loading saved packages…</td></tr></tbody>
               </table>
             </div>
@@ -1428,6 +1428,9 @@ DASHBOARD_HTML = """<!doctype html>
         const run = await response.json();
         if (!response.ok) throw new Error("Saved package not found.");
         const packageData = run.package || {};
+        const fullScript = packageData.creator_brief && packageData.creator_brief.content
+          ? packageData.creator_brief.content
+          : run.query;
         const tags = arr(packageData.tags).map((tag) => "<span class='tag-item'>" + esc(tag) + "</span>").join("") || "<span class='metric-sub'>Not stored in this older record.</span>";
         const hashtags = arr(packageData.hashtags).map((tag) => "<span class='tag-item'>" + esc(tag) + "</span>").join("") || "<span class='metric-sub'>Not stored in this older record.</span>";
         const variants = arr(packageData.title_variants).map((item) => "<li>" + esc(typeof item === "string" ? item : item.title || "") + "</li>").join("") || "<li>Not stored in this older record.</li>";
@@ -1442,7 +1445,7 @@ DASHBOARD_HTML = """<!doctype html>
           legacy +
           "<div class='bento-grid' style='margin-top:18px'>" +
           "<div class='bento-card span-6'><div class='card-title'>Description</div><div style='white-space:pre-wrap;line-height:1.6'>" + esc(packageData.description || "Not stored in this older record.") + "</div></div>" +
-          "<div class='bento-card span-6'><div class='card-title'>Original video content / script</div><div style='white-space:pre-wrap;line-height:1.6'>" + esc(run.query || "Not stored.") + "</div></div>" +
+          "<div class='bento-card span-6'><div class='card-title'>Original video content / script</div><div style='white-space:pre-wrap;line-height:1.6;max-height:420px;overflow-y:auto'>" + esc(fullScript || "Not stored.") + "</div></div>" +
           "<div class='bento-card span-6'><div class='card-title'>Tags</div><div class='tag-list'>" + tags + "</div><div class='card-title' style='margin-top:18px'>Hashtags</div><div class='tag-list'>" + hashtags + "</div></div>" +
           "<div class='bento-card span-6'><div class='card-title'>Title variations</div><ol style='padding-left:20px;line-height:1.8'>" + variants + "</ol><div class='card-title' style='margin-top:18px'>Chapters</div><ol style='padding-left:20px;line-height:1.8'>" + chapters + "</ol></div>" +
           "</div>";
@@ -1638,8 +1641,8 @@ DASHBOARD_HTML = """<!doctype html>
           </div>
 
           <div class="bento-card span-4" style="border-top:3px solid var(--ok)">
-            <div class="card-title"><span>Predicted CTR</span>${chip(ctr.label || "n/a", "ok")}</div>
-            <div class="metric-value">${num(ctr.predicted_ctr_percent)}<span style="font-size:16px;color:var(--text-muted)">%</span></div>
+            <div class="card-title"><span>Title Quality</span>${chip(ctr.label || "n/a", "ok")}</div>
+            <div class="metric-value">${num(ctr.title_quality_score)}<span style="font-size:16px;color:var(--text-muted)">/10</span></div>
             <div class="metric-sub">${esc(ctr.reason || "")}</div>
             ${meter(ctr.predicted_ctr_percent, 12, "ok")}
           </div>
