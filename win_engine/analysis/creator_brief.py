@@ -98,18 +98,22 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
     if not quote_match:
         quote_match = re.search(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", content)
     if quote_match:
-        quote_stopwords = {
-            "some", "look", "looks", "because", "they", "theyre", "they're",
-            "this", "that", "these", "those", "with", "from", "have", "has",
-            "were", "will", "would", "could", "should", "about", "into", "your",
-        }
-        quote_words = [
-            word.lower()
-            for word in re.findall(r"[A-Za-z][A-Za-z'-]*", quote_match.group(1))
-            if len(word) >= 4 and word.lower() not in quote_stopwords
+        # Keep a grammatical phrase instead of deleting stopwords and turning a
+        # quote into a non-searchable bag of words (for example, "part always
+        # wonder didn least deserve..."). When an ellipsis introduces the key
+        # thought, the final clause is normally the useful search phrase.
+        quote_text = re.sub(r"\s+", " ", quote_match.group(1)).strip()
+        clauses = [
+            part.strip(" \t\r\n.,;:!?—–-")
+            for part in re.split(r"\.{2,}|[;—–]", quote_text)
+            if part.strip(" \t\r\n.,;:!?—–-")
         ]
-        if quote_words:
-            return " ".join(dict.fromkeys(quote_words))[:80]
+        focus = clauses[-1] if len(clauses) > 1 else quote_text
+        words = re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", focus)
+        if words and words[0].lower() in {"a", "an", "the"}:
+            words = words[1:]
+        if words:
+            return " ".join(words[:10]).lower()
 
     # Strip camera / background / visual setup headers
     clean_content = re.sub(

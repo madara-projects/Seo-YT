@@ -86,6 +86,20 @@ _NICHE_GUIDANCE = {
         "Warm, personal, first-person voice. Curiosity over keywords, but keep it "
         "searchable."
     ),
+    "quotes": (
+        "Niche: QUOTE SHORT. Package the exact emotional idea without inventing a "
+        "breakup, betrayal, departure, motive, or relationship event. Prefer one "
+        "natural search phrase and one honest emotional hook over generic 'deep "
+        "quote' wording. Keep the description concise and faithful to the on-screen text."
+    ),
+    "shorts": (
+        "Niche: YOUTUBE SHORT. Use a concise, truthful hook that matches the visible "
+        "content. Do not pad the package with generic viral claims."
+    ),
+    "youtube_shorts": (
+        "Niche: YOUTUBE SHORT. Use a concise, truthful hook that matches the visible "
+        "content. Do not pad the package with generic viral claims."
+    ),
     "general": (
         "Niche: GENERAL. Lead with the clearest specific promise. Natural, "
         "human creator voice; avoid generic filler."
@@ -236,15 +250,18 @@ Audience type: {audience_type}
 Constraints:
 - {_language_instruction(language)}
 - the title, description, and tags must accurately match the creator brief and real video
-- for an on-screen quote video, preserve the quote's actual meaning. Do not invent a betrayal, relationship status, motive, event, or claim (such as "just an option") that the quote does not state
-- write a video-specific description, normally 100-220 words. Put the exact topic and truthful viewer payoff in the first two lines
+- treat the video script/idea as the only source of factual events. Audience notes describe who may relate; they are not events that happened in the video
+- for an on-screen quote video, preserve the exact quote and its actual meaning. Do not invent a breakup, departure, betrayal, relationship status, motive, action, or claim (such as "they left", "you stayed", or "just an option") that the source does not state
+- write a video-specific description, normally 100-220 words for long-form or 45-100 words for a single-quote Short. Put the exact topic and truthful viewer payoff in the first two lines
 - make the description easy to scan with short natural paragraphs and 1-3 restrained, topic-relevant emojis. Do not produce one dense wall of text
 - choose a description structure that fits this video. Do not reuse a universal hook, bullet list, chapter template, CTA, or "watch until the end" wording
 - include chapters only when real timestamps or a sufficiently detailed script supports them
+- tags must be natural phrases that a person might type into search. Preserve contractions such as "didn't"; never make a tag by deleting grammar words from a quote, and never return a bag of unrelated quote words
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Do not add generic viral/trending filler
 - title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
-- return exactly five distinct variants. Variant 1 is SEARCH (main topic + clear outcome), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE (a personal proof, story, or channel-relevant angle). Variants 4-5 are additional truthful alternatives.
-- each variant must use a materially different sentence structure and psychological angle. Do not repeat recent-title patterns supplied above
+- return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are additional truthful alternatives
+- each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
+- use idiomatic phrases such as "one-sided effort"; never write unnatural phrases such as "unrequited effort" or "fractions of effort"
 - thumbnail text must add a short new idea; it must not merely repeat the title. Never use false guarantees, unrelated trends, or misleading claims.
 """
 
@@ -290,6 +307,101 @@ def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
         "tags": tags[:10],
         "hashtags": hashtags[:3],
     }
+
+
+_PHRASE_REPLACEMENTS = {
+    "unrequited effort": "one-sided effort",
+    "fractions of effort": "very little effort",
+    "a fraction of effort": "very little effort",
+    "one-sided connection": "one-sided relationship",
+}
+
+_UNSUPPORTED_QUOTE_CLAIMS = (
+    (r"\bthey (?:left|walked away|came back|cheated|lied)\b", r"\b(?:left|walked away|came back|cheated|lied)\b"),
+    (r"\byou (?:stayed|accepted)\b", r"\b(?:stayed|accepted)\b"),
+    (r"\bstaying in\b", r"\bstay(?:ed|ing)?\b"),
+    (r"\b(?:breakup|toxic relationship|just an option)\b", r"\b(?:breakup|toxic|option)\b"),
+)
+
+
+def _naturalize_generated_text(value: str) -> str:
+    text = value
+    for unnatural, natural in _PHRASE_REPLACEMENTS.items():
+        def _replacement(match: re.Match[str], replacement: str = natural) -> str:
+            return replacement.capitalize() if match.group(0)[:1].isupper() else replacement
+
+        text = re.sub(re.escape(unnatural), _replacement, text, flags=re.IGNORECASE)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def _extract_on_screen_quote(script: str) -> str:
+    matches = re.findall(r'["“]([^"“”]{12,})["”]', script or "")
+    if not matches:
+        matches = re.findall(r"(?<![A-Za-z])'([^'\n]{12,})'(?![A-Za-z])", script or "")
+    return max((re.sub(r"\s+", " ", item).strip() for item in matches), key=len, default="")
+
+
+def _has_unsupported_quote_claim(text: str, source: str) -> bool:
+    lowered_source = source.casefold()
+    return any(
+        re.search(claim, text, flags=re.IGNORECASE)
+        and not re.search(evidence, lowered_source, flags=re.IGNORECASE)
+        for claim, evidence in _UNSUPPORTED_QUOTE_CLAIMS
+    )
+
+
+def _remove_unsupported_description_sentences(description: str, source: str) -> str:
+    paragraphs: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", description):
+        sentences = re.split(r"(?<=[.!?])\s+", paragraph.strip())
+        kept = [sentence for sentence in sentences if sentence and not _has_unsupported_quote_claim(sentence, source)]
+        if kept:
+            paragraphs.append(" ".join(kept))
+    return "\n\n".join(paragraphs).strip()
+
+
+def _safe_quote_title(quote: str) -> str:
+    is_question = "?" in quote
+    clauses = [part.strip(" .,:;!?—–-") for part in re.split(r"\.{2,}|[;—–]", quote) if part.strip()]
+    focus = clauses[-1] if clauses else quote
+    focus = focus[:1].upper() + focus[1:]
+    suffix = " #Shorts"
+    if len(focus) + len(suffix) <= 70:
+        return focus.rstrip(".!?") + ("?" if is_question else "") + suffix
+    words: list[str] = []
+    for word in focus.split():
+        if len(" ".join([*words, word])) > 58:
+            break
+        words.append(word)
+    return " ".join(words).rstrip(".,;:!?") + "… #Shorts"
+
+
+def _sanitize_generated_package(pkg: dict[str, Any], script: str) -> dict[str, Any]:
+    """Apply deterministic fidelity checks after generation, especially for quote Shorts."""
+    cleaned = dict(pkg)
+    quote = _extract_on_screen_quote(script)
+    description = _naturalize_generated_text(str(cleaned.get("description") or ""))
+    if quote:
+        description = _remove_unsupported_description_sentences(description, script)
+        if not description:
+            description = f'“{quote}”\n\nA quiet reflection for anyone who connects with these words.'
+    cleaned["description"] = description
+
+    titles = [str(cleaned.get("title") or ""), *(cleaned.get("variants") or [])]
+    safe_titles: list[str] = []
+    for raw_title in titles:
+        title = _naturalize_generated_text(raw_title)
+        if not title or (quote and _has_unsupported_quote_claim(title, script)):
+            continue
+        if any(_title_similarity(title, existing) >= 0.90 for existing in safe_titles):
+            continue
+        safe_titles.append(title)
+    if not safe_titles and quote:
+        safe_titles = [_safe_quote_title(quote)]
+    if safe_titles:
+        cleaned["title"] = safe_titles[0]
+        cleaned["variants"] = safe_titles[:5]
+    return cleaned
 
 
 def _unique_text(values: list[str]) -> list[str]:
@@ -356,7 +468,10 @@ def _generate_one(
     if parsed is None:
         return None
     validated = _validate(parsed)
-    return _prefer_fresh_titles(validated, channel_learning) if validated else None
+    if not validated:
+        return None
+    sanitized = _sanitize_generated_package(validated, script)
+    return _prefer_fresh_titles(sanitized, channel_learning)
 
 
 def write_seo_package(
