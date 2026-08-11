@@ -95,6 +95,8 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
     content = str(brief.get("content") or "").strip()
 
     quote_match = re.search(r'["“”]([^"“”]{6,})["“”]', content)
+    if not quote_match:
+        quote_match = re.search(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", content)
     if quote_match:
         quote_stopwords = {
             "some", "look", "looks", "because", "they", "theyre", "they're",

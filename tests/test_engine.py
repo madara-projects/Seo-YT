@@ -5,9 +5,14 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from win_engine.analysis.creator_brief import build_creator_brief, creator_topic
+from win_engine.analysis.content_auditor import audit_content_package
+from win_engine.analysis.research_planner import plan_research_queries
 from win_engine.analysis.topic_lock import force_topic_in_tags
 from win_engine.feedback.history_store import HistoryStore
-from win_engine.generation.strategy_engine import _content_specific_fallback, build_seo_package
+from win_engine.analysis.gap_engine import _opportunity_score
+from win_engine.feedback.learning_engine import _ctr_prediction
+from win_engine.generation.strategy_engine import _content_specific_fallback, _deterministic_score, build_seo_package
+from win_engine.generation.seo_generator import format_upload_ready_description
 from win_engine.integrations.youtube_channel import _ordered_upload_rows
 from win_engine.llm import gemini_client, seo_writer
 
@@ -111,7 +116,7 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(self.store.recent_generated_titles(2), ["Newer title", "Older title"])
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
-    def test_shorts_keep_required_fixed_tags(self, mocked_writer):
+    def test_shorts_keep_only_useful_fixed_tags(self, mocked_writer):
         mocked_writer.return_value = ({"english": None}, "fallback")
         research = {
             "main_topic": "street food in Chennai",
@@ -125,8 +130,10 @@ class TestEngineStages(unittest.TestCase):
         }
         package = build_seo_package("generate seo", "A short about Chennai street food", research, self.store)
         tags = package["tags"]
-        for required in ("shorts", "yt", "youtube shorts", "viral shorts"):
+        for required in ("shorts", "youtube shorts"):
             self.assertIn(required, tags)
+        self.assertNotIn("yt", tags)
+        self.assertNotIn("viral shorts", tags)
 
     def test_required_shorts_tags_survive_a_full_tag_list(self):
         incoming = [f"topic tag {index}" for index in range(12)] + [
@@ -134,8 +141,10 @@ class TestEngineStages(unittest.TestCase):
         ]
         tags = force_topic_in_tags(incoming, "specific video topic", "general", max_tags=12)
         self.assertEqual(len(tags), 12)
-        for required in ("shorts", "yt", "youtube shorts", "viral shorts"):
+        for required in ("shorts", "youtube shorts"):
             self.assertIn(required, tags)
+        self.assertNotIn("yt", tags)
+        self.assertNotIn("viral shorts", tags)
 
     def test_local_fallback_changes_with_the_video_topic(self):
         food = _content_specific_fallback("Chennai street food", [], {"video_format": "youtube_shorts"})
@@ -191,6 +200,135 @@ class TestEngineStages(unittest.TestCase):
         self.assertNotIn("Gemini was unavailable", package["description"])
         self.assertIn("beautiful endings", package["tags"])
         self.assertNotIn("background visual", package["tags"])
+
+    def test_quote_research_queries_use_the_message_not_production_directions(self):
+        script = (
+            'Rain footage with a typewriter quote: "The worst heartbreak is realizing '
+            'you meant less than they meant to you."'
+        )
+        queries = plan_research_queries(
+            script=script,
+            creator_brief={
+                "content": script,
+                "target_audience": "people experiencing unrequited love and heartbreak",
+                "viewer_promise": "a relatable heartbreak quote",
+                "unique_angle": "typewriter animation over a calming sunset background",
+                "video_format": "YouTube Short emotional quote video",
+            },
+        )
+        query_text = " ".join(item["query"] for item in queries).lower()
+        self.assertIn("worst heartbreak", queries[0]["query"].lower())
+        self.assertIn("unrequited love", query_text)
+        self.assertNotIn("typewriter animation over a calming sunset", query_text)
+
+    def test_quote_short_audit_recognizes_visual_retention_mechanics(self):
+        script = (
+            'A brief pause over rain footage. Ambient music begins. The quote appears '
+            'phrase by phrase with a typewriter animation: "The worst heartbreak is '
+            'realizing you meant less than they meant to you." Hold, then fade to black.'
+        )
+        audit = audit_content_package(
+            script,
+            "When you realize you meant less to them",
+            "worst heartbreak realizing meant less",
+            "unrequited love",
+            "Emotion",
+            video_format="YouTube Short emotional quote video",
+        )
+        self.assertEqual(audit["hook_audit"]["hook_strength"], "HIGH")
+        self.assertEqual(audit["first_30_second_simulator"]["predicted_dropoff_risk"], "LOW")
+        self.assertEqual(audit["pattern_interrupts"]["assessment"], "STRONG")
+        self.assertNotEqual(audit["alignment"]["package_match"], "WEAK")
+
+    def test_single_quoted_screen_text_is_a_quote_short(self):
+        script = (
+            "Rain footage with typewriter animation: 'The worst heartbreak is realizing "
+            "you meant less than they meant to you.' Hold, then fade to black."
+        )
+        audit = audit_content_package(
+            script,
+            "When you realize you meant less to them",
+            "worst heartbreak realizing meant less",
+            "unrequited love",
+            "Emotion",
+            video_format="YouTube Short emotional quote video",
+        )
+        self.assertTrue(audit["hook_audit"]["stakes_present"])
+        brief = build_creator_brief(script=script, video_format="YouTube Short emotional quote video")
+        self.assertTrue(creator_topic(brief).startswith("worst heartbreak"))
+
+    def test_alignment_uses_creator_brief_context(self):
+        audit = audit_content_package(
+            "A typewriter quote appears over rain footage.",
+            "The painful truth about unrequited love...",
+            "worst heartbreak realizing meant less",
+            "emotional distance",
+            "Emotion",
+            video_format="YouTube Short emotional quote video",
+            context_text="Viewers experiencing unrequited love and heartbreak",
+        )
+        self.assertNotEqual(audit["alignment"]["package_match"], "WEAK")
+
+    def test_upload_ready_description_adds_emoji_and_hashtag_line(self):
+        description = format_upload_ready_description(
+            "A quiet reflection for anyone processing unrequited love.",
+            ["#heartbreak", "#sadquotes", "#shorts"],
+            category="quotes",
+            topic="heartbreak quote",
+        )
+        self.assertTrue(description.startswith("💔 "))
+        self.assertTrue(description.endswith("#heartbreak #sadquotes #shorts"))
+        self.assertIn("\n\n#heartbreak", description)
+
+    def test_upload_ready_description_does_not_duplicate_existing_hashtags(self):
+        description = format_upload_ready_description(
+            "🎮 A focused gaming guide.\n\n#gaming",
+            ["#gaming", "#tips"],
+            category="gaming",
+        )
+        self.assertEqual(description.lower().count("#gaming"), 1)
+        self.assertTrue(description.endswith("#gaming #tips"))
+
+    def test_upload_ready_description_consolidates_gemini_hashtag_lines(self):
+        description = format_upload_ready_description(
+            "💔 A quiet reflection.\n\n#Heartbreak #SadQuotes #Shorts",
+            ["#heartbreak", "#quotes", "#sad"],
+            category="quotes",
+        )
+        self.assertTrue(description.endswith("#heartbreak #quotes #sad"))
+        self.assertEqual(len([line for line in description.splitlines() if line.startswith("#")]), 1)
+
+    def test_opportunity_score_has_no_artificial_high_floor(self):
+        result = _opportunity_score([], {"score": 85, "label": "SATURATED"}, [])
+        self.assertLess(result["score"], 45)
+        self.assertEqual(result["label"], "WEAK")
+        self.assertEqual(result["confidence"], "LOW")
+
+    def test_opportunity_score_exposes_normalized_components(self):
+        result = _opportunity_score(
+            [{"keyword": "gap"}] * 3,
+            {"score": 25, "label": "UNDERSERVED"},
+            [
+                {"views_per_day": 1000, "small_channel_outlier": True, "matched_queries": ["main topic", "viewer problem"]},
+                {"views_per_day": 500, "small_channel_outlier": False, "matched_queries": ["main topic"]},
+                {"views_per_day": 250, "small_channel_outlier": True, "matched_queries": ["main topic", "format"]},
+            ],
+        )
+        self.assertGreater(result["score"], 45)
+        self.assertLess(result["score"], 100)
+        self.assertIn("demand_velocity", result["components"])
+
+    def test_title_quality_is_not_claimed_as_ctr(self):
+        score = _deterministic_score(
+            "Why Genuine Love Feels Different When It Is Real",
+            "genuine love",
+            context_text="A quote about why genuine love feels calm and natural",
+            competitor_titles=["Signs of Fake Love"],
+        )
+        guidance = _ctr_prediction({"score": score}, {})
+        self.assertGreaterEqual(score, 6)
+        self.assertIsNone(guidance["actual_ctr_percent"])
+        self.assertNotIn("predicted_ctr_percent", guidance)
 
 
 class TestGeminiGeneration(unittest.TestCase):

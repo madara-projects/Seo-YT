@@ -118,7 +118,7 @@ def build_seo_package(
         )
         if is_short_form:
             existing_tags = [str(t).strip().lower() for t in (p.get("tags") or []) if str(t).strip()]
-            required_tags = ["shorts", "yt", "youtube shorts", "viral shorts"]
+            required_tags = ["shorts", "youtube shorts"]
             topic_tags = [tag for tag in existing_tags if tag not in required_tags]
             p["tags"] = topic_tags[: 12 - len(required_tags)] + required_tags
         return p
@@ -137,16 +137,30 @@ def build_seo_package(
         variant_titles.append(variant_titles[-1])
 
     package_intents = ["Search", "Browse", "Existing audience", "Alternative", "Alternative"]
-    title_variants_data = [
-        {
-            "title": v,
-            "score": _deterministic_score(v, primary_topic),
-            "estimated_ctr": f"{_deterministic_score(v, primary_topic) * 1.1:.1f}%",
-            "character_count": len(v),
-            "package_intent": package_intents[index] if index < len(package_intents) else "Alternative",
-        }
-        for index, v in enumerate(variant_titles[:5])
+    competitor_titles = [
+        str(item.get("title") or "")
+        for item in research.get("youtube_results", [])
+        if isinstance(item, dict) and item.get("title")
     ]
+    title_context = " ".join(
+        str((creator_brief or {}).get(field) or "")
+        for field in ("content", "target_audience", "viewer_promise", "unique_angle")
+    )
+    title_variants_data = []
+    for index, variant in enumerate(variant_titles[:5]):
+        quality_score = _deterministic_score(
+            variant,
+            primary_topic,
+            context_text=title_context,
+            competitor_titles=competitor_titles,
+        )
+        title_variants_data.append({
+            "title": variant,
+            "score": quality_score,
+            "estimated_ctr": None,
+            "character_count": len(variant),
+            "package_intent": package_intents[index] if index < len(package_intents) else "Alternative",
+        })
 
     title_optimization = {
         "best_title": title_variants_data[0]["title"] if title_variants_data else title,
@@ -166,7 +180,18 @@ def build_seo_package(
         competitor_titles=[str(item.get("title") or "") for item in research.get("youtube_results", []) if isinstance(item, dict)],
     )
 
-    content_audit = audit_content_package(script, title, primary_topic, secondary_topic, angle)
+    content_audit = audit_content_package(
+        script,
+        title,
+        primary_topic,
+        secondary_topic,
+        angle,
+        video_format=str((creator_brief or {}).get("video_format") or ""),
+        context_text=" ".join(
+            str((creator_brief or {}).get(field) or "")
+            for field in ("target_audience", "viewer_promise", "unique_angle")
+        ),
+    )
     opportunity_gap_analysis = analyze_opportunity_gaps(
         keyword_signals=keyword_signals,
         entity_signals=entity_signals,
@@ -298,17 +323,44 @@ def _select_content_angle(intent: str, script: str, top_opportunities: list[dict
     return "Story"
 
 
-def _deterministic_score(title: str, topic: str) -> float:
-    """Length + topic-presence score. Replaces the prior random.uniform(7.5, 9.8)."""
-    score = 6.0
-    n = len(title)
-    if 45 <= n <= 65:
-        score += 1.5
-    elif 35 <= n <= 70:
-        score += 0.7
-    if topic and topic.lower() in title.lower():
+def _deterministic_score(
+    title: str,
+    topic: str,
+    *,
+    context_text: str = "",
+    competitor_titles: list[str] | None = None,
+) -> float:
+    """Pre-publication title quality score; never presented as measured CTR."""
+    clean = re.sub(r"\s+", " ", title or "").strip()
+    lowered = clean.lower()
+    score = 0.0
+    length = len(clean)
+    score += 2.0 if 45 <= length <= 65 else 1.2 if 35 <= length <= 70 else 0.5
+
+    words = re.findall(r"[a-z0-9]+", lowered)
+    score += 1.5 if 5 <= len(words) <= 12 else 0.8 if 3 <= len(words) <= 15 else 0.3
+
+    stopwords = {"a", "an", "and", "are", "for", "from", "how", "in", "is", "of", "on", "the", "this", "to", "with", "you", "your"}
+    title_terms = {word for word in words if len(word) >= 3 and word not in stopwords}
+    source_terms = {
+        word for word in re.findall(r"[a-z0-9]+", f"{topic} {context_text}".lower())
+        if len(word) >= 3 and word not in stopwords
+    }
+    relevance = len(title_terms & source_terms) / len(title_terms) if title_terms else 0.0
+    score += relevance * 3.0
+
+    if any(term in lowered for term in ("why", "when", "truth", "mistake", "secret", "hardest", "never", "realize", "what")):
         score += 1.0
-    return round(min(score, 9.5), 1)
+
+    competitors = [set(re.findall(r"[a-z0-9]+", item.lower())) for item in competitor_titles or [] if item]
+    similarities = [len(title_terms & item) / max(len(title_terms | item), 1) for item in competitors]
+    max_similarity = max(similarities, default=0.0)
+    score += 1.0 if max_similarity <= 0.35 else 0.5 if max_similarity <= 0.60 else 0.0
+
+    production_junk = ("vertical", "creator", "background footage", "cinematic dark")
+    score += 1.0 if not any(term in lowered for term in production_junk) else 0.2
+    score += 0.5 if clean and clean.count("!") <= 1 and "???" not in clean else 0.0
+    return round(min(max(score, 0.0), 10.0), 1)
 
 
 def _quoted_text(content: str) -> str:
