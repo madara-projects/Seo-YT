@@ -10,9 +10,12 @@ from win_engine.analysis.research_planner import plan_research_queries
 from win_engine.analysis.topic_lock import force_topic_in_tags
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.analysis.gap_engine import _opportunity_score
+from win_engine.analysis.pacing_engine import analyze_script_pacing
+from win_engine.analysis.strategy_layer import build_upload_timing
+from win_engine.api.dashboard_html import DASHBOARD_HTML
 from win_engine.feedback.learning_engine import _ctr_prediction
 from win_engine.generation.strategy_engine import _content_specific_fallback, _deterministic_score, build_seo_package
-from win_engine.generation.seo_generator import format_upload_ready_description
+from win_engine.generation.seo_generator import format_upload_ready_description, generate_seo_suggestions
 from win_engine.integrations.youtube_channel import _ordered_upload_rows
 from win_engine.llm import gemini_client, seo_writer
 
@@ -116,7 +119,7 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(self.store.recent_generated_titles(2), ["Newer title", "Older title"])
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
-    def test_shorts_keep_only_useful_fixed_tags(self, mocked_writer):
+    def test_shorts_keep_all_required_fixed_tags(self, mocked_writer):
         mocked_writer.return_value = ({"english": None}, "fallback")
         research = {
             "main_topic": "street food in Chennai",
@@ -130,10 +133,8 @@ class TestEngineStages(unittest.TestCase):
         }
         package = build_seo_package("generate seo", "A short about Chennai street food", research, self.store)
         tags = package["tags"]
-        for required in ("shorts", "youtube shorts"):
+        for required in ("shorts", "yt", "youtube shorts", "viral shorts"):
             self.assertIn(required, tags)
-        self.assertNotIn("yt", tags)
-        self.assertNotIn("viral shorts", tags)
 
     def test_required_shorts_tags_survive_a_full_tag_list(self):
         incoming = [f"topic tag {index}" for index in range(12)] + [
@@ -141,10 +142,8 @@ class TestEngineStages(unittest.TestCase):
         ]
         tags = force_topic_in_tags(incoming, "specific video topic", "general", max_tags=12)
         self.assertEqual(len(tags), 12)
-        for required in ("shorts", "youtube shorts"):
+        for required in ("shorts", "yt", "youtube shorts", "viral shorts"):
             self.assertIn(required, tags)
-        self.assertNotIn("yt", tags)
-        self.assertNotIn("viral shorts", tags)
 
     def test_local_fallback_changes_with_the_video_topic(self):
         food = _content_specific_fallback("Chennai street food", [], {"video_format": "youtube_shorts"})
@@ -191,7 +190,7 @@ class TestEngineStages(unittest.TestCase):
         brief = build_creator_brief(script=script)
         topic = creator_topic(brief)
         package = _content_specific_fallback(topic, [], brief)
-        self.assertEqual(topic, "sunsets beautiful endings")
+        self.assertEqual(topic, "some sunsets look beautiful because they're endings")
         self.assertEqual(
             package["title"],
             "Some sunsets look beautiful because they're endings #Shorts",
@@ -200,6 +199,27 @@ class TestEngineStages(unittest.TestCase):
         self.assertNotIn("Gemini was unavailable", package["description"])
         self.assertIn("beautiful endings", package["tags"])
         self.assertNotIn("background visual", package["tags"])
+
+    def test_quote_topic_keeps_a_natural_search_phrase(self):
+        script = (
+            'A rainy highway quote Short. The exact on-screen quote is: '
+            '“A part of me will always wonder... didn\'t I at least deserve the bare minimum from them?”'
+        )
+        topic = creator_topic(build_creator_brief(script=script))
+        self.assertEqual(topic, "didn't i at least deserve the bare minimum from them")
+
+    def test_malformed_contraction_tag_is_removed_but_real_contraction_survives(self):
+        tags = force_topic_in_tags(
+            [
+                "part always wonder didn least deserve bare minimum them",
+                "didn't i deserve the bare minimum",
+                "emotional neglect",
+            ],
+            "bare minimum quote",
+            "quotes",
+        )
+        self.assertNotIn("part always wonder didn least deserve bare minimum them", tags)
+        self.assertIn("didn't i deserve the bare minimum", tags)
 
     def test_quote_research_queries_use_the_message_not_production_directions(self):
         script = (
@@ -239,6 +259,18 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(audit["first_30_second_simulator"]["predicted_dropoff_risk"], "LOW")
         self.assertEqual(audit["pattern_interrupts"]["assessment"], "STRONG")
         self.assertNotEqual(audit["alignment"]["package_match"], "WEAK")
+
+    def test_quote_short_gets_readability_advice_not_spoken_script_advice(self):
+        script = (
+            'A vertical YouTube Short on a rainy highway. The on-screen quote is '
+            '“A part of me will always wonder... didn\'t I at least deserve the bare minimum from them?”'
+        )
+        pacing = analyze_script_pacing(script, video_format="youtube_shorts")
+        self.assertEqual(pacing["analysis_type"], "quote_short")
+        self.assertEqual(pacing["pace_label"], "reflective")
+        self.assertEqual(pacing["hook_density"], "single emotional hook")
+        self.assertIn("readable", pacing["recommendation"])
+        self.assertNotIn("mini-payoffs", pacing["recommendation"])
 
     def test_single_quoted_screen_text_is_a_quote_short(self):
         script = (
@@ -297,6 +329,75 @@ class TestEngineStages(unittest.TestCase):
         )
         self.assertTrue(description.endswith("#heartbreak #quotes #sad"))
         self.assertEqual(len([line for line in description.splitlines() if line.startswith("#")]), 1)
+
+    def test_general_description_does_not_force_an_emoji(self):
+        description = format_upload_ready_description(
+            "A concise professional summary of the video.",
+            ["#analysis"],
+            category="general",
+        )
+        self.assertTrue(description.startswith("A concise professional summary"))
+
+    def test_dashboard_title_quality_meter_uses_title_quality_score(self):
+        self.assertIn('meter(ctr.title_quality_score, 10, "ok")', DASHBOARD_HTML)
+        self.assertNotIn("meter(ctr.predicted_ctr_percent", DASHBOARD_HTML)
+
+    def test_upload_timing_reports_evidence_instead_of_claiming_a_best_time(self):
+        timing = build_upload_timing(
+            [
+                {"published_at": "2026-08-05T07:30:00Z"},
+                {"published_at": "2026-08-12T07:15:00Z"},
+            ],
+            region="global",
+        )
+        self.assertEqual(timing["sample_size"], 2)
+        self.assertEqual(timing["confidence"], "LOW")
+        self.assertIn("not that this timing caused", timing["reasoning"])
+        self.assertNotIn("best upload window", timing["reasoning"])
+
+    def test_upload_timing_day_matches_the_displayed_ist_timezone(self):
+        timing = build_upload_timing(
+            [{"published_at": "2026-08-05T23:30:00Z"}],
+            region="india",
+        )
+        self.assertEqual(timing["recommended_day"], "Thursday")
+
+    @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
+    def test_selected_package_description_is_upload_ready(self, mocked_writer):
+        mocked_writer.return_value = ({
+            "english": {
+                "title": "Didn’t I Deserve the Bare Minimum? #Shorts",
+                "variants": ["Didn’t I Deserve the Bare Minimum? #Shorts"],
+                "description": "A faithful reflection about receiving less than you deserved.",
+                "tags": ["bare minimum quote"],
+                "hashtags": ["#Shorts", "#Quotes", "#Heartbreak"],
+            }
+        }, "gemini")
+        script = 'Rainy highway quote: “Didn\'t I deserve the bare minimum?”'
+        brief = build_creator_brief(script=script, video_format="youtube_shorts")
+        research = {
+            "history_store": self.store,
+            "youtube_results": [],
+            "keyword_signals": [{"keyword": "bare minimum quote"}],
+            "entity_signals": [],
+            "top_opportunities": [],
+            "upload_timing": {},
+            "thumbnail_intelligence": {},
+            "category": "quotes",
+        }
+        result = generate_seo_suggestions(
+            script,
+            research,
+            context={
+                "language": "english",
+                "region": "global",
+                "category": "quotes",
+                "creator_brief": brief,
+            },
+        )
+        description = result["multilang"]["english"]["description"]
+        self.assertTrue(description.endswith("#Shorts #Quotes #Heartbreak"))
+        self.assertIn("\n\n#Shorts", description)
 
     def test_opportunity_score_has_no_artificial_high_floor(self):
         result = _opportunity_score([], {"score": 85, "label": "SATURATED"}, [])
@@ -379,6 +480,31 @@ class TestGeminiGeneration(unittest.TestCase):
             {"recent_titles": ["The Truth About Building Your YouTube Channel"]},
         )
         self.assertEqual(result["title"], "I Built a Channel for 30 Days—Here Is What Worked")
+
+    def test_quote_package_removes_invented_events_and_unnatural_phrases(self):
+        script = (
+            'Rainy highway quote Short. On-screen quote: “A part of me will always wonder... '
+            'didn\'t I at least deserve the bare minimum from them?”'
+        )
+        package = {
+            "title": "Didn’t I Deserve the Bare Minimum? #Shorts",
+            "variants": [
+                "Didn’t I Deserve the Bare Minimum? #Shorts",
+                "When You Accepted Fractions of Effort",
+                "The Painful Reality of Staying in a One-Sided Connection",
+            ],
+            "description": (
+                "A reflection for anyone healing from unrequited effort.\n\n"
+                "The hardest truth is that they left, but you stayed. Take a moment to breathe."
+            ),
+            "tags": ["bare minimum quote"],
+            "hashtags": ["#Shorts"],
+        }
+        cleaned = seo_writer._sanitize_generated_package(package, script)
+        self.assertIn("one-sided effort", cleaned["description"])
+        self.assertNotIn("they left", cleaned["description"].lower())
+        self.assertNotIn("you stayed", cleaned["description"].lower())
+        self.assertFalse(any("staying in" in title.lower() for title in cleaned["variants"]))
 
     def test_tamil_similarity_compares_real_characters(self):
         self.assertLess(

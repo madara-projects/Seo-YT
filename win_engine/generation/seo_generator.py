@@ -121,6 +121,12 @@ def generate_seo_suggestions(
         # descriptions stay in their own language, untouched.
         if lang == "english":
             description = force_topic_in_description(description, main_topic)
+        description = format_upload_ready_description(
+            description,
+            hashtags,
+            category=category,
+            topic=main_topic,
+        )
         return {
             "title": title,
             "variants": variants,
@@ -226,15 +232,26 @@ def format_upload_ready_description(
     ]
     text = "\n".join(prose_lines).strip()
 
-    if not re.search(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", text):
+    emoji_by_category = {
+        "gaming": "🎮",
+        "cooking": "🍽️",
+        "tech": "💻",
+        "finance": "📈",
+        "fitness": "💪",
+        "quotes": "💭",
+        "shorts": "🎬",
+        "youtube_shorts": "🎬",
+    }
+    category_key = category.lower()
+    if (
+        category_key in emoji_by_category
+        and not re.search(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", text)
+    ):
         lowered = f"{topic} {category}".lower()
         if any(term in lowered for term in ("heartbreak", "unrequited", "sad", "betrayal")):
             emoji = "💔"
         else:
-            emoji = {
-                "gaming": "🎮", "cooking": "🍽️", "tech": "💻", "finance": "📈",
-                "fitness": "💪", "quotes": "💭", "shorts": "🎬", "youtube_shorts": "🎬",
-            }.get(category.lower(), "🎥")
+            emoji = emoji_by_category[category_key]
         text = f"{emoji} {text}"
 
     selected: list[str] = []

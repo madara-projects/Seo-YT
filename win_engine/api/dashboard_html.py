@@ -1644,7 +1644,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div class="card-title"><span>Title Quality</span>${chip(ctr.label || "n/a", "ok")}</div>
             <div class="metric-value">${num(ctr.title_quality_score)}<span style="font-size:16px;color:var(--text-muted)">/10</span></div>
             <div class="metric-sub">${esc(ctr.reason || "")}</div>
-            ${meter(ctr.predicted_ctr_percent, 12, "ok")}
+            ${meter(ctr.title_quality_score, 10, "ok")}
           </div>
 
           <div class="bento-card span-4" style="border-top:3px solid var(--accent)">
@@ -1669,12 +1669,13 @@ DASHBOARD_HTML = """<!doctype html>
         <!-- Strategy & Timing -->
         <div class="bento-grid" style="margin-top:18px">
           <div class="bento-card span-6">
-            <div class="card-title">Optimal Upload Timing &amp; Region</div>
+            <div class="card-title">Upload Timing Guidance &amp; Region</div>
             <div class="kv-list">
-              <div class="kv-item"><span class="kv-key">Recommended Day</span><span class="kv-val">${esc(d.upload_timing?.recommended_day || "Thursday")}</span></div>
-              <div class="kv-item"><span class="kv-key">Indian Time (IST)</span><span class="kv-val" style="color:var(--accent);font-weight:700">${esc(d.upload_timing?.recommended_time_ist || "1:30 PM - 4:30 PM IST")}</span></div>
-              <div class="kv-item"><span class="kv-key">UTC Window</span><span class="kv-val">${esc(d.upload_timing?.recommended_time_utc || "08:00 - 11:00 UTC")}</span></div>
+              <div class="kv-item"><span class="kv-key">Observed Day</span><span class="kv-val">${esc(d.upload_timing?.recommended_day || "Not enough evidence")}</span></div>
+              <div class="kv-item"><span class="kv-key">Indian Time (IST)</span><span class="kv-val" style="color:var(--accent);font-weight:700">${esc(d.upload_timing?.recommended_time_ist || "Not enough evidence")}</span></div>
+              <div class="kv-item"><span class="kv-key">UTC Window</span><span class="kv-val">${esc(d.upload_timing?.recommended_time_utc || "Not enough evidence")}</span></div>
               <div class="kv-item"><span class="kv-key">Target Region</span><span class="kv-val">${chip(d.upload_timing?.target_region || "GLOBAL", "accent")}</span></div>
+              <div class="kv-item"><span class="kv-key">Evidence</span><span class="kv-val">${esc((d.upload_timing?.confidence || "LOW") + " · " + Number(d.upload_timing?.sample_size || 0) + " timestamps")}</span></div>
             </div>
             <div class="metric-sub" style="margin-top:12px">${esc(d.upload_timing?.reasoning || "")}</div>
           </div>
@@ -1682,9 +1683,9 @@ DASHBOARD_HTML = """<!doctype html>
           <div class="bento-card span-6">
             <div class="card-title">Content Pacing &amp; Retention</div>
             <div class="kv-list">
-              <div class="kv-item"><span class="kv-key">Pacing Assessment</span><span class="kv-val">${esc(d.pacing_analysis?.pace_label || "n/a")}</span></div>
-              <div class="kv-item"><span class="kv-key">Avg Sentence Length</span><span class="kv-val">${num(d.pacing_analysis?.avg_sentence_length)} words</span></div>
-              <div class="kv-item"><span class="kv-key">Hook Density</span><span class="kv-val">${esc(d.pacing_analysis?.hook_density || "n/a")}</span></div>
+              <div class="kv-item"><span class="kv-key">${d.pacing_analysis?.analysis_type === "quote_short" ? "Format Assessment" : "Pacing Assessment"}</span><span class="kv-val">${esc(d.pacing_analysis?.pace_label || "n/a")}</span></div>
+              <div class="kv-item"><span class="kv-key">${d.pacing_analysis?.analysis_type === "quote_short" ? "Quote Length" : "Avg Sentence Length"}</span><span class="kv-val">${num(d.pacing_analysis?.avg_sentence_length)} words</span></div>
+              <div class="kv-item"><span class="kv-key">${d.pacing_analysis?.analysis_type === "quote_short" ? "Hook Structure" : "Hook Density"}</span><span class="kv-val">${esc(d.pacing_analysis?.hook_density || "n/a")}</span></div>
             </div>
             <div class="metric-sub" style="margin-top:12px">${esc(d.pacing_analysis?.recommendation || "")}</div>
           </div>

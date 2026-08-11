@@ -118,7 +118,7 @@ def build_seo_package(
         )
         if is_short_form:
             existing_tags = [str(t).strip().lower() for t in (p.get("tags") or []) if str(t).strip()]
-            required_tags = ["shorts", "youtube shorts"]
+            required_tags = ["shorts", "yt", "youtube shorts", "viral shorts"]
             topic_tags = [tag for tag in existing_tags if tag not in required_tags]
             p["tags"] = topic_tags[: 12 - len(required_tags)] + required_tags
         return p
@@ -200,7 +200,10 @@ def build_seo_package(
         language_context=language_context,
         target_title=title,
     )
-    pacing_analysis = analyze_script_pacing(script)
+    pacing_analysis = analyze_script_pacing(
+        script,
+        video_format=str((creator_brief or {}).get("video_format") or ""),
+    )
     channel_intelligence = build_channel_intelligence(research.get("youtube_results", []))
     content_graph_strategy = build_content_graph_strategy(
         primary_topic=primary_topic,

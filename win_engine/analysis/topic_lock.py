@@ -285,9 +285,19 @@ def _is_junk_tag(tag: str) -> bool:
     or every meaningful word is in STOP_TAGS."""
     if not tag:
         return True
-    if re.search(r"[^A-Za-z0-9\s\-]", tag):  # only alnum + space + dash allowed
+    if re.search(r"[^A-Za-z0-9\s\-'’]", tag):
         return True
-    words = [w for w in re.findall(r"[A-Za-z]+", tag.lower()) if w]
+    # A standalone contraction stem is a reliable sign that an LLM or keyword
+    # tokenizer destroyed the original phrase ("didn't" -> "didn"). Do not
+    # expose that word salad as an upload tag.
+    if re.search(
+        r"\b(?:didn|doesn|isn|wasn|weren|couldn|wouldn|shouldn|haven|hasn|hadn)(?!['’]t)\b",
+        tag.lower(),
+    ):
+        return True
+    words = [w for w in re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", tag.lower()) if w]
+    if len(words) > 12:
+        return True
     return not words or all(w in STOP_TAGS for w in words)
 
 
@@ -371,9 +381,9 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
     """Drop junk tags, ensure the real topic is first, and preserve model tags.
 
     Generic category filler is intentionally not added. The separate Shorts rule
-    in the strategy engine keeps only useful format tags.
+    in the strategy engine keeps shorts, yt, youtube shorts, and viral shorts.
     """
-    pinned = {"shorts", "youtube shorts"}
+    pinned = {"shorts", "yt", "youtube shorts", "viral shorts"}
     required = list(dict.fromkeys(
         str(tag).strip().lower()
         for tag in (tags or [])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -42,32 +43,53 @@ def build_channel_intelligence(youtube_results: list[dict[str, Any]]) -> dict[st
 
 
 def build_upload_timing(youtube_results: list[dict[str, Any]], region: str = "global") -> dict[str, Any]:
-    """Derive optimal upload timing and location strategy from competitor publishing patterns."""
+    """Describe competitor publish-time patterns without claiming causal performance evidence."""
     if not youtube_results:
         return {
-            "recommended_day": "Thursday or Friday",
-            "recommended_time_utc": "14:00 - 17:00 UTC",
+            "recommended_day": "Use channel audience data",
+            "recommended_time_utc": "Not enough evidence",
+            "recommended_time_ist": "Not enough evidence",
             "target_region": region.upper() if region else "GLOBAL",
-            "reasoning": "Standard peak YouTube activity window for general audiences.",
+            "confidence": "LOW",
+            "sample_size": 0,
+            "reasoning": (
+                "No usable publication timestamps were found. Check YouTube Studio's audience activity "
+                "data after the channel has enough viewers."
+            ),
         }
 
     days: Counter[str] = Counter()
     hours: Counter[int] = Counter()
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+    usable_timestamps = 0
     for item in youtube_results:
         pub = str(item.get("published_at") or "")
         if pub and len(pub) >= 19:
             try:
-                from datetime import datetime
                 dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
-                days[day_names[dt.weekday()]] += 1
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dt_ist = dt.astimezone(timezone(timedelta(minutes=330)))
+                days[day_names[dt_ist.weekday()]] += 1
                 hours[dt.hour] += 1
+                usable_timestamps += 1
             except Exception:
                 pass
 
-    best_day = days.most_common(1)[0][0] if days else "Thursday"
-    best_hour = hours.most_common(1)[0][0] if hours else 15
+    if not usable_timestamps:
+        return {
+            "recommended_day": "Use channel audience data",
+            "recommended_time_utc": "Not enough evidence",
+            "recommended_time_ist": "Not enough evidence",
+            "target_region": region.upper() if region else "GLOBAL",
+            "confidence": "LOW",
+            "sample_size": 0,
+            "reasoning": "The research results did not contain valid publication timestamps.",
+        }
+
+    best_day = days.most_common(1)[0][0]
+    best_hour = hours.most_common(1)[0][0]
 
     start_h = max(0, best_hour - 1)
     end_h = min(23, best_hour + 2)
@@ -83,7 +105,14 @@ def build_upload_timing(youtube_results: list[dict[str, Any]], region: str = "gl
         "recommended_time_utc": f"{start_h:02d}:00 - {end_h:02d}:00 UTC",
         "recommended_time_ist": ist_time_range,
         "target_region": region.upper() if region else "GLOBAL",
-        "reasoning": f"Based on competitor publishing patterns: best upload window is {ist_time_range} ({start_h:02d}:00 UTC) on {best_day}s.",
+        "confidence": "MEDIUM" if usable_timestamps >= 10 else "LOW",
+        "sample_size": usable_timestamps,
+        "reasoning": (
+            f"Observed {usable_timestamps} relevant-video publication timestamps; the most common "
+            f"pattern was {best_day}, around {ist_time_range}. This shows when competitors published, "
+            "not that this timing caused their performance. Prefer your YouTube Studio audience data "
+            "when available."
+        ),
     }
 
 
