@@ -163,16 +163,16 @@ class YouTubeChannelService:
                 credentials = self._credentials()
                 credentials.refresh(Request())
                 youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
-                items = youtube.videos().list(part="snippet", id=youtube_video_id, maxResults=1).execute().get("items", [])
+                items = youtube.videos().list(
+                    part="snippet,statistics,contentDetails,status",
+                    id=youtube_video_id,
+                    maxResults=1,
+                ).execute().get("items", [])
                 if items:
                     snippet = items[0].get("snippet") or {}
                     ch_id = str(snippet.get("channelId") or "")
                     if ch_id == str(channel[1]):
-                        return {
-                            "video_id": youtube_video_id,
-                            "title": str(snippet.get("title") or ""),
-                            "published_at": str(snippet.get("publishedAt") or ""),
-                        }
+                        return _video_metadata(items[0], youtube_video_id, ownership_verified=True)
                     else:
                         logger.info("Video channel %s differs from connected channel %s. Verifying public video.", ch_id, channel[1])
             except ValueError as exc:
@@ -189,14 +189,13 @@ class YouTubeChannelService:
             try:
                 for api_key in self.settings.youtube_api_key_pool:
                     youtube = build("youtube", "v3", developerKey=api_key, cache_discovery=False)
-                    items = youtube.videos().list(part="snippet", id=youtube_video_id, maxResults=1).execute().get("items", [])
+                    items = youtube.videos().list(
+                        part="snippet,statistics,contentDetails,status",
+                        id=youtube_video_id,
+                        maxResults=1,
+                    ).execute().get("items", [])
                     if items:
-                        snippet = items[0].get("snippet") or {}
-                        return {
-                            "video_id": youtube_video_id,
-                            "title": str(snippet.get("title") or ""),
-                            "published_at": str(snippet.get("publishedAt") or datetime.now(timezone.utc).isoformat()),
-                        }
+                        return _video_metadata(items[0], youtube_video_id, ownership_verified=False)
             except Exception as exc:
                 logger.warning("YouTube Data API lookup failed: %s", exc)
 
@@ -211,7 +210,11 @@ class YouTubeChannelService:
                     return {
                         "video_id": youtube_video_id,
                         "title": str(data.get("title") or "YouTube Video"),
+                        "description": "",
+                        "tags": [],
                         "published_at": datetime.now(timezone.utc).isoformat(),
+                        "ownership_verified": False,
+                        "metadata_source": "oembed",
                     }
         except Exception as exc:
             logger.warning("oEmbed lookup failed: %s", exc)
@@ -221,7 +224,11 @@ class YouTubeChannelService:
             return {
                 "video_id": youtube_video_id,
                 "title": "YouTube Video",
+                "description": "",
+                "tags": [],
                 "published_at": datetime.now(timezone.utc).isoformat(),
+                "ownership_verified": False,
+                "metadata_source": "unverified_id",
             }
 
         raise ValueError("That video could not be found on YouTube.")
@@ -243,12 +250,39 @@ class YouTubeChannelService:
         age_hours = max(0.0, (now - published_at).total_seconds() / 3600)
         windows = (("24h", 24.0), ("7d", 24.0 * 7), ("28d", 24.0 * 28))
         due = [(label, hours) for label, hours in windows if age_hours >= hours and (force or not store.has_snapshot_window(video_id, label))]
-        if not due:
-            return {"video_id": video_id, "age_hours": round(age_hours, 1), "captured": [], "message": "No new scheduled snapshot is due yet."}
 
         credentials = self._credentials()
         credentials.refresh(Request())
+        youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+        items = youtube.videos().list(
+            part="snippet,statistics,contentDetails,status",
+            id=video_id,
+            maxResults=1,
+        ).execute().get("items", [])
+        if not items:
+            raise ValueError("The linked video is no longer available to the connected YouTube account.")
+        metadata = _video_metadata(items[0], video_id, ownership_verified=True)
+        connected = self._connection()
+        if connected and connected[1] and metadata.get("channel_id") != str(connected[1]):
+            raise ValueError("This video does not belong to the connected YouTube channel.")
+        store.update_linked_video_metadata(int(link.get("id") or 0), metadata)
+
         analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
+        analytics_current: dict[str, Any] = {}
+        analytics_end = now.date() - timedelta(days=1)
+        if analytics_end >= published_at.date():
+            try:
+                metrics = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
+                analytics_current = self._query(
+                    analytics,
+                    published_at.date(),
+                    analytics_end,
+                    metrics,
+                    filters=f"video=={video_id}",
+                )
+            except Exception as exc:
+                logger.warning("Linked-video Analytics data is not ready yet: %s", exc)
+
         captured: list[dict[str, Any]] = []
         for label, hours in due:
             end = min(now.date() - timedelta(days=1), (published_at + timedelta(hours=hours)).date())
@@ -273,7 +307,29 @@ class YouTubeChannelService:
             snapshot = store.latest_performance_snapshot(video_id) or {}
             captured.append(snapshot)
             store.complete_due_experiment_snapshots(video_id, snapshot)
-        return {"video_id": video_id, "age_hours": round(age_hours, 1), "captured": captured}
+        store.record_performance_snapshot(
+            youtube_video_id=video_id,
+            age_hours=age_hours,
+            views=_optional_int(metadata.get("view_count")),
+            watch_time_minutes=_optional_float(analytics_current.get("estimatedMinutesWatched")),
+            avg_view_duration_seconds=_optional_float(analytics_current.get("averageViewDuration")),
+            avg_view_percentage=_optional_float(analytics_current.get("averageViewPercentage")),
+            likes=_optional_int(metadata.get("like_count")),
+            comments=_optional_int(metadata.get("comment_count")),
+            shares=_optional_int(analytics_current.get("shares")),
+            subscribers_gained=_optional_int(analytics_current.get("subscribersGained")),
+            snapshot_window="current",
+            replace_window=True,
+        )
+        current_snapshot = store.latest_performance_snapshot(video_id) or {}
+        return {
+            "video_id": video_id,
+            "age_hours": round(age_hours, 1),
+            "captured": captured,
+            "current": current_snapshot,
+            "youtube": metadata,
+            "message": "Current YouTube metadata and available analytics were refreshed.",
+        }
 
     def _query(self, analytics, start: date, end: date, metrics: str, **kwargs: Any) -> dict[str, Any]:
         response = analytics.reports().query(ids="channel==MINE", startDate=start.isoformat(), endDate=end.isoformat(), metrics=metrics, **kwargs).execute()
@@ -397,3 +453,34 @@ def _optional_float(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _video_metadata(item: dict[str, Any], video_id: str, *, ownership_verified: bool) -> dict[str, Any]:
+    snippet = item.get("snippet") or {}
+    statistics = item.get("statistics") or {}
+    content_details = item.get("contentDetails") or {}
+    status = item.get("status") or {}
+    thumbnails = snippet.get("thumbnails") or {}
+    thumbnail = next(
+        (str((thumbnails.get(size) or {}).get("url") or "") for size in ("maxres", "standard", "high", "medium", "default") if (thumbnails.get(size) or {}).get("url")),
+        "",
+    )
+    return {
+        "video_id": video_id,
+        "channel_id": str(snippet.get("channelId") or ""),
+        "channel_title": str(snippet.get("channelTitle") or ""),
+        "title": str(snippet.get("title") or ""),
+        "description": str(snippet.get("description") or ""),
+        "tags": [str(tag) for tag in (snippet.get("tags") or [])],
+        "category_id": str(snippet.get("categoryId") or ""),
+        "published_at": str(snippet.get("publishedAt") or datetime.now(timezone.utc).isoformat()),
+        "duration": str(content_details.get("duration") or ""),
+        "privacy_status": str(status.get("privacyStatus") or ""),
+        "thumbnail_url": thumbnail,
+        "view_count": _optional_int(statistics.get("viewCount")),
+        "like_count": _optional_int(statistics.get("likeCount")),
+        "comment_count": _optional_int(statistics.get("commentCount")),
+        "ownership_verified": ownership_verified,
+        "metadata_source": "youtube_data_api",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }

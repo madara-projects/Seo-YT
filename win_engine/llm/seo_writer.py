@@ -200,16 +200,30 @@ def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) ->
     if not channel_learning:
         return ""
     lines: list[str] = []
+    confidence = str(channel_learning.get("confidence") or "collecting")
     best_videos = channel_learning.get("best_videos") or []
-    for v in best_videos[:3]:
-        t = (v.get("title") or "").strip()
-        views = v.get("views")
-        if t:
-            v_str = f" ({int(views):,} views)" if views else ""
-            lines.append(f"- Proven Top Video: \"{t}\"{v_str}")
+    if confidence in {"directional", "evidence-based"}:
+        for v in best_videos[:3]:
+            t = (v.get("title") or "").strip()
+            views = v.get("views")
+            retention = v.get("average_view_percentage")
+            if t:
+                details = [f"{int(views):,} views" if views is not None else ""]
+                if retention is not None:
+                    details.append(f"{float(retention):.1f}% average viewed")
+                details = [detail for detail in details if detail]
+                lines.append(f"- {confidence.title()} linked-video pattern: \"{t}\" ({', '.join(details)})")
+                actual_tags = [str(tag).strip() for tag in (v.get("actual_tags") or []) if str(tag).strip()]
+                if actual_tags:
+                    lines.append(f"  Actual uploaded tags: {', '.join(actual_tags[:6])}")
     rec = channel_learning.get("recommendation")
     if rec and str(rec).strip():
         lines.append(f"- Channel Insight: {str(rec).strip()}")
+    if confidence == "collecting" and channel_learning.get("linked_video_count"):
+        lines.append(
+            f"- Only {channel_learning.get('sample_size', 0)} linked videos have a mature 24-hour snapshot; "
+            "do not imitate or reject a title pattern from this small sample yet."
+        )
     recent_titles = channel_learning.get("recent_titles") or []
     if recent_titles:
         lines.append("- Avoid repeating these recent generated titles or their sentence patterns:")

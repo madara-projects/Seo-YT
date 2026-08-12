@@ -161,6 +161,8 @@ class HistoryStore:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_run_id ON published_video_links(analysis_run_id)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_yt_id ON published_video_links(youtube_video_id)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_pub_at ON published_video_links(published_at)")
+            self._ensure_column(connection, "published_video_links", "youtube_metadata_json", "TEXT")
+            self._ensure_column(connection, "published_video_links", "metadata_synced_at", "TEXT")
 
             # Stage B: Comparable age-based performance snapshots
             connection.execute(
@@ -324,8 +326,15 @@ class HistoryStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, created_at, title, opportunity_score, title_score, query, payload_json
-                FROM analysis_runs ORDER BY created_at DESC LIMIT ? OFFSET ?
+                SELECT a.id, a.created_at, a.title, a.opportunity_score, a.title_score,
+                       a.query, a.payload_json, p.id, p.youtube_video_id
+                FROM analysis_runs a
+                LEFT JOIN published_video_links p ON p.id = (
+                    SELECT linked.id FROM published_video_links linked
+                    WHERE linked.analysis_run_id = a.id
+                    ORDER BY linked.updated_at DESC LIMIT 1
+                )
+                ORDER BY a.created_at DESC LIMIT ? OFFSET ?
                 """
                 , (max(1, min(limit, 100)), max(0, offset))
             ).fetchall()
@@ -335,6 +344,8 @@ class HistoryStore:
                 "opportunity_score": round(float(row[3] or 0), 2),
                 "title_score": round(float(row[4] or 0), 2), "query": row[5],
                 "has_full_package": bool(row[6]),
+                "linked_video_link_id": row[7],
+                "linked_youtube_video_id": row[8],
             }
             for row in rows
         ]
@@ -523,7 +534,7 @@ class HistoryStore:
             ).fetchall()
             recent_rows = connection.execute(
                 """
-                SELECT title, title_score, opportunity_score, created_at
+                SELECT id, title, title_score, opportunity_score, created_at
                 FROM analysis_runs
                 ORDER BY created_at DESC
                 LIMIT 5
@@ -556,10 +567,11 @@ class HistoryStore:
             ],
             "recent_runs": [
                 {
-                    "title": row[0],
-                    "title_score": round(float(row[1] or 0), 2),
-                    "opportunity_score": round(float(row[2] or 0), 2),
-                    "created_at": row[3],
+                    "id": row[0],
+                    "title": row[1],
+                    "title_score": round(float(row[2] or 0), 2),
+                    "opportunity_score": round(float(row[3] or 0), 2),
+                    "created_at": row[4],
                 }
                 for row in recent_rows
             ],
@@ -700,6 +712,12 @@ class HistoryStore:
     ) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
+            # A generated package represents one upload. Changing its link
+            # replaces the association while historical metric rows stay intact.
+            connection.execute(
+                "DELETE FROM published_video_links WHERE analysis_run_id = ? AND youtube_video_id != ?",
+                (analysis_run_id, youtube_video_id),
+            )
             cursor = connection.execute(
                 """
                 INSERT INTO published_video_links (
@@ -739,7 +757,11 @@ class HistoryStore:
                     now,
                 ),
             )
-            return cursor.lastrowid or 0
+            row = connection.execute(
+                "SELECT id FROM published_video_links WHERE youtube_video_id = ?",
+                (youtube_video_id,),
+            ).fetchone()
+            return int(row[0]) if row else int(cursor.lastrowid or 0)
 
     def published_video_links_list(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -749,7 +771,8 @@ class HistoryStore:
                        p.selected_title, p.selected_thumbnail_package, p.selected_description,
                        p.format, p.language, p.region, p.notes, p.linked_at, p.updated_at,
                        COALESCE(a.title, a.query, 'Saved Package'), a.opportunity_score, a.title_score,
-                       s.age_hours, s.views, s.avg_view_percentage, s.impressions_ctr, s.snapshot_window, s.captured_at
+                       s.age_hours, s.views, s.avg_view_percentage, s.impressions_ctr, s.snapshot_window, s.captured_at,
+                       p.selected_tags_json, p.selected_hashtags_json, p.youtube_metadata_json, p.metadata_synced_at
                 FROM published_video_links p
                 LEFT JOIN analysis_runs a ON p.analysis_run_id = a.id
                 LEFT JOIN video_performance_snapshots s ON s.id = (
@@ -782,6 +805,10 @@ class HistoryStore:
                         "age_hours": r[16], "views": r[17], "avg_view_percentage": r[18],
                         "impressions_ctr": r[19], "snapshot_window": r[20], "captured_at": r[21],
                     } if r[21] else None,
+                    "selected_tags": _json_list(r[22]),
+                    "selected_hashtags": _json_list(r[23]),
+                    "youtube_metadata": _json_dict(r[24]),
+                    "metadata_synced_at": r[25],
                 }
                 for r in rows
             ]
@@ -792,9 +819,12 @@ class HistoryStore:
                 """
                 SELECT id, analysis_run_id, youtube_video_id, published_at,
                        selected_title, selected_thumbnail_package, selected_description,
-                       format, language, region, notes, linked_at, updated_at
+                       format, language, region, notes, linked_at, updated_at,
+                       selected_tags_json, selected_hashtags_json, youtube_metadata_json, metadata_synced_at
                 FROM published_video_links
                 WHERE analysis_run_id = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
                 """,
                 (run_id,),
             ).fetchone()
@@ -814,7 +844,22 @@ class HistoryStore:
                 "notes": row[10],
                 "linked_at": row[11],
                 "updated_at": row[12],
+                "selected_tags": _json_list(row[13]),
+                "selected_hashtags": _json_list(row[14]),
+                "youtube_metadata": _json_dict(row[15]),
+                "metadata_synced_at": row[16],
             }
+
+    def update_linked_video_metadata(self, link_id: int, metadata: dict[str, Any]) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE published_video_links
+                   SET youtube_metadata_json = ?, metadata_synced_at = ?, updated_at = ?
+                   WHERE id = ?""",
+                (json.dumps(metadata), now, now, link_id),
+            )
+            return cursor.rowcount > 0
 
     def published_video_link(self, link_id: int) -> dict[str, Any] | None:
         for link in self.published_video_links_list():
@@ -863,9 +908,15 @@ class HistoryStore:
         impressions: int | None = None,
         impressions_ctr: float | None = None,
         snapshot_window: str | None = None,
+        replace_window: bool = False,
     ) -> int:
         captured_at = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
+            if replace_window and snapshot_window:
+                connection.execute(
+                    "DELETE FROM video_performance_snapshots WHERE youtube_video_id = ? AND snapshot_window = ?",
+                    (youtube_video_id, snapshot_window),
+                )
             cursor = connection.execute(
                 """
                 INSERT INTO video_performance_snapshots (
@@ -891,7 +942,7 @@ class HistoryStore:
                     captured_at,
                 ),
             )
-            return cursor.lastrowid or 0
+            return int(cursor.lastrowid or 0)
 
     def has_snapshot_window(self, youtube_video_id: str, snapshot_window: str) -> bool:
         with self._connect() as connection:
@@ -919,6 +970,130 @@ class HistoryStore:
     def latest_performance_snapshot(self, youtube_video_id: str) -> dict[str, Any] | None:
         snapshots = self.performance_snapshots(youtube_video_id)
         return snapshots[-1] if snapshots else None
+
+    def linked_package_report(self, run_id: int) -> dict[str, Any]:
+        """Join a generated package to its uploaded metadata and measured performance."""
+        run = self.history_run(run_id)
+        link = self.published_video_link_by_run(run_id)
+        if not run or not link:
+            return {"linked": False}
+
+        package = run.get("package") if isinstance(run.get("package"), dict) else {}
+        metadata = link.get("youtube_metadata") if isinstance(link.get("youtube_metadata"), dict) else {}
+        snapshots = self.performance_snapshots(str(link.get("youtube_video_id") or ""))
+        latest = snapshots[-1] if snapshots else {}
+        published_at = _parse_datetime_safe(str(link.get("published_at") or ""))
+        age_hours = max(0.0, (datetime.now(timezone.utc) - published_at).total_seconds() / 3600) if published_at else 0.0
+
+        generated_title = str(package.get("title") or run.get("title") or "").strip()
+        uploaded_title = str(metadata.get("title") or link.get("selected_title") or "").strip()
+        generated_description = str(package.get("description") or link.get("selected_description") or "").strip()
+        uploaded_description = str(metadata.get("description") or "").strip()
+        generated_tags = _normalized_list(package.get("tags") or link.get("selected_tags") or [])
+        uploaded_tags = _normalized_list(metadata.get("tags") or [])
+        generated_hashtags = _normalized_list(package.get("hashtags") or link.get("selected_hashtags") or [])
+        uploaded_hashtags = _normalized_list(__import__("re").findall(r"#[A-Za-z0-9_]+", uploaded_description))
+
+        matching_tags = [tag for tag in generated_tags if tag in set(uploaded_tags)]
+        missing_tags = [tag for tag in generated_tags if tag not in set(uploaded_tags)]
+        extra_tags = [tag for tag in uploaded_tags if tag not in set(generated_tags)]
+        matching_hashtags = [tag for tag in generated_hashtags if tag in set(uploaded_hashtags)]
+        description_match = _word_overlap_percent(generated_description, uploaded_description)
+
+        views = _first_number(latest.get("views"), metadata.get("view_count"))
+        likes = _first_number(latest.get("likes"), metadata.get("like_count"))
+        comments = _first_number(latest.get("comments"), metadata.get("comment_count"))
+        shares = _first_number(latest.get("shares"))
+        retention = _optional_number(latest.get("avg_view_percentage"))
+        avg_duration = _optional_number(latest.get("avg_view_duration_seconds"))
+        like_rate = round((likes / views) * 100, 2) if views else None
+        comment_rate = round((comments / views) * 100, 2) if views else None
+
+        baseline = self._comparable_snapshot_baseline(link, latest)
+        verdict, worked, improve = _performance_diagnosis(
+            age_hours=age_hours,
+            views=views,
+            retention=retention,
+            like_rate=like_rate,
+            baseline=baseline,
+            title_match=_normalize_text(uploaded_title) == _normalize_text(generated_title),
+            matching_tags=len(matching_tags),
+            generated_tag_count=len(generated_tags),
+        )
+
+        return {
+            "linked": True,
+            "link_id": link.get("id"),
+            "video_id": link.get("youtube_video_id"),
+            "video_url": f"https://www.youtube.com/watch?v={link.get('youtube_video_id')}",
+            "published_at": link.get("published_at"),
+            "age_hours": round(age_hours, 1),
+            "metadata_synced_at": link.get("metadata_synced_at"),
+            "youtube": metadata,
+            "package_usage": {
+                "generated_title": generated_title,
+                "uploaded_title": uploaded_title,
+                "title_match": _normalize_text(uploaded_title) == _normalize_text(generated_title),
+                "description_match_percent": description_match,
+                "generated_tags": generated_tags,
+                "uploaded_tags": uploaded_tags,
+                "matching_tags": matching_tags,
+                "missing_generated_tags": missing_tags,
+                "extra_uploaded_tags": extra_tags,
+                "generated_hashtags": generated_hashtags,
+                "uploaded_hashtags": uploaded_hashtags,
+                "matching_hashtags": matching_hashtags,
+            },
+            "performance": {
+                "views": views,
+                "likes": likes,
+                "comments": comments,
+                "shares": shares,
+                "like_rate_percent": like_rate,
+                "comment_rate_percent": comment_rate,
+                "average_view_duration_seconds": avg_duration,
+                "average_view_percentage": retention,
+                "subscribers_gained": _optional_number(latest.get("subscribers_gained")),
+                "snapshot_window": latest.get("snapshot_window"),
+                "captured_at": latest.get("captured_at"),
+            },
+            "baseline": baseline,
+            "diagnosis": {
+                "verdict": verdict,
+                "what_worked": worked,
+                "needs_improvement": improve,
+                "confidence": "LOW" if age_hours < 24 or baseline.get("sample_size", 0) < 3 else "MEDIUM",
+                "learning_eligible": bool(age_hours >= 24 and latest),
+                "attribution_note": (
+                    "YouTube APIs report video-level performance, not views caused by individual tags. "
+                    "The tool learns reliable packaging patterns only after comparable linked videos accumulate."
+                ),
+            },
+            "snapshots": snapshots,
+        }
+
+    def _comparable_snapshot_baseline(self, link: dict[str, Any], latest: dict[str, Any]) -> dict[str, Any]:
+        window = str(latest.get("snapshot_window") or "")
+        if not window or window == "current":
+            return {"sample_size": 0, "window": window or "none", "median_views": None, "median_retention_percentage": None}
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT s.views, s.avg_view_percentage
+                   FROM video_performance_snapshots s
+                   JOIN published_video_links p ON p.youtube_video_id = s.youtube_video_id
+                   WHERE s.snapshot_window = ? AND s.youtube_video_id != ?
+                     AND COALESCE(p.format, '') = COALESCE(?, '')
+                     AND COALESCE(p.language, '') = COALESCE(?, '')""",
+                (window, link.get("youtube_video_id"), link.get("format"), link.get("language")),
+            ).fetchall()
+        views = sorted(float(row[0]) for row in rows if row[0] is not None)
+        retention = sorted(float(row[1]) for row in rows if row[1] is not None)
+        return {
+            "sample_size": len(rows),
+            "window": window,
+            "median_views": _median(views),
+            "median_retention_percentage": _median(retention),
+        }
 
     # --- Stage C: Evidence & Cohort Calculation Engine ---
 
@@ -1133,6 +1308,123 @@ def _json_value(value: str | None) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except (TypeError, ValueError):
         return {}
+
+
+def _json_dict(value: str | None) -> dict[str, Any]:
+    return _json_value(value)
+
+
+def _json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+        return [str(item) for item in parsed] if isinstance(parsed, list) else []
+    except (TypeError, ValueError):
+        return []
+
+
+def _normalize_text(value: str) -> str:
+    import re
+    return " ".join(re.findall(r"[a-z0-9]+", (value or "").casefold()))
+
+
+def _normalized_list(values: Any) -> list[str]:
+    out: list[str] = []
+    for value in values if isinstance(values, list) else []:
+        normalized = _normalize_text(str(value).lstrip("#"))
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
+
+
+def _word_overlap_percent(left: str, right: str) -> float:
+    left_words = set(_normalize_text(left).split())
+    right_words = set(_normalize_text(right).split())
+    if not left_words or not right_words:
+        return 0.0
+    return round((len(left_words & right_words) / len(left_words)) * 100, 1)
+
+
+def _optional_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_number(*values: Any) -> int:
+    for value in values:
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
+def _parse_datetime_safe(value: str) -> datetime | None:
+    try:
+        return _parse_datetime(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _performance_diagnosis(
+    *,
+    age_hours: float,
+    views: int,
+    retention: float | None,
+    like_rate: float | None,
+    baseline: dict[str, Any],
+    title_match: bool,
+    matching_tags: int,
+    generated_tag_count: int,
+) -> tuple[str, list[str], list[str]]:
+    worked: list[str] = []
+    improve: list[str] = []
+    if title_match:
+        worked.append("The uploaded title exactly matches the generated recommendation, so its result can inform title learning.")
+    else:
+        improve.append("The uploaded title differs from the generated title; treat this as a test of the uploaded title, not the original recommendation.")
+    if generated_tag_count and matching_tags:
+        worked.append(f"You used {matching_tags} of {generated_tag_count} generated tags.")
+    elif generated_tag_count:
+        improve.append("The uploaded metadata does not currently contain the generated tags, so tag-package adoption cannot be evaluated.")
+
+    sample_size = int(baseline.get("sample_size") or 0)
+    median_views = baseline.get("median_views")
+    median_retention = baseline.get("median_retention_percentage")
+    if sample_size >= 3 and median_views is not None:
+        if views >= float(median_views):
+            worked.append(f"Views are at or above the {baseline.get('window')} comparable median ({int(median_views)}).")
+        else:
+            improve.append(f"Views are below the {baseline.get('window')} comparable median ({int(median_views)}); test a stronger opening or packaging angle next time.")
+    else:
+        improve.append("There are not yet three comparable linked videos at the same age window, so no reliable winner/loser claim is made.")
+
+    if retention is not None:
+        if median_retention is not None and sample_size >= 3:
+            if retention >= float(median_retention):
+                worked.append(f"Average percentage viewed ({retention:.1f}%) is at or above the comparable median.")
+            else:
+                improve.append(f"Average percentage viewed ({retention:.1f}%) is below the comparable median; improve first-frame readability and looping.")
+        elif retention >= 90:
+            worked.append(f"Average percentage viewed is currently {retention:.1f}%, a promising observation for a Short.")
+        elif age_hours >= 24 and retention < 70:
+            improve.append(f"Average percentage viewed is currently {retention:.1f}%; test faster text reveal, clearer contrast, and a cleaner loop.")
+    if like_rate is not None:
+        worked.append(f"Observed like rate is {like_rate:.2f}% ({views} views); this is descriptive, not proof of a title or tag effect.")
+
+    if age_hours < 24:
+        verdict = "TOO EARLY — collecting the first 24-hour evidence"
+    elif sample_size < 3:
+        verdict = "OBSERVATION ONLY — more comparable linked videos are needed"
+    else:
+        verdict = "ABOVE BASELINE" if median_views is not None and views >= float(median_views) else "BELOW BASELINE"
+    return verdict, worked, improve
 
 
 def _top_counts(values: list[Any]) -> list[Any]:
