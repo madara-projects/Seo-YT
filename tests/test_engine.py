@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from win_engine.analysis.creator_brief import build_creator_brief, creator_topic
@@ -9,6 +10,7 @@ from win_engine.analysis.content_auditor import audit_content_package
 from win_engine.analysis.research_planner import plan_research_queries
 from win_engine.analysis.topic_lock import force_topic_in_tags
 from win_engine.feedback.history_store import HistoryStore
+from win_engine.feedback.channel_learning import learning_summary as channel_learning_summary
 from win_engine.analysis.gap_engine import _opportunity_score
 from win_engine.analysis.pacing_engine import analyze_script_pacing
 from win_engine.analysis.strategy_layer import build_upload_timing
@@ -88,6 +90,86 @@ class TestEngineStages(unittest.TestCase):
         self.assertTrue(self.store.has_snapshot_window("test_vid_123", "24h"))
         self.assertEqual(self.store.published_video_links_list(), [])
 
+    def test_current_snapshot_is_replaced_instead_of_duplicated(self):
+        self.store.record_performance_snapshot(
+            "test_vid_123", 2, views=10, snapshot_window="current", replace_window=True,
+        )
+        self.store.record_performance_snapshot(
+            "test_vid_123", 3, views=25, snapshot_window="current", replace_window=True,
+        )
+        snapshots = self.store.performance_snapshots("test_vid_123")
+        self.assertEqual(len(snapshots), 1)
+        self.assertEqual(snapshots[0]["views"], 25)
+
+    def test_linked_package_report_joins_actual_metadata_and_performance(self):
+        package = {
+            "title": "Didn’t I Deserve the Bare Minimum? 🌧️ #Shorts",
+            "description": "A faithful reflection.\n\n#Shorts #Quotes #Heartbreak",
+            "tags": ["bare minimum quote", "heartbreak", "shorts"],
+            "hashtags": ["#Shorts", "#Quotes", "#Heartbreak"],
+        }
+        with self.store._connect() as conn:
+            run_id = conn.execute(
+                """INSERT INTO analysis_runs
+                   (query, created_at, title, title_score, opportunity_score, payload_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                ("quote", datetime.now(timezone.utc).isoformat(), package["title"], 9, 63.61, json.dumps(package)),
+            ).lastrowid
+        published = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+        link_id = self.store.link_published_video(
+            run_id, "Hzkt7KbuV-o", published,
+            selected_title=package["title"],
+            selected_tags_json=json.dumps(package["tags"]),
+            selected_hashtags_json=json.dumps(package["hashtags"]),
+            format_val="youtube_shorts", language="english",
+        )
+        self.store.update_linked_video_metadata(link_id, {
+            "title": package["title"],
+            "description": package["description"],
+            "tags": ["bare minimum quote", "heartbreak", "shorts"],
+            "view_count": 125,
+            "like_count": 10,
+            "comment_count": 2,
+        })
+        self.store.record_performance_snapshot(
+            "Hzkt7KbuV-o", 4, views=125, likes=10, comments=2,
+            avg_view_percentage=88.5, snapshot_window="current", replace_window=True,
+        )
+        report = self.store.linked_package_report(run_id)
+        self.assertTrue(report["linked"])
+        self.assertTrue(report["package_usage"]["title_match"])
+        self.assertEqual(report["package_usage"]["matching_tags"], package["tags"])
+        self.assertEqual(report["performance"]["views"], 125)
+        self.assertEqual(report["performance"]["like_rate_percent"], 8.0)
+        self.assertIn("TOO EARLY", report["diagnosis"]["verdict"])
+
+    def test_future_generation_learning_does_not_overfit_one_linked_video(self):
+        with self.store._connect() as conn:
+            run_id = conn.execute(
+                "INSERT INTO analysis_runs (query, created_at, title) VALUES (?, ?, ?)",
+                ("quote", datetime.now(timezone.utc).isoformat(), "A Strong Quote Title"),
+            ).lastrowid
+        link_id = self.store.link_published_video(
+            run_id,
+            "learn_vid01",
+            (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+            selected_tags_json=json.dumps(["quote tag"]),
+        )
+        self.store.update_linked_video_metadata(link_id, {
+            "title": "A Strong Quote Title", "tags": ["quote tag"], "view_count": 500,
+        })
+        self.store.record_performance_snapshot(
+            "learn_vid01", 48, views=500, avg_view_percentage=91,
+            snapshot_window="current", replace_window=True,
+        )
+        learning = channel_learning_summary(self.db_path)
+        self.assertEqual(learning["linked_video_count"], 1)
+        self.assertEqual(learning["sample_size"], 1)
+        self.assertEqual(learning["confidence"], "collecting")
+        prompt_block = seo_writer._build_channel_learning_block(learning)
+        self.assertIn("do not imitate or reject", prompt_block)
+        self.assertNotIn("linked-video pattern", prompt_block)
+
     def test_cohort_uses_median_not_a_single_outlier(self):
         runs: list[tuple[int, int]] = []
         with self.store._connect() as conn:
@@ -117,6 +199,19 @@ class TestEngineStages(unittest.TestCase):
                 ("newer", "2026-08-02T00:00:00Z", "Newer title"),
             )
         self.assertEqual(self.store.recent_generated_titles(2), ["Newer title", "Older title"])
+
+    def test_learning_summary_recent_runs_include_database_ids(self):
+        with self.store._connect() as conn:
+            cursor = conn.execute(
+                """INSERT INTO analysis_runs
+                   (query, created_at, title, title_score, opportunity_score)
+                   VALUES (?, ?, ?, ?, ?)""",
+                ("linkable", "2026-08-11T17:33:54Z", "Linkable package", 9.0, 63.61),
+            )
+            run_id = int(cursor.lastrowid)
+        recent = self.store.learning_summary()["recent_runs"]
+        self.assertEqual(recent[0]["id"], run_id)
+        self.assertEqual(recent[0]["title"], "Linkable package")
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
     def test_shorts_keep_all_required_fixed_tags(self, mocked_writer):

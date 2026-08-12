@@ -1164,6 +1164,10 @@ DASHBOARD_HTML = """<!doctype html>
 
         const rowsHtml = runs.map((run) => {
           const dtStr = run.created_at ? new Date(run.created_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : "Recently";
+          const runId = Number(run.id);
+          const linkButton = Number.isInteger(runId) && runId > 0
+            ? `<button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)" onclick="linkVideoPrompt(${runId})">🔗 Link</button>`
+            : `<button class="btn" style="padding:2px 8px;font-size:11px" disabled title="Reload history to restore this record ID">Link unavailable</button>`;
           return `
             <tr>
               <td style="font-weight:600;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(run.title)}">${esc(run.title || run.query || "Untitled Video Analysis")}</td>
@@ -1172,14 +1176,18 @@ DASHBOARD_HTML = """<!doctype html>
               <td style="font-size:12px;color:var(--text-muted)">${dtStr}</td>
               <td style="display:flex;gap:6px">
                 <a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Inspect</a>
-                <button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)" onclick="linkVideoPrompt(${Number(run.id)})">🔗 Link</button>
-                <button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#ef4444" onclick="deleteHistoryRun(${Number(run.id)})">🗑️ Delete</button>
+                ${linkButton}
+                ${Number.isInteger(runId) && runId > 0 ? `<button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#ef4444" onclick="deleteHistoryRun(${runId})">🗑️ Delete</button>` : ""}
               </td>
             </tr>`;
         }).join("");
 
         const anaRowsHtml = runs.map((run) => {
           const dtStr = run.created_at ? new Date(run.created_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : "Recently";
+          const runId = Number(run.id);
+          const linkButton = Number.isInteger(runId) && runId > 0
+            ? `<button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)" onclick="linkVideoPrompt(${runId})">🔗 Link</button>`
+            : `<button class="btn" style="padding:2px 8px;font-size:11px" disabled title="Reload history to restore this record ID">Link unavailable</button>`;
           return `
             <tr>
               <td style="font-size:12px;color:var(--text-muted)">${dtStr} IST</td>
@@ -1188,8 +1196,8 @@ DASHBOARD_HTML = """<!doctype html>
               <td><span class="chip chip-ok">${num(run.title_score || 8.8)} / 10</span></td>
               <td style="display:flex;gap:6px">
                 <a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Studio</a>
-                <button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)" onclick="linkVideoPrompt(${Number(run.id)})">🔗 Link</button>
-                <button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#ef4444" onclick="deleteHistoryRun(${Number(run.id)})">🗑️ Delete</button>
+                ${linkButton}
+                ${Number.isInteger(runId) && runId > 0 ? `<button class="btn" style="padding:2px 8px;font-size:11px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#ef4444" onclick="deleteHistoryRun(${runId})">🗑️ Delete</button>` : ""}
               </td>
             </tr>`;
         }).join("");
@@ -1221,6 +1229,10 @@ DASHBOARD_HTML = """<!doctype html>
     }
 
     async function linkVideoPrompt(runId) {
+      if (!Number.isInteger(Number(runId)) || Number(runId) <= 0) {
+        alert("This history row is missing its database ID. Reload the page and try again.");
+        return;
+      }
       const videoId = prompt("Enter your published YouTube Video ID or URL for this package:");
       if (!videoId) return;
       try {
@@ -1399,19 +1411,22 @@ DASHBOARD_HTML = """<!doctype html>
           body.innerHTML = "<tr><td colspan='5' style='color:var(--text-muted);text-align:center;padding:16px'>No saved packages yet.</td></tr>";
           return;
         }
-        body.innerHTML = runs.map((run) =>
-          "<tr>" +
+        body.innerHTML = runs.map((run) => {
+          const linkControl = run.linked_youtube_video_id
+            ? "<span class='chip chip-ok'>Linked</span><button class='btn' style='padding:4px 10px;font-size:11px' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Change link</button>"
+            : "<button class='btn' style='padding:4px 10px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)' onclick='linkVideoPrompt(" + Number(run.id) + ")'>🔗 Link</button>";
+          return "<tr>" +
           "<td style='font-size:12px;color:var(--text-muted)'>" + historyDate(run.created_at) + "</td>" +
           "<td style='font-weight:600;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(run.title) + "'>" + esc(run.title || run.query || "Untitled package") + "</td>" +
           "<td><span style='font-weight:700;color:var(--accent)'>" + num(run.opportunity_score) + "</span> / 100</td>" +
           "<td><span class='chip chip-ok'>" + num(run.title_score) + " / 10</span></td>" +
           "<td style='display:flex;gap:6px'>" +
           "<button class='btn' style='padding:4px 10px;font-size:11px' onclick='openHistoryRun(" + Number(run.id) + ")'>Open</button>" +
-          "<button class='btn' style='padding:4px 10px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)' onclick='linkVideoPrompt(" + Number(run.id) + ")'>🔗 Link</button>" +
+          linkControl +
           "<button class='btn' style='padding:4px 10px;font-size:11px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#ef4444' onclick='deleteHistoryRun(" + Number(run.id) + ")'>🗑️ Delete</button>" +
           "</td>" +
-          "</tr>"
-        ).join("");
+          "</tr>";
+        }).join("");
       } catch (error) {
         body.innerHTML = "<tr><td colspan='5' style='color:var(--bad);text-align:center;padding:16px'>Could not load saved packages.</td></tr>";
         console.error("Saved package history failed:", error);
@@ -1435,6 +1450,9 @@ DASHBOARD_HTML = """<!doctype html>
         const hashtags = arr(packageData.hashtags).map((tag) => "<span class='tag-item'>" + esc(tag) + "</span>").join("") || "<span class='metric-sub'>Not stored in this older record.</span>";
         const variants = arr(packageData.title_variants).map((item) => "<li>" + esc(typeof item === "string" ? item : item.title || "") + "</li>").join("") || "<li>Not stored in this older record.</li>";
         const chapters = arr(packageData.chapters).map((item) => "<li>" + esc((item.timestamp || "") + " " + (item.title || item)) + "</li>").join("") || "<li>Not stored in this older record.</li>";
+        const report = run.linked_video_report || {};
+        const linkedHtml = report.linked ? linkedVideoReportHtml(report, run.id) :
+          "<div class='bento-card' style='margin-top:18px'><div class='card-title'>Published-video learning</div><div class='metric-sub'>No YouTube video is linked to this package yet. Use Link on the History row after publishing.</div></div>";
         const legacy = !run.package
           ? "<div class='alert-banner' style='background:var(--warn-bg);border:1px solid rgba(245,158,11,.3);color:#fcd34d;margin-top:16px'>This package was created before full-package history was added. Its saved title, script, and scores are shown below; future packages retain the complete generated output.</div>"
           : "";
@@ -1443,6 +1461,7 @@ DASHBOARD_HTML = """<!doctype html>
           "<div class='metric-value' style='font-size:24px'>" + esc(packageData.title || run.title || "Untitled package") + "</div>" +
           "<div class='metric-sub' style='margin-top:8px'>Opportunity " + num(run.opportunity_score) + "/100 · Title score " + num(run.title_score) + "/10 · " + esc(run.content_angle || "General") + "</div>" +
           legacy +
+          linkedHtml +
           "<div class='bento-grid' style='margin-top:18px'>" +
           "<div class='bento-card span-6'><div class='card-title'>Description</div><div style='white-space:pre-wrap;line-height:1.6'>" + esc(packageData.description || "Not stored in this older record.") + "</div></div>" +
           "<div class='bento-card span-6'><div class='card-title'>Original video content / script</div><div style='white-space:pre-wrap;line-height:1.6;max-height:420px;overflow-y:auto'>" + esc(fullScript || "Not stored.") + "</div></div>" +
@@ -1450,9 +1469,89 @@ DASHBOARD_HTML = """<!doctype html>
           "<div class='bento-card span-6'><div class='card-title'>Title variations</div><ol style='padding-left:20px;line-height:1.8'>" + variants + "</ol><div class='card-title' style='margin-top:18px'>Chapters</div><ol style='padding-left:20px;line-height:1.8'>" + chapters + "</ol></div>" +
           "</div>";
         panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        const syncedAt = report.metadata_synced_at || (report.performance || {}).captured_at;
+        const stale = !syncedAt || Date.now() - new Date(syncedAt).getTime() > 10 * 60 * 1000;
+        if (report.linked && stale && !historyPerformanceAutoRefresh.has(Number(report.link_id))) {
+          historyPerformanceAutoRefresh.add(Number(report.link_id));
+          refreshHistoryPerformance(Number(report.link_id), Number(run.id), null, true);
+        }
       } catch (error) {
         panel.innerHTML = "<div class='alert-banner alert-err'>Could not open this saved package.</div>";
         console.error("Saved package detail failed:", error);
+      }
+    }
+
+    const historyPerformanceAutoRefresh = new Set();
+
+    function linkedVideoReportHtml(report, runId) {
+      const yt = report.youtube || {};
+      const usage = report.package_usage || {};
+      const perf = report.performance || {};
+      const diagnosis = report.diagnosis || {};
+      const baseline = report.baseline || {};
+      const metric = (value, suffix = "") => value === null || value === undefined ? "Not available yet" : num(value) + suffix;
+      const list = (items, empty) => arr(items).length
+        ? "<ul style='padding-left:20px;line-height:1.65;margin:8px 0'>" + arr(items).map((item) => "<li>" + esc(item) + "</li>").join("") + "</ul>"
+        : "<div class='metric-sub'>" + esc(empty) + "</div>";
+      const tagList = (items, empty) => arr(items).length
+        ? "<div class='tag-list'>" + arr(items).map((item) => "<span class='tag-item'>" + esc(item) + "</span>").join("") + "</div>"
+        : "<div class='metric-sub'>" + esc(empty) + "</div>";
+      const titleStatus = usage.title_match ? "Exact generated title used" : "Uploaded title differs from generated title";
+      const snapshotRows = arr(report.snapshots).map((snapshot) =>
+        "<tr><td>" + esc(snapshot.snapshot_window || "current") + "</td><td>" + metric(snapshot.views) + "</td><td>" + metric(snapshot.likes) + "</td><td>" + metric(snapshot.avg_view_percentage, "%") + "</td><td>" + historyDate(snapshot.captured_at) + "</td></tr>"
+      ).join("") || "<tr><td colspan='5' class='metric-sub'>No performance snapshot has been captured yet.</td></tr>";
+      return "<div class='bento-card' style='margin-top:18px;border-top:3px solid var(--ok)'>" +
+        "<div class='card-title'><span>Linked YouTube performance &amp; learning</span><div style='display:flex;gap:8px;flex-wrap:wrap'>" +
+        "<span class='chip chip-ok'>" + esc(diagnosis.confidence || "LOW") + " confidence</span>" +
+        "<a class='btn' target='_blank' rel='noopener' href='" + esc(report.video_url) + "'>Watch video ↗</a>" +
+        "<button class='btn' onclick='refreshHistoryPerformance(" + Number(report.link_id) + "," + Number(runId) + ",this)'>Refresh YouTube data</button></div></div>" +
+        "<div style='font-size:18px;font-weight:800;margin-top:8px'>" + esc(diagnosis.verdict || "Collecting evidence") + "</div>" +
+        "<div class='metric-sub' style='margin-top:6px'>Published " + historyDate(report.published_at) + " · Video ID " + esc(report.video_id) + " · Last data " + historyDate(report.metadata_synced_at || perf.captured_at) + "</div>" +
+        "<div class='bento-grid' style='margin-top:16px'>" +
+          "<div class='bento-card span-6'><div class='card-title'>Actual YouTube upload</div>" +
+            (yt.thumbnail_url ? "<img src='" + esc(yt.thumbnail_url) + "' alt='' style='width:180px;max-width:100%;border-radius:10px;margin-bottom:12px'>" : "") +
+            "<div style='font-weight:750;line-height:1.5'>" + esc(yt.title || usage.uploaded_title || "Metadata not refreshed yet") + "</div>" +
+            "<div class='metric-sub' style='margin:8px 0'>" + esc(titleStatus) + " · Description adoption " + metric(usage.description_match_percent, "%") + "</div>" +
+            "<details style='margin:12px 0'><summary style='cursor:pointer;font-weight:700'>Description currently on YouTube</summary><div style='white-space:pre-wrap;line-height:1.55;max-height:220px;overflow-y:auto;margin-top:10px'>" + esc(yt.description || "No description returned.") + "</div></details>" +
+            "<div class='card-title' style='margin-top:14px'>Tags actually on YouTube</div>" + tagList(usage.uploaded_tags, "No uploaded tags were returned by YouTube.") +
+            "<div class='card-title' style='margin-top:14px'>Generated tags used</div>" + tagList(usage.matching_tags, "None of the generated tags currently match the uploaded tags.") +
+            "<div class='card-title' style='margin-top:14px'>Hashtags actually in description</div>" + tagList(usage.uploaded_hashtags, "No hashtags were detected in the uploaded description.") +
+          "</div>" +
+          "<div class='bento-card span-6'><div class='card-title'>Current real performance</div>" +
+            "<div class='kv-list'>" +
+              "<div class='kv-item'><span class='kv-key'>Views</span><span class='kv-val'>" + metric(perf.views) + "</span></div>" +
+              "<div class='kv-item'><span class='kv-key'>Likes / like rate</span><span class='kv-val'>" + metric(perf.likes) + " / " + metric(perf.like_rate_percent, "%") + "</span></div>" +
+              "<div class='kv-item'><span class='kv-key'>Comments</span><span class='kv-val'>" + metric(perf.comments) + "</span></div>" +
+              "<div class='kv-item'><span class='kv-key'>Average viewed</span><span class='kv-val'>" + metric(perf.average_view_percentage, "%") + "</span></div>" +
+              "<div class='kv-item'><span class='kv-key'>Average view duration</span><span class='kv-val'>" + metric(perf.average_view_duration_seconds, " sec") + "</span></div>" +
+              "<div class='kv-item'><span class='kv-key'>Subscribers gained</span><span class='kv-val'>" + metric(perf.subscribers_gained) + "</span></div>" +
+            "</div><div class='metric-sub' style='margin-top:10px'>Analytics retention can lag behind public view/like counts. Comparable baseline: " + num(baseline.sample_size || 0) + " other videos at " + esc(baseline.window || "no scheduled window") + ".</div>" +
+          "</div>" +
+          "<div class='bento-card span-6'><div class='card-title'>What worked / positive observations</div>" + list(diagnosis.what_worked, "No positive conclusion is supported yet.") + "</div>" +
+          "<div class='bento-card span-6'><div class='card-title'>What to improve / still unknown</div>" + list(diagnosis.needs_improvement, "No issue has been detected from the available evidence.") + "</div>" +
+          "<div class='bento-card span-12'><div class='card-title'>Performance snapshots</div><div style='overflow-x:auto'><table><thead><tr><th>Window</th><th>Views</th><th>Likes</th><th>Average viewed</th><th>Captured</th></tr></thead><tbody>" + snapshotRows + "</tbody></table></div>" +
+            "<div class='metric-sub' style='margin-top:10px'>" + esc(diagnosis.attribution_note || "") + "</div></div>" +
+        "</div></div>";
+    }
+
+    async function refreshHistoryPerformance(linkId, runId, button, silent = false) {
+      if (!Number.isInteger(Number(linkId)) || Number(linkId) <= 0) return;
+      const original = button ? button.textContent : "";
+      if (button) { button.disabled = true; button.textContent = "Refreshing…"; }
+      try {
+        const response = await fetch("/api/published-videos/" + Number(linkId) + "/refresh", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "YouTube refresh failed.");
+        if (!silent) showToast("YouTube metadata and available analytics refreshed.");
+        invalidateDashboardCache();
+        await openHistoryRun(Number(runId));
+        loadHistoryFeed(true);
+        loadPublishedVideos(true);
+        loadCohortLearning();
+      } catch (error) {
+        if (!silent) alert(error.message || "YouTube refresh failed.");
+      } finally {
+        if (button) { button.disabled = false; button.textContent = original; }
       }
     }
 

@@ -206,9 +206,11 @@ def get_history_runs(limit: int = 50, offset: int = 0):
 
 @router.get("/api/history/runs/{run_id}")
 def get_history_run(run_id: int):
-    run = HistoryStore(get_settings().database_path).history_run(run_id)
+    store = HistoryStore(get_settings().database_path)
+    run = store.history_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Saved package not found.")
+    run["linked_video_report"] = store.linked_package_report(run_id)
     return run
 
 
@@ -234,8 +236,9 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
     clean_vid = _extract_youtube_video_id(payload.youtube_video_id)
     if not clean_vid:
         raise HTTPException(status_code=422, detail="Enter a valid 11-character YouTube video ID or video URL.")
+    service = YouTubeChannelService(settings)
     try:
-        owned_video = YouTubeChannelService(settings).verify_owned_video(clean_vid)
+        owned_video = service.verify_owned_video(clean_vid)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -265,6 +268,17 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
         region=str(region_value) if region_value else None,
         notes=payload.notes,
     )
+    store.update_linked_video_metadata(link_id, owned_video)
+    refresh_warning = None
+    try:
+        link = store.published_video_link(link_id)
+        if link and owned_video.get("ownership_verified"):
+            service.refresh_linked_video_performance(link)
+    except Exception as exc:
+        refresh_warning = (
+            "The package was linked, but live analytics could not be refreshed yet: "
+            + str(exc)
+        )
 
     return {
         "status": "linked",
@@ -272,6 +286,8 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
         "analysis_run_id": run_id,
         "youtube_video_id": clean_vid,
         "published_at": pub_at,
+        "refresh_warning": refresh_warning,
+        "report": store.linked_package_report(run_id),
     }
 
 
@@ -307,7 +323,9 @@ def refresh_published_video(link_id: int):
     if not link:
         raise HTTPException(status_code=404, detail="Published video link not found.")
     try:
-        return YouTubeChannelService(settings).refresh_linked_video_performance(link)
+        refreshed = YouTubeChannelService(settings).refresh_linked_video_performance(link)
+        refreshed["report"] = store.linked_package_report(int(link["analysis_run_id"]))
+        return refreshed
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
