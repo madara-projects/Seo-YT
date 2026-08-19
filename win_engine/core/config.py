@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +13,7 @@ class Settings(BaseSettings):
     app_name: str = "YouTube Win-Engine"
     app_version: str = "0.9.0"
     app_environment: str = "development"
+    bind_host: str = "127.0.0.1"
     admin_api_token: str | None = None
     rate_limit_window_seconds: int = 60
     rate_limit_max_requests: int = 60
@@ -36,6 +38,14 @@ class Settings(BaseSettings):
 
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash-lite"
+
+    snapshot_collector_enabled: bool = False
+    snapshot_collector_dry_run: bool = False
+    snapshot_collector_interval_seconds: int = Field(default=21600, ge=60)
+    snapshot_collector_initial_delay_seconds: int = Field(default=30, ge=0)
+    snapshot_collector_max_links_per_run: int = Field(default=3, ge=1, le=100)
+    snapshot_collector_retry_base_seconds: int = Field(default=21600, ge=60)
+    snapshot_collector_retry_max_seconds: int = Field(default=172800, ge=60)
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="WIN_ENGINE_", extra="ignore")
 

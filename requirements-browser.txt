@@ -1,0 +1,2 @@
+# Development/test-only dependency. Never installed by Dockerfile.
+playwright==1.52.0

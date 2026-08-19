@@ -106,6 +106,12 @@ class UpdatePublishedVideoRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
+class ComparableMetadataRequest(BaseModel):
+    language: str | None = Field(default=None, max_length=40)
+    format: str | None = Field(default=None, max_length=40)
+    duration_bucket: str | None = Field(default=None, max_length=30)
+    topic_category: str | None = Field(default=None, max_length=80)
+
 class RecordExperimentRequest(BaseModel):
     youtube_video_id: str = Field(..., min_length=11, max_length=11)
     old_title: str | None = Field(default=None, max_length=100)

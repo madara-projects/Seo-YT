@@ -125,7 +125,7 @@ class ResearchService:
     def diagnostics(self) -> dict[str, object]:
         """Return a quick health check for external integrations."""
 
-        youtube_status = "ok" if self._settings.youtube_api_key else "missing_api_key"
+        youtube_status = "ok" if self._settings.youtube_api_key_pool else "missing_api_key"
 
         # Use a short, fixed query so users can see errors easily.
         test_query = "youtube growth tips"

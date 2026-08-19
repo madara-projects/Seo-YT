@@ -458,7 +458,7 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
 
     <div class="sidebar-footer">
-      <div class="status-badge"><span class="dot"></span> Google Gemini Configured</div>
+      <div class="status-badge"><span class="dot"></span> Optional Gemini · local fallback available</div>
     </div>
   </aside>
 
@@ -494,11 +494,11 @@ DASHBOARD_HTML = """<!doctype html>
               <div>
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
                   <span class="chip chip-accent" style="font-weight:700;font-size:11.5px">⚡ Studio AI Command v3.5</span>
-                  <span class="chip chip-ok" style="font-weight:600;font-size:11.5px"><span class="dot"></span> YouTube Data API Synced</span>
+                  <span class="chip" style="font-weight:600;font-size:11.5px">Read-only YouTube research when connected</span>
                 </div>
                 <h1 style="font-size:24px;font-weight:800;letter-spacing:-0.02em;color:#fff">YouTube Creator SEO Growth Studio</h1>
                 <p style="font-size:13.5px;color:var(--text-muted);margin-top:6px;max-width:680px">
-                  Turn video ideas into upload-ready SEO titles, rich descriptions, tags, and AI retention strategies using live YouTube market research.
+                  Turn video ideas into upload-ready SEO titles, rich descriptions, tags, and AI retention guidance using YouTube market research when available.
                 </p>
               </div>
 
@@ -518,7 +518,7 @@ DASHBOARD_HTML = """<!doctype html>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--accent)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                 Instant Video SEO Package Generator
               </span>
-              <span style="font-size:11.5px;color:var(--text-muted);font-family:var(--mono)">Powered by Google Gemini</span>
+              <span style="font-size:11.5px;color:var(--text-muted);font-family:var(--mono)">Optional Google Gemini · local fallback available</span>
             </div>
 
             <!-- Starter Template Chips -->
@@ -571,23 +571,23 @@ DASHBOARD_HTML = """<!doctype html>
 
           <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
             <div class="card-title"><span>Avg Opportunity Score</span></div>
-            <div class="metric-value" style="color:var(--accent);font-size:32px" id="dashMetricOpp">--</div>
+            <div class="metric-value" style="color:var(--accent);font-size:32px" id="dashMetricOpp">Not available</div>
             <div class="metric-sub" id="dashMetricOppSub" style="margin-top:8px">Calculated from your saved analyses.</div>
           </div>
 
           <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
             <div class="card-title"><span>AI Engine Status</span></div>
             <div class="metric-value" style="font-size:20px;display:flex;align-items:center;gap:6px;margin-top:4px">
-              Gemini <span style="font-size:12px;padding:3px 8px" class="chip chip-ok">⚡ Active</span>
+              <span id="dashGeminiStatus">Optional Gemini · local fallback available</span>
             </div>
-            <div class="metric-sub">Google Gemini Engine</div>
+            <div class="metric-sub">Configuration and quota are checked when an analysis runs.</div>
           </div>
 
           <!-- RECENT VIDEO PACKAGE HISTORY TABLE (SPAN 7) -->
           <div class="bento-card span-7">
             <div class="card-title">
               <span>Recent Video Package History Log</span>
-              <span class="chip chip-accent">SQLite DB Sync</span>
+              <span class="chip chip-accent">Saved records</span>
             </div>
             <div id="dashHistoryWrap" style="overflow-x:auto;margin-top:12px">
               <table class="history-table">
@@ -614,7 +614,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div>
               <div class="card-title">
                 <span>Connected YouTube Channel</span>
-                <span class="chip chip-ok"><span class="dot"></span> Live Sync</span>
+                <span class="chip"><span class="dot"></span> Status loads from YouTube</span>
               </div>
 
               <div style="display:flex;align-items:center;gap:14px;margin-top:10px">
@@ -623,12 +623,12 @@ DASHBOARD_HTML = """<!doctype html>
                 </div>
                 <div>
                   <div class="metric-value" style="font-size:22px" id="dashChannelName">No channel connected</div>
-                  <div class="metric-sub" style="font-size:12px;margin-top:2px" id="dashChannelStats">Last 28 days: 1,050 views · 24 likes</div>
+                  <div class="metric-sub" style="font-size:12px;margin-top:2px" id="dashChannelStats">Loading channel status…</div>
                 </div>
               </div>
 
               <div style="margin-top:16px;padding:12px 14px;border-radius:var(--radius-sm);background:rgba(229, 9, 20, 0.12);border:1px solid rgba(229, 9, 20, 0.30);font-size:12.5px;color:var(--text-muted)">
-                🎯 <strong style="color:var(--text)">Snapshot Self-Learning Active:</strong> AI models future title suggestions using your channel's top video snapshots.
+                🎯 <strong style="color:var(--text)">Channel evidence learning:</strong> recommendations use verified comparable videos only after mature snapshots are available.
               </div>
 
               <div class="kv-list" style="margin-top:16px">
@@ -644,44 +644,22 @@ DASHBOARD_HTML = """<!doctype html>
             </div>
           </div>
 
-          <!-- HIGH-OPPORTUNITY NICHE SEARCH TRENDS (SPAN 6) -->
+          <!-- PUBLIC RESEARCH TRENDS (NO GLOBAL FEED) -->
           <div class="bento-card span-6">
-            <div class="card-title"><span>High-Opportunity Niche Search Trends</span><span class="chip chip-ok">Live Gap Radar</span></div>
-            <div class="kv-list" style="margin-top:12px">
-              <div class="kv-item">
-                <div>
-                  <div style="font-size:14px;font-weight:700;color:var(--text)">AI Productivity Tools 2026</div>
-                  <div style="font-size:12px;color:var(--text-muted)">Low competition gap · High search intent</div>
-                </div>
-                <span class="chip chip-accent" style="font-weight:700">+48% search</span>
-              </div>
-              <div class="kv-item">
-                <div>
-                  <div style="font-size:14px;font-weight:700;color:var(--text)">Tamil Tech &amp; Coding Routines</div>
-                  <div style="font-size:12px;color:var(--text-muted)">High retention subscriber niche</div>
-                </div>
-                <span class="chip chip-ok" style="font-weight:700">+32% views</span>
-              </div>
-              <div class="kv-item">
-                <div>
-                  <div style="font-size:14px;font-weight:700;color:var(--text)">Python Automation Hacks</div>
-                  <div style="font-size:12px;color:var(--text-muted)">Evergreen how-to keyword cluster</div>
-                </div>
-                <span class="chip chip-accent" style="font-weight:700">+54% search</span>
-              </div>
-            </div>
+            <div class="card-title"><span>Public research trends</span><span class="chip">Not loaded</span></div>
+            <div class="metric-sub" style="margin-top:12px">Research is run for each analysis. No global trend feed is connected to this dashboard, so no trend percentages are shown here.</div>
           </div>
 
-          <!-- AI SELF-LEARNING WINNING FORMULAS (SPAN 6) -->
+          <!-- EVIDENCE-BASED LEARNING (SPAN 6) -->
           <div class="bento-card span-6">
-            <div class="card-title"><span>AI Self-Learning Winning Formulas</span></div>
+            <div class="card-title"><span>Evidence-based learning</span></div>
             <div class="kv-list" style="margin-top:12px">
-              <div class="kv-item"><span class="kv-key">Top Title Pattern</span><span class="kv-val" style="color:var(--text)">"How I [Result] in [Timeframe]"</span></div>
-              <div class="kv-item"><span class="kv-key">Best Content Angle</span><span class="kv-val" style="color:var(--text)">Tutorial / Step-by-Step</span></div>
-              <div class="kv-item"><span class="kv-key">Retention Booster</span><span class="kv-val" style="color:var(--ok);font-weight:700">Hook in first 15 sec (+34% retention)</span></div>
+              <div class="kv-item"><span class="kv-key">Title patterns</span><span class="kv-val" style="color:var(--text)">Not enough mature evidence</span></div>
+              <div class="kv-item"><span class="kv-key">Content angles</span><span class="kv-val" style="color:var(--text)">Not enough mature evidence</span></div>
+              <div class="kv-item"><span class="kv-key">Retention patterns</span><span class="kv-val" style="color:var(--text)">Not enough mature evidence</span></div>
             </div>
             <div class="metric-sub" style="margin-top:16px;padding:10px 12px;background:rgba(255,255,255,0.03);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px">
-              🤖 Learned dynamically from your published video performance snapshots.
+              Channel evidence appears only after verified linked videos have completed named snapshots.
             </div>
           </div>
 
@@ -694,7 +672,7 @@ DASHBOARD_HTML = """<!doctype html>
           <div class="bento-card span-12">
             <div class="card-title">
               <span>Script, Topic or Idea Input</span>
-              <span class="chip chip-accent">Google Gemini First</span>
+              <span class="chip chip-accent">Gemini preferred when configured</span>
             </div>
 
             <!-- Starter Template Chips -->
@@ -819,7 +797,7 @@ DASHBOARD_HTML = """<!doctype html>
           </div>
 
           <div class="bento-card span-6">
-            <div class="card-title"><span>Winning Patterns Engine</span></div>
+            <div class="card-title"><span>Evidence-based learning</span></div>
             <div class="metric-value" style="font-size:20px" id="anaWinningAngle">Collecting evidence</div>
             <div class="metric-sub" style="margin-top:6px" id="anaObservation">No personal winner is claimed until enough linked videos are measured.</div>
           </div>
@@ -828,14 +806,14 @@ DASHBOARD_HTML = """<!doctype html>
             <div class="card-title">Historical Scorecard &amp; Self-Learning Metrics</div>
             <div class="kv-list" style="margin-top:14px">
               <div class="kv-item"><span class="kv-key">Stored Database Runs</span><span class="kv-val" id="anaTotalRuns">0</span></div>
-              <div class="kv-item"><span class="kv-key">Average Title Score</span><span class="kv-val" id="anaAvgTitle">8.8 / 10</span></div>
-              <div class="kv-item"><span class="kv-key">Average Opportunity Score</span><span class="kv-val" id="anaAvgOpp">61.4 / 100</span></div>
+              <div class="kv-item"><span class="kv-key">Average title quality heuristic</span><span class="kv-val" id="anaAvgTitle">Not available</span></div>
+              <div class="kv-item"><span class="kv-key">Average opportunity heuristic</span><span class="kv-val" id="anaAvgOpp">Not available</span></div>
             </div>
           </div>
 
           <div class="bento-card span-12">
-            <div class="card-title"><span>Channel Videos &amp; Linked Packages</span><span class="chip chip-accent">Newest uploads first</span></div>
-            <div class="metric-sub" style="margin:8px 0 12px">Video views, likes, and comments come from the current YouTube Data API response. Retention appears only when YouTube Analytics provides a real value.</div>
+            <div class="card-title"><span>Current channel uploads &amp; linked packages</span><span class="chip chip-accent">Current data · newest first</span></div>
+            <div class="metric-sub" style="margin:8px 0 12px">These are current YouTube Data API counts and latest display snapshots. They are not mature 24h/7d/28d learning evidence.</div>
             <div style="overflow-x:auto"><table class="history-table"><thead><tr><th>Published title / video</th><th>Published / snapshot</th><th>Views</th><th>Engagement / retention</th><th>Action</th></tr></thead><tbody id="publishedVideoBody"><tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">Loading current channel videos…</td></tr></tbody></table></div>
           </div>
 
@@ -894,12 +872,18 @@ DASHBOARD_HTML = """<!doctype html>
             </div>
           </div>
 
+          <div class="bento-card span-6" data-testid="collector-status-card">
+            <div class="card-title">Snapshot Collector</div>
+            <div class="metric-sub" id="settCollectorStatus">Loading collector status…</div>
+            <div class="metric-sub" id="settCollectorDetails" style="margin-top:8px">Automatic collection is opt-in and quota-capped.</div>
+          </div>
+
           <div class="bento-card span-6">
             <div class="card-title">AI &amp; API Provider Status</div>
             <div class="kv-list" style="margin-top:14px">
-              <div class="kv-item"><span class="kv-key">Primary AI Engine</span><span class="kv-val"><span class="chip chip-accent">Google Gemini</span></span></div>
-              <div class="kv-item"><span class="kv-key">Offline Fallback</span><span class="kv-val"><span class="chip">Local template</span></span></div>
-              <div class="kv-item"><span class="kv-key">YouTube Data API v3 Pool</span><span class="kv-val"><span class="chip chip-ok">Active</span></span></div>
+              <div class="kv-item"><span class="kv-key">Primary AI Engine</span><span class="kv-val"><span class="chip chip-accent">Optional Google Gemini</span></span></div>
+              <div class="kv-item"><span class="kv-key">Offline Fallback</span><span class="kv-val"><span class="chip">Available locally</span></span></div>
+              <div class="kv-item"><span class="kv-key">YouTube Data API v3 Pool</span><span class="kv-val"><span class="chip">Configured status shown when diagnostics run</span></span></div>
               <div class="kv-item"><span class="kv-key">SQLite Local DB</span><span class="kv-val"><span class="chip chip-ok">win_engine.db</span></span></div>
             </div>
           </div>
@@ -909,7 +893,7 @@ DASHBOARD_HTML = """<!doctype html>
               <span>System Maintenance &amp; Diagnostics</span>
               <button class="btn" id="runDiagBtn" style="padding:4px 12px;font-size:11.5px">Run Diagnostics</button>
             </div>
-            <pre id="settDiagOut" style="font-family:var(--mono);font-size:12px;color:var(--text-muted);white-space:pre-wrap;max-height:300px;overflow:auto;margin-top:14px">Click 'Run Diagnostics' to probe YouTube API, Gemini, and database health.</pre>
+            <pre id="settDiagOut" style="font-family:var(--mono);font-size:12px;color:var(--text-muted);white-space:pre-wrap;max-height:300px;overflow:auto;margin-top:14px">No diagnostic probe has run. The live probe can use YouTube API quota.</pre>
           </div>
         </div>
       </section>
@@ -922,13 +906,56 @@ DASHBOARD_HTML = """<!doctype html>
     let historySummaryFetchedAt = 0;
     let historySummaryRequest = null;
 
+    class FrontendApiError extends Error {
+      constructor(message, requestId = "", status = 0) {
+        super(message);
+        this.name = "FrontendApiError";
+        this.requestId = requestId || "";
+        this.status = status || 0;
+      }
+    }
+
+    function formatApiError(error, fallback = "Request failed.") {
+      const message = error && error.message ? error.message : fallback;
+      const requestId = error && error.requestId ? ` Request ID: ${error.requestId}` : "";
+      return message + requestId;
+    }
+
+    async function apiRequest(url, options = {}) {
+      let response;
+      try {
+        response = await fetch(url, options);
+      } catch (error) {
+        throw new FrontendApiError("Network request failed. Check that the local server is running.");
+      }
+      let data = {};
+      const raw = await response.text();
+      if (raw) {
+        try { data = JSON.parse(raw); } catch (_) { data = { raw }; }
+      }
+      if (!response.ok) {
+        const envelope = data && data.error && typeof data.error === "object" ? data.error : {};
+        throw new FrontendApiError(
+          envelope.message || data.detail || data.message || `Request failed (${response.status}).`,
+          envelope.request_id || data.request_id || "",
+          response.status,
+        );
+      }
+      return data;
+    }
+
+    function renderApiError(element, error, fallback) {
+      if (!element) return;
+      element.textContent = formatApiError(error, fallback);
+      element.style.color = "var(--bad)";
+    }
+
     async function getHistorySummary(force = false) {
       const cacheFresh = historySummaryCache && (Date.now() - historySummaryFetchedAt < 15000);
       if (!force && cacheFresh) return historySummaryCache;
       if (historySummaryRequest) return historySummaryRequest;
-      historySummaryRequest = fetch("/api/history", { cache: "no-store" }).then(async (response) => {
-        if (!response.ok) throw new Error("History request failed");
-        historySummaryCache = await response.json();
+      historySummaryRequest = apiRequest("/api/history", { cache: "no-store" }).then((data) => {
+        historySummaryCache = data;
         historySummaryFetchedAt = Date.now();
         return historySummaryCache;
       }).finally(() => { historySummaryRequest = null; });
@@ -975,7 +1002,7 @@ DASHBOARD_HTML = """<!doctype html>
     const TEMPLATES = {
       tech: "How to build a full YouTube SEO automation app in Python and Tamil using Gemini AI and FastAPI.",
       quote: "The biggest betrayal is knowing that if you didn't find out, they would have never told you.",
-      growth: "How I grew my YouTube channel from 0 to 10,000 subscribers in 30 days using high-CTR titles.",
+      growth: "How I grew my YouTube channel from 0 to 10,000 subscribers in 30 days using stronger title and topic choices.",
       review: "Top 5 AI productivity tools in 2026 that will double your coding and video creation output."
     };
 
@@ -989,10 +1016,10 @@ DASHBOARD_HTML = """<!doctype html>
     // Multi-Page SPA Hash Router
     const pages = {
       dashboard: { title: "Dashboard Overview", sub: "Welcome back! Track performance and launch new analyses.", navId: "nav-dashboard", viewId: "view-dashboard" },
-      creator: { title: "SEO Creator Studio", sub: "Enter your video script to generate high-CTR titles and multilingual packages.", navId: "nav-creator", viewId: "view-creator" },
-      analytics: { title: "Channel Analytics &amp; History", sub: "Real 28-day channel metrics, retention patterns, and video learning history.", navId: "nav-analytics", viewId: "view-analytics" },
+      creator: { title: "SEO Creator Studio", sub: "Enter your video script to generate title alternatives and multilingual packages.", navId: "nav-creator", viewId: "view-creator" },
+      analytics: { title: "Channel Analytics &amp; History", sub: "YouTube channel metrics, current uploads, and evidence-based learning history.", navId: "nav-analytics", viewId: "view-analytics" },
       history: { title: "Saved SEO Packages", sub: "Open any past package to reuse its complete upload-ready content.", navId: "nav-history", viewId: "view-history" },
-      settings: { title: "Settings &amp; Integrations", sub: "Configure YouTube OAuth, AI provider endpoints, and live diagnostics.", navId: "nav-settings", viewId: "view-settings" },
+      settings: { title: "Settings &amp; Integrations", sub: "Inspect YouTube OAuth, AI configuration, and live API diagnostics.", navId: "nav-settings", viewId: "view-settings" },
     };
 
     function switchPage(key, updateHistory = true) {
@@ -1034,7 +1061,7 @@ DASHBOARD_HTML = """<!doctype html>
         oauthRedirectHandled = true;
         console.log("YouTube OAuth connected! Auto-syncing channel analytics...");
         try {
-          await fetch("/youtube/channel/refresh", { method: "POST" });
+          await apiRequest("/youtube/channel/refresh", { method: "POST" });
         } catch (_) {}
         if (window.history.replaceState) {
           const cleanUrl = window.location.pathname + window.location.hash;
@@ -1092,20 +1119,20 @@ DASHBOARD_HTML = """<!doctype html>
         const isConnected = !!(ch.id || chTitle);
 
         // 1. 28d Views Milestone Card
-        const totalViews = owned.total_views || 0;
-        if ($("dashMetricViews")) $("dashMetricViews").textContent = num(totalViews);
+        const totalViews = owned.total_views;
+        if ($("dashMetricViews")) $("dashMetricViews").textContent = isConnected ? num(totalViews) : "Not available";
         if ($("dashMetricViewsSub")) {
           $("dashMetricViewsSub").textContent = isConnected ? "Real 28-day channel views synced from YouTube." : "Connect and refresh your channel in Settings.";
         }
 
         // 2. Estimated Watch Time Card
-        const watchMins = owned.estimated_watch_minutes || 0;
+        const watchMins = owned.estimated_watch_minutes;
         let watchStr = "--";
-        if (watchMins >= 60) {
+        if (typeof watchMins === "number" && watchMins >= 60) {
           watchStr = (watchMins / 60).toFixed(1) + " hrs";
-        } else if (watchMins > 0) {
+        } else if (typeof watchMins === "number" && watchMins > 0) {
           watchStr = watchMins + " mins";
-        } else if (isConnected) {
+        } else if (isConnected && watchMins === 0) {
           watchStr = "0 mins";
         }
         if ($("dashMetricWatch")) $("dashMetricWatch").textContent = watchStr;
@@ -1114,7 +1141,7 @@ DASHBOARD_HTML = """<!doctype html>
         }
         if ($("anaSubscribers")) $("anaSubscribers").textContent = owned.subscribers === null || owned.subscribers === undefined ? "--" : num(owned.subscribers);
         if ($("anaLifetimeViews")) $("anaLifetimeViews").textContent = owned.lifetime_views === null || owned.lifetime_views === undefined ? "--" : num(owned.lifetime_views);
-        if ($("ana28dViews")) $("ana28dViews").textContent = isConnected ? num(owned.views_28_days || 0) : "--";
+        if ($("ana28dViews")) $("ana28dViews").textContent = isConnected ? num(owned.views_28_days) : "--";
         if ($("anaWatchTime")) $("anaWatchTime").textContent = watchStr;
         if ($("anaSyncStatus")) {
           const synced = sync.synced_at ? historyDate(sync.synced_at) : "Never";
@@ -1124,8 +1151,8 @@ DASHBOARD_HTML = """<!doctype html>
 
         // 3. Avg Opportunity Score Card
         if (scorecard.total_runs !== undefined) {
-          const roundedOpp = scorecard.avg_opportunity_score === null || scorecard.avg_opportunity_score === undefined ? "--" : Math.round(scorecard.avg_opportunity_score);
-          const roundedTitle = scorecard.avg_title_score === null || scorecard.avg_title_score === undefined ? "--" : (Math.round(scorecard.avg_title_score * 10) / 10);
+          const roundedOpp = scorecard.avg_opportunity_score === null || scorecard.avg_opportunity_score === undefined ? "Not available" : Math.round(scorecard.avg_opportunity_score);
+          const roundedTitle = scorecard.avg_title_score === null || scorecard.avg_title_score === undefined ? "Not available" : (Math.round(scorecard.avg_title_score * 10) / 10);
           if ($("dashMetricOpp")) $("dashMetricOpp").textContent = roundedOpp + " / 100";
           if ($("dashMetricOppSub")) $("dashMetricOppSub").textContent = `Calculated from your ${num(scorecard.total_runs)} saved analyses.`;
           if ($("dashTotalRuns")) $("dashTotalRuns").textContent = num(scorecard.total_runs);
@@ -1171,8 +1198,8 @@ DASHBOARD_HTML = """<!doctype html>
           return `
             <tr>
               <td style="font-weight:600;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(run.title)}">${esc(run.title || run.query || "Untitled Video Analysis")}</td>
-              <td><span class="chip chip-ok">High CTR</span></td>
-              <td><span style="font-weight:700;color:var(--accent)">${num(run.opportunity_score || 78)}</span> / 100</td>
+              <td><span class="chip">Title quality heuristic</span></td>
+              <td><span style="font-weight:700;color:var(--accent)">${num(run.opportunity_score)}</span> / 100</td>
               <td style="font-size:12px;color:var(--text-muted)">${dtStr}</td>
               <td style="display:flex;gap:6px">
                 <a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Inspect</a>
@@ -1192,8 +1219,8 @@ DASHBOARD_HTML = """<!doctype html>
             <tr>
               <td style="font-size:12px;color:var(--text-muted)">${dtStr} IST</td>
               <td style="font-weight:600;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(run.title)}">${esc(run.title || run.query || "Untitled Video Analysis")}</td>
-              <td><span style="font-weight:700;color:var(--accent)">${num(run.opportunity_score || 78)}</span> / 100</td>
-              <td><span class="chip chip-ok">${num(run.title_score || 8.8)} / 10</span></td>
+              <td><span style="font-weight:700;color:var(--accent)">${num(run.opportunity_score)}</span> / 100</td>
+              <td><span class="chip">${num(run.title_score)} / 10</span></td>
               <td style="display:flex;gap:6px">
                 <a href="#creator" class="btn" style="padding:2px 8px;font-size:11px" onclick="switchPage('creator'); return false;">Studio</a>
                 ${linkButton}
@@ -1205,26 +1232,24 @@ DASHBOARD_HTML = """<!doctype html>
         if (dashBody) dashBody.innerHTML = rowsHtml;
         if (anaBody) anaBody.innerHTML = anaRowsHtml;
       } catch (err) {
-        console.error("History loading failed:", err);
+        const message = esc(formatApiError(err, "History could not be loaded."));
+        const errorRow = `<tr><td colspan="5" style="color:var(--bad);text-align:center;padding:16px">${message}</td></tr>`;
+        if ($("dashHistoryBody")) $("dashHistoryBody").innerHTML = errorRow;
+        if ($("anaHistoryBody")) $("anaHistoryBody").innerHTML = errorRow;
       }
     }
 
     async function deleteHistoryRun(runId) {
       if (!confirm("Are you sure you want to delete this saved package from your SQLite database?")) return;
       try {
-        const res = await fetch(`/api/history/runs/${runId}`, { method: "DELETE" });
-        const data = await res.json();
-        if (!res.ok) {
-          alert("Delete failed: " + (data.detail || "Error deleting package"));
-          return;
-        }
-        alert("🗑️ Saved package deleted successfully.");
+        await apiRequest(`/api/history/runs/${runId}`, { method: "DELETE" });
+        showToast("Saved package deleted successfully.");
         if ($("historyDetail")) $("historyDetail").classList.add("hidden");
         invalidateDashboardCache();
         loadHistoryFeed(true);
         loadSavedHistory();
       } catch (err) {
-        alert("Error deleting package: " + err.message);
+        showToast(formatApiError(err, "Could not delete package."));
       }
     }
 
@@ -1236,22 +1261,17 @@ DASHBOARD_HTML = """<!doctype html>
       const videoId = prompt("Enter your published YouTube Video ID or URL for this package:");
       if (!videoId) return;
       try {
-        const res = await fetch(`/api/history/runs/${runId}/link-video`, {
+        await apiRequest(`/api/history/runs/${runId}/link-video`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ youtube_video_id: videoId })
         });
-        const data = await res.json();
-        if (!res.ok) {
-          alert("Linking failed: " + (data.detail || "Error linking video"));
-          return;
-        }
-        showToast("✅ Package linked to YouTube Video ID!");
+        showToast("Package linked to YouTube Video ID.");
         invalidateDashboardCache();
         loadHistoryFeed(true);
         loadSavedHistory();
       } catch (err) {
-        alert("Error linking video: " + err.message);
+        showToast(formatApiError(err, "Could not link video."));
       }
     }
 
@@ -1259,11 +1279,10 @@ DASHBOARD_HTML = """<!doctype html>
       const body = $("publishedVideoBody");
       if (!body) return;
       try {
-        const [pubRes, histData] = await Promise.all([
-          fetch("/api/published-videos", { cache: "no-store" }),
+        const [pubData, histData] = await Promise.all([
+          apiRequest("/api/published-videos", { cache: "no-store" }),
           getHistorySummary(force)
         ]);
-        const pubData = pubRes.ok ? await pubRes.json() : {};
         const links = (pubData.links || []).slice().sort((left, right) =>
           String(right.published_at || "").localeCompare(String(left.published_at || "")) || Number(right.id || 0) - Number(left.id || 0)
         );
@@ -1313,35 +1332,33 @@ DASHBOARD_HTML = """<!doctype html>
 
         body.innerHTML = html;
       } catch (error) {
-        console.error("Published video loading failed:", error);
-        body.innerHTML = "<tr><td colspan='5' style='color:var(--bad);text-align:center;padding:16px'>Could not load channel video performance.</td></tr>";
+        body.innerHTML = "<tr><td colspan='5' style='color:var(--bad);text-align:center;padding:16px'>" + esc(formatApiError(error, "Could not load channel video performance.")) + "</td></tr>";
       }
     }
 
     async function refreshLinkedVideo(linkId, button) {
       button.disabled = true;
       try {
-        const response = await fetch("/api/published-videos/" + linkId + "/refresh", { method: "POST" });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error?.message || "Refresh failed.");
+        const data = await apiRequest("/api/published-videos/" + linkId + "/refresh", { method: "POST" });
         showToast(data.message || ((data.captured || []).length ? "Snapshot saved." : "No snapshot due yet."));
         invalidateDashboardCache();
         loadPublishedVideos(true);
         loadCohortLearning();
       } catch (error) {
-        alert(error.message || "Could not refresh this video.");
+        showToast(formatApiError(error, "Could not refresh this video."));
       } finally { button.disabled = false; }
     }
 
     async function loadCohortLearning() {
       try {
-        const response = await fetch("/api/learning/cohorts");
-        const data = await response.json();
-        if (!response.ok) return;
+        const data = await apiRequest("/api/learning/cohorts");
         if ($("anaWinningAngle")) $("anaWinningAngle").textContent = data.confidence_label || "Collecting evidence";
         if ($("anaObservation")) $("anaObservation").textContent = data.recommendation || "Link and refresh published videos to build evidence.";
         if ($("anaRecommendation")) $("anaRecommendation").textContent = data.sample_size ? ("Cohort: " + data.sample_size + " linked videos. " + (data.recommendation || "")) : "Learning begins after linked videos receive real snapshots.";
-      } catch (_) {}
+      } catch (error) {
+        if ($("anaWinningAngle")) $("anaWinningAngle").textContent = "Unavailable";
+        if ($("anaObservation")) renderApiError($("anaObservation"), error, "Learning evidence is unavailable.");
+      }
     }
 
     let latestChannelStatus = null;
@@ -1354,9 +1371,7 @@ DASHBOARD_HTML = """<!doctype html>
       buttons.forEach((item) => { item.disabled = true; });
       if ($("anaSyncStatus")) $("anaSyncStatus").textContent = "Refreshing current counts from YouTube…";
       analyticsRefreshRequest = (async () => {
-        const response = await fetch("/youtube/channel/refresh", { method: "POST" });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || data.error?.message || "YouTube refresh failed");
+        const data = await apiRequest("/youtube/channel/refresh", { method: "POST" });
         invalidateDashboardCache();
         await Promise.all([
           loadHistoryFeed(true),
@@ -1367,8 +1382,8 @@ DASHBOARD_HTML = """<!doctype html>
         if (!silent) showToast("YouTube analytics and video counts updated.");
         return data;
       })().catch((error) => {
-        if ($("anaSyncStatus")) $("anaSyncStatus").textContent = error.message || "YouTube refresh failed.";
-        if (!silent) alert(error.message || "YouTube refresh failed.");
+        if ($("anaSyncStatus")) renderApiError($("anaSyncStatus"), error, "YouTube refresh failed.");
+        if (!silent) showToast(formatApiError(error, "YouTube refresh failed."));
         return null;
       }).finally(() => {
         buttons.forEach((item) => { item.disabled = false; });
@@ -1404,10 +1419,9 @@ DASHBOARD_HTML = """<!doctype html>
       const body = $("historyPageBody");
       if (!body) return;
       try {
-        const response = await fetch("/api/history/runs");
-        const data = await response.json();
+        const data = await apiRequest("/api/history/runs");
         const runs = data.runs || [];
-        if (!response.ok || !runs.length) {
+        if (!runs.length) {
           body.innerHTML = "<tr><td colspan='5' style='color:var(--text-muted);text-align:center;padding:16px'>No saved packages yet.</td></tr>";
           return;
         }
@@ -1428,8 +1442,7 @@ DASHBOARD_HTML = """<!doctype html>
           "</tr>";
         }).join("");
       } catch (error) {
-        body.innerHTML = "<tr><td colspan='5' style='color:var(--bad);text-align:center;padding:16px'>Could not load saved packages.</td></tr>";
-        console.error("Saved package history failed:", error);
+        body.innerHTML = "<tr><td colspan='5' style='color:var(--bad);text-align:center;padding:16px'>" + esc(formatApiError(error, "Could not load saved packages.")) + "</td></tr>";
       }
     }
 
@@ -1439,9 +1452,7 @@ DASHBOARD_HTML = """<!doctype html>
       panel.classList.remove("hidden");
       panel.innerHTML = "<div class='metric-sub'>Loading saved package…</div>";
       try {
-        const response = await fetch("/api/history/runs/" + runId);
-        const run = await response.json();
-        if (!response.ok) throw new Error("Saved package not found.");
+        const run = await apiRequest("/api/history/runs/" + runId);
         const packageData = run.package || {};
         const fullScript = packageData.creator_brief && packageData.creator_brief.content
           ? packageData.creator_brief.content
@@ -1476,8 +1487,7 @@ DASHBOARD_HTML = """<!doctype html>
           refreshHistoryPerformance(Number(report.link_id), Number(run.id), null, true);
         }
       } catch (error) {
-        panel.innerHTML = "<div class='alert-banner alert-err'>Could not open this saved package.</div>";
-        console.error("Saved package detail failed:", error);
+        panel.innerHTML = "<div class='alert-banner alert-err'>" + esc(formatApiError(error, "Could not open this saved package.")) + "</div>";
       }
     }
 
@@ -1497,6 +1507,12 @@ DASHBOARD_HTML = """<!doctype html>
         ? "<div class='tag-list'>" + arr(items).map((item) => "<span class='tag-item'>" + esc(item) + "</span>").join("") + "</div>"
         : "<div class='metric-sub'>" + esc(empty) + "</div>";
       const titleStatus = usage.title_match ? "Exact generated title used" : "Uploaded title differs from generated title";
+      const comparable = report.comparable_metadata || {};
+      const sources = comparable.sources || {};
+      const sourceLabel = (source) => ({creator:"Creator confirmed", youtube_verified:"YouTube verified", package:"From package", unknown:"Unknown"}[source] || "Unknown");
+      const metadataEditor = "<div class='bento-card span-12' style='margin-top:12px'><div class='card-title'>Comparable learning metadata</div><div class='metric-sub'>These local labels control future cohort comparisons. They do not edit YouTube.</div><div class='bento-grid' style='margin-top:10px'>" +
+        ["language","format","duration_bucket","topic_category"].map((field) => "<label class='field span-3' style='display:block'><span class='field-label'>" + esc(field.replaceAll("_", " ")) + " <small class='chip'>" + esc(sourceLabel(sources[field])) + "</small></span><input id='comparable-" + field + "' value='" + esc(comparable[field] === "unknown" ? "" : comparable[field] || "") + "' maxlength='80' placeholder='Unknown'></label>").join("") +
+        "</div><div style='display:flex;gap:8px;margin-top:10px'><button class='btn btn-primary' onclick='saveComparableMetadata(" + Number(report.link_id) + "," + Number(runId) + ")'>Save metadata</button><button class='btn' onclick='openHistoryRun(" + Number(runId) + ")'>Cancel</button></div><div id='comparable-meta-error' class='metric-sub' style='color:var(--bad);margin-top:8px'></div></div>";
       const snapshotRows = arr(report.snapshots).map((snapshot) =>
         "<tr><td>" + esc(snapshot.snapshot_window || "current") + "</td><td>" + metric(snapshot.views) + "</td><td>" + metric(snapshot.likes) + "</td><td>" + metric(snapshot.avg_view_percentage, "%") + "</td><td>" + historyDate(snapshot.captured_at) + "</td></tr>"
       ).join("") || "<tr><td colspan='5' class='metric-sub'>No performance snapshot has been captured yet.</td></tr>";
@@ -1529,9 +1545,25 @@ DASHBOARD_HTML = """<!doctype html>
           "</div>" +
           "<div class='bento-card span-6'><div class='card-title'>What worked / positive observations</div>" + list(diagnosis.what_worked, "No positive conclusion is supported yet.") + "</div>" +
           "<div class='bento-card span-6'><div class='card-title'>What to improve / still unknown</div>" + list(diagnosis.needs_improvement, "No issue has been detected from the available evidence.") + "</div>" +
+          metadataEditor +
           "<div class='bento-card span-12'><div class='card-title'>Performance snapshots</div><div style='overflow-x:auto'><table><thead><tr><th>Window</th><th>Views</th><th>Likes</th><th>Average viewed</th><th>Captured</th></tr></thead><tbody>" + snapshotRows + "</tbody></table></div>" +
             "<div class='metric-sub' style='margin-top:10px'>" + esc(diagnosis.attribution_note || "") + "</div></div>" +
         "</div></div>";
+    }
+
+    async function saveComparableMetadata(linkId, runId) {
+      const fields = ["language", "format", "duration_bucket", "topic_category"];
+      const payload = {};
+      fields.forEach((field) => { const node = $("comparable-" + field); if (node) payload[field] = node.value.trim() || null; });
+      const errorNode = $("comparable-meta-error");
+      if (errorNode) errorNode.textContent = "Saving…";
+      try {
+        await apiRequest("/api/published-videos/" + Number(linkId) + "/comparable-metadata", { method: "PATCH", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload) });
+        await openHistoryRun(Number(runId));
+        loadCohortLearning();
+      } catch (error) {
+        if (errorNode) errorNode.textContent = formatApiError(error, "Metadata could not be saved.");
+      }
     }
 
     async function refreshHistoryPerformance(linkId, runId, button, silent = false) {
@@ -1539,9 +1571,7 @@ DASHBOARD_HTML = """<!doctype html>
       const original = button ? button.textContent : "";
       if (button) { button.disabled = true; button.textContent = "Refreshing…"; }
       try {
-        const response = await fetch("/api/published-videos/" + Number(linkId) + "/refresh", { method: "POST" });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || "YouTube refresh failed.");
+        await apiRequest("/api/published-videos/" + Number(linkId) + "/refresh", { method: "POST" });
         if (!silent) showToast("YouTube metadata and available analytics refreshed.");
         invalidateDashboardCache();
         await openHistoryRun(Number(runId));
@@ -1549,7 +1579,7 @@ DASHBOARD_HTML = """<!doctype html>
         loadPublishedVideos(true);
         loadCohortLearning();
       } catch (error) {
-        if (!silent) alert(error.message || "YouTube refresh failed.");
+        if (!silent) showToast(formatApiError(error, "YouTube refresh failed."));
       } finally {
         if (button) { button.disabled = false; button.textContent = original; }
       }
@@ -1577,7 +1607,7 @@ DASHBOARD_HTML = """<!doctype html>
     let latestAnalysis = null;
 
     const esc = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-    const num = (v) => typeof v === "number" ? v.toLocaleString() : (v || "0");
+    const num = (v) => typeof v === "number" ? v.toLocaleString() : (v === null || v === undefined || v === "" ? "Not available" : v);
     const arr = (v) => Array.isArray(v) ? v : [];
 
     function copyText(text, btn) {
@@ -1598,6 +1628,13 @@ DASHBOARD_HTML = """<!doctype html>
       if (!el) return;
       const text = el.value || el.innerText || el.textContent || "";
       copyText(text, btn);
+    }
+
+    function bindGeneratedCopyButtons(root) {
+      if (!root) return;
+      root.querySelectorAll(".copy-generated-btn").forEach((button) => {
+        button.addEventListener("click", () => copyText(button.dataset.copyText || "", button));
+      });
     }
 
     function chip(text, tone) {
@@ -1625,7 +1662,7 @@ DASHBOARD_HTML = """<!doctype html>
             <span style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);min-width:24px">#${i+1}</span>
             <span style="font-size:13.5px;font-weight:500;color:var(--text);line-height:1.4">${esc(v)}</span>
           </div>
-          <button class="btn" style="padding:5px 12px;font-size:11.5px;white-space:nowrap;font-weight:600" onclick="copyText('${esc(v).replace(/'/g, "\\'").replace(/\\n/g, " ")}', this)">📋 Copy</button>
+          <button class="btn copy-generated-btn" data-copy-text="${esc(v)}" style="padding:5px 12px;font-size:11.5px;white-space:nowrap;font-weight:600">📋 Copy</button>
         </div>`).join("");
 
       const tags = arr(p.tags).map((t) => `<span class="tag-item" style="font-size:12px;padding:5px 12px;background:rgba(229,9,20,0.12);border:1px solid rgba(229,9,20,0.28);color:var(--text);border-radius:6px;margin:3px">${esc(t)}</span>`).join("");
@@ -1645,7 +1682,7 @@ DASHBOARD_HTML = """<!doctype html>
                 <span style="font-weight:800;color:var(--accent);font-size:12px">🔥 Primary Recommended Title</span>
                 <div style="display:flex;gap:8px;align-items:center">
                   <span class="chip ${titleLen <= 70 ? "chip-ok" : "chip-warn"}">${titleLen}/70 chars</span>
-                  <button class="btn" style="padding:5px 14px;font-size:12px;font-weight:700;background:var(--accent);color:#fff;border:none" onclick="copyText('${esc(p.title).replace(/'/g, "\\'").replace(/\\n/g, " ")}', this)">📋 Copy Title</button>
+                  <button class="btn copy-generated-btn" data-copy-text="${esc(p.title)}" style="padding:5px 14px;font-size:12px;font-weight:700;background:var(--accent);color:#fff;border:none">📋 Copy Title</button>
                 </div>
               </div>
               <div style="font-size:18px;font-weight:800;line-height:1.45;color:var(--text);letter-spacing:-0.2px">${esc(p.title)}</div>
@@ -1653,7 +1690,7 @@ DASHBOARD_HTML = """<!doctype html>
 
             <div>
               <div class="card-title" style="margin-bottom:12px">
-                <span>🎯 Top Title Variants (High CTR Suite)</span>
+                <span>🎯 Title alternatives</span>
               </div>
               <div>${variants}</div>
             </div>
@@ -1691,7 +1728,7 @@ DASHBOARD_HTML = """<!doctype html>
           <!-- HASHTAGS CARD -->
           <div class="bento-card span-6">
             <div class="card-title" style="margin-bottom:14px">
-              <span>#️⃣ Viral Hashtags</span>
+              <span>#️⃣ Suggested hashtags</span>
               <button class="btn" style="padding:5px 14px;font-size:12px;font-weight:600" onclick="copyById('hashtags_${uid}', this)">📋 Copy Hashtags</button>
             </div>
             <div class="tag-list" style="display:flex;flex-wrap:wrap;gap:6px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:12px">${hashtags}</div>
@@ -1793,6 +1830,8 @@ DASHBOARD_HTML = """<!doctype html>
 
       outputContent.innerHTML = html;
 
+      bindGeneratedCopyButtons(outputContent);
+
       // Wire language tabs
       const tabs = $("langTabs");
       if (tabs) {
@@ -1802,6 +1841,7 @@ DASHBOARD_HTML = """<!doctype html>
             t.classList.add("active");
             const lang = t.dataset.lang || "english";
             $("langPanel").innerHTML = pkgHtml(ml[lang], lang);
+            bindGeneratedCopyButtons($("langPanel"));
           });
         });
       }
@@ -1821,9 +1861,6 @@ DASHBOARD_HTML = """<!doctype html>
       resultsPanel.classList.add("hidden");
       if (!script) { showAlert("err", "Please enter a script or video idea first."); return; }
 
-      const accordion = document.querySelector("details.accordion");
-      const useOverrides = accordion && accordion.open;
-
       const payload = {
         script,
         video_language: briefInputs.video_language ? briefInputs.video_language.value : "english",
@@ -1831,27 +1868,22 @@ DASHBOARD_HTML = """<!doctype html>
         region: briefInputs.region ? briefInputs.region.value : "global",
       };
 
-      if (useOverrides) {
-        if (briefInputs.target_audience && briefInputs.target_audience.value.trim()) payload.target_audience = briefInputs.target_audience.value.trim();
-        if (briefInputs.viewer_promise && briefInputs.viewer_promise.value.trim()) payload.viewer_promise = briefInputs.viewer_promise.value.trim();
-        if (briefInputs.unique_angle && briefInputs.unique_angle.value.trim()) payload.unique_angle = briefInputs.unique_angle.value.trim();
-        if (briefInputs.proof && briefInputs.proof.value.trim()) payload.proof = briefInputs.proof.value.trim();
-        if (briefInputs.video_format && briefInputs.video_format.value.trim()) payload.video_format = briefInputs.video_format.value.trim();
-        if (briefInputs.title_style && briefInputs.title_style.value.trim()) payload.title_style = briefInputs.title_style.value.trim();
-        if (briefInputs.thumbnail_idea && briefInputs.thumbnail_idea.value.trim()) payload.thumbnail_idea = briefInputs.thumbnail_idea.value.trim();
-      }
+      // The advanced panel is visual disclosure only. Collapsing it must never
+      // discard values that the creator entered before submitting.
+      ["target_audience", "viewer_promise", "unique_angle", "proof", "video_format", "title_style", "thumbnail_idea"].forEach((field) => {
+        const input = briefInputs[field];
+        if (input && input.value.trim()) payload[field] = input.value.trim();
+      });
 
       analyzeBtn.disabled = true;
       const original = analyzeBtn.innerHTML;
       analyzeBtn.innerHTML = `<span class="spin"></span> Analyzing &amp; Packaging…`;
       try {
-        const r = await fetch("/analyze", {
+        const data = await apiRequest("/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
           body: JSON.stringify(payload),
         });
-        const data = await r.json();
-        if (!r.ok) { showAlert("err", data.error?.message || data.detail || "Analysis failed."); return; }
         latestAnalysis = data;
         exportBtn.disabled = false;
         render(data);
@@ -1860,7 +1892,7 @@ DASHBOARD_HTML = """<!doctype html>
         // Update history feed
         loadHistoryFeed();
       } catch (e) {
-        showAlert("err", "Request failed. Is the server running?");
+        showAlert("err", formatApiError(e, "Analysis failed."));
       } finally {
         analyzeBtn.disabled = false;
         analyzeBtn.innerHTML = original;
@@ -1880,18 +1912,16 @@ DASHBOARD_HTML = """<!doctype html>
       const out = $("settDiagOut");
       out.textContent = "Running diagnostics…";
       try {
-        const r = await fetch("/diagnostics");
-        const data = await r.json();
-        out.textContent = r.ok ? JSON.stringify(data, null, 2) : (data.error?.message || "Diagnostics failed");
+        const data = await apiRequest("/diagnostics");
+        out.textContent = JSON.stringify(data, null, 2);
       } catch (e) {
-        out.textContent = "Diagnostics request failed. Is the server running?";
+        renderApiError(out, e, "Diagnostics failed.");
       }
     });
 
     async function loadChannelStatus(force = false) {
       try {
-        const r = await fetch("/youtube/channel/status", { cache: force ? "reload" : "no-store" });
-        const data = await r.json();
+        const data = await apiRequest("/youtube/channel/status", { cache: force ? "reload" : "no-store" });
         latestChannelStatus = data;
         const settStatus = $("settChannelStatus");
         const connectBtn = $("settConnectBtn");
@@ -1945,10 +1975,10 @@ DASHBOARD_HTML = """<!doctype html>
         refreshBtn.onclick = () => refreshYouTubeAnalytics(refreshBtn);
         disconnectBtn.onclick = async () => {
           if (!confirm("Disconnect YouTube channel?")) return;
-          const response = await fetch("/youtube/channel/disconnect", {method:"POST"});
-          if (!response.ok) {
-            const error = await response.json().catch(() => ({}));
-            settStatus.textContent = error.error?.message || "Could not disconnect the channel.";
+          try {
+            await apiRequest("/youtube/channel/disconnect", {method:"POST"});
+          } catch (error) {
+            renderApiError(settStatus, error, "Could not disconnect the channel.");
             return;
           }
           await loadChannelStatus();
@@ -1956,13 +1986,39 @@ DASHBOARD_HTML = """<!doctype html>
         return data;
       } catch (error) {
         const settStatus = $("settChannelStatus");
-        if (settStatus) settStatus.textContent = "Could not load channel settings. Refresh the page and try again.";
-        console.error("Channel settings failed to load:", error);
+        if (settStatus) renderApiError(settStatus, error, "Could not load channel settings.");
         return null;
+      }
+    }
+    async function loadCollectorStatus() {
+      const statusNode = $("settCollectorStatus");
+      const detailsNode = $("settCollectorDetails");
+      if (!statusNode) return;
+      try {
+        const data = await apiRequest("/api/snapshot-collector/status", { cache: "no-store" });
+        const state = String(data.state || "unknown");
+        const knownStates = new Set(["disabled", "dry-run", "unconfigured", "waiting", "running", "healthy/idle", "cooldown", "error"]);
+        statusNode.textContent = "Status: " + (knownStates.has(state) ? state : "Unavailable");
+        if (detailsNode) {
+          const counts = data.last_counts || {};
+          detailsNode.textContent = data.dry_run
+            ? "Dry-run mode: no YouTube/Gemini calls or database writes."
+            : state === "disabled"
+              ? "Automatic collection is disabled by configuration."
+              : state === "unconfigured"
+                ? "Collector is not configured; no collection has run."
+                : state === "error"
+                  ? "Collector error: " + String(data.last_error || "The collector reported an error.")
+                  : "Last run: " + (data.last_finished_at ? historyDate(data.last_finished_at) : "Not run") + " · Planned links: " + num(counts.links) + " · Windows: " + num(counts.windows);
+        }
+      } catch (error) {
+        statusNode.textContent = "Status unavailable";
+        if (detailsNode) detailsNode.textContent = formatApiError(error, "Collector status unavailable.");
       }
     }
     if ($("anaRefreshBtn")) $("anaRefreshBtn").onclick = () => refreshYouTubeAnalytics($("anaRefreshBtn"));
     route();
+    loadCollectorStatus();
     if ((window.location.hash || "#dashboard") !== "#analytics") loadChannelStatus();
   </script>
 </body>

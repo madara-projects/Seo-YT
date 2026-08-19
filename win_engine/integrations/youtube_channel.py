@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
-import sqlite3
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -19,6 +19,7 @@ from googleapiclient.errors import HttpError
 
 from win_engine.core.config import Settings
 from win_engine.feedback.channel_learning import learning_summary, save_video_snapshots
+from win_engine.feedback.migrations import connect_managed
 
 _SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
@@ -156,31 +157,34 @@ class YouTubeChannelService:
         return payload
 
     def verify_owned_video(self, youtube_video_id: str) -> dict[str, Any]:
-        """Verify video ownership via connected OAuth channel, or fall back to public video verification."""
+        """Fail closed unless OAuth proves the video belongs to the connected channel."""
         channel = self._connection()
-        if channel and channel[1]:
-            try:
-                credentials = self._credentials()
-                credentials.refresh(Request())
-                youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
-                items = youtube.videos().list(
-                    part="snippet,statistics,contentDetails,status",
-                    id=youtube_video_id,
-                    maxResults=1,
-                ).execute().get("items", [])
-                if items:
-                    snippet = items[0].get("snippet") or {}
-                    ch_id = str(snippet.get("channelId") or "")
-                    if ch_id == str(channel[1]):
-                        return _video_metadata(items[0], youtube_video_id, ownership_verified=True)
-                    else:
-                        logger.info("Video channel %s differs from connected channel %s. Verifying public video.", ch_id, channel[1])
-            except ValueError as exc:
-                raise exc
-            except Exception as exc:
-                logger.warning("OAuth video verification fallback triggered: %s", exc)
+        if not channel or not channel[1]:
+            raise ValueError("Connect the YouTube channel that owns this video before linking it.")
+        try:
+            credentials = self._credentials()
+            credentials.refresh(Request())
+            youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+            items = youtube.videos().list(
+                part="snippet,statistics,contentDetails,status",
+                id=youtube_video_id,
+                maxResults=1,
+            ).execute().get("items", [])
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.warning("OAuth ownership verification failed: %s", type(exc).__name__)
+            raise ValueError(
+                "YouTube ownership could not be verified. Nothing was linked; retry when the connection is available."
+            ) from exc
 
-        return self.verify_public_video(youtube_video_id)
+        if not items:
+            raise ValueError("That video was not found for the connected YouTube channel.")
+        metadata = _video_metadata(items[0], youtube_video_id, ownership_verified=True)
+        actual_channel_id = str(metadata.get("channel_id") or "")
+        if not actual_channel_id or actual_channel_id != str(channel[1]):
+            raise ValueError("This video does not belong to the connected YouTube channel.")
+        return metadata
 
     def verify_public_video(self, youtube_video_id: str) -> dict[str, Any]:
         """Verify video existence on YouTube using public API / oEmbed metadata."""
@@ -233,7 +237,7 @@ class YouTubeChannelService:
 
         raise ValueError("That video could not be found on YouTube.")
 
-    def refresh_linked_video_performance(self, link: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+    def refresh_linked_video_performance(self, link: dict[str, Any], *, force: bool = False, collect_current: bool = True) -> dict[str, Any]:
         """Capture only due 24-hour, 7-day, and 28-day analytics snapshots.
 
         This is intentionally manual: a laptop cannot collect data while it is off.
@@ -249,7 +253,24 @@ class YouTubeChannelService:
         now = datetime.now(timezone.utc)
         age_hours = max(0.0, (now - published_at).total_seconds() / 3600)
         windows = (("24h", 24.0), ("7d", 24.0 * 7), ("28d", 24.0 * 28))
-        due = [(label, hours) for label, hours in windows if age_hours >= hours and (force or not store.has_snapshot_window(video_id, label))]
+        due = [
+            (label, hours)
+            for label, hours in windows
+            if age_hours >= hours
+            and not store.has_snapshot_window(video_id, label)
+            and (force or store.snapshot_retry_allowed(video_id, label))
+        ]
+
+        if not due and not collect_current:
+            return {
+                "video_id": video_id,
+                "age_hours": round(age_hours, 1),
+                "captured": [],
+                "window_states": [store.snapshot_window_state(video_id, label) for label, _ in windows],
+                "current": store.latest_performance_snapshot(video_id) or None,
+                "youtube": None,
+                "message": "No scheduled snapshot window is due; no YouTube API call was made.",
+            }
 
         credentials = self._credentials()
         credentials.refresh(Request())
@@ -266,11 +287,15 @@ class YouTubeChannelService:
         if connected and connected[1] and metadata.get("channel_id") != str(connected[1]):
             raise ValueError("This video does not belong to the connected YouTube channel.")
         store.update_linked_video_metadata(int(link.get("id") or 0), metadata)
+        store.mark_link_ownership_verified(
+            int(link.get("id") or 0),
+            str(metadata.get("channel_id") or ""),
+        )
 
         analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
         analytics_current: dict[str, Any] = {}
         analytics_end = now.date() - timedelta(days=1)
-        if analytics_end >= published_at.date():
+        if collect_current and analytics_end >= published_at.date():
             try:
                 metrics = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
                 analytics_current = self._query(
@@ -290,7 +315,31 @@ class YouTubeChannelService:
             if end < start:
                 continue
             metrics = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
-            data = self._query(analytics, start, end, metrics, filters=f"video=={video_id}")
+            try:
+                data = self._query(analytics, start, end, metrics, filters=f"video=={video_id}")
+            except Exception as exc:
+                logger.warning("Linked-video %s snapshot remains retryable: %s", label, type(exc).__name__)
+                store.record_snapshot_attempt(
+                    video_id,
+                    label,
+                    status="failed_retryable",
+                    failure_reason="analytics_request_failed",
+                    age_hours=age_hours,
+                    source_start_date=start.isoformat(),
+                    source_end_date=end.isoformat(),
+                )
+                continue
+            if not data or data.get("views") is None:
+                store.record_snapshot_attempt(
+                    video_id,
+                    label,
+                    status="empty_retryable",
+                    failure_reason="analytics_returned_no_rows",
+                    age_hours=age_hours,
+                    source_start_date=start.isoformat(),
+                    source_end_date=end.isoformat(),
+                )
+                continue
             store.record_performance_snapshot(
                 youtube_video_id=video_id,
                 age_hours=hours,
@@ -303,29 +352,34 @@ class YouTubeChannelService:
                 shares=_optional_int(data.get("shares")),
                 subscribers_gained=_optional_int(data.get("subscribersGained")),
                 snapshot_window=label,
+                snapshot_status="complete",
+                source_start_date=start.isoformat(),
+                source_end_date=end.isoformat(),
             )
-            snapshot = store.latest_performance_snapshot(video_id) or {}
+            snapshot = store.completed_evidence_snapshot(video_id, label) or {}
             captured.append(snapshot)
             store.complete_due_experiment_snapshots(video_id, snapshot)
-        store.record_performance_snapshot(
-            youtube_video_id=video_id,
-            age_hours=age_hours,
-            views=_optional_int(metadata.get("view_count")),
-            watch_time_minutes=_optional_float(analytics_current.get("estimatedMinutesWatched")),
-            avg_view_duration_seconds=_optional_float(analytics_current.get("averageViewDuration")),
-            avg_view_percentage=_optional_float(analytics_current.get("averageViewPercentage")),
-            likes=_optional_int(metadata.get("like_count")),
-            comments=_optional_int(metadata.get("comment_count")),
-            shares=_optional_int(analytics_current.get("shares")),
-            subscribers_gained=_optional_int(analytics_current.get("subscribersGained")),
-            snapshot_window="current",
-            replace_window=True,
-        )
+        if collect_current:
+            store.record_performance_snapshot(
+                youtube_video_id=video_id,
+                age_hours=age_hours,
+                views=_optional_int(metadata.get("view_count")),
+                watch_time_minutes=_optional_float(analytics_current.get("estimatedMinutesWatched")),
+                avg_view_duration_seconds=_optional_float(analytics_current.get("averageViewDuration")),
+                avg_view_percentage=_optional_float(analytics_current.get("averageViewPercentage")),
+                likes=_optional_int(metadata.get("like_count")),
+                comments=_optional_int(metadata.get("comment_count")),
+                shares=_optional_int(analytics_current.get("shares")),
+                subscribers_gained=_optional_int(analytics_current.get("subscribersGained")),
+                snapshot_window="current",
+                replace_window=True,
+            )
         current_snapshot = store.latest_performance_snapshot(video_id) or {}
         return {
             "video_id": video_id,
             "age_hours": round(age_hours, 1),
             "captured": captured,
+            "window_states": [store.snapshot_window_state(video_id, label) for label, _ in windows],
             "current": current_snapshot,
             "youtube": metadata,
             "message": "Current YouTube metadata and available analytics were refreshed.",
@@ -377,7 +431,7 @@ class YouTubeChannelService:
         return HistoryStore(self.settings.database_path)
 
     def _connect(self):
-        return sqlite3.connect(self.settings.database_path)
+        return connect_managed(self.settings.database_path, timeout=10)
 
     def _is_configured(self) -> bool:
         if not all((self.settings.youtube_oauth_client_id, self.settings.youtube_oauth_client_secret, self.settings.oauth_token_encryption_key)):

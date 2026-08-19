@@ -196,13 +196,13 @@ def _build_creator_brief_block(creator_brief: Optional[dict[str, Any]]) -> str:
 
 
 def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) -> str:
-    """Format channel learning history so the LLM models titles after proven channel winners."""
+    """Format only policy-approved evidence, plus recent-title anti-repetition context."""
     if not channel_learning:
         return ""
     lines: list[str] = []
     confidence = str(channel_learning.get("confidence") or "collecting")
     best_videos = channel_learning.get("best_videos") or []
-    if confidence in {"directional", "evidence-based"}:
+    if confidence in {"early_signal", "moderate_evidence", "strong_evidence"}:
         for v in best_videos[:3]:
             t = (v.get("title") or "").strip()
             views = v.get("views")
@@ -212,7 +212,8 @@ def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) ->
                 if retention is not None:
                     details.append(f"{float(retention):.1f}% average viewed")
                 details = [detail for detail in details if detail]
-                lines.append(f"- {confidence.title()} linked-video pattern: \"{t}\" ({', '.join(details)})")
+                label = str(channel_learning.get("confidence_label") or confidence.replace("_", " ").title())
+                lines.append(f"- {label} linked-video pattern: \"{t}\" ({', '.join(details)})")
                 actual_tags = [str(tag).strip() for tag in (v.get("actual_tags") or []) if str(tag).strip()]
                 if actual_tags:
                     lines.append(f"  Actual uploaded tags: {', '.join(actual_tags[:6])}")
