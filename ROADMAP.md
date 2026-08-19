@@ -27,12 +27,23 @@ It must say Collecting evidence when there is not enough data to support the con
 
 The core implementation for Stages A through F is present and verified locally. Personal recommendations remain in the Collecting evidence state until real linked videos reach the documented sample thresholds.
 
-- **Stage A (Package-to-Video Linking)**: `published_video_links` table, video ownership validation, `POST /api/history/runs/{id}/link-video`, `GET /api/published-videos`, `PATCH /api/published-videos/{id}`, and 1-click **🔗 Link Video** actions in the dashboard.
-- **Stage B (Age-Based Snapshots)**: `video_performance_snapshots` table and manual due-snapshot refresh for 24h, 7d, and 28d timelines. It stores only metrics returned by YouTube Analytics.
-- **Stage C (Personal Learning Engine)**: Cohort analytics engine (`GET /api/learning/cohorts`) with honest evidence confidence thresholds (`Collecting evidence`, `Directional observation`, `Moderate-confidence pattern`, `Evidence-based recommendation`) and cohort median calculations.
+- **Stage A (Package-to-Video Linking)**: `published_video_links` table, fail-closed owned-video verification with stored channel provenance, `POST /api/history/runs/{id}/link-video`, `GET /api/published-videos`, `PATCH /api/published-videos/{id}`, and 1-click link actions in the dashboard.
+- **Stage B (Age-Based Snapshots)**: `video_performance_snapshots` keeps current display data separate from bounded, observable, retryable 24h/7d/28d evidence windows. Only valid Analytics evidence completes a scheduled window.
+- **Stage C (Personal Learning Engine)**: `evidence_policy.py` is the single 5/10/20 threshold source for cohort analytics, History diagnosis, channel learning, and Gemini prompt eligibility. One verified video contributes at most one completed observation to a selected format/language/window cohort.
 - **Stage D (Package Experiments)**: `package_experiments` table and experiment logging endpoints (`POST /api/experiments`) with a real saved performance baseline; all live YouTube changes remain manual.
 - **Stage E (Search/Browse/Audience Packages)**: Gemini multilingual generation producing dedicated Search, Browse, and Returning Audience title/thumbnail packages.
-- **Stage F (Reliability & Test Suite)**: Unit test suite for persistence and cohort thresholds, SQLite WAL persistence, no-cache headers, and verified Docker `127.0.0.1:8000` binding. Browser automation remains a future test-harness improvement, not a product blocker.
+- **Stage F (Reliability & Test Suite)**: Schema version 2, verified online backup-before-migration, runtime foreign-key enforcement, safe cascades, transactional deletion rollback, SQLite WAL persistence, 65 backend tests, and 27 deterministic Chromium workflow tests. Browser tooling remains development-only.
+- **Phase 3D (Creator Decision Workflow)**: Complete eight-stage flow from Idea through Checklist, truthful Research/provenance, deterministic local package comparison and selection, decision evidence/unknowns, safe copy/export, manual acknowledgments, and Creator renderer ownership in `pages/creator.js`.
+
+Stages G through L are the next product program. They are not complete merely because this roadmap describes them. An agent may mark an item complete only after its database migration, backend, dashboard flow, tests, Docker rebuild, and live verification all pass.
+
+### Current gaps that must be addressed first
+
+- The quota-aware due-snapshot collector is implemented but deliberately opt-in and disabled by default. Until the creator enables it, linked-video refresh remains manual/page-triggered and evidence accumulates more slowly.
+- Existing links migrated from schema version 0 are deliberately unverified and legacy/current snapshots are deliberately excluded from mature evidence until official verification and new scheduled collection succeed.
+- The experiment database endpoints exist, but the complete experiment-center dashboard workflow does not.
+- Ideas, saved competitor watchlists, possible-outlier monitoring, personal AI coaching, weekly reports, and the PWA/Android boundary are planned but not implemented.
+- Creator rendering is modularized. Dashboard, History, Analytics, and Settings renderers still share a compatibility bundle and should be extracted incrementally before several more complex pages are added.
 
 ## Rules for any AI agent working on this project
 
@@ -41,7 +52,7 @@ Before editing:
 1. Read this roadmap, README.md, compose.yaml, core configuration, API routes, history store, and the relevant feature module.
 2. Inspect the working tree. Never overwrite unrelated user changes.
 3. Never delete the database, OAuth token, existing history, or channel snapshots unless the creator explicitly requests that exact deletion.
-4. Use additive, reversible database migrations. Use CREATE TABLE IF NOT EXISTS, additive columns, and indexes. Never require a destructive reset.
+4. Use versioned, backup-first, reversible database migrations. Prefer additive changes; when a SQLite relationship requires a table rebuild, preserve and verify every row inside one transaction. Never require a destructive reset.
 5. Show missing data as Not available. Never create guessed analytics values.
 6. Add or update tests for every backend behavior and exercise changed dashboard actions in a browser test.
 
@@ -226,10 +237,18 @@ Turn linked package plus outcome data into conservative recommendations.
 
 | Evidence | Allowed recommendation |
 |---|---|
-| Fewer than 5 linked videos in a cohort | Collecting evidence; no winner claim |
-| 5 to 9 linked videos | Directional observation with low confidence |
-| 10 to 19 linked videos | Moderate-confidence pattern |
-| 20 or more linked videos with repeated outcome | Evidence-based recommendation |
+| Fewer than 5 mature comparable videos | Collecting evidence; no winner claim |
+| 5 to 9 mature comparable videos | Early signal |
+| 10 to 19 mature comparable videos | Moderate evidence |
+| 20 or more mature comparable videos | Strong historical pattern |
+
+These thresholds are implemented once in `evidence_policy.py` and reused by cohort analytics, History diagnosis, channel learning, and the Gemini prompt. A mature observation requires verified ownership, comparable format/language metadata, and a valid completed 24h, 7d, or 28d snapshot selected for that cohort. Current public counts may be displayed, but they cannot qualify as learning evidence.
+
+The learning engine must maintain three clearly labeled baselines:
+
+1. **Channel baseline**: all owned videos with available real metrics, used only for broad context.
+2. **SEO YT baseline**: videos linked to generated packages, used to evaluate this tool's recommendations.
+3. **Comparable cohort baseline**: linked videos with the same format, language, similar duration, topic/emotion cluster, and performance age. This is the only baseline allowed for package winner/loser recommendations.
 
 ### Learn these features
 
@@ -379,17 +398,54 @@ Add the strongest useful workflows found in mature creator tools while preservin
 
 Complete and verify each item before the next one:
 
-1. Idea backlog and topic opportunity workspace.
-2. Competitor and outlier watchlist.
-3. Published-video audit checklist.
-4. Creator-approved experiment center and thumbnail comparison.
-5. Search-position tracking only after an approved data source is chosen.
+1. Operationalize the existing opt-in due-snapshot collector and enrich comparable-cohort metadata without changing its disabled-by-default safety posture.
+2. Idea backlog and topic opportunity workspace.
+3. Competitor and outlier watchlist.
+4. Published-video audit checklist.
+5. Creator-approved experiment center and thumbnail/first-frame comparison.
+6. Honest topic-demand explorer; search-position tracking only after an approved data source is chosen.
+
+### G0 — Learning consistency and automatic collection
+
+#### Shared evidence policy — completed in Phase 1
+
+- `evidence_policy.py` is used by `channel_learning.py`, `history_store.py`, API responses, and the Gemini prompt builder.
+- The implemented labels are: fewer than 5 mature comparable videos = Collecting evidence; 5–9 = Early signal; 10–19 = Moderate evidence; 20 or more = Strong historical pattern.
+- A valid completed 24h/7d/28d snapshot is required for the selected cohort window. Current and legacy snapshots are never promoted automatically.
+- Include cohort identity, sample size, window, median, comparison value, confidence, and data-capture time with every recommendation.
+- Remove or migrate older conflicting labels so History, Analytics, generation, and reports cannot disagree.
+
+#### Local due-snapshot collector
+
+- Add a quota-aware scheduler inside the existing application process; do not add a cloud worker or another paid service.
+- Run one due-snapshot scan after application startup and then at a conservative interval while Docker remains running.
+- Support approximately 6-hour public-count observation plus immutable 24-hour, 7-day, and 28-day comparison snapshots. Analytics values that have not arrived yet remain null and may be filled only by a later official refresh.
+- Make collection idempotent. Repeated scans may update the replaceable `current` observation but must not duplicate or silently rewrite a completed scheduled window.
+- Record the last attempt, last success, next due time, API operation, and sanitized failure reason. Never record credentials or raw OAuth responses.
+- Add a quota budget and backoff. Authentication, quota, and temporary API failures must not stop the application.
+- Keep the existing manual Refresh action for immediate creator-controlled updates.
+
+#### Baselines and cohort fields
+
+- Backfill or derive `format`, `language`, `duration_bucket`, `topic_cluster`, and `emotion_or_intent` for linked videos without deleting original metadata.
+- Keep channel-wide performance, SEO-YT-linked performance, and comparable cohort performance separate in storage and UI.
+- Prefer median and median absolute deviation over arithmetic mean when enough observations exist.
+- Flag an extreme video as an outlier and show it separately; never let one viral result define the generation prompt.
+
+#### Acceptance checks
+
+- Every learning consumer returns the same confidence for the same cohort.
+- A cohort of four mature videos never changes Gemini's strategy as a learned winner.
+- The fifth mature comparable video may produce only a directional observation.
+- Restarting Docker catches up due snapshots without creating duplicates.
+- API quota or OAuth failure is visible but does not break History, generation, or Docker health.
+- Tests cover boundary samples of 0, 4, 5, 9, 10, 19, and 20 videos.
 
 ### G1 — Idea backlog and topic opportunity workspace
 
 #### Database
 
-Create `content_ideas` with: `id`, `topic`, `notes`, `format`, `language`, `region`, `search_angle`, `browse_angle`, `audience_angle`, `evidence_json`, `status`, `analysis_run_id`, `published_video_link_id`, `created_at`, and `updated_at`.
+Create `content_ideas` with: `id`, `topic`, `notes`, `format`, `language`, `region`, `visual_or_background`, `on_screen_text`, `target_duration_seconds`, `emotion_or_intent`, `search_angle`, `browse_angle`, `audience_angle`, `evidence_json`, `status`, `analysis_run_id`, `published_video_link_id`, `created_at`, and `updated_at`.
 
 - `status` is one of `idea`, `scripted`, `package_generated`, `published`, or `archived`.
 - Add indexes for `status`, `created_at`, and the format/language/region combination.
@@ -412,6 +468,7 @@ Show `Not enough personal evidence` when appropriate. Never display a guessed se
 - An idea survives Docker restart and links to its generated package and published video.
 - Pagination and status filters work with 100+ saved ideas.
 - Missing research data is represented honestly, not fabricated.
+- The complete lifecycle is traceable: idea → script → generated package → published link → mature performance → learning.
 
 ### G2 — Competitor and outlier watchlist
 
@@ -426,6 +483,8 @@ Calculate a possible outlier only against the median of at least five recent com
 
 UI must offer `Create different angle`, which opens a blank original brief. It must never prefill or offer to copy a competitor title or script.
 
+Add a private daily-opportunities view generated only from saved watchlists, approved API research, dated evidence, and the creator's own gaps. Each suggestion must explain why it appeared and expire or refresh stale trend evidence. It must never present a competitor's wording as a ready-to-publish title.
+
 ### G3 — Published-video audit checklist
 
 Add `GET /api/published-videos/{id}/audit`. Return individual checks with `pass`, `review`, `missing`, or `not_available`, explanation, and evidence source. Do not create one misleading SEO percentage.
@@ -435,12 +494,18 @@ Evaluate only known fields:
 - Title is truthful and has a clear topic/outcome.
 - First two description lines state topic and viewer promise.
 - Tags are 5–12 relevant phrases; hashtags are 1–3 focused terms.
+- The opening frame, on-screen text, and claimed payoff agree with the title and are readable within the supplied duration.
 - Package is linked, actual metadata is recorded, and an age snapshot is due or complete.
 - Playlist, end-screen, card, and thumbnail checks are `not_available` unless connected API data supports them.
 
-### G4 — Experiment center and thumbnail comparison
+### G4 — Experiment center and thumbnail/first-frame comparison
 
 Show two or three saved title/thumbnail packages side by side. Let the creator upload local thumbnail drafts for visual comparison; keep only local file paths or generated local assets.
+
+- For Shorts, treat the first visible frame, on-screen hook, readability, and visual loop as first-class experiment assets rather than assuming a conventional thumbnail controls Shorts-feed performance.
+- Provide mobile-size preview, safe-area overlay, contrast/readability checks, clutter warning, and title-image duplication warning.
+- Let Gemini review an explicitly uploaded local image when quota is available. Label visual advice as an AI review, not measured performance.
+- Allow manual recording or import of creator-visible YouTube Test & Compare results when supported. Do not invent an API result that YouTube does not expose.
 
 - Require one changed variable per experiment: title, thumbnail, description, or tags.
 - Save the latest real linked-video metrics as baseline.
@@ -451,7 +516,18 @@ Show two or three saved title/thumbnail packages side by side. Let the creator u
 
 Every experiment retains original metadata, changed metadata, reason, baseline, follow-up, and creator approval timestamp.
 
-### G5 — Search-position tracking decision
+### G5 — Honest topic-demand explorer and search-position decision
+
+Build a topic-demand explorer from dated, explainable signals available to this private tool:
+
+- Relevant recent result count from approved API research.
+- Publication freshness and recent view velocity.
+- Possible outliers from both large and small channels.
+- Repeated title/topic patterns and visible content gaps.
+- The creator's connected YouTube search-query analytics when available.
+- Evergreen versus time-sensitive classification.
+
+Display the individual signals and their capture times. A combined opportunity label may summarize them, but it must never be labeled monthly search volume unless an approved source actually supplied monthly search volume.
 
 Search position must not be built by scraping YouTube result pages. Before implementation, document and approve one legal, low-cost data source, including quota, retention, and terms. If no approved source fits the personal budget, do not implement ranking tracking.
 
@@ -471,3 +547,359 @@ Workflow references, not implementation dependencies:
 - vidIQ channel audit: https://support.vidiq.com/en/articles/10141815-channel-audit
 - TubeBuddy keyword explorer: https://www.tubebuddy.com/tools/keyword-explorer/
 - TubeBuddy experiment guidance: https://support.tubebuddy.com/hc/en-us/articles/21191305824027-A-B-Testing-FAQs
+
+## Stage H — Generation quality and anti-repetition engine
+
+### Goal
+
+Make every package truthful, natural, distinct, content-specific, and informed by mature personal evidence without turning successful patterns into repetitive templates.
+
+### H1 — Structured creator brief
+
+Before Gemini generation, normalize the creator's input into a stored brief containing:
+
+- Video format and intended duration.
+- Exact spoken dialogue, exact on-screen text, or explicit `no voice-over` state.
+- Visual/background description and important objects or people.
+- Core meaning, emotion, viewer problem, and intended payoff.
+- Target audience, primary language, region, and content restrictions.
+- Claims that are supported and interpretations that are not supported.
+- Desired Search, Browse, or Existing Audience emphasis.
+
+The original user input remains immutable in History. Store the normalized brief beside it rather than replacing it.
+
+### H2 — Candidate diversity
+
+Generate candidates across different truthful mechanisms, not synonym swaps:
+
+- Direct emotional conflict.
+- Curiosity with a specific payoff.
+- Search/topic clarity.
+- First-person personal framing.
+- Existing-audience framing only when channel evidence exists.
+
+Measure semantic similarity among candidates and against recent generated and published titles. Reject a candidate when it repeats a recent template, changes the video's meaning, introduces unsupported betrayal/breakup/result claims, or merely rearranges the same phrase.
+
+Do not force every content type into all five mechanisms. A quiet quote Short may need emotional and curiosity variants; a tutorial may need outcome and problem-solving variants.
+
+### H3 — Deterministic post-generation quality gate
+
+Run a local validation pass after Gemini and before saving:
+
+- Title matches the actual content and supplied proof.
+- Title length and important-word placement are suitable for mobile display.
+- Candidate titles are materially distinct.
+- Description first lines state content and viewer relevance naturally.
+- Description does not repeat a list of SEO phrases or invent facts.
+- Tags are focused; retain the creator-required Shorts tags `shorts`, `yt`, `youtube shorts`, and `viral shorts` for Shorts.
+- Hashtags contain 1–3 relevant terms and are not duplicated accidentally.
+- Search/Browse/Audience labels match the actual candidate strategy.
+- Emoji use is optional, relevant, and limited.
+- Unicode is normalized and copy output contains no mojibake or invisible unwanted characters.
+
+If too few candidates pass, make at most one repair request to Gemini. If Gemini fails or quota is exhausted, show a clearly labeled fallback and never describe it as Gemini output.
+
+### H4 — Personal evidence injection
+
+- Inject only mature comparable-cohort observations that meet the shared Stage C evidence policy.
+- Include both positive and negative patterns with sample size, metric, window, and confidence.
+- Never send OAuth tokens, API keys, raw private database files, or irrelevant channel history to Gemini.
+- Cap the learning context so it does not consume quota or overpower the current video's meaning.
+- Prefer diversity around a proven principle; never command Gemini to reproduce the exact winning title.
+
+### H5 — Package explanations
+
+For each recommended package, display:
+
+- Intended discovery surface: Search, Browse, or Existing Audience.
+- Content-specific reason it fits.
+- Personal evidence used, or `No mature personal evidence used`.
+- Main risk or tradeoff.
+- Generated-versus-heuristic labels for every score.
+
+Opportunity Score remains research context, not a predicted chance of growth. Title Quality remains a rule-based quality assessment, not predicted CTR.
+
+### Acceptance checks
+
+- A test set of at least 30 materially different briefs produces no cross-topic generic-template leakage.
+- Quote, tutorial, vlog, review, and story fixtures retain their actual meaning.
+- At least three title candidates per run are semantically distinct when the brief supports three legitimate angles.
+- Descriptions read naturally and do not repeat raw tag phrases.
+- Required Shorts tags remain present without causing unrelated tags to be added.
+- Gemini quota exhaustion causes one clear fallback, not repeated paid or quota-consuming retries.
+- History records the brief, raw model label, quality-gate decisions, selected output, and actual published metadata.
+
+## Stage I — Hook, pacing, and retention assistant
+
+### Goal
+
+Improve the video itself, especially the first seconds of Shorts, rather than treating metadata as the only growth lever.
+
+### I1 — Pre-publish Short guidance
+
+For a Short, calculate and display:
+
+- Word count and estimated reading time for on-screen text.
+- Whether the hook appears within the first second.
+- Recommended minimum readable duration based on word count.
+- Text contrast, safe-area, font-size, and line-count checklist.
+- Whether title, opening frame, and on-screen text promise the same experience.
+- Optional shorter on-screen version that preserves meaning; never silently replace an exact quote.
+- Suggested clean loop or final visual beat.
+- Mood/audio direction as creative guidance, not a claim that a sound will trend.
+
+For narrated or long-form videos, provide a separate structure: opening promise, proof, pacing sections, payoff, and next-view transition. Do not apply Shorts rules to long-form content.
+
+### I2 — Post-publish retention learning
+
+- Store the actual duration, hook type, on-screen word count, visual type, audio/mood note, and loop type used when the creator links the video.
+- Compare retention only inside mature comparable cohorts.
+- Identify repeated retention drops only when official data exposes the required detail; otherwise report only average duration/percentage viewed.
+- Learn visual or hook associations as correlations. Never claim that a sunset, rainy road, song, title, or tag caused the result.
+
+### Acceptance checks
+
+- A 17-word quote receives a realistic reading-time recommendation and no generic `add more curiosity turns` advice.
+- Missing detailed retention data displays `Not available`.
+- Long-form and Shorts receive separate pacing logic.
+- Personal hook recommendations obey the shared evidence thresholds.
+
+## Stage J — Personal AI coach and weekly channel report
+
+### Goal
+
+Provide a private, evidence-citing assistant over the creator's own structured history, analytics, ideas, competitors, and experiments.
+
+### J1 — Evidence service before chat
+
+Create deterministic query functions for:
+
+- Best and weakest comparable linked videos by 24-hour, 7-day, and 28-day windows.
+- Title mechanism, title length, topic/emotion, hook, visual, duration, and upload-time cohorts.
+- Retention, engagement per 1,000 views, subscriber conversion, and view performance.
+- Package usage: exact generated fields used, edited, or ignored.
+- Experiments awaiting follow-up and ideas awaiting action.
+
+The coach must receive a compact evidence object from these functions. It must not invent SQL, metrics, sample sizes, or channel facts inside the model response.
+
+### J2 — Coach interface
+
+Support questions such as:
+
+- Why did this linked video underperform its cohort?
+- Which title mechanisms work for my quote Shorts?
+- What should I publish next, and what evidence supports it?
+- Are sunset and rainy-road visuals associated with different retention?
+- Is this published video a responsible title-change candidate?
+
+Every answer must show evidence cards containing cohort, sample size, time window, comparison metric, confidence, and last refresh. If evidence is insufficient, answer with a collection plan rather than generic certainty.
+
+Store coach conversations locally with rename and delete controls. Do not send an entire channel database when only a small evidence summary is required.
+
+### J3 — Weekly private report
+
+Generate a local weekly report containing:
+
+- Strongest and weakest mature upload with fair cohort comparison.
+- Meaningful retention, engagement, and subscriber-conversion movement.
+- Package fields used versus changed before publishing.
+- Mature patterns and explicitly labeled early observations.
+- Videos missing package links or due snapshots.
+- Experiments awaiting follow-up.
+- Idea backlog state and three evidence-backed next actions.
+
+The report may be generated on demand and on a local schedule while Docker is running. It must not email, publish, or upload anything automatically.
+
+### Acceptance checks
+
+- Coach answers reproduce the deterministic evidence values exactly.
+- A channel with fewer than five comparable mature videos receives no winning-pattern claim.
+- Deleting a chat does not delete packages, analytics, ideas, or experiments.
+- Weekly report generation succeeds without Gemini by showing the deterministic metrics and collection status.
+
+## Phase 3C — Frontend extraction (completed 16 August 2026)
+
+### Delivered
+
+- Extracted the embedded dashboard shell and CSS into `win_engine/api/static/index.html` and `css/app.css`.
+- Added FastAPI same-origin static serving at `/static/*`; the default `/`, `/app`, and `/dashboard_view` routes now return the local shell.
+- Added native ES modules for the shared API client, normalized errors, explicit in-memory state, hash-navigation metadata, and five page lifecycle seams.
+- Kept all existing DOM IDs, hash routes, API payloads, request gates, truthfulness labels, Creator advanced-field behavior, History behavior, Analytics evidence separation, and Settings collector vocabulary.
+- Preserved the embedded implementation at `/dashboard_legacy` as a route-only rollback path.
+- Added deterministic browser coverage for static assets, module loading, and the legacy route. The extracted frontend passed 14 Chromium tests and the full local suite passed 79 tests against a fresh local FastAPI process.
+
+### Deliberate limitations
+
+- Dashboard, History, Analytics, and Settings renderers remain in `js/app.js` as a compatibility bundle while their page seams are introduced. Phase 3D-E later removed all Creator-only rendering and handlers from that bundle.
+- Inline handlers generated inside legacy-compatible dynamic strings remain behind the documented `window` bridge. No new inline handlers were added to the static shell.
+- Docker image rebuild/health and production-image browser-tool inspection were unavailable during Phase 3C itself; final Phase 3D verification later completed those checks successfully.
+
+### Acceptance gate
+
+Phase 3C is complete for local extraction and compatibility. The complete Phase 3D workflow is now delivered and verified without changing the API, database, permissions, or production dependency model.
+
+## Phase 3D — Creator decision workflow (completed 16 August 2026)
+
+### Completed increments
+
+- **3D-A — state and workflow shell:** explicit in-memory Creator state, eight stages, preserved form values, entered-versus-inferred brief provenance, one Analyze owner, and stale-response protection.
+- **3D-B — Research and provenance:** read-only rendering of existing research queries, research decision, public YouTube observations, local scoring candidates, keyword/entity signals, thumbnail metadata, generation context, warnings, and explicit unavailable/error states.
+- **3D-C — package comparison and selection:** deterministic local package IDs, primary/alternative title and thumbnail cards, source-labelled heuristics, safe copy actions, and local selection with zero network calls.
+- **3D-D — decision and checklist:** selected-package summary, evidence/unknown separation, source guide, eight manual acknowledgments, manual-publishing boundary, and full-analysis export with clearly marked local workflow state.
+- **3D-E — Creator renderer migration:** `pages/creator.js` now owns Creator state, Analyze, rendering, selection, copy, checklist, and export. The old Creator renderer, inactive rollback callback block, and temporary Creator window bridge were removed from `app.js`.
+- **3D-F — regression and usability:** active-frontend encoding artifacts were removed, responsive workflow styling was reviewed in real Chromium, request gates remained intact, and local plus Docker verification passed.
+
+### Guardrails retained
+
+- No new API endpoint, response field, schema, migration, database write, OAuth scope, YouTube write, collector behavior, Docker dependency, paid API, quota change, or Ollama change.
+- Stage navigation and evidence presentation make no additional Gemini, YouTube, OAuth, or research calls.
+- Public observations, local heuristics, AI suggestions, creator input, and insufficient evidence remain visibly distinct.
+- Package selection and checklist interactions are local session state. They do not mutate the Analyze response, SQLite History, or YouTube.
+
+### Verification gate
+
+Phase 3D passed 65 backend tests, 27 deterministic Chromium tests, and 92 tests in full local discovery. The rebuilt `win-engine` container is healthy; its backend suite passes with browser tests correctly skipped, and the production image contains no Playwright, Chromium, Node, or Ollama.
+
+## Stage K — Maintainable dashboard, PWA, and Android boundary
+
+### Goal
+
+Make the growing tool fast, testable, mobile-friendly, and safe without prematurely creating a public service.
+
+### K1 — Frontend modularization (Phase 3C foundation complete)
+
+Continue splitting the compatibility bundle into:
+
+- HTML templates or a small static application shell.
+- Shared design tokens and responsive CSS.
+- Page-specific JavaScript modules.
+- One reusable API client with timeout, error parsing, request cancellation, and stale-request protection.
+- Reusable modal, toast, table, metric, empty-state, loading, and confirmation components.
+
+Preserve routes and behavior during the split. Phase 3C already delivered the static shell, shared API/error/state/navigation modules, and page lifecycle seams; move renderer bodies one page at a time without redesigning or rewriting every feature in one unreviewable change.
+
+### K2 — Performance and accessibility
+
+- Load page data only when that page is opened.
+- Cache read-only API results briefly and invalidate them after mutations.
+- Paginate History, Ideas, competitors, experiments, and coach chats.
+- Cancel obsolete requests and prevent duplicate refresh/generation clicks.
+- Use semantic buttons, visible keyboard focus, labels, sufficient contrast, and mobile touch targets.
+- Add browser tests for every sidebar route and critical action.
+
+### K3 — Installable PWA
+
+- Add a web-app manifest, icons, responsive layout, and conservative service worker.
+- Cache only the static shell. Never cache secrets, OAuth callbacks, private analytics responses, or mutation responses.
+- Show an offline state; do not claim generation or YouTube sync works offline.
+- Keep the current Docker binding to `127.0.0.1` until an Android connection architecture is explicitly approved.
+
+### K4 — Android decision gate
+
+Choose and document one option before implementation:
+
+1. **Laptop companion**: authenticated local-network pairing; laptop and Docker must be running.
+2. **Private personal backend**: requires TLS, authentication, secret storage, updates, backups, and a separate cost/security approval.
+3. **Export/import viewer**: phone consumes an encrypted export and cannot generate or sync live data.
+
+Do not expose port 8000 to the LAN or internet merely to make the PWA reachable. No Android build may embed OAuth client secrets or an unencrypted Gemini key in recoverable application assets.
+
+### Acceptance checks
+
+- Existing desktop workflows remain functional after modularization.
+- Main pages work at common phone widths without horizontal page overflow.
+- Browser tests cover navigation, generation, History detail, linking, refresh, ideas, experiments, and errors.
+- The installed PWA never serves stale private API data from a cache.
+- An approved threat model and architecture decision exist before any network exposure.
+
+## Stage L — Cost, quota, backup, and operational reliability
+
+### Goal
+
+Keep normal personal operation free or below the creator's one-dollar monthly target without sacrificing truthfulness or data safety.
+
+### L1 — Quota and cost controls
+
+- Add a local quota dashboard for Gemini calls, model used, successful generations, repair calls, failures, YouTube Data API operations, and Analytics refreshes.
+- Cache normalized research queries by query, region, language, format, and freshness class.
+- Reuse deterministic analysis locally instead of asking Gemini to recalculate it.
+- Generate only the selected language by default.
+- Permit at most one Gemini repair request for a failed quality gate.
+- Stop immediately on a confirmed quota-exhausted response and show the reset guidance available from the provider response.
+- Never silently switch to a paid provider, paid keyword API, or a more expensive model.
+
+### L2 — Data protection and recovery
+
+- Add a versioned migration registry and backup-before-migration.
+- Run SQLite integrity checks and expose the last successful result in Settings.
+- Provide creator-triggered encrypted backup and restore with a dry-run validation step.
+- Provide JSON export for packages, links, snapshots, ideas, experiments, and deterministic reports without exporting secrets.
+- Preserve at least 12 months of raw linked-video snapshots unless the creator explicitly changes retention.
+
+### L3 — Operational diagnostics
+
+- Settings must show Docker/app version, database path, schema version, database health, last backup, last YouTube sync, OAuth state, Gemini state, and quota summary without revealing secret values.
+- Use structured sanitized logging and stable request IDs.
+- Add health checks for database access and required internal services, but do not make temporary Gemini or YouTube failure mark the local app process unhealthy.
+- Test OAuth expiry, revoked consent, API quota exhaustion, Gemini 429/5xx responses, SQLite lock contention, malformed model JSON, and Docker restart recovery.
+
+### Acceptance checks
+
+- A normal generation uses one Gemini call; a repair path uses no more than two total.
+- Cached identical research does not repeat YouTube search operations inside its freshness window.
+- Backup restore is verified against a temporary database before replacing the live database, and replacement requires explicit creator confirmation.
+- No secret appears in logs, exports, browser storage, database history JSON, screenshots, or Git.
+- Docker remains healthy and bound only to `127.0.0.1:8000`.
+
+## Master execution sequence
+
+### Phase 2 implementation status (15 August 2026)
+
+- Schema 2 comparable metadata and creator edit audit: implemented and migrated with backup-first verification.
+- Source-aware cohort filters and evidence reporting: implemented with language, format, duration bucket, and topic filters; unknown values remain excluded.
+- Automatic snapshot collector: implemented but disabled by default; dry-run and quota safeguards are available.
+- History comparable-metadata editor and collector status API: implemented.
+- Optional Playwright browser smoke coverage: added; requires separate development installation and Chromium.
+- Docker rebuild, in-container verification, and browser execution were subsequently completed during final Phase 3D verification.
+
+### Phase 3A/3B implementation status (15 August 2026)
+
+- Phase 3A completed the browser-test harness, deterministic request interception, and production-image separation for browser tooling.
+- Phase 3B completed the embedded dashboard reality fixes: neutral unavailable states, evidence/current-data labels, normalized frontend API errors with request IDs, advanced-brief retention, truthful collector states, targeted copy-button safety, and request-count coverage.
+- Phase 3B remains behaviorally compatible with the extracted dashboard. The complete Creator workflow and evidence presentation are now delivered through Phase 3D-A through 3D-F.
+- Browser tests remain development-only and run with a separately installed Chromium; Playwright and Chromium are not production dependencies.
+
+### Phase 3C implementation status (16 August 2026)
+
+- Same-origin static HTML/CSS/native-module frontend is the default route.
+- Shared API/error handling, explicit frontend state, navigation metadata, and page lifecycle seams are extracted.
+- `/dashboard_legacy` preserves the embedded dashboard for route-only rollback.
+- 27 deterministic Chromium tests and 92 full local tests pass after the completed Phase 3D workflow.
+- The rebuilt Docker application is healthy on `127.0.0.1:8000`; same-origin assets and `/dashboard_legacy` return HTTP 200, and production excludes Playwright, Chromium, Node, and Ollama.
+
+Agents must implement the remaining work in this order unless the creator explicitly reprioritizes it:
+
+1. **H** — Strengthen brief normalization, candidate diversity, anti-repetition, and the deterministic quality gate.
+2. **G1** — Build the Ideas lifecycle.
+3. **G2 and G5** — Build watchlists, possible outliers, and the honest topic-demand explorer.
+4. **I** — Add hook/pacing guidance and retention feature capture.
+5. **G3 and G4** — Build audits, thumbnail/first-frame comparison, and the complete experiment UI.
+6. **J** — Add the evidence service, personal coach, and weekly report.
+7. **K1 and K2** — Extract the remaining page renderers and optimize accessibility/performance; Creator ownership is complete.
+8. **L** — Complete quota visibility, encrypted backup/restore, and operational diagnostics.
+9. **K3 and K4** — Add the PWA only after the Android connection architecture is approved.
+
+### Definition of personal feature parity
+
+SEO YT does not need a commercial creator database, billing system, team workspace, public browser extension, or proprietary keyword-volume imitation. It reaches its intended personal parity when the creator can:
+
+1. Save and research an original idea.
+2. Generate distinct truthful packaging and hook guidance from the real content.
+3. Compare competitors and possible outliers using transparent dated evidence.
+4. Publish manually and link the exact owned video to its package.
+5. Collect comparable performance automatically while Docker is running.
+6. See what generated metadata was actually used and how the video performed.
+7. Run creator-approved packaging experiments.
+8. Receive conservative personal recommendations and weekly actions backed by sufficient mature data.
+9. Use the workflow comfortably on desktop and, after an explicit security decision, Android.
+10. Keep normal operation private and free or below the stated personal monthly budget.

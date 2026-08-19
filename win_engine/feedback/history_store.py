@@ -7,8 +7,33 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from win_engine.feedback.migrations import (
+    connect_managed,
+    configure_connection,
+    initialize_memory_database,
+    prepare_database,
+)
+from win_engine.feedback.evidence_policy import confidence_payload, mature_snapshot
+
 _INITIALIZED_DATABASES: set[str] = set()
 _INITIALIZATION_LOCK = Lock()
+_SCHEDULED_WINDOWS = {"24h", "7d", "28d"}
+_MAX_SNAPSHOT_ATTEMPTS = 5
+COMPARABLE_FIELDS = ("language", "format", "duration_bucket", "topic_category")
+FORMAT_VALUES = {
+    "short",
+    "youtube_shorts",
+    "talking_head",
+    "tutorial",
+    "vlog",
+    "review",
+    "quote",
+    "story",
+    "challenge",
+    "other",
+    "unknown",
+}
+DURATION_VALUES = {"under_60s", "60_to_180s", "3_to_10m", "over_10m", "unknown"}
 
 
 class HistoryStore:
@@ -20,13 +45,13 @@ class HistoryStore:
         self._memory_connection: sqlite3.Connection | None = None
         if database_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
-            self._initialize()
+            initialize_memory_database(self._memory_connection)
         else:
             database_key = str(self._database_path.resolve()) if self._database_path else database_path
             if database_key not in _INITIALIZED_DATABASES:
                 with _INITIALIZATION_LOCK:
                     if database_key not in _INITIALIZED_DATABASES:
-                        self._initialize()
+                        prepare_database(database_path)
                         _INITIALIZED_DATABASES.add(database_key)
 
     @property
@@ -38,176 +63,14 @@ class HistoryStore:
             return self._memory_connection
         if self._database_path is None:
             raise RuntimeError("Database path is unavailable.")
-        connection = sqlite3.connect(self._database_path, timeout=10)
-        connection.execute("PRAGMA busy_timeout = 10000")
-        return connection
+        return connect_managed(str(self._database_path), timeout=10)
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = NORMAL")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS video_snapshots (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    video_id TEXT NOT NULL,
-                    query TEXT NOT NULL,
-                    captured_at TEXT NOT NULL,
-                    published_at TEXT,
-                    view_count INTEGER DEFAULT 0,
-                    like_count INTEGER DEFAULT 0,
-                    comment_count INTEGER DEFAULT 0,
-                    subscriber_count INTEGER DEFAULT 0
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS owned_video_snapshots (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    video_id TEXT NOT NULL,
-                    captured_at TEXT NOT NULL,
-                    published_at TEXT,
-                    title TEXT,
-                    views INTEGER DEFAULT 0,
-                    watch_minutes REAL DEFAULT 0,
-                    average_view_duration REAL DEFAULT 0,
-                    average_view_percentage REAL DEFAULT 0,
-                    likes INTEGER DEFAULT 0,
-                    comments INTEGER DEFAULT 0,
-                    shares INTEGER DEFAULT 0,
-                    subscribers_gained INTEGER DEFAULT 0
-                )
-                """
-            )
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_owned_video_snapshots_video_time ON owned_video_snapshots(video_id, captured_at)")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS youtube_channel_connection (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    encrypted_refresh_token TEXT NOT NULL,
-                    channel_id TEXT,
-                    channel_title TEXT,
-                    connected_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS youtube_channel_syncs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    synced_at TEXT NOT NULL,
-                    payload_json TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_video_snapshots_video_time
-                ON video_snapshots(video_id, captured_at)
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS analysis_runs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    query TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    intent TEXT,
-                    content_angle TEXT,
-                    title TEXT,
-                    title_score REAL DEFAULT 0,
-                    retention_risk TEXT,
-                    opportunity_label TEXT,
-                    opportunity_score REAL DEFAULT 0,
-                    payload_json TEXT
-                )
-                """
-            )
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(analysis_runs)").fetchall()}
-            if "payload_json" not in columns:
-                connection.execute("ALTER TABLE analysis_runs ADD COLUMN payload_json TEXT")
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_analysis_runs_created_at
-                ON analysis_runs(created_at)
-                """
-            )
-
-            # Stage A: Link saved package to published video
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS published_video_links (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    analysis_run_id INTEGER NOT NULL,
-                    youtube_video_id TEXT NOT NULL UNIQUE,
-                    published_at TEXT NOT NULL,
-                    selected_title TEXT,
-                    selected_thumbnail_package TEXT,
-                    selected_description TEXT,
-                    selected_tags_json TEXT,
-                    selected_hashtags_json TEXT,
-                    format TEXT,
-                    language TEXT,
-                    region TEXT,
-                    notes TEXT,
-                    linked_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id)
-                )
-                """
-            )
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_run_id ON published_video_links(analysis_run_id)")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_yt_id ON published_video_links(youtube_video_id)")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_pub_links_pub_at ON published_video_links(published_at)")
-            self._ensure_column(connection, "published_video_links", "youtube_metadata_json", "TEXT")
-            self._ensure_column(connection, "published_video_links", "metadata_synced_at", "TEXT")
-
-            # Stage B: Comparable age-based performance snapshots
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS video_performance_snapshots (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    youtube_video_id TEXT NOT NULL,
-                    age_hours REAL NOT NULL,
-                    views INTEGER DEFAULT 0,
-                    watch_time_minutes REAL DEFAULT 0,
-                    avg_view_duration_seconds REAL DEFAULT 0,
-                    avg_view_percentage REAL DEFAULT 0,
-                    likes INTEGER DEFAULT 0,
-                    comments INTEGER DEFAULT 0,
-                    shares INTEGER DEFAULT 0,
-                    subscribers_gained INTEGER DEFAULT 0,
-                    impressions INTEGER DEFAULT 0,
-                    impressions_ctr REAL DEFAULT 0,
-                    snapshot_window TEXT,
-                    captured_at TEXT NOT NULL
-                )
-                """
-            )
-            self._ensure_column(connection, "video_performance_snapshots", "snapshot_window", "TEXT")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_perf_snaps_yt_id ON video_performance_snapshots(youtube_video_id)")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_perf_snaps_yt_window ON video_performance_snapshots(youtube_video_id, snapshot_window)")
-
-            # Stage D: Package experiments & post-publish changes
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS package_experiments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    youtube_video_id TEXT NOT NULL,
-                    changed_at TEXT NOT NULL,
-                    old_title TEXT,
-                    new_title TEXT,
-                    old_thumbnail TEXT,
-                    new_thumbnail TEXT,
-                    reason TEXT,
-                    performance_before_json TEXT,
-                    performance_after_json TEXT
-                )
-                """
-            )
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_pkg_exp_yt_id ON package_experiments(youtube_video_id)")
+        # Retained as a compatibility hook for callers from older versions.
+        if self._memory_connection is not None:
+            initialize_memory_database(self._memory_connection)
+        else:
+            prepare_database(self._database_path_raw)
 
     @staticmethod
     def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -385,9 +248,15 @@ class HistoryStore:
         }
 
     def delete_analysis_run(self, run_id: int) -> bool:
-        """Delete a recorded analysis run from the SQLite database."""
+        """Atomically delete a package and link-owned dependents, or roll back all."""
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute("DELETE FROM analysis_runs WHERE id = ?", (run_id,))
+            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise sqlite3.IntegrityError(
+                    f"Deletion would leave {len(violations)} foreign-key violation(s)."
+                )
             return cursor.rowcount > 0
 
     def record_owned_snapshot(self, title: str, views: int, likes: int) -> None:
@@ -709,6 +578,10 @@ class HistoryStore:
         language: str | None = None,
         region: str | None = None,
         notes: str | None = None,
+        ownership_state: str = "unverified",
+        ownership_verified: bool = False,
+        verified_channel_id: str | None = None,
+        ownership_verified_at: str | None = None,
     ) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
@@ -724,8 +597,9 @@ class HistoryStore:
                     analysis_run_id, youtube_video_id, published_at,
                     selected_title, selected_thumbnail_package, selected_description,
                     selected_tags_json, selected_hashtags_json, format, language, region, notes,
-                    linked_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    linked_at, updated_at, ownership_state, ownership_verified,
+                    verified_channel_id, ownership_verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(youtube_video_id) DO UPDATE SET
                     analysis_run_id = excluded.analysis_run_id,
                     published_at = excluded.published_at,
@@ -738,6 +612,10 @@ class HistoryStore:
                     language = excluded.language,
                     region = excluded.region,
                     notes = excluded.notes,
+                    ownership_state = excluded.ownership_state,
+                    ownership_verified = excluded.ownership_verified,
+                    verified_channel_id = excluded.verified_channel_id,
+                    ownership_verified_at = excluded.ownership_verified_at,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -755,13 +633,27 @@ class HistoryStore:
                     notes,
                     now,
                     now,
+                    ownership_state,
+                    1 if ownership_verified else 0,
+                    verified_channel_id,
+                    ownership_verified_at,
                 ),
             )
             row = connection.execute(
                 "SELECT id FROM published_video_links WHERE youtube_video_id = ?",
                 (youtube_video_id,),
             ).fetchone()
-            return int(row[0]) if row else int(cursor.lastrowid or 0)
+            link_id = int(row[0]) if row else int(cursor.lastrowid or 0)
+            connection.execute(
+                """INSERT OR IGNORE INTO published_video_comparable_metadata
+                   (published_video_link_id, language, format, duration_bucket, topic_category,
+                    language_source, format_source, duration_bucket_source, topic_category_source,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, 'unknown', 'unknown', ?, ?, 'unknown', 'unknown', ?, ?)""",
+                (link_id, language or "unknown", format_val or "unknown",
+                 "package" if language else "unknown", "package" if format_val else "unknown", now, now),
+            )
+            return link_id
 
     def published_video_links_list(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -772,7 +664,8 @@ class HistoryStore:
                        p.format, p.language, p.region, p.notes, p.linked_at, p.updated_at,
                        COALESCE(a.title, a.query, 'Saved Package'), a.opportunity_score, a.title_score,
                        s.age_hours, s.views, s.avg_view_percentage, s.impressions_ctr, s.snapshot_window, s.captured_at,
-                       p.selected_tags_json, p.selected_hashtags_json, p.youtube_metadata_json, p.metadata_synced_at
+                       p.selected_tags_json, p.selected_hashtags_json, p.youtube_metadata_json, p.metadata_synced_at,
+                       p.ownership_state, p.ownership_verified, p.verified_channel_id, p.ownership_verified_at
                 FROM published_video_links p
                 LEFT JOIN analysis_runs a ON p.analysis_run_id = a.id
                 LEFT JOIN video_performance_snapshots s ON s.id = (
@@ -783,7 +676,7 @@ class HistoryStore:
                 ORDER BY p.published_at DESC
                 """
             ).fetchall()
-            return [
+            result = [
                 {
                     "id": r[0],
                     "analysis_run_id": r[1],
@@ -809,9 +702,21 @@ class HistoryStore:
                     "selected_hashtags": _json_list(r[23]),
                     "youtube_metadata": _json_dict(r[24]),
                     "metadata_synced_at": r[25],
+                    "ownership_state": r[26],
+                    "ownership_verified": bool(r[27]),
+                    "verified_channel_id": r[28],
+                    "ownership_verified_at": r[29],
                 }
                 for r in rows
             ]
+            metadata_rows = connection.execute("SELECT published_video_link_id, language, format, duration_bucket, topic_category, language_source, format_source, duration_bucket_source, topic_category_source, updated_at FROM published_video_comparable_metadata").fetchall()
+            metadata_by_link = {
+                r[0]: {"language": r[1], "format": r[2], "duration_bucket": r[3], "topic_category": r[4], "sources": {"language": r[5], "format": r[6], "duration_bucket": r[7], "topic_category": r[8]}, "updated_at": r[9]}
+                for r in metadata_rows
+            }
+            for item in result:
+                item["comparable_metadata"] = metadata_by_link.get(item["id"])
+            return result
 
     def published_video_link_by_run(self, run_id: int) -> dict[str, Any] | None:
         with self._connect() as connection:
@@ -820,7 +725,8 @@ class HistoryStore:
                 SELECT id, analysis_run_id, youtube_video_id, published_at,
                        selected_title, selected_thumbnail_package, selected_description,
                        format, language, region, notes, linked_at, updated_at,
-                       selected_tags_json, selected_hashtags_json, youtube_metadata_json, metadata_synced_at
+                       selected_tags_json, selected_hashtags_json, youtube_metadata_json, metadata_synced_at,
+                       ownership_state, ownership_verified, verified_channel_id, ownership_verified_at
                 FROM published_video_links
                 WHERE analysis_run_id = ?
                 ORDER BY updated_at DESC
@@ -848,6 +754,10 @@ class HistoryStore:
                 "selected_hashtags": _json_list(row[14]),
                 "youtube_metadata": _json_dict(row[15]),
                 "metadata_synced_at": row[16],
+                "ownership_state": row[17],
+                "ownership_verified": bool(row[18]),
+                "verified_channel_id": row[19],
+                "ownership_verified_at": row[20],
             }
 
     def update_linked_video_metadata(self, link_id: int, metadata: dict[str, Any]) -> bool:
@@ -861,11 +771,84 @@ class HistoryStore:
             )
             return cursor.rowcount > 0
 
+    def mark_link_ownership_verified(self, link_id: int, channel_id: str) -> bool:
+        if not channel_id:
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE published_video_links
+                   SET ownership_state = 'verified', ownership_verified = 1,
+                       verified_channel_id = ?, ownership_verified_at = ?, updated_at = ?
+                   WHERE id = ?""",
+                (channel_id, now, now, link_id),
+            )
+            return cursor.rowcount > 0
+
     def published_video_link(self, link_id: int) -> dict[str, Any] | None:
         for link in self.published_video_links_list():
             if link["id"] == link_id:
                 return link
         return None
+
+    def comparable_metadata(self, link_id: int) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT published_video_link_id, language, format, duration_bucket, topic_category,
+                          language_source, format_source, duration_bucket_source, topic_category_source,
+                          created_at, updated_at
+                   FROM published_video_comparable_metadata WHERE published_video_link_id = ?""",
+                (link_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "link_id": row[0],
+            "language": row[1], "format": row[2], "duration_bucket": row[3], "topic_category": row[4],
+            "sources": {"language": row[5], "format": row[6], "duration_bucket": row[7], "topic_category": row[8]},
+            "created_at": row[9], "updated_at": row[10],
+            "edits": self.comparable_metadata_edits(link_id),
+        }
+
+    def comparable_metadata_edits(self, link_id: int, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT id, field_name, old_value, new_value, source, changed_at
+                   FROM published_video_metadata_edits WHERE published_video_link_id = ?
+                   ORDER BY id DESC LIMIT ?""", (link_id, max(1, min(limit, 500)))
+            ).fetchall()
+        return [{"id": r[0], "field": r[1], "old_value": r[2], "new_value": r[3], "source": r[4], "changed_at": r[5]} for r in rows]
+
+    def update_comparable_metadata(self, link_id: int, values: dict[str, Any]) -> dict[str, Any] | None:
+        if not values or set(values) - set(COMPARABLE_FIELDS):
+            raise ValueError("At least one supported comparable metadata field is required.")
+        for field, value in values.items():
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{field} cannot be empty.")
+            if field == "duration_bucket" and value is not None and value not in DURATION_VALUES:
+                raise ValueError("Invalid duration bucket.")
+            if field == "format" and value is not None and value not in FORMAT_VALUES:
+                raise ValueError("Invalid format.")
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            if not connection.execute("SELECT 1 FROM published_video_links WHERE id = ?", (link_id,)).fetchone():
+                return None
+            connection.execute(
+                """INSERT OR IGNORE INTO published_video_comparable_metadata
+                   (published_video_link_id, language, format, duration_bucket, topic_category,
+                    language_source, format_source, duration_bucket_source, topic_category_source,
+                    created_at, updated_at) VALUES (?, 'unknown', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown', ?, ?)""",
+                (link_id, now, now),
+            )
+            row = connection.execute("SELECT language, format, duration_bucket, topic_category FROM published_video_comparable_metadata WHERE published_video_link_id = ?", (link_id,)).fetchone()
+            indexes = {"language": 0, "format": 1, "duration_bucket": 2, "topic_category": 3}
+            for field, raw in values.items():
+                new_value = (raw.strip() if isinstance(raw, str) else None) or "unknown"
+                old_value = row[indexes[field]] or "unknown"
+                connection.execute(f"UPDATE published_video_comparable_metadata SET {field} = ?, {field}_source = ?, updated_at = ? WHERE published_video_link_id = ?", (new_value, "unknown" if new_value == "unknown" else "creator", now, link_id))
+                if old_value != new_value:
+                    connection.execute("INSERT INTO published_video_metadata_edits (published_video_link_id, field_name, old_value, new_value, source, changed_at) VALUES (?, ?, ?, ?, 'creator', ?)", (link_id, field, old_value, new_value, now))
+        return self.comparable_metadata(link_id)
 
     def update_published_video_link(
         self,
@@ -909,9 +892,61 @@ class HistoryStore:
         impressions_ctr: float | None = None,
         snapshot_window: str | None = None,
         replace_window: bool = False,
+        snapshot_status: str | None = None,
+        failure_reason: str | None = None,
+        source_start_date: str | None = None,
+        source_end_date: str | None = None,
     ) -> int:
         captured_at = datetime.now(timezone.utc).isoformat()
+        if snapshot_status is None:
+            if snapshot_window == "current":
+                snapshot_status = "display_only"
+            elif snapshot_window in _SCHEDULED_WINDOWS:
+                snapshot_status = "complete" if views is not None else "empty_retryable"
+            else:
+                snapshot_status = "legacy_unverified"
+        if snapshot_status == "complete" and views is None:
+            snapshot_status = "empty_retryable"
+            failure_reason = failure_reason or "analytics_returned_no_rows"
+
         with self._connect() as connection:
+            if snapshot_window in _SCHEDULED_WINDOWS:
+                existing = connection.execute(
+                    """SELECT id, snapshot_status, attempt_count
+                       FROM video_performance_snapshots
+                       WHERE youtube_video_id = ? AND snapshot_window = ?
+                       ORDER BY captured_at DESC, id DESC LIMIT 1""",
+                    (youtube_video_id, snapshot_window),
+                ).fetchone()
+                if existing and existing[1] == "complete" and not replace_window:
+                    return int(existing[0])
+                attempt_count = min(int(existing[2] or 0) + 1, _MAX_SNAPSHOT_ATTEMPTS) if existing else 1
+                completed_at = captured_at if snapshot_status == "complete" else None
+                if existing:
+                    connection.execute(
+                        """UPDATE video_performance_snapshots
+                           SET published_video_link_id = COALESCE(
+                                   published_video_link_id,
+                                   (SELECT id FROM published_video_links WHERE youtube_video_id = ?)
+                               ),
+                               age_hours = ?, views = ?, watch_time_minutes = ?,
+                               avg_view_duration_seconds = ?, avg_view_percentage = ?,
+                               likes = ?, comments = ?, shares = ?, subscribers_gained = ?,
+                               impressions = ?, impressions_ctr = ?, snapshot_status = ?,
+                               attempt_count = ?, last_failure_reason = ?, last_attempted_at = ?,
+                               completed_at = ?, source_start_date = ?, source_end_date = ?, captured_at = ?
+                           WHERE id = ?""",
+                        (
+                            youtube_video_id, age_hours, views, watch_time_minutes,
+                            avg_view_duration_seconds, avg_view_percentage, likes, comments,
+                            shares, subscribers_gained, impressions, impressions_ctr,
+                            snapshot_status, attempt_count, failure_reason, captured_at,
+                            completed_at, source_start_date, source_end_date, captured_at,
+                            int(existing[0]),
+                        ),
+                    )
+                    return int(existing[0])
+
             if replace_window and snapshot_window:
                 connection.execute(
                     "DELETE FROM video_performance_snapshots WHERE youtube_video_id = ? AND snapshot_window = ?",
@@ -920,12 +955,15 @@ class HistoryStore:
             cursor = connection.execute(
                 """
                 INSERT INTO video_performance_snapshots (
-                    youtube_video_id, age_hours, views, watch_time_minutes,
+                    published_video_link_id, youtube_video_id, age_hours, views, watch_time_minutes,
                     avg_view_duration_seconds, avg_view_percentage, likes, comments,
-                    shares, subscribers_gained, impressions, impressions_ctr, snapshot_window, captured_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    shares, subscribers_gained, impressions, impressions_ctr, snapshot_window,
+                    snapshot_status, attempt_count, last_failure_reason, last_attempted_at,
+                    completed_at, source_start_date, source_end_date, captured_at
+                ) VALUES ((SELECT id FROM published_video_links WHERE youtube_video_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    youtube_video_id,
                     youtube_video_id,
                     age_hours,
                     views,
@@ -939,6 +977,13 @@ class HistoryStore:
                     impressions,
                     impressions_ctr,
                     snapshot_window,
+                    snapshot_status,
+                    1 if snapshot_window in _SCHEDULED_WINDOWS else 0,
+                    failure_reason,
+                    captured_at if snapshot_window in _SCHEDULED_WINDOWS else None,
+                    captured_at if snapshot_status == "complete" else None,
+                    source_start_date,
+                    source_end_date,
                     captured_at,
                 ),
             )
@@ -947,25 +992,175 @@ class HistoryStore:
     def has_snapshot_window(self, youtube_video_id: str, snapshot_window: str) -> bool:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT 1 FROM video_performance_snapshots WHERE youtube_video_id = ? AND snapshot_window = ? LIMIT 1",
+                """SELECT 1 FROM video_performance_snapshots
+                   WHERE youtube_video_id = ? AND snapshot_window = ?
+                     AND snapshot_status = 'complete' LIMIT 1""",
                 (youtube_video_id, snapshot_window),
             ).fetchone()
         return bool(row)
+
+    def record_snapshot_attempt(
+        self,
+        youtube_video_id: str,
+        snapshot_window: str,
+        *,
+        status: str,
+        failure_reason: str,
+        age_hours: float = 0.0,
+        source_start_date: str | None = None,
+        source_end_date: str | None = None,
+    ) -> int:
+        if snapshot_window not in _SCHEDULED_WINDOWS:
+            raise ValueError("Snapshot attempts are supported only for 24h, 7d, and 28d windows.")
+        if status not in {"pending", "collecting", "empty_retryable", "failed_retryable"}:
+            raise ValueError("Snapshot attempt status is not retryable.")
+        return self.record_performance_snapshot(
+            youtube_video_id=youtube_video_id,
+            age_hours=age_hours,
+            snapshot_window=snapshot_window,
+            snapshot_status=status,
+            failure_reason=failure_reason,
+            source_start_date=source_start_date,
+            source_end_date=source_end_date,
+        )
+
+    def snapshot_window_state(self, youtube_video_id: str, snapshot_window: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT snapshot_status, attempt_count, last_failure_reason,
+                          last_attempted_at, completed_at, source_start_date,
+                          source_end_date, captured_at
+                   FROM video_performance_snapshots
+                   WHERE youtube_video_id = ? AND snapshot_window = ?
+                   ORDER BY captured_at DESC, id DESC LIMIT 1""",
+                (youtube_video_id, snapshot_window),
+            ).fetchone()
+        if not row:
+            return {
+                "window": snapshot_window,
+                "status": "pending",
+                "attempt_count": 0,
+                "retry_allowed": True,
+                "last_failure_reason": None,
+            }
+        status = str(row[0] or "pending")
+        attempts = int(row[1] or 0)
+        return {
+            "window": snapshot_window,
+            "status": status,
+            "attempt_count": attempts,
+            "retry_allowed": status != "complete" and attempts < _MAX_SNAPSHOT_ATTEMPTS,
+            "last_failure_reason": row[2],
+            "last_attempted_at": row[3],
+            "completed_at": row[4],
+            "source_start_date": row[5],
+            "source_end_date": row[6],
+            "captured_at": row[7],
+        }
+
+    def snapshot_retry_allowed(self, youtube_video_id: str, snapshot_window: str) -> bool:
+        return bool(self.snapshot_window_state(youtube_video_id, snapshot_window).get("retry_allowed"))
+
+    def due_snapshot_links(self, *, now: datetime | None = None, retry_cooldown_seconds: int = 0, retry_max_seconds: int | None = None) -> list[dict[str, Any]]:
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT id, youtube_video_id, published_at, ownership_state, ownership_verified
+                   FROM published_video_links
+                   WHERE ownership_state = 'verified' AND ownership_verified = 1
+                   ORDER BY published_at ASC, id ASC"""
+            ).fetchall()
+        due: list[dict[str, Any]] = []
+        windows = (("24h", 24.0), ("7d", 168.0), ("28d", 672.0))
+        for link_id, video_id, published_at, *_ in rows:
+            try:
+                parsed = datetime.fromisoformat(str(published_at).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            age_hours = max(0.0, (now - parsed).total_seconds() / 3600)
+            due_windows: list[str] = []
+            for label, hours in windows:
+                if age_hours < hours:
+                    continue
+                state = self.snapshot_window_state(str(video_id), label)
+                if state["status"] == "complete" or not state["retry_allowed"]:
+                    continue
+                last = state.get("last_attempted_at")
+                if retry_cooldown_seconds and last:
+                    retry_delay = retry_cooldown_seconds * (2 ** max(0, int(state.get("attempt_count") or 1) - 1))
+                    if retry_max_seconds:
+                        retry_delay = min(retry_delay, retry_max_seconds)
+                    try:
+                        attempted = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+                        if attempted.tzinfo is None:
+                            attempted = attempted.replace(tzinfo=timezone.utc)
+                        if (now - attempted).total_seconds() < retry_delay:
+                            continue
+                    except ValueError:
+                        pass
+                due_windows.append(label)
+            if due_windows:
+                due.append({"id": link_id, "youtube_video_id": video_id, "published_at": published_at, "age_hours": round(age_hours, 2), "due_windows": due_windows})
+        return due
 
     def performance_snapshots(self, youtube_video_id: str) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT age_hours, views, watch_time_minutes, avg_view_duration_seconds,
                           avg_view_percentage, likes, comments, shares, subscribers_gained,
-                          impressions, impressions_ctr, snapshot_window, captured_at
+                          impressions, impressions_ctr, snapshot_window, captured_at,
+                          snapshot_status, attempt_count, last_failure_reason,
+                          last_attempted_at, completed_at, source_start_date, source_end_date
                    FROM video_performance_snapshots WHERE youtube_video_id = ?
                    ORDER BY captured_at ASC""",
                 (youtube_video_id,),
             ).fetchall()
         keys = ("age_hours", "views", "watch_time_minutes", "avg_view_duration_seconds",
                 "avg_view_percentage", "likes", "comments", "shares", "subscribers_gained",
-                "impressions", "impressions_ctr", "snapshot_window", "captured_at")
-        return [dict(zip(keys, row)) for row in rows]
+                "impressions", "impressions_ctr", "snapshot_window", "captured_at",
+                "snapshot_status", "attempt_count", "last_failure_reason",
+                "last_attempted_at", "completed_at", "source_start_date", "source_end_date")
+        snapshots = [dict(zip(keys, row)) for row in rows]
+        for snapshot in snapshots:
+            snapshot["retry_allowed"] = (
+                snapshot.get("snapshot_status") != "complete"
+                and int(snapshot.get("attempt_count") or 0) < _MAX_SNAPSHOT_ATTEMPTS
+            )
+        return snapshots
+
+    def current_performance_snapshot(self, youtube_video_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id FROM video_performance_snapshots
+                   WHERE youtube_video_id = ? AND snapshot_window = 'current'
+                     AND snapshot_status = 'display_only'
+                   ORDER BY captured_at DESC, id DESC LIMIT 1""",
+                (youtube_video_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return next(
+            (
+                item for item in reversed(self.performance_snapshots(youtube_video_id))
+                if item.get("snapshot_window") == "current"
+                and item.get("snapshot_status") == "display_only"
+            ),
+            None,
+        )
+
+    def completed_evidence_snapshot(
+        self, youtube_video_id: str, snapshot_window: str
+    ) -> dict[str, Any] | None:
+        return next(
+            (
+                item for item in reversed(self.performance_snapshots(youtube_video_id))
+                if item.get("snapshot_window") == snapshot_window
+                and item.get("snapshot_status") == "complete"
+            ),
+            None,
+        )
 
     def latest_performance_snapshot(self, youtube_video_id: str) -> dict[str, Any] | None:
         snapshots = self.performance_snapshots(youtube_video_id)
@@ -981,7 +1176,16 @@ class HistoryStore:
         package = run.get("package") if isinstance(run.get("package"), dict) else {}
         metadata = link.get("youtube_metadata") if isinstance(link.get("youtube_metadata"), dict) else {}
         snapshots = self.performance_snapshots(str(link.get("youtube_video_id") or ""))
-        latest = snapshots[-1] if snapshots else {}
+        current = self.current_performance_snapshot(str(link.get("youtube_video_id") or "")) or {}
+        evidence: dict[str, Any] = {}
+        for window in ("28d", "7d", "24h"):
+            candidate = self.completed_evidence_snapshot(
+                str(link.get("youtube_video_id") or ""), window
+            )
+            if candidate:
+                evidence = candidate
+                break
+        latest = current or evidence
         published_at = _parse_datetime_safe(str(link.get("published_at") or ""))
         age_hours = max(0.0, (datetime.now(timezone.utc) - published_at).total_seconds() / 3600) if published_at else 0.0
 
@@ -1009,7 +1213,7 @@ class HistoryStore:
         like_rate = round((likes / views) * 100, 2) if views else None
         comment_rate = round((comments / views) * 100, 2) if views else None
 
-        baseline = self._comparable_snapshot_baseline(link, latest)
+        baseline = self._comparable_snapshot_baseline(link, evidence)
         verdict, worked, improve = _performance_diagnosis(
             age_hours=age_hours,
             views=views,
@@ -1021,6 +1225,7 @@ class HistoryStore:
             generated_tag_count=len(generated_tags),
         )
 
+        diagnosis_policy = confidence_payload(baseline.get("sample_size", 0))
         return {
             "linked": True,
             "link_id": link.get("id"),
@@ -1030,6 +1235,7 @@ class HistoryStore:
             "age_hours": round(age_hours, 1),
             "metadata_synced_at": link.get("metadata_synced_at"),
             "youtube": metadata,
+            "comparable_metadata": self.comparable_metadata(int(link.get("id") or 0)),
             "package_usage": {
                 "generated_title": generated_title,
                 "uploaded_title": uploaded_title,
@@ -1056,14 +1262,22 @@ class HistoryStore:
                 "subscribers_gained": _optional_number(latest.get("subscribers_gained")),
                 "snapshot_window": latest.get("snapshot_window"),
                 "captured_at": latest.get("captured_at"),
+                "snapshot_status": latest.get("snapshot_status"),
             },
+            "current_performance": current or None,
+            "learning_evidence": evidence or None,
             "baseline": baseline,
             "diagnosis": {
                 "verdict": verdict,
                 "what_worked": worked,
                 "needs_improvement": improve,
-                "confidence": "LOW" if age_hours < 24 or baseline.get("sample_size", 0) < 3 else "MEDIUM",
-                "learning_eligible": bool(age_hours >= 24 and latest),
+                "confidence": diagnosis_policy["confidence_label"],
+                "evidence_level": diagnosis_policy["evidence_level"],
+                "learning_eligible": bool(
+                    link.get("ownership_state") == "verified"
+                    and link.get("ownership_verified")
+                    and mature_snapshot(evidence)
+                ),
                 "attribution_note": (
                     "YouTube APIs report video-level performance, not views caused by individual tags. "
                     "The tool learns reliable packaging patterns only after comparable linked videos accumulate."
@@ -1074,7 +1288,7 @@ class HistoryStore:
 
     def _comparable_snapshot_baseline(self, link: dict[str, Any], latest: dict[str, Any]) -> dict[str, Any]:
         window = str(latest.get("snapshot_window") or "")
-        if not window or window == "current":
+        if not mature_snapshot(latest):
             return {"sample_size": 0, "window": window or "none", "median_views": None, "median_retention_percentage": None}
         with self._connect() as connection:
             rows = connection.execute(
@@ -1082,8 +1296,17 @@ class HistoryStore:
                    FROM video_performance_snapshots s
                    JOIN published_video_links p ON p.youtube_video_id = s.youtube_video_id
                    WHERE s.snapshot_window = ? AND s.youtube_video_id != ?
+                     AND s.snapshot_status = 'complete'
+                     AND p.ownership_state = 'verified' AND p.ownership_verified = 1
                      AND COALESCE(p.format, '') = COALESCE(?, '')
-                     AND COALESCE(p.language, '') = COALESCE(?, '')""",
+                     AND COALESCE(p.language, '') = COALESCE(?, '')
+                     AND s.id = (
+                         SELECT x.id FROM video_performance_snapshots x
+                         WHERE x.youtube_video_id = s.youtube_video_id
+                           AND x.snapshot_window = s.snapshot_window
+                           AND x.snapshot_status = 'complete'
+                         ORDER BY x.completed_at DESC, x.id DESC LIMIT 1
+                     )""",
                 (window, link.get("youtube_video_id"), link.get("format"), link.get("language")),
             ).fetchall()
         views = sorted(float(row[0]) for row in rows if row[0] is not None)
@@ -1097,73 +1320,105 @@ class HistoryStore:
 
     # --- Stage C: Evidence & Cohort Calculation Engine ---
 
-    def cohort_analytics(self, format_filter: str | None = None, language_filter: str | None = None) -> dict[str, Any]:
+    def cohort_analytics(
+        self,
+        format_filter: str | None = None,
+        language_filter: str | None = None,
+        duration_bucket_filter: str | None = None,
+        topic_category_filter: str | None = None,
+        snapshot_window: str = "24h",
+    ) -> dict[str, Any]:
+        if snapshot_window not in _SCHEDULED_WINDOWS:
+            raise ValueError("Cohorts require a 24h, 7d, or 28d evidence window.")
         with self._connect() as connection:
             query = """
-                SELECT p.youtube_video_id, p.format, p.language,
-                       COALESCE(s.views, o.views, 0) as views,
-                       COALESCE(s.likes, o.likes, 0) as likes,
-                       COALESCE(s.avg_view_percentage, o.average_view_percentage, 0) as avg_view_percentage
+                SELECT p.youtube_video_id, m.format, m.language, m.duration_bucket, m.topic_category,
+                       s.views, s.likes, s.avg_view_percentage,
+                       m.format_source, m.language_source, m.duration_bucket_source, m.topic_category_source
                 FROM published_video_links p
-                LEFT JOIN owned_video_snapshots o ON p.youtube_video_id = o.video_id
-                LEFT JOIN (
-                    SELECT youtube_video_id, views, likes, avg_view_percentage,
-                           ROW_NUMBER() OVER(PARTITION BY youtube_video_id ORDER BY captured_at DESC) as rn
-                    FROM video_performance_snapshots
-                ) s ON p.youtube_video_id = s.youtube_video_id AND s.rn = 1
-                WHERE 1=1
+                JOIN published_video_comparable_metadata m ON m.published_video_link_id = p.id
+                JOIN video_performance_snapshots s ON s.id = (
+                    SELECT x.id FROM video_performance_snapshots x
+                    WHERE x.youtube_video_id = p.youtube_video_id
+                      AND x.snapshot_window = ?
+                      AND x.snapshot_status = 'complete'
+                    ORDER BY x.completed_at DESC, x.id DESC LIMIT 1
+                )
+                WHERE p.ownership_state = 'verified'
+                  AND p.ownership_verified = 1
+                  AND p.verified_channel_id IS NOT NULL
+                  AND p.ownership_verified_at IS NOT NULL
+                  AND m.format != 'unknown'
+                  AND m.language != 'unknown'
             """
-            params: list[Any] = []
+            params: list[Any] = [snapshot_window]
             if format_filter:
-                query += " AND p.format = ?"
+                query += " AND m.format = ?"
                 params.append(format_filter)
             if language_filter:
-                query += " AND p.language = ?"
+                query += " AND m.language = ?"
                 params.append(language_filter)
+            if duration_bucket_filter:
+                query += " AND m.duration_bucket = ?"
+                params.append(duration_bucket_filter)
+            if topic_category_filter:
+                query += " AND m.topic_category = ?"
+                params.append(topic_category_filter)
 
             rows = connection.execute(query, params).fetchall()
             count = len(rows)
+            policy = confidence_payload(count)
 
-            if count == 0:
-                confidence = "Collecting evidence"
-                confidence_level = "none"
-            elif count < 5:
-                confidence = f"Collecting evidence ({count}/5 linked videos)"
-                confidence_level = "low"
-            elif count < 10:
-                confidence = f"Directional observation ({count} linked videos)"
-                confidence_level = "medium-low"
-            elif count < 20:
-                confidence = f"Moderate-confidence pattern ({count} linked videos)"
-                confidence_level = "moderate"
-            else:
-                confidence = f"Evidence-based recommendation ({count} linked videos)"
-                confidence_level = "high"
+            total_query = "SELECT COUNT(DISTINCT youtube_video_id) FROM published_video_links WHERE 1=1"
+            total_params: list[Any] = []
+            if format_filter:
+                total_query += " AND format = ?"
+                total_params.append(format_filter)
+            if language_filter:
+                total_query += " AND language = ?"
+                total_params.append(language_filter)
+            total_links = int(connection.execute(total_query, total_params).fetchone()[0] or 0)
 
-            views_list = sorted([r[3] for r in rows if r[3] is not None])
-            retention_list = sorted([r[5] for r in rows if r[5] is not None])
-            likes_list = sorted([r[4] for r in rows if r[4] is not None])
+            views_list = sorted([r[5] for r in rows if r[5] is not None])
+            retention_list = sorted([r[7] for r in rows if r[7] is not None])
+            likes_list = sorted([r[6] for r in rows if r[6] is not None])
             median_views = _median(views_list)
             median_retention = _median(retention_list)
             median_likes = _median(likes_list)
 
-            recommendation = "Collect linked-video snapshots before using personal performance patterns."
-            if count >= 5 and median_retention is not None:
+            recommendation = (
+                f"Collect verified completed {snapshot_window} snapshots until at least 5 comparable videos are available."
+            )
+            if policy["learning_allowed"] and median_retention is not None:
                 recommendation = (
-                    f"Use this {format_filter or 'format'} / {language_filter or 'language'} cohort as a comparison baseline. "
-                    f"Median retention at the latest comparable snapshot is {median_retention:.1f}%."
+                    f"{policy['confidence_label']}: use this {format_filter or 'format'} / "
+                    f"{language_filter or 'language'} {snapshot_window} cohort as a cautious comparison baseline. "
+                    f"Median average viewed is {median_retention:.1f}%."
                 )
 
             return {
                 "format": format_filter or "all",
                 "language": language_filter or "all",
+                "duration_bucket": duration_bucket_filter or "all",
+                "topic_category": topic_category_filter or "all",
+                "snapshot_window": snapshot_window,
                 "sample_size": count,
-                "confidence_label": confidence,
-                "confidence_level": confidence_level,
+                "confidence_label": policy["confidence_label"],
+                "confidence_level": policy["evidence_level"],
+                "learning_allowed": policy["learning_allowed"],
+                "next_threshold": policy["next_threshold"],
                 "median_views": median_views,
                 "median_retention_percentage": median_retention,
                 "median_likes": median_likes,
                 "total_linked": count,
+                "total_links_considered": total_links,
+                "excluded_count": max(0, total_links - count),
+                "metadata_sources": {
+                    "format": sorted({r[8] for r in rows}),
+                    "language": sorted({r[9] for r in rows}),
+                    "duration_bucket": sorted({r[10] for r in rows}),
+                    "topic_category": sorted({r[11] for r in rows}),
+                },
                 "recommendation": recommendation,
             }
 
@@ -1184,11 +1439,12 @@ class HistoryStore:
             cursor = connection.execute(
                 """
                 INSERT INTO package_experiments (
-                    youtube_video_id, changed_at, old_title, new_title,
+                    published_video_link_id, youtube_video_id, changed_at, old_title, new_title,
                     old_thumbnail, new_thumbnail, reason, performance_before_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES ((SELECT id FROM published_video_links WHERE youtube_video_id = ?), ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    youtube_video_id,
                     youtube_video_id,
                     now,
                     old_title,
@@ -1386,7 +1642,10 @@ def _performance_diagnosis(
     worked: list[str] = []
     improve: list[str] = []
     if title_match:
-        worked.append("The uploaded title exactly matches the generated recommendation, so its result can inform title learning.")
+        worked.append(
+            "The uploaded title exactly matches the generated recommendation, preserving title attribution "
+            "if enough comparable evidence accumulates."
+        )
     else:
         improve.append("The uploaded title differs from the generated title; treat this as a test of the uploaded title, not the original recommendation.")
     if generated_tag_count and matching_tags:
@@ -1395,18 +1654,22 @@ def _performance_diagnosis(
         improve.append("The uploaded metadata does not currently contain the generated tags, so tag-package adoption cannot be evaluated.")
 
     sample_size = int(baseline.get("sample_size") or 0)
+    baseline_policy = confidence_payload(sample_size)
     median_views = baseline.get("median_views")
     median_retention = baseline.get("median_retention_percentage")
-    if sample_size >= 3 and median_views is not None:
+    if baseline_policy["learning_allowed"] and median_views is not None:
         if views >= float(median_views):
             worked.append(f"Views are at or above the {baseline.get('window')} comparable median ({int(median_views)}).")
         else:
             improve.append(f"Views are below the {baseline.get('window')} comparable median ({int(median_views)}); test a stronger opening or packaging angle next time.")
     else:
-        improve.append("There are not yet three comparable linked videos at the same age window, so no reliable winner/loser claim is made.")
+        improve.append(
+            "There are not yet five verified comparable videos at the same completed window, "
+            "so no winner/loser claim is made."
+        )
 
     if retention is not None:
-        if median_retention is not None and sample_size >= 3:
+        if median_retention is not None and baseline_policy["learning_allowed"]:
             if retention >= float(median_retention):
                 worked.append(f"Average percentage viewed ({retention:.1f}%) is at or above the comparable median.")
             else:
@@ -1420,7 +1683,7 @@ def _performance_diagnosis(
 
     if age_hours < 24:
         verdict = "TOO EARLY — collecting the first 24-hour evidence"
-    elif sample_size < 3:
+    elif not baseline_policy["learning_allowed"]:
         verdict = "OBSERVATION ONLY — more comparable linked videos are needed"
     else:
         verdict = "ABOVE BASELINE" if median_views is not None and views >= float(median_views) else "BELOW BASELINE"

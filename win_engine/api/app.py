@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from win_engine.api.routes import router
 from win_engine.core.logging import configure_logging
 from win_engine.core.middleware import request_context_middleware
 from win_engine.core.rate_limit import InMemoryRateLimiter
+from win_engine.feedback.snapshot_collector import SnapshotCollector
 
 logger = logging.getLogger(__name__)
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def create_app() -> FastAPI:
@@ -22,12 +27,27 @@ def create_app() -> FastAPI:
     from win_engine.core.config import get_settings
 
     settings = get_settings()
+    collector = SnapshotCollector(settings)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        collector.start()
+        try:
+            yield
+        finally:
+            collector.stop()
 
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         description="YouTube-first SEO and opportunity analyzer with dashboard, research, and strategy layers.",
+        lifespan=lifespan,
     )
+    app.state.snapshot_collector = collector
+    # The extracted frontend is served by FastAPI itself. Keeping the mount
+    # same-origin avoids a second frontend server and works identically in
+    # local and Docker deployments.
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     app_start = time.time()
     rate_limiter = InMemoryRateLimiter(

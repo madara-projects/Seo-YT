@@ -2,6 +2,7 @@
 .env.local
 .env.*.local
 .venv/
+.venv-browser/
 .tmp/
 __pycache__/
 *.pyc
@@ -13,6 +14,10 @@ win_engine.db
 *.db-journal
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
 .DS_Store
 
 # Editor / OS / IDE state

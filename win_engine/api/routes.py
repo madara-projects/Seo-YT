@@ -3,16 +3,18 @@ from __future__ import annotations
 import json
 import re
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from google.auth.exceptions import RefreshError
 
 from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.core.config import get_settings
-from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, LinkVideoRequest, UpdatePublishedVideoRequest, RecordExperimentRequest
+from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.ingestion.research_service import ResearchService
@@ -23,20 +25,25 @@ from win_engine.integrations.youtube_channel import YouTubeChannelService
 router = APIRouter()
 
 _APP_START = time.time()
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 
 @router.get("/", response_class=HTMLResponse)
 @router.get("/app", response_class=HTMLResponse)
 @router.get("/dashboard_view", response_class=HTMLResponse)
 def dashboard():
-    return HTMLResponse(
-        content=DASHBOARD_HTML,
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html", headers=_NO_CACHE_HEADERS)
+
+
+@router.get("/dashboard_legacy", response_class=HTMLResponse)
+def legacy_dashboard():
+    """Rollback route for the pre-Phase-3C embedded dashboard."""
+    return HTMLResponse(content=DASHBOARD_HTML, headers=_NO_CACHE_HEADERS)
 
 
 @router.get("/health")
@@ -51,6 +58,14 @@ def health_check():
         "uptime_seconds": int(time.time() - _APP_START),
         "database_ok": history["database_ok"],
     }
+
+
+@router.get("/api/snapshot-collector/status")
+def snapshot_collector_status(request: Request):
+    collector = getattr(request.app.state, "snapshot_collector", None)
+    if collector is None:
+        return {"state": "disabled", "enabled": False, "dry_run": False, "running": False}
+    return collector.status()
 
 
 @router.get("/ready")
@@ -243,6 +258,11 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     pub_at = payload.published_at or owned_video.get("published_at")
+    if not owned_video.get("ownership_verified") or not owned_video.get("channel_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="YouTube ownership could not be verified, so the video was not linked.",
+        )
     if not pub_at:
         raise HTTPException(status_code=400, detail="YouTube did not return a publication time for this video.")
     saved_package = run.get("package") if isinstance(run.get("package"), dict) else {}
@@ -267,6 +287,10 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
         language=str(language_value) if language_value else None,
         region=str(region_value) if region_value else None,
         notes=payload.notes,
+        ownership_state="verified",
+        ownership_verified=True,
+        verified_channel_id=str(owned_video.get("channel_id") or ""),
+        ownership_verified_at=datetime.now(timezone.utc).isoformat(),
     )
     store.update_linked_video_metadata(link_id, owned_video)
     refresh_warning = None
@@ -345,12 +369,39 @@ def update_published_video_link(link_id: int, payload: UpdatePublishedVideoReque
     return {"status": "updated", "link_id": link_id}
 
 
+@router.patch("/api/published-videos/{link_id}/comparable-metadata")
+def update_comparable_metadata(link_id: int, payload: ComparableMetadataRequest):
+    store = HistoryStore(get_settings().database_path)
+    try:
+        result = store.update_comparable_metadata(link_id, payload.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Published video link not found.")
+    return {"status": "updated", "link_id": link_id, "comparable_metadata": result}
+
+
 # --- Stage C: Cohort Evidence Endpoints ---
 
 @router.get("/api/learning/cohorts")
-def get_cohort_analytics(format: str | None = None, language: str | None = None):
+def get_cohort_analytics(
+    format: str | None = None,
+    language: str | None = None,
+    duration_bucket: str | None = None,
+    topic_category: str | None = None,
+    window: str = "24h",
+):
     store = HistoryStore(get_settings().database_path)
-    return store.cohort_analytics(format_filter=format, language_filter=language)
+    try:
+        return store.cohort_analytics(
+            format_filter=format,
+            language_filter=language,
+            duration_bucket_filter=duration_bucket,
+            topic_category_filter=topic_category,
+            snapshot_window=window,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 # --- Stage D: Package Experiments Endpoints ---

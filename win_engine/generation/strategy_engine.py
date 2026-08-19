@@ -85,7 +85,12 @@ def build_seo_package(
         selected_language = "english"
 
     try:
-        channel_learning = channel_performance_learning(history_store.database_path)
+        channel_learning = channel_performance_learning(
+            history_store.database_path,
+            format_filter=str((creator_brief or {}).get("video_format") or "").strip() or None,
+            language_filter=selected_language,
+            snapshot_window="24h",
+        )
     except Exception as exc:
         logger.warning("Channel performance learning is unavailable: %s", type(exc).__name__)
         channel_learning = {}

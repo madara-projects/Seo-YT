@@ -8,10 +8,12 @@ services:
       - .env
     environment:
       - WIN_ENGINE_REDIS_URL=redis://redis:6379/0
+      - WIN_ENGINE_BIND_HOST=0.0.0.0
     depends_on:
       - redis
     volumes:
       - ./win_engine.db:/app/win_engine.db
+      - ./backups:/app/backups
     restart: unless-stopped
   redis:
     image: redis:7-alpine

@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YouTube SEO Studio - Local Creator Decision Tool</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <!-- Toast Notification Popup -->
+  <div id="toastNotification">Copied to clipboard.</div>
+
+  <!-- Left Sidebar SaaS Navigation -->
+  <aside class="sidebar">
+    <div>
+      <div class="sidebar-brand">
+        <div class="brand-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="#fff"><path d="M21.6 7.2a2.7 2.7 0 0 0-1.9-1.9C18 5 12 5 12 5s-6 0-7.7.3A2.7 2.7 0 0 0 2.4 7.2 28 28 0 0 0 2 12a28 28 0 0 0 .4 4.8 2.7 2.7 0 0 0 1.9 1.9C6 19 12 19 12 19s6 0 7.7-.3a2.7 2.7 0 0 0 1.9-1.9A28 28 0 0 0 22 12a28 28 0 0 0-.4-4.8ZM10 15V9l5 3-5 3Z"/></svg>
+        </div>
+        <div class="brand-title">
+          <h1 style="display:flex;align-items:center;gap:6px">YouTube Studio <span style="font-size:10px;padding:2px 6px;background:var(--accent);color:#fff;border-radius:4px;font-weight:800;letter-spacing:0.04em">PRO v3.5</span></h1>
+          <p>AI Strategy &amp; Growth Engine</p>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <a class="nav-item active" href="#dashboard" id="nav-dashboard" data-page="dashboard" onclick="switchPage('dashboard'); return false;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+          Dashboard Overview
+        </a>
+        <a class="nav-item" href="#creator" id="nav-creator" data-page="creator" onclick="switchPage('creator'); return false;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/></svg>
+          SEO Creator Studio
+        </a>
+        <a class="nav-item" href="#analytics" id="nav-analytics" data-page="analytics" onclick="switchPage('analytics'); return false;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+          Channel Analytics
+        </a>
+        <a class="nav-item" href="#history" id="nav-history" data-page="history" onclick="switchPage('history'); return false;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+          Package History
+        </a>
+        <a class="nav-item" href="#settings" id="nav-settings" data-page="settings" onclick="switchPage('settings'); return false;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings &amp; APIs
+        </a>
+      </nav>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="status-badge"><span class="dot"></span> Optional Gemini / local fallback available</div>
+    </div>
+  </aside>
+
+  <!-- Right Application Body Workspace -->
+  <main class="app-container">
+    <div class="top-bar">
+      <div class="page-header-title">
+        <h2 id="topTitle">Dashboard Overview</h2>
+        <p id="topSub">Welcome back, creator! Track your SEO performance and generate new packages.</p>
+      </div>
+      <div class="top-actions">
+        <div style="display:flex;align-items:center;gap:8px;background:var(--panel-solid);border:1px solid var(--border);padding:6px 12px;border-radius:var(--radius-sm)">
+          <span style="font-size:11.5px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Theme:</span>
+          <select id="themeSelector" style="background:transparent;border:none;color:var(--text);font-size:12.5px;font-weight:600;outline:none;cursor:pointer">
+            <option value="obsidian">Obsidian Crimson (Dark)</option>
+            <option value="cyber">Cyber Flame</option>
+            <option value="emerald">Emerald Dark</option>
+            <option value="light">Pearl Light</option>
+          </select>
+        </div>
+        <a class="btn btn-primary" href="#creator" onclick="switchPage('creator'); return false;">New SEO Analysis</a>
+      </div>
+    </div>
+
+    <div class="content-viewport">
+      <!-- PAGE 1: DASHBOARD WORKSPACE -->
+      <section class="page-view active" id="view-dashboard">
+        <div class="bento-grid">
+
+          <!-- HERO STUDIO HEADER BANNER (SPAN 12) -->
+          <div class="bento-card span-12 hero-card" style="padding:28px 32px">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:18px">
+              <div>
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+                  <span class="chip chip-accent" style="font-weight:700;font-size:11.5px">Studio AI Command v3.5</span>
+                  <span class="chip" style="font-weight:600;font-size:11.5px">Read-only YouTube research when connected</span>
+                </div>
+                <h1 style="font-size:24px;font-weight:800;letter-spacing:-0.02em;color:#fff">YouTube Creator SEO Growth Studio</h1>
+                <p style="font-size:13.5px;color:var(--text-muted);margin-top:6px;max-width:680px">
+                  Turn video ideas into upload-ready SEO titles, rich descriptions, tags, and AI retention guidance using YouTube market research when available.
+                </p>
+              </div>
+
+              <div style="display:flex;gap:10px">
+                <a class="btn btn-primary" href="#creator" onclick="switchPage('creator'); return false;" style="padding:12px 26px;font-size:14px">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  Open Full Studio Workspace
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <!-- QUICK SCRIPT LAUNCHER STUDIO CARD (SPAN 12) -->
+          <div class="bento-card span-12" style="border-top:3px solid var(--accent)">
+            <div class="card-title">
+              <span style="display:flex;align-items:center;gap:8px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--accent)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                Instant Video SEO Package Generator
+              </span>
+              <span style="font-size:11.5px;color:var(--text-muted);font-family:var(--mono)">Optional Google Gemini / local fallback available</span>
+            </div>
+
+            <!-- Starter Template Chips -->
+            <div class="template-chips">
+              <span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-right:4px;display:inline-flex;align-items:center">Try 1-Click Idea:</span>
+              <span class="template-chip" onclick="applyTemplate('tech')">AI &amp; Python App Tutorial</span>
+              <span class="template-chip" onclick="applyTemplate('quote')">Quote &amp; Life Lesson</span>
+              <span class="template-chip" onclick="applyTemplate('growth')">YouTube 10k Growth Guide</span>
+              <span class="template-chip" onclick="applyTemplate('review')">Top AI Tools Review</span>
+            </div>
+
+            <textarea id="dashQuickScript" class="input-box" placeholder="Paste your video script excerpt, raw idea, or quote here (e.g. The biggest betrayal is knowing that if you didn't find out, they would have never told you...)..."></textarea>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-top:16px">
+              <div style="display:flex;gap:12px;flex-wrap:wrap">
+                <div class="field-group" style="margin:0">
+                  <select id="dashQuickLang" style="background:var(--panel-solid);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 14px;color:var(--text);font-size:13px;font-weight:600">
+                    <option value="english">Language: English</option>
+                    <option value="tamil">Language: Tamil</option>
+                    <option value="tanglish">Language: Tanglish</option>
+                  </select>
+                </div>
+                <div class="field-group" style="margin:0">
+                  <select id="dashQuickRegion" style="background:var(--panel-solid);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 14px;color:var(--text);font-size:13px;font-weight:600">
+                    <option value="global">Target Region: Global</option>
+                    <option value="in">Target Region: India (IN)</option>
+                  </select>
+                </div>
+              </div>
+
+              <button class="btn btn-primary" id="dashQuickLaunchBtn" style="padding:11px 26px;font-size:14px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                Generate SEO Package Now
+              </button>
+            </div>
+          </div>
+
+          <!-- 4 KEY KPI ANALYTICS CARDS (SPAN 3 EACH) -->
+          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
+            <div class="card-title"><span>28d Views Milestone</span></div>
+            <div class="metric-value" id="dashMetricViews" style="color:var(--text);font-size:32px">--</div>
+            <div class="metric-sub" id="dashMetricViewsSub" style="margin-top:8px">Connect and refresh your channel to load actual data.</div>
+          </div>
+
+          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
+            <div class="card-title"><span>Estimated Watch Time</span></div>
+            <div class="metric-value" id="dashMetricWatch" style="font-size:32px">--</div>
+            <div class="metric-sub" id="dashMetricWatchSub" style="margin-top:8px">Not available until YouTube Analytics sync succeeds.</div>
+          </div>
+
+          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
+            <div class="card-title"><span>Avg Opportunity Score</span></div>
+            <div class="metric-value" style="color:var(--accent);font-size:32px" id="dashMetricOpp">Not available</div>
+            <div class="metric-sub" id="dashMetricOppSub" style="margin-top:8px">Calculated from your saved analyses.</div>
+          </div>
+
+          <div class="bento-card span-3" style="border-top:3px solid var(--accent)">
+            <div class="card-title"><span>AI Engine Status</span></div>
+            <div class="metric-value" style="font-size:20px;display:flex;align-items:center;gap:6px;margin-top:4px">
+              <span id="dashGeminiStatus">Optional Gemini / local fallback available</span>
+            </div>
+            <div class="metric-sub">Configuration and quota are checked when an analysis runs.</div>
+          </div>
+
+          <!-- RECENT VIDEO PACKAGE HISTORY TABLE (SPAN 7) -->
+          <div class="bento-card span-7">
+            <div class="card-title">
+              <span>Recent Video Package History Log</span>
+              <span class="chip chip-accent">Saved records</span>
+            </div>
+            <div id="dashHistoryWrap" style="overflow-x:auto;margin-top:12px">
+              <table class="history-table">
+                <thead>
+                  <tr>
+                    <th>Video Idea / Topic</th>
+                    <th>Title Quality</th>
+                    <th>Opportunity</th>
+                    <th>Date &amp; Time (IST)</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="dashHistoryBody">
+                  <tr>
+                    <td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">Loading stored analysis history from SQLite database...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- CONNECTED CHANNEL & UPLOAD SCHEDULER WIDGET (SPAN 5) -->
+          <div class="bento-card span-5" style="display:flex;flex-direction:column;justify-content:space-between">
+            <div>
+              <div class="card-title">
+                <span>Connected YouTube Channel</span>
+                <span class="chip"><span class="dot"></span> Status loads from YouTube</span>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:14px;margin-top:10px">
+                <div id="dashChannelAvatar" style="width:46px;height:46px;border-radius:14px;background:var(--accent-grad);display:grid;place-items:center;font-weight:800;font-size:20px;color:#fff;box-shadow:0 4px 16px var(--accent-shadow)">
+                  M
+                </div>
+                <div>
+                  <div class="metric-value" style="font-size:22px" id="dashChannelName">No channel connected</div>
+                  <div class="metric-sub" style="font-size:12px;margin-top:2px" id="dashChannelStats">Loading channel status...</div>
+                </div>
+              </div>
+
+              <div style="margin-top:16px;padding:12px 14px;border-radius:var(--radius-sm);background:rgba(229, 9, 20, 0.12);border:1px solid rgba(229, 9, 20, 0.30);font-size:12.5px;color:var(--text-muted)">
+                <strong style="color:var(--text)">Channel evidence learning:</strong> recommendations use verified comparable videos only after mature snapshots are available.
+              </div>
+
+              <div class="kv-list" style="margin-top:16px">
+                <div class="kv-item"><span class="kv-key">Best Posting Days</span><span class="kv-val" style="color:var(--text)">Collecting evidence</span></div>
+                <div class="kv-item"><span class="kv-key">Peak Window (IST)</span><span class="kv-val" style="color:var(--accent);font-weight:700">Not available yet</span></div>
+              </div>
+            </div>
+
+            <div style="margin-top:16px">
+              <a class="btn" href="#analytics" onclick="switchPage('analytics'); return false;" style="width:100%;justify-content:center;font-size:13px;padding:10px">
+                View Full Channel Analytics &rarr;
+              </a>
+            </div>
+          </div>
+
+          <!-- PUBLIC RESEARCH TRENDS (NO GLOBAL FEED) -->
+          <div class="bento-card span-6">
+            <div class="card-title"><span>Public research trends</span><span class="chip">Not loaded</span></div>
+            <div class="metric-sub" style="margin-top:12px">Research is run for each analysis. No global trend feed is connected to this dashboard, so no trend percentages are shown here.</div>
+          </div>
+
+          <!-- EVIDENCE-BASED LEARNING (SPAN 6) -->
+          <div class="bento-card span-6">
+            <div class="card-title"><span>Evidence-based learning</span></div>
+            <div class="kv-list" style="margin-top:12px">
+              <div class="kv-item"><span class="kv-key">Title patterns</span><span class="kv-val" style="color:var(--text)">Not enough mature evidence</span></div>
+              <div class="kv-item"><span class="kv-key">Content angles</span><span class="kv-val" style="color:var(--text)">Not enough mature evidence</span></div>
+              <div class="kv-item"><span class="kv-key">Retention patterns</span><span class="kv-val" style="color:var(--text)">Not enough mature evidence</span></div>
+            </div>
+            <div class="metric-sub" style="margin-top:16px;padding:10px 12px;background:rgba(255,255,255,0.03);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px">
+              Channel evidence appears only after verified linked videos have completed named snapshots.
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- PAGE 2: SEO CREATOR STUDIO -->
+      <section class="page-view" id="view-creator">
+        <div class="creator-workflow-shell" id="creatorWorkflow" data-testid="creator-workflow" data-stage="idea" aria-label="Creator workflow progress">
+          <div class="card-title"><span>Creator workflow</span><span class="chip chip-accent" id="creatorStageStatus">Stage 1 / Idea</span></div>
+          <div class="creator-stage-nav" role="tablist" aria-label="Creator workflow stages">
+            <button type="button" class="creator-stage-btn active" data-creator-stage="idea" data-testid="creator-stage-idea">1. Idea</button>
+            <button type="button" class="creator-stage-btn" data-creator-stage="brief" data-testid="creator-stage-brief">2. Creator Brief</button>
+            <button type="button" class="creator-stage-btn" data-creator-stage="research" data-testid="creator-stage-research">3. Research</button>
+            <button type="button" class="creator-stage-btn" data-creator-stage="angle" data-testid="creator-stage-angle">4. Recommended Angle</button>
+            <button type="button" class="creator-stage-btn" data-creator-stage="packaging" data-testid="creator-stage-packaging">5. Packaging</button>
+            <button type="button" class="creator-stage-btn" data-creator-stage="compare" data-testid="creator-stage-compare">6. Compare</button>
+            <button type="button" class="creator-stage-btn" data-creator-stage="decision" data-testid="creator-stage-decision">7. Decision</button>
+            <button type="button" class="creator-stage-btn" data-creator-stage="checklist" data-testid="creator-stage-checklist">8. Checklist</button>
+          </div>
+          <p class="metric-sub" id="creatorWorkflowHint">Start with the script, topic, or raw video idea.</p>
+          <div class="creator-stage-controls"><button type="button" class="btn" id="creatorBack" data-testid="creator-back" disabled>Back</button><button type="button" class="btn" id="creatorNext" data-testid="creator-next">Next</button></div>
+        </div>
+        <section class="creator-research-panel hidden" id="creatorResearchPanel" data-creator-panel="research" data-testid="creator-research-panel" aria-live="polite" aria-hidden="true"></section>
+        <div class="bento-grid" id="creatorInputPanel" data-creator-panel="idea brief">
+          <div class="bento-card span-12">
+            <div class="card-title">
+              <span>Script, Topic or Idea Input</span>
+              <span class="chip chip-accent">Gemini preferred when configured</span>
+            </div>
+
+            <!-- Starter Template Chips -->
+            <div class="template-chips">
+              <span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-right:4px;display:inline-flex;align-items:center">Try 1-Click Idea:</span>
+              <button type="button" class="template-chip" data-template-key="tech">AI &amp; Python App Tutorial</button>
+              <button type="button" class="template-chip" data-template-key="quote">Quote &amp; Life Lesson</button>
+              <button type="button" class="template-chip" data-template-key="growth">YouTube 10k Growth Guide</button>
+              <button type="button" class="template-chip" data-template-key="review">Top AI Tools Review</button>
+            </div>
+
+            <textarea id="scriptInput" class="input-box" placeholder="Paste your video script, topic title, or raw content idea here..."></textarea>
+
+            <!-- Streamlined Core Controls -->
+            <div class="core-inputs-grid">
+              <div class="field-group">
+                <label>Spoken Language in Video</label>
+                <select id="video_language">
+                  <option value="english">English</option>
+                  <option value="tamil">Tamil</option>
+                </select>
+              </div>
+
+              <div class="field-group">
+                <label>Output SEO Package Language</label>
+                <select id="language">
+                  <option value="english">English</option>
+                  <option value="tamil">Tamil</option>
+                  <option value="tanglish">Tanglish (Tamil + English)</option>
+                  <option value="auto">Auto Select Best</option>
+                </select>
+              </div>
+
+              <div class="field-group">
+                <label>Target Region</label>
+                <select id="region">
+                  <option value="global">Global</option>
+                  <option value="in">India (IN)</option>
+                  <option value="us">United States (US)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Optional Advanced Overrides -->
+            <details class="accordion">
+              <summary>Advanced Brief Overrides (Optional - inferred if empty)</summary>
+              <div class="brief-grid">
+                <div class="brief-field"><label>Target Audience</label><input type="text" id="target_audience" placeholder="e.g. Tamil working professionals (Auto inferred if blank)" /></div>
+                <div class="brief-field"><label>Viewer Promise</label><input type="text" id="viewer_promise" placeholder="e.g. Learn how to manage time (Auto inferred if blank)" /></div>
+                <div class="brief-field"><label>Unique Angle</label><input type="text" id="unique_angle" placeholder="e.g. Real office footage (Auto inferred if blank)" /></div>
+                <div class="brief-field"><label>Proof / Footage</label><input type="text" id="proof" placeholder="e.g. My 9-5 routine (Auto inferred if blank)" /></div>
+                <div class="brief-field">
+                  <label>Video Format</label>
+                  <select id="video_format">
+                    <option value="">Auto Detect</option>
+                    <option value="talking_head">Talking Head / Vlog</option>
+                    <option value="tutorial">Tutorial / Screen Recording</option>
+                    <option value="story">Story / Documentary</option>
+                  </select>
+                </div>
+                <div class="brief-field">
+                  <label>Title Style</label>
+                  <select id="title_style">
+                    <option value="balanced">Balanced (CTR + Keyword)</option>
+                    <option value="curiosity">High Curiosity Gap</option>
+                    <option value="search">Search &amp; How-To Focused</option>
+                  </select>
+                </div>
+                <div class="brief-field wide"><label>Thumbnail Direction</label><input type="text" id="thumbnail_idea" placeholder="e.g. Tired face; text: NO TIME LEFT (Auto inferred if blank)" /></div>
+              </div>
+            </details>
+
+            <div id="creatorBriefProvenance" class="creator-brief-provenance hidden" data-testid="creator-brief-provenance" aria-live="polite"></div>
+
+            <div style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end">
+              <button class="btn" id="exportBtn" disabled>Export full analysis JSON</button>
+              <button class="btn btn-primary" id="analyzeBtn">Generate SEO Package</button>
+            </div>
+          </div>
+        </div>
+
+        <section class="creator-status-panel hidden" id="creatorStatusPanel" aria-live="polite"><div id="alertBox"></div></section>
+        <section class="creator-stage-panel hidden" id="creatorAnglePanel" data-creator-panel="angle" data-testid="creator-angle-panel" aria-hidden="true"></section>
+        <section class="results-panel creator-stage-panel hidden" id="resultsPanel" data-creator-panel="packaging" data-testid="creator-packaging-panel" aria-hidden="true">
+          <div id="outputContent"></div>
+        </section>
+        <section class="creator-stage-panel hidden" id="creatorComparePanel" data-creator-panel="compare" data-testid="creator-compare-panel" aria-hidden="true"></section>
+        <section class="creator-stage-panel hidden" id="creatorDecisionPanel" data-creator-panel="decision" data-testid="creator-decision-panel" aria-hidden="true"></section>
+        <section class="creator-stage-panel hidden" id="creatorChecklistPanel" data-creator-panel="checklist" data-testid="creator-checklist-panel" aria-hidden="true"></section>
+      </section>
+
+      <!-- PAGE 3: CHANNEL ANALYTICS & HISTORY -->
+      <section class="page-view" id="view-analytics">
+        <div class="bento-grid">
+          <div class="bento-card span-12">
+            <div class="card-title">
+              <span>Connected Channel Performance</span>
+              <button class="btn" id="anaRefreshBtn" style="padding:6px 12px;font-size:12px">Refresh from YouTube</button>
+            </div>
+            <div class="metric-value" id="anaChannelName">No channel connected</div>
+            <div class="metric-sub" id="anaChannelStats" style="margin-top:8px">Connect YouTube to read current channel and 28-day analytics.</div>
+            <div class="metric-sub" id="anaSyncStatus" style="margin-top:6px">No YouTube sync has completed.</div>
+            <div class="metric-sub" id="anaRecommendation" style="margin-top:8px;color:var(--accent)">Learning begins after linked videos receive real snapshots.</div>
+          </div>
+
+          <div class="bento-card span-3">
+            <div class="card-title">Subscribers</div>
+            <div class="metric-value" id="anaSubscribers">--</div>
+            <div class="metric-sub">Current channel count</div>
+          </div>
+
+          <div class="bento-card span-3">
+            <div class="card-title">Lifetime Views</div>
+            <div class="metric-value" id="anaLifetimeViews">--</div>
+            <div class="metric-sub">Current Data API count</div>
+          </div>
+
+          <div class="bento-card span-3">
+            <div class="card-title">Views - Last 28 Days</div>
+            <div class="metric-value" id="ana28dViews">--</div>
+            <div class="metric-sub">Through YouTube's last fully processed day</div>
+          </div>
+
+          <div class="bento-card span-3">
+            <div class="card-title">Watch Time - Last 28 Days</div>
+            <div class="metric-value" id="anaWatchTime">--</div>
+            <div class="metric-sub">YouTube Analytics estimate</div>
+          </div>
+
+          <div class="bento-card span-6">
+            <div class="card-title"><span>Evidence-based learning</span></div>
+            <div class="metric-value" style="font-size:20px" id="anaWinningAngle">Collecting evidence</div>
+            <div class="metric-sub" style="margin-top:6px" id="anaObservation">No personal winner is claimed until enough linked videos are measured.</div>
+          </div>
+
+          <div class="bento-card span-6">
+            <div class="card-title">Historical Scorecard &amp; Self-Learning Metrics</div>
+            <div class="kv-list" style="margin-top:14px">
+              <div class="kv-item"><span class="kv-key">Stored Database Runs</span><span class="kv-val" id="anaTotalRuns">0</span></div>
+              <div class="kv-item"><span class="kv-key">Average title quality heuristic</span><span class="kv-val" id="anaAvgTitle">Not available</span></div>
+              <div class="kv-item"><span class="kv-key">Average opportunity heuristic</span><span class="kv-val" id="anaAvgOpp">Not available</span></div>
+            </div>
+          </div>
+
+          <div class="bento-card span-12">
+            <div class="card-title"><span>Current channel uploads &amp; linked packages</span><span class="chip chip-accent">Current data / newest first</span></div>
+            <div class="metric-sub" style="margin:8px 0 12px">These are current YouTube Data API counts and latest display snapshots. They are not mature 24h/7d/28d learning evidence.</div>
+            <div style="overflow-x:auto"><table class="history-table"><thead><tr><th>Published title / video</th><th>Published / snapshot</th><th>Views</th><th>Engagement / retention</th><th>Action</th></tr></thead><tbody id="publishedVideoBody"><tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">Loading current channel videos...</td></tr></tbody></table></div>
+          </div>
+
+          <!-- FULL GENERATION HISTORY LOG -->
+          <div class="bento-card span-12">
+            <div class="card-title"><span>All Generated SEO Video Packages (SQLite Database Log)</span><span class="chip chip-accent">Permanent Records</span></div>
+            <div style="overflow-x:auto;margin-top:12px">
+              <table class="history-table">
+                <thead>
+                  <tr>
+                    <th>Date &amp; Time (IST)</th>
+                    <th>Primary Title / Topic</th>
+                    <th>Opportunity Score</th>
+                    <th>Title Quality Score</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="anaHistoryBody">
+                  <tr>
+                    <td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">Loading stored analysis history from SQLite database...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PAGE 4: SAVED SEO PACKAGE HISTORY -->
+      <section class="page-view" id="view-history">
+        <div class="bento-grid">
+          <div class="bento-card span-12">
+            <div class="card-title"><span>All Generated SEO Video Packages</span><span class="chip chip-accent">Permanent Records</span></div>
+            <div class="metric-sub">Open a package to review its saved title, description, tags, thumbnails, and chapters.</div>
+            <div style="overflow-x:auto;margin-top:14px">
+              <table class="history-table">
+                <thead><tr><th>Date &amp; Time (IST)</th><th>Primary Title / Topic</th><th>Opportunity Score</th><th>Title Quality Score</th><th>Action</th></tr></thead>
+                <tbody id="historyPageBody"><tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">Loading saved packages...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="bento-card span-12 hidden" id="historyDetail"></div>
+        </div>
+      </section>
+
+      <!-- PAGE 5: SETTINGS & INTEGRATIONS -->
+      <section class="page-view" id="view-settings">
+        <div class="bento-grid">
+          <div class="bento-card span-6">
+            <div class="card-title">YouTube OAuth Integration</div>
+            <div class="metric-sub" id="settChannelStatus">Connect your channel for read-only analytics learning.</div>
+            <div style="display:flex;gap:10px;margin-top:20px">
+              <button class="btn" id="settConnectBtn">Connect Channel</button>
+              <button class="btn" id="settRefreshBtn">Refresh Analytics</button>
+              <button class="btn" id="settDisconnectBtn">Disconnect</button>
+            </div>
+          </div>
+
+          <div class="bento-card span-6" data-testid="collector-status-card">
+            <div class="card-title">Snapshot Collector</div>
+            <div class="metric-sub" id="settCollectorStatus">Loading collector status...</div>
+            <div class="metric-sub" id="settCollectorDetails" style="margin-top:8px">Automatic collection is opt-in and quota-capped.</div>
+          </div>
+
+          <div class="bento-card span-6">
+            <div class="card-title">AI &amp; API Provider Status</div>
+            <div class="kv-list" style="margin-top:14px">
+              <div class="kv-item"><span class="kv-key">Primary AI Engine</span><span class="kv-val"><span class="chip chip-accent">Optional Google Gemini</span></span></div>
+              <div class="kv-item"><span class="kv-key">Offline Fallback</span><span class="kv-val"><span class="chip">Available locally</span></span></div>
+              <div class="kv-item"><span class="kv-key">YouTube Data API v3 Pool</span><span class="kv-val"><span class="chip">Configured status shown when diagnostics run</span></span></div>
+              <div class="kv-item"><span class="kv-key">SQLite Local DB</span><span class="kv-val"><span class="chip chip-ok">win_engine.db</span></span></div>
+            </div>
+          </div>
+
+          <div class="bento-card span-12">
+            <div class="card-title">
+              <span>System Maintenance &amp; Diagnostics</span>
+              <button class="btn" id="runDiagBtn" style="padding:4px 12px;font-size:11.5px">Run Diagnostics</button>
+            </div>
+            <pre id="settDiagOut" style="font-family:var(--mono);font-size:12px;color:var(--text-muted);white-space:pre-wrap;max-height:300px;overflow:auto;margin-top:14px">No diagnostic probe has run. The live probe can use YouTube API quota.</pre>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

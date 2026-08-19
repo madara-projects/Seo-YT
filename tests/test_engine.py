@@ -18,6 +18,8 @@ from win_engine.api.dashboard_html import DASHBOARD_HTML
 from win_engine.feedback.learning_engine import _ctr_prediction
 from win_engine.generation.strategy_engine import _content_specific_fallback, _deterministic_score, build_seo_package
 from win_engine.generation.seo_generator import format_upload_ready_description, generate_seo_suggestions
+from win_engine.core.config import Settings
+from win_engine.ingestion.research_service import ResearchService
 from win_engine.integrations.youtube_channel import _ordered_upload_rows
 from win_engine.llm import gemini_client, seo_writer
 
@@ -42,6 +44,15 @@ class TestEngineStages(unittest.TestCase):
         self.assertIn("target_audience", brief)
         self.assertIn("proof", brief)
         self.assertIn("unique_angle", brief)
+
+    def test_diagnostics_accepts_the_configured_youtube_key_pool(self):
+        service = ResearchService(
+            Settings(database_path=self.db_path, youtube_api_keys="pool-key-1,pool-key-2")
+        )
+        with patch.object(service._youtube, "search_videos", return_value=[]):
+            diagnostics = service.diagnostics()
+
+        self.assertEqual(diagnostics["youtube"]["status"], "ok")
 
     def test_link_published_video(self):
         # Record a dummy analysis run first
@@ -154,13 +165,19 @@ class TestEngineStages(unittest.TestCase):
             "learn_vid01",
             (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
             selected_tags_json=json.dumps(["quote tag"]),
+            format_val="youtube_shorts",
+            language="english",
+            ownership_state="verified",
+            ownership_verified=True,
+            verified_channel_id="owner-channel",
+            ownership_verified_at=datetime.now(timezone.utc).isoformat(),
         )
         self.store.update_linked_video_metadata(link_id, {
             "title": "A Strong Quote Title", "tags": ["quote tag"], "view_count": 500,
         })
         self.store.record_performance_snapshot(
             "learn_vid01", 48, views=500, avg_view_percentage=91,
-            snapshot_window="current", replace_window=True,
+            snapshot_window="24h",
         )
         learning = channel_learning_summary(self.db_path)
         self.assertEqual(learning["linked_video_count"], 1)
@@ -181,12 +198,21 @@ class TestEngineStages(unittest.TestCase):
                 runs.append((run_id, views))
         for index, (run_id, views) in enumerate(runs, start=1):
             video_id = f"test_video{index:02d}"
-            self.store.link_published_video(run_id, video_id, "2026-07-01T00:00:00Z", format_val="tutorial", language="english")
-            self.store.record_performance_snapshot(video_id, 168, views=views, avg_view_percentage=60, snapshot_window="7d")
+            self.store.link_published_video(
+                run_id, video_id, "2026-07-01T00:00:00Z",
+                format_val="tutorial", language="english",
+                ownership_state="verified", ownership_verified=True,
+                verified_channel_id="owner-channel",
+                ownership_verified_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self.store.record_performance_snapshot(
+                video_id, 24, views=views, avg_view_percentage=60,
+                snapshot_window="24h",
+            )
         analytics = self.store.cohort_analytics(format_filter="tutorial", language_filter="english")
         self.assertEqual(analytics["sample_size"], 5)
         self.assertEqual(analytics["median_views"], 200.0)
-        self.assertIn("Directional observation", analytics["confidence_label"])
+        self.assertEqual(analytics["confidence_label"], "Early signal")
 
     def test_recent_generated_titles_returns_newest_first(self):
         with self.store._connect() as conn:
