@@ -41,7 +41,7 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
 
     // Dynamic Theme Engine
     function setTheme(themeKey) {
-      const validThemes = ["obsidian", "cyber", "emerald", "light"];
+      const validThemes = ["obsidian", "pearl", "light", "cyber", "emerald"];
       const safeTheme = validThemes.includes(themeKey) ? themeKey : "obsidian";
       document.documentElement.setAttribute("data-theme", safeTheme);
       try { localStorage.setItem("yt_seo_theme", safeTheme); } catch (_) {}

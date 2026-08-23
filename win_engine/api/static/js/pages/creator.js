@@ -118,7 +118,10 @@ function renderStage(root, stageKey = creatorState.stage) {
   });
   root.querySelectorAll("[data-creator-panel]").forEach((panel) => {
     const stages = String(panel.dataset.creatorPanel || "").split(/\s+/).filter(Boolean);
-    const visible = stages.includes(stage.key);
+    // Keep the source input available while reviewing later stages. This lets
+    // the creator refine or submit a newer analysis without losing the
+    // original context, and stale responses are still rejected by sequence.
+    const visible = panel.id === "creatorInputPanel" || stages.includes(stage.key);
     panel.classList.toggle("hidden", !visible);
     panel.setAttribute("aria-hidden", String(!visible));
   });
@@ -459,7 +462,7 @@ function renderPackagingPanel(root) {
   const score = choice.titleQualityScore;
   const variants = creatorState.packageOptions.map((option) => `
     <div class="creator-variant-row ${option.id === choice.id ? "selected" : ""}">
-      <div><strong>${esc(option.label)}${option.primary ? " / Primary recommendation" : ""}</strong><div>${esc(option.title)}</div></div>
+      <div><strong>${esc(option.label)}${option.primary ? " / Primary recommendation" : ""} <span class="chip" style="font-family:var(--mono);font-size:9.5px;padding:1px 6px">${option.title.length} chars</span></strong><div>${esc(option.title)}</div></div>
       <div class="creator-inline-actions">${copyButton("title", option.id, "Copy title")}<button type="button" class="btn creator-select-btn" data-select-package="${esc(option.id)}">${option.id === choice.id ? "Selected" : "Select"}</button></div>
     </div>`).join("");
   panel.innerHTML = `<div class="card-title"><span>Generated SEO package</span>${sourceChip(choice.source, data.generation_source === "gemini" ? "accent" : "warn")}</div>
@@ -469,8 +472,8 @@ function renderPackagingPanel(root) {
       <div class="creator-score-card"><span>Selection</span><strong>${esc(choice.label)}</strong><small>${creatorState.selectionStatus === "saved" ? "Saved to History; not published." : creatorState.selectionStatus === "saving" ? "Saving to History..." : creatorState.selectionStatus === "error" ? "Could not save; retry selection." : "Preview only until you select it."}</small></div>
     </div>
     <div class="creator-analysis-grid creator-package-fields">
-      <div class="creator-analysis-card wide"><div class="creator-card-heading"><span>Selected title</span>${copyButton("title", choice.id, "Copy title")}</div><p class="creator-output-title">${esc(choice.title)}</p></div>
-      <div class="creator-analysis-card wide"><div class="creator-card-heading"><span>Description</span>${copyButton("description", choice.id, "Copy description")}</div><div class="creator-output-text">${esc(choice.description)}</div></div>
+      <div class="creator-analysis-card wide"><div class="creator-card-heading"><span style="display:flex;align-items:center;gap:6px">Selected title <span class="chip" style="font-family:var(--mono);font-size:10px;padding:2px 6px">${choice.title.length} chars</span></span>${copyButton("title", choice.id, "Copy title")}</div><p class="creator-output-title">${esc(choice.title)}</p></div>
+      <div class="creator-analysis-card wide"><div class="creator-card-heading"><span style="display:flex;align-items:center;gap:6px">Description <span class="chip" style="font-family:var(--mono);font-size:10px;padding:2px 6px">${choice.description.length} chars</span></span>${copyButton("description", choice.id, "Copy description")}</div><div class="creator-output-text">${esc(choice.description)}</div></div>
       <div class="creator-analysis-card"><div class="creator-card-heading"><span>Video tags</span>${copyButton("tags", choice.id, "Copy tags")}</div><div class="tag-list">${tagsHtml(choice.tags, "No tags returned.")}</div></div>
       <div class="creator-analysis-card"><div class="creator-card-heading"><span>Hashtags</span>${copyButton("hashtags", choice.id, "Copy hashtags")}</div><div class="tag-list">${tagsHtml(choice.hashtags, "No hashtags returned.")}</div></div>
       <div class="creator-analysis-card"><div class="creator-card-heading">Thumbnail direction ${sourceChip("Generated suggestion", "warn")}</div><p>${displayValue(choice.thumbnailVisual)}</p><p class="metric-sub">Suggested text: ${displayValue(choice.thumbnailText)}</p></div>

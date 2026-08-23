@@ -64,6 +64,8 @@ Planned but not yet complete:
 
 See [ROADMAP.md](ROADMAP.md) for the exact implementation sequence, data rules, and acceptance checks.
 
+For page-by-page instructions, required inputs, the complete creator workflow, YouTube linking steps, and current limitations, see the [User Guide](docs/USER_GUIDE.md).
+
 ## Main workflow
 
 ```text

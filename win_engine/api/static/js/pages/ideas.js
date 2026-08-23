@@ -25,15 +25,31 @@ function renderIdeaList(data) {
   $("ideasPrevBtn").disabled = ideaState.offset <= 0;
   $("ideasNextBtn").disabled = ideaState.offset + ideaState.limit >= ideaState.total;
   if (!ideas.length) {
-    root.innerHTML = `<div class="creator-empty-state">No ideas match this filter. Save an original topic below; research and performance evidence will remain unavailable until collected.</div>`;
+    root.innerHTML = `
+      <div class="empty-state-card" style="margin:8px 0">
+        <div class="empty-state-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M8.5 14.5A7 7 0 1 1 15.5 14.5C14.5 15.3 14 16 14 17h-4c0-1-.5-1.7-1.5-2.5Z"/></svg>
+        </div>
+        <h4>No Ideas In Backlog</h4>
+        <p>No ideas match this filter. Save an original topic below; research and performance evidence will remain unavailable until collected.</p>
+      </div>`;
     return;
   }
   root.innerHTML = ideas.map((idea) => `
     <button type="button" class="ideas-card ${Number(idea.id) === Number(ideaState.selectedId) ? "selected" : ""}" data-idea-id="${Number(idea.id)}">
-      <div class="ideas-card-head"><strong>${esc(idea.topic)}</strong>${statusChip(idea.status)}</div>
-      <div class="ideas-card-meta">${esc(idea.format || "unknown")} / ${esc(idea.language || "unknown")} / ${esc(idea.region || "unknown")}</div>
-      <p>${esc(idea.opportunity_explanation || "Research has not been run for this idea.")}</p>
-      <div class="ideas-card-meta">Last research: ${esc(dateValue(idea.last_researched_at))} / Saved: ${esc(dateValue(idea.created_at))}</div>
+      <div class="ideas-card-head">
+        <strong>${esc(idea.topic)}</strong>
+        ${statusChip(idea.status)}
+      </div>
+      <div class="ideas-card-meta" style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0">
+        <span class="chip" style="font-size:10.5px">${esc(idea.format || "unknown")}</span>
+        <span class="chip" style="font-size:10.5px">${esc(idea.language || "unknown")}</span>
+        <span class="chip" style="font-size:10.5px">${esc(idea.region || "global")}</span>
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin:4px 0">${esc(idea.opportunity_explanation || "Research has not been run for this idea.")}</p>
+      <div class="ideas-card-meta" style="font-size:10.5px;color:var(--text-sub)">
+        Last research: ${esc(dateValue(idea.last_researched_at))} &bull; Saved: ${esc(dateValue(idea.created_at))}
+      </div>
     </button>`).join("");
 }
 
@@ -73,28 +89,55 @@ function renderIdeaDetail(idea) {
   const linked = Boolean(idea.published_video_link_id);
   const archived = idea.status === "archived";
   const generated = Boolean(idea.analysis_run_id);
+  const scripted = idea.status === "scripted" || generated || linked;
+  const published = idea.status === "published" || linked;
   const demand = idea.latest_demand_research || null;
+
   root.innerHTML = `
-    <div class="card-title"><span>Idea detail</span>${statusChip(idea.status)}</div>
+    <div class="card-title"><span>Opportunity Backlog Detail</span>${statusChip(idea.status)}</div>
     <h2 class="ideas-detail-title">${esc(idea.topic)}</h2>
     <p class="ideas-detail-notes">${esc(idea.notes || "No notes supplied.")}</p>
-    <div class="ideas-facts">
-      <div><span>Format / language</span><strong>${esc(idea.format || "unknown")} / ${esc(idea.language || "unknown")}</strong></div>
-      <div><span>Region / duration</span><strong>${esc(idea.region || "unknown")} / ${idea.target_duration_seconds ? `${num(idea.target_duration_seconds)} sec` : "Not available"}</strong></div>
-      <div><span>Generated package</span><strong>${generated ? `History run ${Number(idea.analysis_run_id)}` : "Not generated"}</strong></div>
-      <div><span>Published link</span><strong>${linked ? `Linked record ${Number(idea.published_video_link_id)}` : "Not linked"}</strong></div>
+
+    <!-- Idea Lifecycle Pipeline -->
+    <div class="demand-pipeline-flow" style="margin:16px 0">
+      <div class="demand-pipeline-step"><span>1. IDEA</span><strong>${esc(idea.status)}</strong></div>
+      <div class="demand-pipeline-arrow">&rarr;</div>
+      <div class="demand-pipeline-step"><span>2. SCRIPT</span><strong>${scripted ? "Scripted" : "Pending"}</strong></div>
+      <div class="demand-pipeline-arrow">&rarr;</div>
+      <div class="demand-pipeline-step"><span>3. PACKAGE</span><strong>${generated ? `Run #${Number(idea.analysis_run_id)}` : "Pending"}</strong></div>
+      <div class="demand-pipeline-arrow">&rarr;</div>
+      <div class="demand-pipeline-step"><span>4. PUBLISHED</span><strong>${published ? "Linked" : "Manual"}</strong></div>
     </div>
+
+    <div class="ideas-facts">
+      <div><span>Format / Language</span><strong>${esc(idea.format || "unknown")} / ${esc(idea.language || "unknown")}</strong></div>
+      <div><span>Region / Duration</span><strong>${esc(idea.region || "unknown")} / ${idea.target_duration_seconds ? `${num(idea.target_duration_seconds)} sec` : "Not specified"}</strong></div>
+      <div><span>Generated Package</span><strong>${generated ? `History run #${Number(idea.analysis_run_id)}` : "Not generated"}</strong></div>
+      <div><span>Published Link</span><strong>${linked ? `Linked record #${Number(idea.published_video_link_id)}` : "Not linked"}</strong></div>
+    </div>
+
     <div class="creator-analysis-grid ideas-angles">
       <div class="creator-analysis-card"><div class="creator-card-heading">Search angle ${chip("Creator supplied")}</div><p>${esc(idea.search_angle || "Not supplied")}</p></div>
       <div class="creator-analysis-card"><div class="creator-card-heading">Browse angle ${chip("Creator supplied")}</div><p>${esc(idea.browse_angle || "Not supplied")}</p></div>
       <div class="creator-analysis-card wide"><div class="creator-card-heading">Existing audience angle ${chip("Creator supplied")}</div><p>${esc(idea.audience_angle || "Not supplied")}</p></div>
     </div>
-    <div class="creator-card-heading">Visual / on-screen plan</div>
-    <p class="ideas-detail-notes">Visual: ${esc(idea.visual_or_background || "Not supplied")}<br>On-screen text: ${esc(idea.on_screen_text || "Not supplied")}<br>Emotion or intent: ${esc(idea.emotion_or_intent || "Not supplied")}</p>
+
+    <div class="creator-card-heading">Visual &amp; On-Screen Plan</div>
+    <div class="intel-evidence" style="margin-bottom:14px">
+      <div><strong>Visual / Scene footage</strong><span>${esc(idea.visual_or_background || "Not supplied")}</span></div>
+      <div><strong>Exact on-screen wording</strong><span>${esc(idea.on_screen_text || "Not supplied")}</span></div>
+      <div><strong>Emotion / Creator intent</strong><span>${esc(idea.emotion_or_intent || "Not supplied")}</span></div>
+    </div>
+
     ${evidenceCard(idea)}
-    <div class="ideas-evidence-summary"><div class="creator-card-heading">Topic-demand evidence ${demand ? chip(demand.classification, demand.stale ? "warn" : "accent") : chip("Unavailable", "warn")}</div><p>${demand ? (demand.stale ? "This demand snapshot is stale because relevant creator fields changed. Run demand research again." : "A current immutable demand snapshot is linked to this idea.") : "Demand research has not been run. No market-demand conclusion is assumed."}</p></div>
+
+    <div class="ideas-evidence-summary">
+      <div class="creator-card-heading">Topic-demand evidence ${demand ? chip(demand.classification, demand.stale ? "warn" : "accent") : chip("Unavailable", "warn")}</div>
+      <p>${demand ? (demand.stale ? "This demand snapshot is stale because relevant creator fields changed. Run demand research again." : "A current immutable demand snapshot is linked to this idea.") : "Demand research has not been run. No market-demand conclusion is assumed."}</p>
+    </div>
+
     <div id="ideaActionStatus" class="metric-sub" aria-live="polite"></div>
-    <div class="creator-inline-actions ideas-actions">
+    <div class="creator-inline-actions ideas-actions" style="margin-top:16px">
       <button type="button" class="btn" data-idea-action="research" ${archived ? "disabled" : ""}>Research now</button>
       <button type="button" class="btn" data-idea-action="demand" ${archived ? "disabled" : ""}>Demand / outlier research</button>
       <button type="button" class="btn btn-primary" data-idea-action="generate" ${archived || idea.status === "published" ? "disabled" : ""}>Generate package</button>
