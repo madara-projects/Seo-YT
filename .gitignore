@@ -1,13 +1,51 @@
 .env
 .env.local
+.env.*
+!.env.example
+!.env.template
+
+# Local credentials and private key material
+credentials.json
+client_secret*.json
+token*.json
+*.pem
+*.key
+
+# Python environments and tooling
 .env.*.local
 .venv/
 .venv-browser/
+venv/
+env/
+ENV/
 .tmp/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Local runtime data
+backups/
+*.log
+logs/
+debug/
+debug.log
+tmp/
+temp/
+.cache/
+*.tmp
+*.temp
+
+# Database files
 win_engine.db
 *.db-shm
 *.db-wal
@@ -26,3 +64,18 @@ win_engine.db
 .claude/
 *.swp
 Thumbs.db
+
+# Browser/test artifacts
+test-results/
+playwright-report/
+blob-report/
+browser-artifacts/
+screenshots/
+artifacts/
+ms-playwright/
+
+# Node tooling (not part of the production image)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*

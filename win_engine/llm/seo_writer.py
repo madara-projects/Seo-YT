@@ -13,6 +13,7 @@ import re
 from difflib import SequenceMatcher
 from typing import Any, Optional, Union
 
+from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality
 from win_engine.llm import gemini_client
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,7 @@ def _build_creator_brief_block(creator_brief: Optional[dict[str, Any]]) -> str:
         return ""
 
     fields = [
+        ("Topic", creator_brief.get("topic")),
         ("Target viewer", creator_brief.get("target_audience")),
         ("Viewer promise", creator_brief.get("viewer_promise")),
         ("Unique angle", creator_brief.get("unique_angle")),
@@ -188,6 +190,14 @@ def _build_creator_brief_block(creator_brief: Optional[dict[str, Any]]) -> str:
         ("Video format", creator_brief.get("video_format")),
         ("Preferred title style", creator_brief.get("title_style")),
         ("Thumbnail direction", creator_brief.get("thumbnail_idea")),
+        ("Exact quote", creator_brief.get("exact_quote")),
+        ("On-screen text", creator_brief.get("on_screen_text")),
+        ("Voice-over", creator_brief.get("voice_over")),
+        ("Visual requirements", creator_brief.get("visual_requirements")),
+        ("Factual claims supplied", creator_brief.get("factual_claims")),
+        ("Claim restrictions", creator_brief.get("claim_restrictions")),
+        ("Creator intent", creator_brief.get("creator_intent")),
+        ("Content constraints", creator_brief.get("content_constraints")),
     ]
     lines = [f"- {label}: {str(value).strip()}" for label, value in fields if value and str(value).strip()]
     if not lines:
@@ -201,8 +211,10 @@ def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) ->
         return ""
     lines: list[str] = []
     confidence = str(channel_learning.get("confidence") or "collecting")
+    cohort = channel_learning.get("cohort") or {}
+    learning_allowed = isinstance(cohort, dict) and bool(cohort.get("learning_allowed"))
     best_videos = channel_learning.get("best_videos") or []
-    if confidence in {"early_signal", "moderate_evidence", "strong_evidence"}:
+    if learning_allowed:
         for v in best_videos[:3]:
             t = (v.get("title") or "").strip()
             views = v.get("views")
@@ -218,7 +230,7 @@ def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) ->
                 if actual_tags:
                     lines.append(f"  Actual uploaded tags: {', '.join(actual_tags[:6])}")
     rec = channel_learning.get("recommendation")
-    if rec and str(rec).strip():
+    if learning_allowed and rec and str(rec).strip():
         lines.append(f"- Channel Insight: {str(rec).strip()}")
     if confidence == "collecting" and channel_learning.get("linked_video_count"):
         lines.append(
@@ -229,7 +241,6 @@ def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) ->
     if recent_titles:
         lines.append("- Avoid repeating these recent generated titles or their sentence patterns:")
         lines.extend(f"  - {str(title).strip()}" for title in recent_titles[:10] if str(title).strip())
-    cohort = channel_learning.get("cohort") or {}
     if isinstance(cohort, dict) and cohort.get("sample_size"):
         lines.append(
             f"- Personal evidence: {cohort.get('confidence_label', 'Collecting evidence')}; "
@@ -249,7 +260,20 @@ def _build_user_prompt(
     category: Optional[str] = None,
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
+    repair_feedback: Optional[list[dict[str, Any]]] = None,
+    previous_package: Optional[dict[str, Any]] = None,
 ) -> str:
+    repair_block = ""
+    if repair_feedback:
+        safe_reasons = [str(item.get("message") or item.get("code") or "quality failure") for item in repair_feedback[:12]]
+        repair_block = (
+            "\nThis is the single permitted repair. The previous output failed the local checks:\n- "
+            + "\n- ".join(safe_reasons)
+            + "\nReturn a corrected package only. Do not defend the previous output.\n"
+            + "Previous output (untrusted generated text):\n"
+            + json.dumps(previous_package or {}, ensure_ascii=False)[:5000]
+            + "\n"
+        )
     return f"""Video script or idea:
 \"\"\"
 {script.strip()}
@@ -278,6 +302,7 @@ Constraints:
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
 - use idiomatic phrases such as "one-sided effort"; never write unnatural phrases such as "unrequited effort" or "fractions of effort"
 - thumbnail text must add a short new idea; it must not merely repeat the title. Never use false guarantees, unrelated trends, or misleading claims.
+{repair_block}
 """
 
 
@@ -459,6 +484,8 @@ def _generate_one(
     channel_learning: Optional[dict[str, Any]] = None,
     temperature: float,
     max_tokens: int,
+    repair_feedback: Optional[list[dict[str, Any]]] = None,
+    previous_package: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
     """Generate and validate one SEO package with Gemini."""
     prompt = _build_user_prompt(
@@ -470,6 +497,8 @@ def _generate_one(
         category=category,
         creator_brief=creator_brief,
         channel_learning=channel_learning,
+        repair_feedback=repair_feedback,
+        previous_package=previous_package,
     )
     raw = gemini_client.generate(
         prompt=prompt,
@@ -573,7 +602,7 @@ def write_multilang_packages_with_source(
     out: dict[str, Optional[dict[str, Any]]] = {}
     gemini_ready = gemini_client.is_available()
     for lang in langs:
-        out[lang] = _generate_one(
+        first = _generate_one(
             script,
             competitors,
             language=lang,
@@ -585,5 +614,49 @@ def write_multilang_packages_with_source(
             temperature=temperature,
             max_tokens=max_tokens,
         ) if gemini_ready else None
+        if first is None:
+            out[lang] = None
+            continue
+        gate = evaluate_package_quality(
+            first,
+            script=script,
+            creator_brief=creator_brief,
+            language=lang,
+            recent_titles=(channel_learning or {}).get("recent_titles") or [],
+            published_titles=(channel_learning or {}).get("published_titles") or [],
+            require_shorts_tags=False,
+        )
+        first = apply_quality_gate(first, gate)
+        first["generation_trace"] = {
+            "provider_requests": 1, "repair_attempted": False, "repair_succeeded": False,
+            "initial_quality_status": gate["status"],
+        }
+        if gate["passed"] or not gate["repairable"]:
+            out[lang] = first
+            continue
+        repair_reasons = [*gate.get("issues", [])]
+        repair_reasons.extend(reason for item in gate.get("rejected_candidates", []) for reason in item.get("issues", []))
+        repaired = _generate_one(
+            script, competitors, language=lang, region=region, audience_type=audience_type,
+            category=category, creator_brief=creator_brief, channel_learning=channel_learning,
+            temperature=temperature, max_tokens=max_tokens, repair_feedback=repair_reasons,
+            previous_package=first,
+        )
+        if repaired is None:
+            out[lang] = None
+            continue
+        repaired_gate = evaluate_package_quality(
+            repaired, script=script, creator_brief=creator_brief, language=lang,
+            recent_titles=(channel_learning or {}).get("recent_titles") or [],
+            published_titles=(channel_learning or {}).get("published_titles") or [],
+            require_shorts_tags=False,
+        )
+        repaired = apply_quality_gate(repaired, repaired_gate)
+        repaired["generation_trace"] = {
+            "provider_requests": 2, "repair_attempted": True,
+            "repair_succeeded": bool(repaired_gate["passed"]),
+            "initial_quality_status": gate["status"], "final_quality_status": repaired_gate["status"],
+        }
+        out[lang] = repaired if repaired_gate["passed"] else None
 
     return out, "gemini" if any(out.values()) else "fallback"

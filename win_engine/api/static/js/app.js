@@ -8,6 +8,11 @@ import { mountSettingsPage } from "./pages/settings.js";
 import { mountAnalyticsPage } from "./pages/analytics.js";
 import { mountHistoryPage } from "./pages/history.js";
 import { mountCreatorPage } from "./pages/creator.js";
+import { loadIdeasPage, mountIdeasPage } from "./pages/ideas.js";
+import { loadDemand, mountDemandPage } from "./pages/demand.js";
+import { loadWatchlist, mountWatchlistPage } from "./pages/watchlist.js";
+import { loadAudits, mountAuditsPage } from "./pages/audits.js";
+import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
 
     async function getHistorySummary(force = false) {
       const cacheFresh = frontendState.historySummaryCache && (Date.now() - frontendState.historySummaryFetchedAt < 15000);
@@ -98,6 +103,11 @@ import { mountCreatorPage } from "./pages/creator.js";
       if (appContainer) appContainer.scrollTop = 0;
 
       if (pageKey === "dashboard") loadHistoryFeed();
+      if (pageKey === "ideas") loadIdeasPage();
+      if (pageKey === "demand") loadDemand();
+      if (pageKey === "watchlist") loadWatchlist();
+      if (pageKey === "audits") loadAudits();
+      if (pageKey === "experiments") loadExperiments();
       if (pageKey === "analytics") loadAnalyticsPage();
       if (pageKey === "history") loadSavedHistory();
     }
@@ -472,7 +482,7 @@ import { mountCreatorPage } from "./pages/creator.js";
             : "<button class='btn' style='padding:4px 10px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Link</button>";
           return "<tr>" +
           "<td style='font-size:12px;color:var(--text-muted)'>" + historyDate(run.created_at) + "</td>" +
-          "<td style='font-weight:600;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(run.title) + "'>" + esc(run.title || run.query || "Untitled package") + "</td>" +
+          "<td style='font-weight:600;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(run.title) + "'>" + esc(run.title || run.query || "Untitled package") + (run.selected_package_id ? " <span class='chip chip-ok'>Choice saved</span>" : " <span class='chip'>Choice unknown</span>") + "</td>" +
           "<td><span style='font-weight:700;color:var(--accent)'>" + num(run.opportunity_score) + "</span> / 100</td>" +
           "<td><span class='chip chip-ok'>" + num(run.title_score) + " / 10</span></td>" +
           "<td style='display:flex;gap:6px'>" +
@@ -503,6 +513,16 @@ import { mountCreatorPage } from "./pages/creator.js";
         const variants = arr(packageData.title_variants).map((item) => "<li>" + esc(typeof item === "string" ? item : item.title || "") + "</li>").join("") || "<li>Not stored in this older record.</li>";
         const chapters = arr(packageData.chapters).map((item) => "<li>" + esc((item.timestamp || "") + " " + (item.title || item)) + "</li>").join("") || "<li>Not stored in this older record.</li>";
         const report = run.linked_video_report || {};
+        const selection = run.selected_package || null;
+        const selectedData = selection && selection.package ? selection.package : null;
+        const selectionHtml = selectedData
+          ? "<div class='bento-card' style='margin-top:18px'><div class='card-title'><span>Creator-selected generated package</span><span class='chip chip-ok'>Explicitly recorded</span></div><div style='font-weight:750'>" + esc(selectedData.title || "Selected package") + "</div><div class='metric-sub'>Package ID " + esc(selection.generated_package_id || "unknown") + " / Selected " + historyDate(selection.selected_at) + (selection.later_associated_with_video ? " / Associated with linked video" : " / Not linked yet") + "</div></div>"
+          : "<div class='bento-card' style='margin-top:18px'><div class='card-title'><span>Creator-selected generated package</span><span class='chip'>Unknown</span></div><div class='metric-sub'>No explicit selection was recorded. The tool will not infer one after publishing.</div></div>";
+        const retention = packageData.retention_assistant || {};
+        const retentionRisks = arr(retention.risk_map).flatMap((stage) => arr((stage || {}).risks));
+        const retentionHtml = Object.keys(retention).length
+          ? "<div class='bento-card' style='margin-top:18px'><div class='card-title'><span>Saved hook, pacing &amp; retention trace</span><span class='chip'>" + esc(retention.rule_version || "Local rules") + "</span></div><div style='font-weight:750'>Risk level: " + esc(retention.risk_level || "unknown") + "</div><div class='metric-sub'>" + esc((retention.trace || {}).timing_basis || "relative stage") + " / " + retentionRisks.length + " deterministic finding(s). This is pre-publish heuristic guidance, not measured retention.</div></div>"
+          : "";
         const linkedHtml = report.linked ? linkedVideoReportHtml(report, run.id) :
           "<div class='bento-card' style='margin-top:18px'><div class='card-title'>Published-video learning</div><div class='metric-sub'>No YouTube video is linked to this package yet. Use Link on the History row after publishing.</div></div>";
         const legacy = !run.package
@@ -513,6 +533,8 @@ import { mountCreatorPage } from "./pages/creator.js";
           "<div class='metric-value' style='font-size:24px'>" + esc(packageData.title || run.title || "Untitled package") + "</div>" +
           "<div class='metric-sub' style='margin-top:8px'>Opportunity " + num(run.opportunity_score) + "/100 / Title score " + num(run.title_score) + "/10 / " + esc(run.content_angle || "General") + "</div>" +
           legacy +
+          selectionHtml +
+          retentionHtml +
           linkedHtml +
           "<div class='bento-grid' style='margin-top:18px'>" +
           "<div class='bento-card span-6'><div class='card-title'>Description</div><div style='white-space:pre-wrap;line-height:1.6'>" + esc(packageData.description || "Not stored in this older record.") + "</div></div>" +
@@ -548,7 +570,10 @@ import { mountCreatorPage } from "./pages/creator.js";
         ? "<div class='tag-list'>" + arr(items).map((item) => "<span class='tag-item'>" + esc(item) + "</span>").join("") + "</div>"
         : "<div class='metric-sub'>" + esc(empty) + "</div>";
       const titleStatus = usage.title_match ? "Exact generated title used" : "Uploaded title differs from generated title";
+      const attribution = usage.attribution_status === "creator_selected" ? "Creator-selected package" : "Package selection unknown";
       const comparable = report.comparable_metadata || {};
+      const retentionLearning = report.retention_learning || {};
+      const retentionLearningHtml = "<div class='bento-card span-12'><div class='card-title'>Retention learning status</div><div style='font-weight:750'>" + esc(retentionLearning.status || "insufficient_evidence") + "</div><div class='metric-sub'>" + esc(retentionLearning.message || "No eligible retention pattern is available.") + " Sample: " + num(retentionLearning.sample_size || 0) + " / Minimum: " + num(retentionLearning.minimum_samples || 5) + ". Correlation is not causation.</div></div>";
       const sources = comparable.sources || {};
       const sourceLabel = (source) => ({creator:"Creator confirmed", youtube_verified:"YouTube verified", package:"From package", unknown:"Unknown"}[source] || "Unknown");
       const metadataEditor = "<div class='bento-card span-12' style='margin-top:12px'><div class='card-title'>Comparable learning metadata</div><div class='metric-sub'>These local labels control future cohort comparisons. They do not edit YouTube.</div><div class='bento-grid' style='margin-top:10px'>" +
@@ -568,7 +593,7 @@ import { mountCreatorPage } from "./pages/creator.js";
           "<div class='bento-card span-6'><div class='card-title'>Actual YouTube upload</div>" +
             (yt.thumbnail_url ? "<img src='" + esc(yt.thumbnail_url) + "' alt='' style='width:180px;max-width:100%;border-radius:10px;margin-bottom:12px'>" : "") +
             "<div style='font-weight:750;line-height:1.5'>" + esc(yt.title || usage.uploaded_title || "Metadata not refreshed yet") + "</div>" +
-            "<div class='metric-sub' style='margin:8px 0'>" + esc(titleStatus) + " / Description adoption " + metric(usage.description_match_percent, "%") + "</div>" +
+            "<div class='metric-sub' style='margin:8px 0'>" + esc(attribution) + " / " + esc(titleStatus) + " / Description adoption " + metric(usage.description_match_percent, "%") + "</div>" +
             "<details style='margin:12px 0'><summary style='cursor:pointer;font-weight:700'>Description currently on YouTube</summary><div style='white-space:pre-wrap;line-height:1.55;max-height:220px;overflow-y:auto;margin-top:10px'>" + esc(yt.description || "No description returned.") + "</div></details>" +
             "<div class='card-title' style='margin-top:14px'>Tags actually on YouTube</div>" + tagList(usage.uploaded_tags, "No uploaded tags were returned by YouTube.") +
             "<div class='card-title' style='margin-top:14px'>Generated tags used</div>" + tagList(usage.matching_tags, "None of the generated tags currently match the uploaded tags.") +
@@ -586,6 +611,7 @@ import { mountCreatorPage } from "./pages/creator.js";
           "</div>" +
           "<div class='bento-card span-6'><div class='card-title'>What worked / positive observations</div>" + list(diagnosis.what_worked, "No positive conclusion is supported yet.") + "</div>" +
           "<div class='bento-card span-6'><div class='card-title'>What to improve / still unknown</div>" + list(diagnosis.needs_improvement, "No issue has been detected from the available evidence.") + "</div>" +
+          retentionLearningHtml +
           metadataEditor +
           "<div class='bento-card span-12'><div class='card-title'>Performance snapshots</div><div style='overflow-x:auto'><table><thead><tr><th>Window</th><th>Views</th><th>Likes</th><th>Average viewed</th><th>Captured</th></tr></thead><tbody>" + snapshotRows + "</tbody></table></div>" +
             "<div class='metric-sub' style='margin-top:10px'>" + esc(diagnosis.attribution_note || "") + "</div></div>" +
@@ -752,6 +778,11 @@ import { mountCreatorPage } from "./pages/creator.js";
         loadHistoryFeed(true);
       },
     });
+    mountIdeasPage();
+    mountDemandPage();
+    mountWatchlistPage();
+    mountAuditsPage();
+    mountExperimentsPage();
     route();
     loadCollectorStatus();
     if ((window.location.hash || "#dashboard") !== "#analytics") loadChannelStatus();

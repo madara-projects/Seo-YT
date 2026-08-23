@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 6
 _APPLICATION_TABLES = {
     "analysis_runs",
     "video_snapshots",
@@ -149,8 +149,30 @@ def prepare_database(database_path: str, *, backup_before_migration: bool = True
         if old_version == 0:
             _migrate_v0_to_v1(connection)
             _migrate_v1_to_v2(connection)
+            _migrate_v2_to_v3(connection)
+            _migrate_v3_to_v4(connection)
+            _migrate_v4_to_v5(connection)
+            _migrate_v5_to_v6(connection)
         elif old_version == 1:
             _migrate_v1_to_v2(connection)
+            _migrate_v2_to_v3(connection)
+            _migrate_v3_to_v4(connection)
+            _migrate_v4_to_v5(connection)
+            _migrate_v5_to_v6(connection)
+        elif old_version == 2:
+            _migrate_v2_to_v3(connection)
+            _migrate_v3_to_v4(connection)
+            _migrate_v4_to_v5(connection)
+            _migrate_v5_to_v6(connection)
+        elif old_version == 3:
+            _migrate_v3_to_v4(connection)
+            _migrate_v4_to_v5(connection)
+            _migrate_v5_to_v6(connection)
+        elif old_version == 4:
+            _migrate_v4_to_v5(connection)
+            _migrate_v5_to_v6(connection)
+        elif old_version == 5:
+            _migrate_v5_to_v6(connection)
         else:
             raise MigrationError(f"No migration path exists from schema version {old_version}.")
         configure_connection(connection)
@@ -196,7 +218,7 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
         (
             CURRENT_SCHEMA_VERSION,
             datetime.now(timezone.utc).isoformat(),
-            "Phase 2 comparable metadata, source provenance, and audit history",
+            "Phase 8 immutable published audits and structured experiments",
         ),
     )
     connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
@@ -344,6 +366,73 @@ def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
+def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+    """Add creator-selected package attribution without rewriting History."""
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_analysis_package_selections(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
+            (3, datetime.now(timezone.utc).isoformat(), "Phase 4 selected package attribution and generation traceability"),
+        )
+        connection.execute("PRAGMA user_version = 3")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+    """Add the Stage G1 idea workspace without rewriting existing records."""
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_content_idea_tables(connection)
+        _create_indexes(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
+            (4, datetime.now(timezone.utc).isoformat(), "Stage G1 idea backlog and immutable research evidence"),
+        )
+        connection.execute("PRAGMA user_version = 4")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _migrate_v4_to_v5(connection: sqlite3.Connection) -> None:
+    """Add normalized G2/G5 observational evidence without rewriting existing data."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_watchlist_demand_tables(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
+            (5, datetime.now(timezone.utc).isoformat(), "Phase 7 watchlist, outlier, and honest demand evidence"),
+        )
+        connection.execute("PRAGMA user_version = 5")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
+    """Add immutable G3 audits and explicit G4 experiment comparisons."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_audit_experiment_tables(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
+            (6, datetime.now(timezone.utc).isoformat(), "Phase 8 immutable published audits and structured experiments"),
+        )
+        connection.execute("PRAGMA user_version = 6")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 def _create_comparable_metadata_tables(connection: sqlite3.Connection) -> None:
     connection.execute(
         """CREATE TABLE IF NOT EXISTS published_video_comparable_metadata (
@@ -455,6 +544,202 @@ def _create_relational_tables(connection: sqlite3.Connection) -> None:
     _create_video_performance_snapshots(connection)
     _create_package_experiments(connection)
     _create_comparable_metadata_tables(connection)
+    _create_analysis_package_selections(connection)
+    _create_content_idea_tables(connection)
+    _create_watchlist_demand_tables(connection)
+    _create_audit_experiment_tables(connection)
+
+
+def _create_audit_experiment_tables(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS published_video_audits (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               published_video_link_id INTEGER NOT NULL,
+               analysis_run_id INTEGER NOT NULL,
+               captured_at TEXT NOT NULL,
+               summary_state TEXT NOT NULL CHECK(summary_state IN (
+                   'not_enough_data','collecting_evidence','observable','mature_observation',
+                   'inconclusive','actionable_observation')),
+               audit_json TEXT NOT NULL,
+               provenance_version TEXT NOT NULL,
+               FOREIGN KEY(published_video_link_id) REFERENCES published_video_links(id) ON DELETE CASCADE,
+               FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id) ON DELETE CASCADE
+           )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS experiments (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               name TEXT NOT NULL,
+               description TEXT NOT NULL DEFAULT '',
+               hypothesis TEXT NOT NULL,
+               mode TEXT NOT NULL CHECK(mode IN ('controlled','observational')),
+               status TEXT NOT NULL CHECK(status IN (
+                   'draft','planned','active','paused','completed','cancelled','inconclusive')),
+               variable TEXT NOT NULL,
+               variable_category TEXT NOT NULL,
+               control_definition TEXT NOT NULL,
+               variant_definition TEXT NOT NULL,
+               success_metric TEXT NOT NULL,
+               secondary_metrics_json TEXT NOT NULL DEFAULT '[]',
+               target_sample_size INTEGER,
+               minimum_sample_size INTEGER NOT NULL DEFAULT 5,
+               observation_window TEXT NOT NULL DEFAULT '24h'
+                   CHECK(observation_window IN ('24h','7d','28d')),
+               start_date TEXT,
+               end_date TEXT,
+               notes TEXT NOT NULL DEFAULT '',
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS experiment_video_assignments (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               experiment_id INTEGER NOT NULL,
+               published_video_link_id INTEGER NOT NULL,
+               role TEXT NOT NULL CHECK(role IN ('control','variant','observational_reference')),
+               assigned_at TEXT NOT NULL,
+               notes TEXT NOT NULL DEFAULT '',
+               UNIQUE(experiment_id, published_video_link_id),
+               FOREIGN KEY(experiment_id) REFERENCES experiments(id) ON DELETE CASCADE,
+               FOREIGN KEY(published_video_link_id) REFERENCES published_video_links(id) ON DELETE CASCADE
+           )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS experiment_result_snapshots (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               experiment_id INTEGER NOT NULL,
+               captured_at TEXT NOT NULL,
+               result_state TEXT NOT NULL CHECK(result_state IN (
+                   'insufficient_evidence','directional_control','directional_variant',
+                   'inconclusive','mixed_results','observational_pattern')),
+               result_json TEXT NOT NULL,
+               provenance_version TEXT NOT NULL,
+               FOREIGN KEY(experiment_id) REFERENCES experiments(id) ON DELETE CASCADE
+           )"""
+    )
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_audits_link_time ON published_video_audits(published_video_link_id, captured_at)",
+        "CREATE INDEX IF NOT EXISTS idx_audits_state_time ON published_video_audits(summary_state, captured_at)",
+        "CREATE INDEX IF NOT EXISTS idx_experiments_status_time ON experiments(status, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_experiment_assignments_role ON experiment_video_assignments(experiment_id, role)",
+        "CREATE INDEX IF NOT EXISTS idx_experiment_results_time ON experiment_result_snapshots(experiment_id, captured_at)",
+    ):
+        connection.execute(statement)
+
+
+def _create_watchlist_demand_tables(connection: sqlite3.Connection) -> None:
+    connection.execute("""CREATE TABLE IF NOT EXISTS watchlist_channels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+        thumbnail_url TEXT, subscriber_count INTEGER, video_count INTEGER, notes TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived')),
+        source TEXT NOT NULL DEFAULT 'public_observation', last_researched_at TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS watchlist_channel_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, watchlist_channel_id INTEGER NOT NULL,
+        captured_at TEXT NOT NULL, subscriber_count INTEGER, video_count INTEGER, view_count INTEGER,
+        metadata_json TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'public_observation',
+        FOREIGN KEY(watchlist_channel_id) REFERENCES watchlist_channels(id) ON DELETE CASCADE)""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS watchlist_videos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, video_id TEXT NOT NULL UNIQUE, watchlist_channel_id INTEGER,
+        channel_id TEXT, channel_title TEXT, title TEXT NOT NULL, published_at TEXT, duration_seconds REAL,
+        language TEXT, format TEXT, notes TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived')),
+        source TEXT NOT NULL DEFAULT 'public_observation', last_researched_at TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        FOREIGN KEY(watchlist_channel_id) REFERENCES watchlist_channels(id) ON DELETE SET NULL)""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS watchlist_video_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, watchlist_video_id INTEGER NOT NULL, captured_at TEXT NOT NULL,
+        view_count INTEGER, like_count INTEGER, comment_count INTEGER, duration_seconds REAL,
+        metadata_json TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'public_observation',
+        FOREIGN KEY(watchlist_video_id) REFERENCES watchlist_videos(id) ON DELETE CASCADE)""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS watchlist_outlier_analyses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, watchlist_video_id INTEGER NOT NULL, analyzed_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('insufficient_evidence','possible_outlier','observed_normal')),
+        observed_views INTEGER, baseline_median_views REAL, relative_multiplier REAL, sample_size INTEGER NOT NULL,
+        observation_window TEXT NOT NULL, explanation TEXT NOT NULL, signals_json TEXT NOT NULL,
+        provenance TEXT NOT NULL DEFAULT 'heuristic_public_observation',
+        FOREIGN KEY(watchlist_video_id) REFERENCES watchlist_videos(id) ON DELETE CASCADE)""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS demand_research_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, idea_id INTEGER, topic TEXT NOT NULL, language TEXT,
+        format TEXT, region TEXT, audience_context TEXT, idea_fingerprint TEXT,
+        classification TEXT NOT NULL CHECK(classification IN ('insufficient_evidence','emerging_signal','active_topic','strong_observed_interest')),
+        evidence_json TEXT NOT NULL, captured_at TEXT NOT NULL,
+        FOREIGN KEY(idea_id) REFERENCES content_ideas(id) ON DELETE SET NULL)""")
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_watch_channels_state ON watchlist_channels(state, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_watch_channel_snaps ON watchlist_channel_snapshots(watchlist_channel_id, captured_at)",
+        "CREATE INDEX IF NOT EXISTS idx_watch_videos_state ON watchlist_videos(state, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_watch_videos_channel ON watchlist_videos(channel_id, published_at)",
+        "CREATE INDEX IF NOT EXISTS idx_watch_video_snaps ON watchlist_video_snapshots(watchlist_video_id, captured_at)",
+        "CREATE INDEX IF NOT EXISTS idx_outlier_video_time ON watchlist_outlier_analyses(watchlist_video_id, analyzed_at)",
+        "CREATE INDEX IF NOT EXISTS idx_demand_topic_time ON demand_research_snapshots(topic, captured_at)",
+        "CREATE INDEX IF NOT EXISTS idx_demand_idea_time ON demand_research_snapshots(idea_id, captured_at)",
+    ):
+        connection.execute(statement)
+
+
+def _create_content_idea_tables(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS content_ideas (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               topic TEXT NOT NULL,
+               notes TEXT,
+               format TEXT,
+               language TEXT,
+               region TEXT,
+               visual_or_background TEXT,
+               on_screen_text TEXT,
+               target_duration_seconds REAL,
+               emotion_or_intent TEXT,
+               search_angle TEXT,
+               browse_angle TEXT,
+               audience_angle TEXT,
+               evidence_json TEXT NOT NULL DEFAULT '{}',
+               status TEXT NOT NULL DEFAULT 'idea'
+                   CHECK (status IN ('idea', 'scripted', 'package_generated', 'published', 'archived')),
+               analysis_run_id INTEGER,
+               published_video_link_id INTEGER,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id) ON DELETE SET NULL,
+               FOREIGN KEY(published_video_link_id) REFERENCES published_video_links(id) ON DELETE SET NULL
+           )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS content_idea_research_snapshots (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               content_idea_id INTEGER NOT NULL,
+               captured_at TEXT NOT NULL,
+               evidence_json TEXT NOT NULL,
+               FOREIGN KEY(content_idea_id) REFERENCES content_ideas(id) ON DELETE CASCADE
+           )"""
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_content_ideas_status ON content_ideas(status)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_content_ideas_created_at ON content_ideas(created_at)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_content_ideas_cohort ON content_ideas(format, language, region)")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_content_idea_research_time ON content_idea_research_snapshots(content_idea_id, captured_at)"
+    )
+
+
+def _create_analysis_package_selections(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS analysis_package_selections (
+               analysis_run_id INTEGER PRIMARY KEY,
+               generated_package_id TEXT NOT NULL,
+               package_json TEXT NOT NULL,
+               quality_gate_json TEXT,
+               selection_source TEXT NOT NULL DEFAULT 'creator'
+                   CHECK (selection_source = 'creator'),
+               selected_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id) ON DELETE CASCADE
+           )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_package_selection_time ON analysis_package_selections(selected_at)"
+    )
 
 
 def _create_published_video_links(connection: sqlite3.Connection) -> None:

@@ -8,18 +8,20 @@ SEO YT is an advisory tool. It does not guarantee views, reach, CTR, virality, s
 
 ## Current status
 
-Current application version: `0.9.0`
+Current application version: `0.13.0`
 
 Implemented and available now:
 
 - Script/content analysis with a structured creator brief.
+- Phase 4 truthful brief provenance (`creator_supplied`, `inferred`, `unknown`, or `unavailable`) with exact-quote, voice-over, visual, factual-claim, and constraint fields.
 - Google Gemini generation with a clearly labeled local fallback when Gemini is unavailable.
 - One selected output language per run to reduce Gemini quota use.
 - English, Tamil, and Tanglish-oriented generation workflows.
-- Five title variants, description, tags, hashtags, upload-time evidence, and pacing guidance.
+- Up to five locally validated title variants without duplicate padding, plus description, tags, hashtags, upload-time evidence, and pacing guidance.
 - Search, Browse, and Existing Audience packaging angles.
 - YouTube API research, competitor-result analysis, keyword/entity extraction, possible outlier signals, and transparent Opportunity Score components.
 - Permanent SQLite package History.
+- Explicit creator package selection persisted in SQLite with package ID, selection time, quality decision, metadata, and later video-link association.
 - Read-only YouTube OAuth connection and channel analytics.
 - Fail-closed package-to-owned-video linking with stored ownership provenance.
 - Comparison of generated metadata with the actual uploaded title, description, tags, and hashtags.
@@ -36,17 +38,26 @@ Implemented and available now:
 - Collector status clearly distinguishes disabled, dry-run, and unavailable/error states; collector remains disabled by default.
 - Phase 3C local static frontend extraction: FastAPI serves same-origin HTML/CSS/native ES modules, with shared API/error/state/navigation modules and a `/dashboard_legacy` rollback route.
 - Complete Phase 3D Creator decision workflow: Idea, Brief, Research, Angle, Packaging, Compare, Decision, and Checklist.
-- Deterministic local package comparison and selection, evidence-aware decision summaries, manual pre-publish acknowledgments, safe copy, and full JSON export. Selection/checklist state remains local and never publishes or changes YouTube.
+- Deterministic local package comparison, evidence-aware decision summaries, manual pre-publish acknowledgments, safe copy, and full JSON export. Explicit package selection is saved to History; checklist state remains local, and neither action publishes or changes YouTube.
+- Phase 4 generation quality gate checks quote fidelity, unsupported claims, title repetition/diversity, template leakage, description/tag contamination, hashtags, required Shorts tags, contradictions, and Unicode-aware Tamil/Tanglish behavior.
+- Phase 5 deterministic hook, first-frame, pacing, quote-presentation, package-alignment, and retention-risk guidance is integrated into the existing Creator workflow. It distinguishes creator facts, local inference, heuristics, unavailable data, and mature post-publish evidence.
+- Retention learning uses only verified, comparable, completed-window videos with real average-view-percentage data. Fewer than five eligible videos remains `insufficient_evidence`; observed associations are never presented as causation.
+- Stage G1 Ideas Workspace saves original topics and creator fields in SQLite, supports status filtering and pagination, preserves immutable dated research snapshots, generates through the existing Creator engine, and automatically links the idea lifecycle to its History run and verified published-video record.
+- Idea opportunity explanations show only captured public-result counts, query angles, publication dates, possible-outlier observations, and eligible personal evidence. Missing research remains unavailable; monthly search volume, trend percentages, and outcome confidence are never guessed.
+- Phase 7 private Watchlist saves verified public channels and videos, appends immutable research snapshots, and evaluates a video only against at least five comparable uploads from the same channel. Sparse evidence returns `insufficient_evidence`; observed multiples are never described as causation or guaranteed virality.
+- Phase 7 Demand Explorer combines dated approved-API research, publication freshness, independent-channel coverage, matching watchlist evidence, and evidence-gated personal channel observations. It reports an honest classification and the individual signals—not fabricated monthly search volume, CPC, ranking, or growth probability.
+- Demand research can start from a standalone topic or a saved Idea. It can then feed the existing Creator generator and History workflow without creating a second generation or publishing system.
+- Phase 8 Published Audits append immutable snapshots that preserve the generated package, explicit creator selection or unknown attribution, actual owned-video metadata, saved pre-publish quality/retention/research traces, available post-publish windows, deterministic findings, and evidence-gated learning candidates.
+- Phase 8 Experiment Center records explicit hypotheses, controlled or observational mode, one named variable, control/variant definitions, verified linked-video assignments, comparable observation windows, and immutable result snapshots. Small samples remain `insufficient_evidence`; visible directions are associations, never causal winners.
+- Gemini generation allows at most one quality-repair request. Empty, rejected, or quota-exhausted provider responses stop immediately and use the clearly labelled local fallback.
 - Creator rendering and behavior are owned by `pages/creator.js`; the temporary Creator compatibility renderer and window bridge were removed from `app.js`.
-- 68 automated backend tests and 27 deterministic Chromium browser tests (95 tests in the full local discovery run; browser tooling stays outside production Docker).
+- 179 automated backend tests and 38 deterministic Chromium browser tests (217 tests in the full local discovery run; browser tooling stays outside production Docker).
 
 Planned but not yet complete:
 
-- Ideas workspace and lifecycle tracking.
-- Saved competitor/outlier watchlists and daily opportunity research.
-- Honest topic-demand explorer.
-- Complete visual Experiment Center and thumbnail/first-frame laboratory.
-- Hook and retention assistant.
+- Daily opportunity summaries derived from the completed Watchlist and Demand evidence.
+- Thumbnail/first-frame draft laboratory and creator-visible Test & Compare import.
+- Advanced retention-curve/drop-point analysis if an official source later exposes that data.
 - Personal AI coach and weekly private report.
 - Remaining page-level frontend modularization, installable PWA, and an approved Android architecture.
 - Encrypted backup/restore and quota dashboard.
@@ -91,6 +102,11 @@ The creator always decides what to publish or change. SEO YT does not automatica
 |---|---|
 | Dashboard | Channel summary, recent activity, diagnostics, and shortcuts. |
 | Creator Studio | Move from idea and brief through research, angle, packaging, local comparison/selection, final decision, and a manual pre-publish checklist. |
+| Ideas | Save original ideas, refresh dated research, inspect evidence, open Demand research, and generate through the existing Creator engine. |
+| Demand | Research a topic from dated public and eligible personal signals, inspect limitations/provenance, and generate through the existing engine. |
+| Watchlist | Save verified public channels/videos, refresh immutable snapshots, and inspect transparent same-channel possible-outlier analysis. |
+| Published Audits | Preserve generated, selected, and actually published states; inspect historical intelligence, real evidence windows, findings, unknowns, and cautious learning candidates. |
+| Experiments | Create planned or observational comparisons, explicitly assign verified linked videos, and compare mature metrics without fake significance or causal claims. |
 | Analytics | View connected-channel metrics, owned videos, linked-video snapshots, and cohort-learning status. |
 | History | Open complete saved packages, copy their contents, link an owned published video, and review actual metadata and performance. |
 | Settings | Inspect YouTube OAuth, AI configuration, collector state, and local application diagnostics. |
@@ -99,14 +115,14 @@ The creator always decides what to publish or change. SEO YT does not automatica
 
 A successful Creator Studio run can include:
 
-- Primary recommended title and five materially different variants.
+- A primary title and only the materially distinct alternatives that pass local validation; fewer than three are returned honestly when necessary.
 - Title quality heuristic. This is not a CTR prediction.
 - Natural video-specific description.
 - Focused YouTube tags and one to three hashtags.
 - Required creator-selected Shorts tags when the content is a Short.
 - Search, Browse, and Existing Audience title/thumbnail directions.
 - Local comparison cards with deterministic package IDs, source labels, title-quality heuristics, thumbnail direction, and why-suggested context.
-- A local selection summary that separates public observations, local heuristics, generated/AI suggestions, and unavailable post-publish evidence.
+- A persisted selection summary that separates public observations, local heuristics, generated/AI suggestions, and unavailable post-publish evidence.
 - A manual checklist plus copy/export actions; the exported JSON includes the complete analysis and a clearly labeled local workflow summary.
 - Creator brief and content audit.
 - Research queries, relevant public results, keyword/entity signals, and possible gaps.
@@ -115,6 +131,8 @@ A successful Creator Studio run can include:
 - Format-specific pacing guidance.
 
 Gemini output is validated and stored with its generation source. If Gemini is unavailable, the application displays `FALLBACK` and does not claim that the fallback came from Gemini.
+
+Watchlist and Demand results are observations captured at a point in time. They do not prove why a video performed, guarantee future demand, expose private competitor analytics, or represent monthly keyword volume or search rank. YouTube API availability and quota determine whether fresh public evidence can be captured.
 
 ## YouTube linking and personal learning
 
@@ -371,7 +389,9 @@ Example analysis request:
 - The official APIs do not provide vidIQ's proprietary monthly keyword-search estimates.
 - Public competitor metadata can show correlations and possible outliers but cannot reveal private competitor retention or prove causation.
 - The experiment persistence API exists, but the complete Experiment Center UI is not finished.
-- Creator package selection and checklist acknowledgments are intentionally browser-session state. The generated analysis is saved to History, but the local choice is not claimed as a persisted publishing decision.
+- Creator package selection is persisted in History; checklist acknowledgments remain browser-session state and never claim that YouTube was changed.
+- Phase 5 opening and pacing scores are deterministic pre-publish heuristics, not measured retention or performance predictions. Detailed retention curves and drop timestamps are unavailable through the current data source.
+- Idea research depends on the configured YouTube Data API quota. An empty or unavailable research response is saved honestly and does not become a demand estimate. Editing creator idea fields marks the current evidence stale while retaining older dated snapshots.
 - The application is not yet an Android app and remains bound to the local laptop.
 
 ## Testing
@@ -388,7 +408,7 @@ Or inside the running Docker service:
 docker compose exec -T win-engine python -m unittest discover -s tests
 ```
 
-The backend suite contains 65 tests covering versioned migrations, backup verification, foreign keys, ownership, retryable snapshots, transactional deletion, history persistence, comparable metadata, collector dry-run/disablement, linked-video reports, cohort thresholds, learning behavior, scoring, Gemini failure handling, and related engine behavior. The optional browser suite contains 27 deterministic Playwright/Chromium tests covering navigation, loading/errors, advanced-brief retention, Research/provenance, stale responses, package comparison/selection, decision/checklist behavior, safe copy/export, encoding integrity, OAuth/collector states, History detail, linked refresh, request counts, console/page errors, and external-request isolation. The full local discovery run passes 92 tests. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
+The backend suite contains 134 tests covering versioned backup-first migrations through schema v4, foreign keys, ownership, retryable snapshots, transactional deletion, History and package-selection persistence, comparable metadata, collector dry-run/disablement, linked-video attribution, cohort thresholds, generation quality/diversity, 30 deterministic brief fixtures, Tamil/Tanglish Unicode behavior, one-repair/quota behavior, deterministic hook/first-frame/pacing/quote analysis, evidence-gated retention learning, Idea validation, 100+ item pagination, immutable/stale research evidence, generation linkage, and verified publication linkage. The optional browser suite contains 31 deterministic Playwright/Chromium tests covering navigation, loading/errors, advanced-brief retention, Research/provenance, persisted package selection, Phase 5 traceability, the Stage G1 create/research/generate/filter workflow, decision/checklist behavior, safe copy/export, encoding integrity, OAuth/collector states, History detail, linked refresh, request counts, console/page errors, and external-request isolation. The full local discovery run passes 165 tests. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
 
 ## Repository structure
 

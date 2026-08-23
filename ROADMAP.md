@@ -25,24 +25,29 @@ It must say Collecting evidence when there is not enough data to support the con
 
 ## Current implementation snapshot
 
-The core implementation for Stages A through F is present and verified locally. Personal recommendations remain in the Collecting evidence state until real linked videos reach the documented sample thresholds.
+The core implementation for Stages A through F, Stage G1, Stage H, and Stage I is present and verified locally. Personal recommendations remain in the Collecting evidence state until real linked videos reach the documented sample thresholds.
 
 - **Stage A (Package-to-Video Linking)**: `published_video_links` table, fail-closed owned-video verification with stored channel provenance, `POST /api/history/runs/{id}/link-video`, `GET /api/published-videos`, `PATCH /api/published-videos/{id}`, and 1-click link actions in the dashboard.
 - **Stage B (Age-Based Snapshots)**: `video_performance_snapshots` keeps current display data separate from bounded, observable, retryable 24h/7d/28d evidence windows. Only valid Analytics evidence completes a scheduled window.
 - **Stage C (Personal Learning Engine)**: `evidence_policy.py` is the single 5/10/20 threshold source for cohort analytics, History diagnosis, channel learning, and Gemini prompt eligibility. One verified video contributes at most one completed observation to a selected format/language/window cohort.
 - **Stage D (Package Experiments)**: `package_experiments` table and experiment logging endpoints (`POST /api/experiments`) with a real saved performance baseline; all live YouTube changes remain manual.
 - **Stage E (Search/Browse/Audience Packages)**: Gemini multilingual generation producing dedicated Search, Browse, and Returning Audience title/thumbnail packages.
-- **Stage F (Reliability & Test Suite)**: Schema version 2, verified online backup-before-migration, runtime foreign-key enforcement, safe cascades, transactional deletion rollback, SQLite WAL persistence, 65 backend tests, and 27 deterministic Chromium workflow tests. Browser tooling remains development-only.
+- **Stage F (Reliability & Test Suite)**: Schema version 6, verified online backup-before-migration, runtime foreign-key enforcement, safe cascades, transactional deletion rollback, SQLite WAL persistence, 179 backend tests, and 38 deterministic Chromium workflow tests. Browser tooling remains development-only.
 - **Phase 3D (Creator Decision Workflow)**: Complete eight-stage flow from Idea through Checklist, truthful Research/provenance, deterministic local package comparison and selection, decision evidence/unknowns, safe copy/export, manual acknowledgments, and Creator renderer ownership in `pages/creator.js`.
+- **Stage H / Phase 4 (Generation Quality & Anti-Repetition Engine)**: Completed 23 August 2026. Structured brief provenance, deterministic Unicode-aware quality/diversity checks, one-repair maximum, evidence-gated personalization trace, package reasons/trade-offs, additive selected-package persistence, and explicit History attribution are implemented. See `docs/phases/PHASE_04.md`.
+- **Stage I / Phase 5 (Hook, Pacing & Retention Assistant)**: Completed 23 August 2026. Deterministic pre-publish hook, first-frame, pacing, quote-presentation, risk-map, practical-alternative, and package-alignment guidance is integrated into the existing Creator flow. Comparable mature post-publish average-view-percentage evidence is correlation-labelled and unavailable retention details remain unavailable. See `docs/phases/PHASE_05.md`.
+- **Stage G1 / Phase 6 (Idea Backlog & Topic Opportunity Workspace)**: Completed 23 August 2026. The Ideas page, schema-v4 lifecycle persistence, immutable dated research snapshots, approved research reuse, existing-generator linkage, verified publication linkage, honest opportunity explanation, pagination, filtering, and stale-evidence protection are implemented. See `docs/phases/PHASE_06.md`.
+- **Stages G2 and G5 / Phase 7 (Watchlist & Honest Demand Explorer)**: Completed 23 August 2026. Verified channel/video watchlists, immutable public snapshots, same-channel comparable-format possible-outlier analysis, dated demand classifications, shared personal-evidence gating, Idea integration, and generation through the existing Creator/History engine are implemented. See `docs/phases/PHASE_07.md`.
+- **Stages G3 and G4 / Phase 8 (Published Audits & Experiment Center)**: Completed 23 August 2026. Immutable generated/selected/published audit snapshots, historical pre-publish traceability, actual observation windows, deterministic findings, controlled-versus-observational experiments, explicit video assignment, comparable-window metrics, and evidence-gated result snapshots are implemented. See `docs/phases/PHASE_08.md`.
 
-Stages G through L are the next product program. They are not complete merely because this roadmap describes them. An agent may mark an item complete only after its database migration, backend, dashboard flow, tests, Docker rebuild, and live verification all pass.
+Stages J through L remain the next product program. Stages G1 through G5, H, and I are complete for their documented scopes. An agent may mark another item complete only after its required database work, backend, dashboard flow, tests, Docker rebuild, and live verification all pass.
 
 ### Current gaps that must be addressed first
 
 - The quota-aware due-snapshot collector is implemented but deliberately opt-in and disabled by default. Until the creator enables it, linked-video refresh remains manual/page-triggered and evidence accumulates more slowly.
 - Existing links migrated from schema version 0 are deliberately unverified and legacy/current snapshots are deliberately excluded from mature evidence until official verification and new scheduled collection succeed.
-- The experiment database endpoints exist, but the complete experiment-center dashboard workflow does not.
-- Ideas, saved competitor watchlists, possible-outlier monitoring, personal AI coaching, weekly reports, and the PWA/Android boundary are planned but not implemented.
+- Structured experiments and their dashboard workflow are implemented. Local thumbnail-draft review and creator-visible YouTube Test & Compare import remain future G4 extensions.
+- Automated daily opportunity summaries, personal AI coaching, weekly reports, and the PWA/Android boundary are planned but not implemented. Manual Watchlist and Demand research are implemented.
 - Creator rendering is modularized. Dashboard, History, Analytics, and Settings renderers still share a compatibility bundle and should be extracted incrementally before several more complex pages are added.
 
 ## Rules for any AI agent working on this project
@@ -470,6 +475,17 @@ Show `Not enough personal evidence` when appropriate. Never display a guessed se
 - Missing research data is represented honestly, not fabricated.
 - The complete lifecycle is traceable: idea → script → generated package → published link → mature performance → learning.
 
+#### Stage G1 implementation status (completed 23 August 2026 / Phase 6)
+
+- Schema v4 additively creates `content_ideas` and immutable `content_idea_research_snapshots` with the documented status, creation-date, and format/language/region indexes. The verified backup-first migration preserves all existing History and link records.
+- The documented create, paginated list, creator-field update, research, and generation endpoints are implemented, plus a read-only idea-detail endpoint required by the workspace.
+- Research refreshes append a dated snapshot. Creator content edits invalidate only the current evidence pointer and retain older snapshots for traceability; status-only changes do not make research stale.
+- Generation reuses the existing Creator brief, approved research fields, quality gate, History, retention assistant, and package generator. It does not create a second generator or History system.
+- Linking the generated History run to a verified owned YouTube video automatically completes the idea's published association. Deleting a History run preserves the original idea and returns it to `scripted`.
+- The Ideas page provides list, status filter, pagination, detail, Search/Browse/Existing Audience angles, public result publication dates, personal evidence state, Research, Generate package, Mark scripted, Mark published, Archive/Restore, and History actions.
+- Missing public research and fewer than five mature comparable videos remain unavailable or `insufficient_evidence`; no monthly volume, trend percentage, or outcome confidence is fabricated.
+- Verification covers 134 backend and 31 browser tests (165 total). Detailed architecture and limitations are in `docs/phases/PHASE_06.md`.
+
 ### G2 — Competitor and outlier watchlist
 
 Create `competitor_channels` with unique `channel_id`, title, notes, format/language focus, created_at, and updated_at. Limit the private workspace to 20 saved channels.
@@ -485,6 +501,14 @@ UI must offer `Create different angle`, which opens a blank original brief. It m
 
 Add a private daily-opportunities view generated only from saved watchlists, approved API research, dated evidence, and the creator's own gaps. Each suggestion must explain why it appeared and expire or refresh stale trend evidence. It must never present a competitor's wording as a ready-to-publish title.
 
+#### Stage G2 implementation status (completed 23 August 2026 / Phase 7)
+
+- Schema v5 additively creates normalized channel/video records, immutable channel/video snapshots, and immutable outlier analyses. The existing backup-first migration path preserves History, Ideas, links, analytics, and selections.
+- The private UI and API validate public YouTube channel/video identifiers, prevent duplicates, support active/archive/restore lifecycle, refresh dated snapshots, and retain provenance. Archive is used instead of destructive deletion.
+- Channel refresh retrieves recent uploads in a bulk video request and records public metadata only. The system never requests private competitor analytics or YouTube write scopes.
+- Possible-outlier analysis compares a target only with the latest snapshots for at least five recent same-channel, comparable-format peers. It exposes target views, median, multiplier, sample, capture time, and limitations. Sparse evidence has no multiplier or score.
+- The completed scope is manual evidence research. Automated daily opportunity summaries remain a later feature.
+
 ### G3 — Published-video audit checklist
 
 Add `GET /api/published-videos/{id}/audit`. Return individual checks with `pass`, `review`, `missing`, or `not_available`, explanation, and evidence source. Do not create one misleading SEO percentage.
@@ -497,6 +521,15 @@ Evaluate only known fields:
 - The opening frame, on-screen text, and claimed payoff agree with the title and are readable within the supplied duration.
 - Package is linked, actual metadata is recorded, and an age snapshot is due or complete.
 - Playlist, end-screen, card, and thumbnail checks are `not_available` unless connected API data supports them.
+
+#### Stage G3 implementation status (completed 23 August 2026 / Phase 8)
+
+- Schema v6 additively creates immutable `published_video_audits`; every refresh appends a new version instead of rewriting historical truth.
+- Audits preserve primary generated metadata, explicit creator selection or unknown attribution, actual owned YouTube metadata, saved quality/retention/Idea/Demand traces available before publication, current observations, completed windows, and shared cohort evidence.
+- Title, description, tags, and hashtags are deterministically labelled exact, changed, missing, unknown, or unavailable across generated-to-selected, selected-to-published, and generated-to-published comparisons.
+- Findings include a code, severity, category, explanation, evidence, evidence state, and recommended interpretation. Summary states describe data availability and maturity, never success/failure or causality.
+- Learning candidates reuse the shared evidence policy and remain insufficient, hypothesis-only, or mature comparable observations. No audit reconstructs unavailable historical facts from current public research.
+- The Published Audits page and API expose candidates, filters, immutable versions, detail, findings, evidence, and refresh actions. Detailed contracts are in `docs/phases/PHASE_08.md`.
 
 ### G4 — Experiment center and thumbnail/first-frame comparison
 
@@ -516,6 +549,15 @@ Show two or three saved title/thumbnail packages side by side. Let the creator u
 
 Every experiment retains original metadata, changed metadata, reason, baseline, follow-up, and creator approval timestamp.
 
+#### Stage G4 implementation status (completed core scope 23 August 2026 / Phase 8)
+
+- Schema v6 adds structured experiment definitions, explicit verified-video assignments, and immutable result snapshots beside the preserved legacy package-change log.
+- Every comparison records controlled or observational mode, one named variable, hypothesis, control and variant definitions, primary/secondary metrics, minimum and target samples, one completed 24h/7d/28d window, lifecycle, and notes.
+- A video is counted only after explicit creator assignment. Duplicate assignment, unverified links, invalid roles, and assignments to closed experiments are rejected.
+- Comparison output shows assigned/eligible/mature group counts, missing metrics, mean, median, absolute and relative differences, evidence state, interpretation, limitations, and next collection step. At least five eligible videos per group are required for a direction.
+- Results are limited to insufficient, directional control/variant, inconclusive, mixed, or observational pattern. No fake statistical significance or causal winner is calculated, and learning candidates are not automatically applied to generation.
+- The Experiment Center page supports creation, filtering, detail, lifecycle, assignment, removal, and comparison. Thumbnail/first-frame draft analysis and creator-visible Test & Compare import remain future extensions, not fabricated API capabilities.
+
 ### G5 — Honest topic-demand explorer and search-position decision
 
 Build a topic-demand explorer from dated, explainable signals available to this private tool:
@@ -532,6 +574,15 @@ Display the individual signals and their capture times. A combined opportunity l
 Search position must not be built by scraping YouTube result pages. Before implementation, document and approve one legal, low-cost data source, including quota, retention, and terms. If no approved source fits the personal budget, do not implement ranking tracking.
 
 Until then, use connected-channel YouTube Analytics search-term data as channel evidence, never as a claimed search ranking.
+
+#### Stage G5 implementation status (completed 23 August 2026 / Phase 7)
+
+- Schema v5 additively creates immutable `demand_research_snapshots`, with optional Idea linkage and a content fingerprint that exposes when saved research is stale after creator-content changes.
+- Standalone topics and saved Ideas reuse the approved YouTube research service, Watchlist observations, and the shared mature personal-evidence policy. No second research, generation, or History system was introduced.
+- Results expose dated public samples, recent-publication count, independent-channel count, captured-view median, matching possible outliers, personal-evidence state, reasons, provenance, and limitations.
+- Deterministic labels are limited to `insufficient_evidence`, `emerging_signal`, `active_topic`, and `strong_observed_interest`. They are summaries of visible inputs, not demand scores, CTR predictions, search rank, monthly volume, CPC, or guarantees.
+- Demand-to-generation actions use the existing Creator generator and History persistence. YouTube publishing and metadata changes remain manual.
+- Search-position tracking remains unimplemented because no legal, approved, low-cost ranking source has been selected.
 
 ### Data boundaries and references
 
@@ -629,7 +680,13 @@ Opportunity Score remains research context, not a predicted chance of growth. Ti
 - Gemini quota exhaustion causes one clear fallback, not repeated paid or quota-consuming retries.
 - History records the brief, raw model label, quality-gate decisions, selected output, and actual published metadata.
 
+### Phase 4 implementation status (completed 23 August 2026)
+
+Stage H is formally Phase 4. Its implementation is complete for this repository pass: candidates are locally filtered rather than padded; failed Gemini packages receive at most one repair; quota/empty output falls back without repair; mature comparable evidence is the only personal-performance input; the Creator records an explicit server-validated package selection; and History reports selected-versus-primary-versus-uploaded attribution without inferring unknown choices. Schema v3 adds only `analysis_package_selections` and preserves existing rows through the backup-first migration framework. Verification passed 83 backend tests and 27 browser tests (110 total). Detailed rules and limitations are in `docs/phases/PHASE_04.md`.
+
 ## Stage I — Hook, pacing, and retention assistant
+
+**Implementation status: completed 23 August 2026 (Phase 5).** The implementation uses the existing schema-v3 analysis payload and selection record rather than duplicating data in a new table. Detailed behavior, provenance, tests, and limitations are documented in `docs/phases/PHASE_05.md`.
 
 ### Goal
 
@@ -663,6 +720,16 @@ For narrated or long-form videos, provide a separate structure: opening promise,
 - Missing detailed retention data displays `Not available`.
 - Long-form and Shorts receive separate pacing logic.
 - Personal hook recommendations obey the shared evidence thresholds.
+
+### Phase 5 completion notes
+
+- Shorts and long-form content use separate deterministic pacing branches.
+- Exact quotes are preserved and any shorter presentation is labelled as a generated structural alternative, never a silent replacement or attribution.
+- Duration-based timing bands are emitted only when duration is creator-supplied; otherwise the risk map uses relative opening/setup/middle/payoff stages.
+- The saved analysis payload retains the complete Phase 5 response, while explicit package selection stores a compact retention trace for later attribution.
+- Linked History reports dynamically expose the comparable retention-learning state. A minimum of five eligible completed observations with real average-view-percentage values is required before displaying observed correlations.
+- Official retention curves and exact drop timestamps are not available in the current integration and are never fabricated.
+- Verification covers 114 backend and 29 browser tests (143 total). Schema remains version 3.
 
 ## Stage J — Personal AI coach and weekly channel report
 
@@ -879,15 +946,10 @@ Keep normal personal operation free or below the creator's one-dollar monthly ta
 
 Agents must implement the remaining work in this order unless the creator explicitly reprioritizes it:
 
-1. **H** — Strengthen brief normalization, candidate diversity, anti-repetition, and the deterministic quality gate.
-2. **G1** — Build the Ideas lifecycle.
-3. **G2 and G5** — Build watchlists, possible outliers, and the honest topic-demand explorer.
-4. **I** — Add hook/pacing guidance and retention feature capture.
-5. **G3 and G4** — Build audits, thumbnail/first-frame comparison, and the complete experiment UI.
-6. **J** — Add the evidence service, personal coach, and weekly report.
-7. **K1 and K2** — Extract the remaining page renderers and optimize accessibility/performance; Creator ownership is complete.
-8. **L** — Complete quota visibility, encrypted backup/restore, and operational diagnostics.
-9. **K3 and K4** — Add the PWA only after the Android connection architecture is approved.
+1. **J** — Add the evidence service, personal coach, and weekly report.
+2. **K1 and K2** — Extract the remaining page renderers and optimize accessibility/performance; Creator ownership is complete.
+3. **L** — Complete quota visibility, encrypted backup/restore, and operational diagnostics.
+4. **K3 and K4** — Add the PWA only after the Android connection architecture is approved.
 
 ### Definition of personal feature parity
 
