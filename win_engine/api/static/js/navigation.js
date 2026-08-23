@@ -7,9 +7,9 @@ export const pages = {
   watchlist: { title: "Public Research Watchlist", sub: "Observe saved public channels and videos with immutable snapshots and local outlier analysis.", navId: "nav-watchlist", viewId: "view-watchlist" },
   audits: { title: "Published Video Audits", sub: "Separate generated intent, creator selection, published reality, and evidence without causal claims.", navId: "nav-audits", viewId: "view-audits" },
   experiments: { title: "Experiment / Comparison Center", sub: "Record explicit hypotheses and compare controlled or observational groups with honest evidence states.", navId: "nav-experiments", viewId: "view-experiments" },
-  analytics: { title: "Channel Analytics &amp; History", sub: "YouTube channel metrics, current uploads, and evidence-based learning history.", navId: "nav-analytics", viewId: "view-analytics" },
+  analytics: { title: "Channel Analytics & History", sub: "YouTube channel metrics, current uploads, and evidence-based learning history.", navId: "nav-analytics", viewId: "view-analytics" },
   history: { title: "Saved SEO Packages", sub: "Open any past package to reuse its complete upload-ready content.", navId: "nav-history", viewId: "view-history" },
-  settings: { title: "Settings &amp; Integrations", sub: "Inspect YouTube OAuth, AI configuration, and live API diagnostics.", navId: "nav-settings", viewId: "view-settings" },
+  settings: { title: "Settings & Integrations", sub: "Inspect YouTube OAuth, AI configuration, and live API diagnostics.", navId: "nav-settings", viewId: "view-settings" },
 };
 
 export function normalizePageKey(hash = "") {
