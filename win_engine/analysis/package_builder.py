@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from win_engine.ai_enhancement import find_content_similarity
+from win_engine.analysis.generation_quality import candidate_mechanism, unicode_words
 
 
 _GENERIC_WORDS = {
@@ -19,6 +20,7 @@ def build_title_thumbnail_packages(
     title_variants: list[dict[str, Any]],
     creator_brief: dict[str, Any] | None = None,
     competitor_titles: list[str] | None = None,
+    validated: bool = False,
 ) -> list[dict[str, Any]]:
     """Return only clear, non-duplicated packages a creator can compare."""
 
@@ -31,13 +33,14 @@ def build_title_thumbnail_packages(
         if not title or key in seen:
             continue
         seen.add(key)
-        issues = _quality_issues(title, brief, competitor_titles or [])
+        issues = [] if validated else _quality_issues(title, brief, competitor_titles or [])
         if issues:
             continue
         style = _title_style(title)
         package_intent = str(variant.get("package_intent") or "Alternative")
         packages.append(
             {
+                "package_id": f"package-{chr(97 + len(packages))}",
                 "package": chr(65 + len(packages)),
                 "title": title,
                 "thumbnail_text": _thumbnail_text(title, brief),
@@ -49,6 +52,13 @@ def build_title_thumbnail_packages(
                 "best_for": _best_for(style, brief, package_intent),
                 "misleading_risk": "low",
                 "quality_status": "approved",
+                "mechanism": str(variant.get("mechanism") or candidate_mechanism(title)),
+                "reason": str(variant.get("reason") or "A distinct, source-supported packaging option."),
+                "discovery_surface": str(variant.get("discovery_surface") or package_intent),
+                "evidence_used": variant.get("evidence_used") or {"status": "insufficient_evidence"},
+                "tradeoffs": variant.get("tradeoffs") or ["Generated suggestion; publishing outcome is not guaranteed."],
+                "quality_gate": variant.get("quality_gate") or {"status": "pass", "source": "local"},
+                "provenance": "generated_suggestion",
             }
         )
     return packages[:8]
@@ -73,20 +83,17 @@ def _quality_issues(title: str, brief: dict[str, Any], competitor_titles: list[s
 
 
 def _meaningful_words(value: str) -> list[str]:
-    return [
-        word.lower() for word in re.findall(r"[A-Za-z0-9]+", value)
-        if len(word) >= 3 and word.lower() not in _CONTEXT_STOPWORDS
-    ]
+    return [word for word in unicode_words(value) if len(word) >= 3 and word not in _CONTEXT_STOPWORDS]
 
 
 def _thumbnail_text(title: str, brief: dict[str, Any]) -> str:
     direction = str(brief.get("thumbnail_idea") or "").strip()
     if direction:
-        words = re.findall(r"[A-Za-z0-9]+", direction.upper())[:4]
+        words = unicode_words(direction.upper())[:4]
         if words:
             return " ".join(words)
     ignored = {"the", "a", "an", "how", "to", "my", "your", "and", "with", "for", "what", "is", "really"}
-    words = [word.upper() for word in re.findall(r"[A-Za-z0-9]+", title) if word.lower() not in ignored]
+    words = [word.upper() for word in unicode_words(title) if word.lower() not in ignored]
     return " ".join(words[:4]) or "WATCH THIS"
 
 

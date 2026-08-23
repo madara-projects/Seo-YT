@@ -94,6 +94,68 @@ class YouTubeClient:
 
         return results
 
+    def get_channel(self, channel_id: str, *, raise_on_error: bool = False) -> dict[str, Any] | None:
+        """Resolve one public channel using the read-only Data API key."""
+        if not self._api_keys:
+            self._last_warning = "YouTube API key is missing."
+            return None
+        payload = self._request_json(self._CHANNELS_URL, {
+            "part": "snippet,statistics,contentDetails", "id": channel_id,
+        }, raise_on_error=raise_on_error)
+        items = payload.get("items", []) if payload else []
+        if not items:
+            return None
+        item = items[0]
+        snippet, stats = item.get("snippet", {}), item.get("statistics", {})
+        return {
+            "channel_id": item.get("id"), "title": snippet.get("title"),
+            "description": snippet.get("description"), "thumbnail_url": ((snippet.get("thumbnails") or {}).get("high") or (snippet.get("thumbnails") or {}).get("default") or {}).get("url"),
+            "subscriber_count": stats.get("subscriberCount"), "video_count": stats.get("videoCount"),
+            "view_count": stats.get("viewCount"), "hidden_subscriber_count": stats.get("hiddenSubscriberCount"),
+        }
+
+    def get_video(self, video_id: str, *, raise_on_error: bool = False) -> dict[str, Any] | None:
+        """Resolve one public video and its currently visible public metrics."""
+        if not self._api_keys:
+            self._last_warning = "YouTube API key is missing."
+            return None
+        videos = self._get_videos([video_id], raise_on_error=raise_on_error)
+        return videos[0] if videos else None
+
+    def _get_videos(self, video_ids: list[str], *, raise_on_error: bool = False) -> list[dict[str, Any]]:
+        if not video_ids:
+            return []
+        payload = self._request_json(self._VIDEOS_URL, {
+            "part": "snippet,statistics,contentDetails", "id": ",".join(video_ids),
+        }, raise_on_error=raise_on_error)
+        items = payload.get("items", []) if payload else []
+        results = []
+        for item in items:
+            snippet, stats, details = item.get("snippet", {}), item.get("statistics", {}), item.get("contentDetails", {})
+            results.append({
+            "video_id": item.get("id"), "channel_id": snippet.get("channelId"),
+            "channel_title": snippet.get("channelTitle"), "title": snippet.get("title"),
+            "description": snippet.get("description"), "published_at": snippet.get("publishedAt"),
+            "default_language": snippet.get("defaultLanguage") or snippet.get("defaultAudioLanguage"),
+            "duration": details.get("duration"), "view_count": stats.get("viewCount"),
+            "like_count": stats.get("likeCount"), "comment_count": stats.get("commentCount"),
+            "thumbnails": snippet.get("thumbnails", {}),
+            })
+        return results
+
+    def list_channel_videos(self, channel_id: str, max_results: int = 20, *, raise_on_error: bool = False) -> list[dict[str, Any]]:
+        """Return recent public uploads for an observational channel baseline."""
+        if not self._api_keys:
+            self._last_warning = "YouTube API key is missing."
+            return []
+        payload = self._request_json(self._SEARCH_URL, {
+            "part": "snippet", "channelId": channel_id, "type": "video",
+            "order": "date", "maxResults": max(1, min(max_results, 50)),
+        }, raise_on_error=raise_on_error)
+        items = payload.get("items", []) if payload else []
+        ids = [str((item.get("id") or {}).get("videoId") or "") for item in items]
+        return self._get_videos([video_id for video_id in ids if video_id], raise_on_error=raise_on_error)
+
     def _fetch_video_stats(
         self,
         video_ids: List[str],

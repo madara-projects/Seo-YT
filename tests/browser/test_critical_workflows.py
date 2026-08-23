@@ -67,6 +67,11 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         for hash_name, nav_id, view_id in (
             ("#dashboard", "nav-dashboard", "view-dashboard"),
             ("#creator", "nav-creator", "view-creator"),
+            ("#ideas", "nav-ideas", "view-ideas"),
+            ("#demand", "nav-demand", "view-demand"),
+            ("#watchlist", "nav-watchlist", "view-watchlist"),
+            ("#audits", "nav-audits", "view-audits"),
+            ("#experiments", "nav-experiments", "view-experiments"),
             ("#analytics", "nav-analytics", "view-analytics"),
             ("#history", "nav-history", "view-history"),
             ("#settings", "nav-settings", "view-settings"),
@@ -91,11 +96,156 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.assert_clean_browser()
 
     def test_active_frontend_has_no_mojibake_markers(self):
-        for hash_name in ("#dashboard", "#creator", "#analytics", "#history", "#settings"):
+        for hash_name in ("#dashboard", "#creator", "#ideas", "#demand", "#watchlist", "#audits", "#experiments", "#analytics", "#history", "#settings"):
             self.open(hash_name)
             text = self.page.locator("body").inner_text()
             for marker in ("Ã", "Â", "â", "ðŸ", "ï¸"):
                 self.assertNotIn(marker, text, f"unexpected encoding artifact on {hash_name}: {marker}")
+        self.assert_clean_browser()
+
+    def test_watchlist_add_refresh_and_outlier_evidence(self):
+        self.open("#watchlist")
+        self.page.locator("#watchChannelId").fill("UC-fixture")
+        self.page.locator("#watchChannelForm button[type='submit']").click()
+        self.page.wait_for_selector("text=Fixture Public Channel")
+        self.page.locator("#watchVideoId").fill("https://youtu.be/AbCdEfGhI12")
+        self.page.locator("#watchVideoForm button[type='submit']").click()
+        self.page.wait_for_selector("text=Fixture camera outlier")
+        self.page.locator("#watchVideos [data-watch-id='1']").click()
+        self.page.wait_for_selector("#watchDetail >> text=Outlier analysis")
+        self.page.locator("#watchDetail [data-watch-action='research']").click()
+        self.page.wait_for_selector("#watchDetail >> text=9,300 views")
+        self.page.locator("#watchDetail [data-watch-action='outlier']").click()
+        self.page.wait_for_selector("#watchDetail >> text=observational outlier signal")
+        text = self.page.locator("#watchDetail").inner_text().lower()
+        self.assertIn("possible_outlier", text)
+        self.assertIn("not a viral prediction", text)
+        self.assertEqual(self.router.count("POST", "/api/watchlist/channels"), 1)
+        self.assertEqual(self.router.count("POST", "/api/watchlist/videos"), 1)
+        self.assert_clean_browser()
+
+    def test_published_audit_navigation_list_and_intent_actual_detail(self):
+        self.replace_router(include_link=True)
+        self.open("#audits")
+        self.page.wait_for_selector("text=Linked rainy highway upload")
+        self.page.locator("[data-audit-link='9']").click()
+        self.page.wait_for_selector("#auditDetail >> text=Audit not run")
+        self.page.locator("#auditDetail [data-audit-action='refresh']").click()
+        self.page.wait_for_selector("#auditDetail >> text=PUBLISHED VIDEO AUDIT")
+        text = self.page.locator("#auditDetail").inner_text()
+        self.assertIn("Generated rainy highway title", text)
+        self.assertIn("Selected rainy highway title", text)
+        self.assertIn("Published rainy highway title", text)
+        self.assertIn("NOT ESTABLISHED", text)
+        self.assertIn("INSUFFICIENT EVIDENCE", text)
+        self.assertEqual(self.router.count("POST", "/api/audits/9/refresh"), 1)
+        self.assert_clean_browser()
+
+    def test_published_audit_empty_state_is_truthful(self):
+        self.open("#audits")
+        self.page.wait_for_selector("text=No linked published videos")
+        self.assertIn("0 linked video", self.page.locator("#auditStatus").inner_text())
+        self.assertIn("immutable", self.page.locator("#auditStatus").inner_text().lower())
+        self.assert_clean_browser()
+
+    def test_experiment_creation_duplicate_click_guard_and_detail(self):
+        self.replace_router(include_link=True)
+        self.open("#experiments")
+        self.page.locator("#experimentName").fill("Curiosity title comparison")
+        self.page.locator("#experimentHypothesis").fill("Specific curiosity may be associated with stronger observed retention.")
+        self.page.locator("#experimentControl").fill("Descriptive title")
+        self.page.locator("#experimentVariant").fill("Specific curiosity title")
+        self.page.locator("#experimentCreateBtn").evaluate("b => { b.click(); b.click(); }")
+        self.page.wait_for_selector("#experimentDetail >> text=Curiosity title comparison")
+        text = self.page.locator("#experimentDetail").inner_text()
+        self.assertIn("PLANNED EXPERIMENT", text)
+        self.assertIn("NOT CAUSAL PROOF", text)
+        self.assertEqual(self.router.count("POST", "/api/experiment-center/experiments"), 1)
+        self.assert_clean_browser()
+
+    def test_experiment_assignment_comparison_and_insufficient_evidence(self):
+        self.replace_router(include_link=True)
+        self.open("#experiments")
+        self.page.locator("#experimentName").fill("Opening test")
+        self.page.locator("#experimentHypothesis").fill("A direct opening may be associated with stronger average viewing.")
+        self.page.locator("#experimentControl").fill("Normal opening")
+        self.page.locator("#experimentVariant").fill("Direct opening")
+        self.page.locator("#experimentCreateBtn").click()
+        self.page.wait_for_selector("#experimentAssignVideo")
+        self.page.locator("#experimentAssignVideo").select_option("9")
+        self.page.locator("#experimentAssignRole").select_option("control")
+        self.page.locator("[data-experiment-action='assign']").click()
+        self.page.wait_for_selector("#experimentDetail >> text=Published rainy highway title")
+        self.page.locator("[data-experiment-action='compare']").evaluate("b => { b.click(); b.click(); }")
+        self.page.wait_for_selector("#experimentDetail >> text=INSUFFICIENT EVIDENCE")
+        detail = self.page.locator("#experimentDetail").inner_text()
+        self.assertIn("no direction is claimed", detail.lower())
+        self.assertIn("No fake statistical significance", detail)
+        self.assertEqual(self.router.count("POST", "/api/experiment-center/experiments/1/assignments"), 1)
+        self.assertEqual(self.router.count("POST", "/api/experiment-center/experiments/1/compare"), 1)
+        self.assert_clean_browser()
+
+    def test_demand_research_provenance_limitations_and_duplicate_click_guard(self):
+        self.open("#demand")
+        self.assertIn("No demand", self.page.locator("#demandList").inner_text())
+        self.page.locator("#demandTopic").fill("camera comparison")
+        self.page.locator("#demandForm").evaluate("form => form.requestSubmit()")
+        self.page.wait_for_selector("#demandDetail >> text=active_topic")
+        text = self.page.locator("#demandDetail").inner_text().lower()
+        self.assertIn("public_observation", text)
+        self.assertIn("not monthly search volume", text)
+        self.assertIn("no official monthly search-volume", text)
+        self.page.locator("#demandDetail [data-demand-action='generate']").evaluate("b => { b.click(); b.click(); }")
+        self.page.wait_for_selector("#demandActionStatus >> text=Package saved")
+        self.assertEqual(self.router.count("POST", "/api/demand/research/1/generate"), 1)
+        self.assert_clean_browser()
+
+    def test_idea_demand_to_existing_generation_flow(self):
+        self.open("#ideas")
+        self.page.wait_for_selector("text=Rainy highway quote idea")
+        self.page.locator("[data-idea-id='1']").click()
+        self.page.wait_for_selector("#ideaDetail [data-idea-action='demand']")
+        self.page.locator("#ideaDetail [data-idea-action='demand']").click()
+        self.page.wait_for_selector("#ideaDetail >> text=emerging_signal")
+        self.page.locator("#ideaDetail [data-idea-action='generate']").click()
+        self.page.wait_for_selector("#ideaDetail [data-idea-action='history']")
+        self.assertEqual(self.router.count("POST", "/api/ideas/1/demand-research"), 1)
+        self.assertEqual(self.router.count("POST", "/api/ideas/1/generate"), 1)
+        self.assert_clean_browser()
+
+    def test_ideas_workspace_renders_honest_empty_evidence_and_dated_research(self):
+        self.open("#ideas")
+        self.page.wait_for_selector("text=Rainy highway quote idea")
+        self.page.locator("[data-idea-id='1']").click()
+        detail = self.page.locator("#ideaDetail")
+        self.page.wait_for_selector("#ideaDetail >> text=Research unavailable")
+        self.assertIn("Research unavailable", detail.inner_text())
+        self.assertIn("No search volume", detail.inner_text())
+        detail.locator("[data-idea-action='research']").click()
+        self.page.wait_for_selector("text=Public rainy road observation")
+        text = detail.inner_text()
+        self.assertIn("not monthly search volume", text)
+        self.assertIn("Not enough personal evidence", text)
+        self.assertIn("Captured:", text)
+        self.assertIn("Published:", text)
+        self.assertEqual(self.router.count("POST", "/api/ideas/1/research"), 1)
+        self.assert_clean_browser()
+
+    def test_ideas_create_generate_and_status_filter_workflow(self):
+        self.open("#ideas")
+        self.page.locator("#ideaTopic").fill("Sunset couple quote idea")
+        self.page.locator("#ideaNotes").fill("Two people beneath the same sky.")
+        self.page.locator("#ideaCreateForm").evaluate("form => form.requestSubmit()")
+        self.page.wait_for_selector("text=Idea saved permanently in SQLite")
+        self.assertEqual(self.router.count("POST", "/api/ideas"), 1)
+        self.page.locator("#ideaDetail [data-idea-action='generate']").click()
+        self.page.wait_for_selector("#ideaDetail [data-idea-action='history']")
+        self.assertIn("package generated", self.page.locator("#ideaDetail").inner_text().lower())
+        self.assertEqual(self.router.count("POST", "/api/ideas/2/generate"), 1)
+        self.page.locator("#ideasStatusFilter").select_option("package_generated")
+        self.page.wait_for_timeout(100)
+        self.assertIn("Sunset couple quote idea", self.page.locator("#ideasList").inner_text())
+        self.assertNotIn("Rainy highway quote idea", self.page.locator("#ideasList").inner_text())
         self.assert_clean_browser()
 
     def test_creator_success_has_one_analyze_request(self):
@@ -248,7 +398,7 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.assertEqual(self.router.count("POST", "/analyze"), 1)
         self.assert_clean_browser()
 
-    def test_package_comparison_selection_is_local_and_survives_navigation(self):
+    def test_package_comparison_selection_is_persisted_and_survives_navigation(self):
         self.open("#creator")
         self.page.locator("#scriptInput").fill("A reflective quote over a rainy highway.")
         self.page.locator("#analyzeBtn").click()
@@ -256,12 +406,14 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.page.locator("[data-testid='creator-stage-compare']").click()
         self.assertGreaterEqual(self.page.locator("[data-testid='package-option-card']").count(), 3)
         self.page.locator("[data-testid='select-package-b']").click()
+        self.page.wait_for_selector("text=Selection saved")
         self.assertEqual(self.page.locator("[data-testid='select-package-b']").get_attribute("aria-pressed"), "true")
         self.page.locator("[data-testid='creator-stage-decision']").click()
-        self.assertIn("package b selected locally", self.page.locator("#creatorDecisionPanel").inner_text().lower())
+        self.assertIn("package b recorded in history", self.page.locator("#creatorDecisionPanel").inner_text().lower())
         self.page.locator("[data-testid='creator-stage-compare']").click()
         self.assertEqual(self.page.locator("[data-testid='select-package-b']").get_attribute("aria-pressed"), "true")
         self.assertEqual(self.router.count("POST", "/analyze"), 1)
+        self.assertEqual(self.router.count("PUT", "/api/history/runs/1/selection"), 1)
         self.assert_clean_browser()
 
     def test_decision_stage_separates_evidence_heuristics_and_unknowns(self):
@@ -275,8 +427,40 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.assertIn("Local heuristic", text)
         self.assertIn("unavailable before publishing", text.lower())
         self.assertIn("do not predict actual ctr", text.lower())
-        self.assertIn("does not change the saved History record", text)
+        self.assertIn("never changes or publishes a YouTube video", text)
         self.assertEqual(self.router.count("POST", "/analyze"), 1)
+        self.assert_clean_browser()
+
+    def test_retention_assistant_is_real_traceable_creator_output(self):
+        self.open("#creator")
+        self.page.locator("#scriptInput").fill("A reflective quote over a rainy highway.")
+        self.page.locator("#analyzeBtn").click()
+        self.page.wait_for_selector("text=The Truth About Letting Go #Shorts")
+        self.page.locator("[data-testid='creator-stage-angle']").click()
+        panel = self.page.locator("[data-testid='creator-retention-panel']")
+        text = panel.inner_text()
+        self.assertIn("hook, pacing and retention assistant", text.lower())
+        self.assertIn("first_frame_text_dense", text.lower())
+        self.assertIn("Reveal the exact text in readable steps", text)
+        self.assertIn("HEURISTIC", text.upper())
+        self.assertIn("insufficient_evidence", text)
+        self.assertIn("does not predict or guarantee", text)
+        self.assertEqual(self.router.count("POST", "/analyze"), 1)
+        self.assert_clean_browser()
+
+    def test_retention_package_alignment_updates_after_persisted_selection(self):
+        self.open("#creator")
+        self.page.locator("#scriptInput").fill("A reflective quote over a rainy highway.")
+        self.page.locator("#analyzeBtn").click()
+        self.page.wait_for_selector("text=The Truth About Letting Go #Shorts")
+        self.page.locator("[data-testid='creator-stage-compare']").click()
+        self.page.locator("[data-testid='select-package-b']").click()
+        self.page.wait_for_selector("text=Selection saved")
+        self.page.locator("[data-testid='creator-stage-decision']").click()
+        panel = self.page.locator("[data-testid='creator-retention-panel']")
+        self.assertIn("Package B / package-b", panel.inner_text())
+        self.assertIn("Status: aligned", panel.inner_text())
+        self.assertEqual(self.router.count("PUT", "/api/history/runs/1/selection"), 1)
         self.assert_clean_browser()
 
     def test_checklist_is_local_persists_and_resets_after_selection_change(self):

@@ -5,6 +5,9 @@ from typing import Any, Dict
 
 from win_engine.analysis.intent_classifier import classify_intent
 from win_engine.analysis.creator_brief import creator_topic
+from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality
+from win_engine.analysis.package_builder import build_title_thumbnail_packages
+from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.research_planner import brief_research_text
 from win_engine.analysis.topic_lock import (
     _is_junk_tag,
@@ -86,6 +89,22 @@ def generate_seo_suggestions(
         force_topic_in_title(v["title"], main_topic, category, variant_index=i)
         for i, v in enumerate(seo_package["title_variants"])
     ]
+    final_gate = evaluate_package_quality(
+        {
+            "title": locked_title, "variants": locked_variants,
+            "description": locked_description, "tags": locked_tags, "hashtags": locked_hashtags,
+        },
+        script=safe_script,
+        creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
+        language=str(ctx.get("language") or "english"),
+    )
+    gated = apply_quality_gate(
+        {"title": locked_title, "variants": locked_variants, "description": locked_description,
+         "tags": locked_tags, "hashtags": locked_hashtags},
+        final_gate,
+    )
+    locked_title = gated["title"]
+    locked_variants = gated["variants"]
 
     # Patch title_optimization so best_title + scored_variants are also topic-locked.
     title_opt = dict(seo_package.get("title_optimization") or {})
@@ -161,6 +180,42 @@ def generate_seo_suggestions(
         )
     # --------------------------------------------------------------------
 
+    final_variants_data = [
+        item for item in (seo_package.get("title_variants") or [])
+        if item.get("title") in set(locked_variants)
+    ]
+    if not final_variants_data:
+        final_variants_data = [
+            {"title": title, "score": 0.0, "estimated_ctr": None,
+             "character_count": len(title), "package_intent": "Alternative"}
+            for title in locked_variants
+        ]
+    final_packages = build_title_thumbnail_packages(
+        final_variants_data,
+        creator_brief if isinstance(creator_brief, dict) else None,
+        competitor_titles=[str(item.get("title") or "") for item in research_payload.get("youtube_results", []) if isinstance(item, dict)],
+        validated=True,
+    )
+    try:
+        retention_learning = history_store.retention_learning_summary(
+            format_filter=str((creator_brief or {}).get("video_format") or "").strip() or None,
+            language_filter=str(ctx.get("language") or "english").strip().lower(),
+            snapshot_window="24h",
+        )
+    except Exception:
+        retention_learning = {
+            "status": "insufficient_evidence", "learning_allowed": False,
+            "sample_size": 0, "minimum_samples": 5,
+            "message": "Retention evidence could not be evaluated for this run; no historical pattern was applied.",
+        }
+    retention_assistant = analyze_retention_assistant(
+        safe_script,
+        creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
+        content_angle=str(seo_package.get("content_angle") or ""),
+        packages=final_packages,
+        retention_learning=retention_learning,
+    )
+
     response = AnalyzeResponse(
         title=locked_title,
         description=locked_description,
@@ -170,7 +225,7 @@ def generate_seo_suggestions(
         content_angle=seo_package["content_angle"],
         title_variants=locked_variants,
         title_optimization=title_opt,
-        title_thumbnail_packages=seo_package.get("title_thumbnail_packages", []),
+        title_thumbnail_packages=final_packages,
         content_audit=seo_package["content_audit"],
         cache_policy=research_payload.get("cache_policy", "evergreen"),
         research_warnings=research_warnings,
@@ -203,6 +258,11 @@ def generate_seo_suggestions(
         ab_test_pack=seo_package["feedback_package"]["ab_test_pack"],
         internal_scorecard=seo_package["feedback_package"]["internal_scorecard"],
         historical_comparison=seo_package["feedback_package"]["historical_comparison"],
+        history_run_id=seo_package.get("history_run_id"),
+        generation_quality=final_gate,
+        personalization=seo_package.get("personalization") or {},
+        generation_trace=seo_package.get("generation_trace") or {},
+        retention_assistant=retention_assistant,
     ).model_dump()
     history_store = research_payload.get("history_store")
     history_run_id = seo_package.get("history_run_id")

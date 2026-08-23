@@ -18,6 +18,8 @@ const FORM_FIELDS = [
   "script", "video_language", "language", "region", "target_audience",
   "viewer_promise", "unique_angle", "proof", "video_format", "title_style",
   "thumbnail_idea",
+  "duration_seconds", "exact_quote", "voice_over", "visual_requirements",
+  "factual_claims", "claim_restrictions", "creator_intent", "content_constraints",
 ];
 
 const PROVENANCE_FIELDS = [
@@ -28,6 +30,11 @@ const PROVENANCE_FIELDS = [
   ["video_format", "Video format"],
   ["title_style", "Title style"],
   ["thumbnail_idea", "Thumbnail direction"],
+  ["exact_quote", "Exact quote"],
+  ["voice_over", "Voice-over"],
+  ["visual_requirements", "Visual requirements"],
+  ["factual_claims", "Factual claims"],
+  ["claim_restrictions", "Claim restrictions"],
 ];
 
 const CHECKLIST_ITEMS = [
@@ -137,9 +144,10 @@ function renderBriefProvenance(root, brief, submitted = {}) {
   }
   const rows = PROVENANCE_FIELDS.map(([field, label]) => {
     const value = String(brief[field] || submitted[field] || "").trim();
-    if (!value) return "";
-    const entered = Boolean(String(submitted[field] || "").trim());
-    return `<div class="creator-provenance-row"><span><strong>${esc(label)}</strong><span class="creator-provenance-value">${esc(value)}</span></span>${sourceChip(entered ? "Creator-entered" : "Inferred", entered ? "ok" : "warn")}</div>`;
+    const provenance = objectOf(objectOf(brief.field_provenance)[field]);
+    const source = String(provenance.source || (String(submitted[field] || "").trim() ? "creator_supplied" : value ? "inferred" : "unknown"));
+    const labels = { creator_supplied: "Creator-entered / supplied", inferred: "Inferred", unknown: "Unknown", unavailable: "Unavailable" };
+    return `<div class="creator-provenance-row"><span><strong>${esc(label)}</strong><span class="creator-provenance-value">${esc(value || "Not provided")}</span></span>${sourceChip(labels[source] || source, source === "creator_supplied" ? "ok" : "warn")}</div>`;
   }).filter(Boolean).join("");
   if (!rows) {
     panel.innerHTML = "";
@@ -322,7 +330,7 @@ function buildPackageOptions(data) {
     seen.add(key);
     const index = options.length;
     options.push({
-      id: `package-${String.fromCharCode(97 + index)}`,
+      id: String(candidate.package_id || `package-${String.fromCharCode(97 + index)}`),
       label: `Package ${String.fromCharCode(65 + index)}`,
       primary: Boolean(candidate.primary) || key === normalizedTitle(base.title),
       title,
@@ -341,6 +349,11 @@ function buildPackageOptions(data) {
       qualityStatus: String(candidate.quality_status || "not evaluated").trim(),
       titleQualityScore: titleScore(data, title),
       source: generationLabel,
+      mechanism: String(candidate.mechanism || candidate.approach || "direct topic framing"),
+      reason: String(candidate.reason || candidate.why_click || "A source-supported generated alternative."),
+      evidenceUsed: objectOf(candidate.evidence_used),
+      tradeoffs: listOf(candidate.tradeoffs),
+      gate: objectOf(candidate.quality_gate),
     });
   });
   return options;
@@ -381,6 +394,53 @@ function renderAnglePanel(root) {
     </div>`;
 }
 
+function renderRetentionPanel(root) {
+  const panel = root.getElementById("creatorRetentionPanel");
+  if (!panel) return;
+  const data = creatorState.analysis;
+  const assistant = objectOf(data?.retention_assistant);
+  if (!data || !Object.keys(assistant).length) {
+    panel.innerHTML = `<div class="card-title"><span>Hook, pacing and retention assistant</span>${sourceChip("Unavailable", "warn")}</div>${emptyState("Run Analyze to inspect the opening, first frame, quote burden, pacing, and retention risks.")}`;
+    return;
+  }
+  const opening = objectOf(assistant.opening);
+  const frame = objectOf(assistant.first_frame);
+  const pacing = objectOf(assistant.pacing);
+  const quote = objectOf(assistant.quote_presentation);
+  const learning = objectOf(assistant.retention_learning);
+  const choice = selectedPackage();
+  const alignment = listOf(assistant.package_alignment).find((item) => objectOf(item).package_id === choice?.id);
+  const risks = listOf(assistant.risk_map).flatMap((stage) => listOf(objectOf(stage).risks));
+  const riskRows = risks.length ? risks.map((risk) => {
+    const item = objectOf(risk);
+    const tone = item.severity === "high" ? "bad" : item.severity === "medium" ? "warn" : "accent";
+    return `<div class="creator-research-item"><div class="creator-card-heading"><span>${displayValue(item.stage)} / ${displayValue(item.risk_code)}</span>${sourceChip(String(item.severity || "review").toUpperCase(), tone)}</div><p>${displayValue(item.explanation)}</p><p class="metric-sub"><strong>Evidence:</strong> ${displayValue(item.evidence)}<br><strong>Change:</strong> ${displayValue(item.recommendation)} / HEURISTIC</p></div>`;
+  }).join("") : researchEmpty("No specific deterministic risk was identified. This is not measured retention evidence.");
+  const recommendationRows = listOf(assistant.recommendations).map((item) => {
+    const row = objectOf(item);
+    return `<div class="creator-research-item"><strong>${displayValue(row.recommendation)}</strong><div class="creator-research-meta">Priority: ${displayValue(row.priority)} / ${sourceChip("Heuristic", "warn")} / No performance guarantee</div></div>`;
+  }).join("");
+  const alternativeRows = listOf(assistant.alternatives).map((item) => {
+    const row = objectOf(item);
+    return `<div class="creator-research-item"><strong>${displayValue(row.alternative_code)}</strong><div class="creator-research-meta">${displayValue(row.structure)}<br>Preserves: ${displayValue(row.preserves_source)} / ${sourceChip("Generated heuristic", "warn")}</div></div>`;
+  }).join("");
+  const learningAllowed = Boolean(learning.learning_allowed);
+  const patternRows = listOf(learning.patterns).map((item) => `<div class="creator-research-item"><strong>${displayValue(objectOf(item).feature)} / ${displayValue(objectOf(item).value)}</strong><div class="creator-research-meta">${displayValue(objectOf(item).observation)} Correlation only; causation is not claimed.</div></div>`).join("");
+  panel.innerHTML = `<div class="card-title"><span>Hook, pacing and retention assistant</span>${sourceChip(`Risk: ${String(assistant.risk_level || "unknown").toUpperCase()}`, assistant.risk_level === "high" ? "bad" : assistant.risk_level === "medium" ? "warn" : "ok")}</div>
+    <p class="metric-sub creator-panel-intro">${displayValue(assistant.disclaimer)} Rules: ${displayValue(assistant.rule_version)}.</p>
+    <div class="creator-analysis-grid">
+      <div class="creator-analysis-card"><div class="creator-card-heading">Opening ${sourceChip("Heuristic", "warn")}</div><p><strong>${opening.score === null || opening.score === undefined ? "Unavailable" : `${num(opening.score)} / 100`}</strong></p><p class="metric-sub">Clarity: ${displayValue(opening.clarity)} / Specificity: ${displayValue(opening.specificity)} / Generic setup: ${opening.generic_setup ? "yes" : "no"}. This score is not measured retention.</p></div>
+      <div class="creator-analysis-card"><div class="creator-card-heading">First frame ${sourceChip(frame.status === "unavailable" ? "Unavailable" : "Creator-supplied / inferred", frame.status === "unavailable" ? "warn" : "ok")}</div><p>Readability: ${displayValue(frame.readability)}</p><p class="metric-sub">Text: ${displayValue(frame.text_word_count, "Unavailable")} words / One-read estimate: ${displayValue(frame.estimated_single_read_seconds, "Unavailable")} seconds / Visual basis: ${displayValue(frame.visual_analysis_basis)}</p></div>
+      <div class="creator-analysis-card"><div class="creator-card-heading">Pacing ${sourceChip("Heuristic", "warn")}</div><p>${displayValue(pacing.format_assessment)}</p><p class="metric-sub">${displayValue(pacing.word_count)} words / Estimated speech: ${displayValue(pacing.estimated_spoken_seconds)} seconds / Intended duration: ${displayValue(pacing.duration_seconds)} / Timing: ${displayValue(pacing.timing_confidence)}</p></div>
+      <div class="creator-analysis-card"><div class="creator-card-heading">Quote presentation ${sourceChip(quote.status === "available" ? "Creator-supplied / inferred" : "Unavailable", quote.status === "available" ? "ok" : "warn")}</div><p>${quote.status === "available" ? `${displayValue(quote.word_count)} words / about ${displayValue(quote.estimated_single_read_seconds)} seconds per read` : displayValue(quote.reason)}</p><p class="metric-sub">Exact text preserved: ${displayValue(quote.exact_text_preserved_on_screen)} / Attribution: ${displayValue(quote.attribution)}. The assistant never rewrites or attributes the quote silently.</p></div>
+      <div class="creator-analysis-card"><div class="creator-card-heading">Selected package alignment ${sourceChip("Heuristic", "warn")}</div><p>${choice ? `${displayValue(choice.label)} / ${displayValue(choice.id)}` : "No package selected"}</p><p class="metric-sub">Status: ${displayValue(objectOf(alignment).status)} / Similarity basis: ${displayValue(objectOf(alignment).opening_similarity)}. This is text alignment, not observed viewer behavior.</p></div>
+      <div class="creator-analysis-card"><div class="creator-card-heading">Post-publish retention learning ${sourceChip(learningAllowed ? "Post-publish evidence" : "Unavailable", learningAllowed ? "accent" : "warn")}</div><p>${displayValue(learning.status)}</p><p class="metric-sub">${displayValue(learning.message)} Sample: ${num(learning.sample_size || 0)} / Minimum: ${num(learning.minimum_samples || 0)}.</p>${patternRows}</div>
+    </div>
+    <div class="creator-section-heading">Retention-risk map</div><div class="creator-research-list">${riskRows}</div>
+    <div class="creator-analysis-grid" style="margin-top:16px"><div class="creator-analysis-card"><div class="creator-card-heading">What to change ${sourceChip("Heuristic", "warn")}</div><div class="creator-research-list">${recommendationRows || researchEmpty("No additional recommendation returned.")}</div></div><div class="creator-analysis-card"><div class="creator-card-heading">Practical alternatives ${sourceChip("Generated heuristic", "warn")}</div><div class="creator-research-list">${alternativeRows || researchEmpty("No alternative is forced when the source supports only one structure.")}</div></div></div>
+    <div class="creator-source-legend"><strong>Source guide</strong>${sourceChip("Creator-supplied", "ok")}${sourceChip("Inferred", "warn")}${sourceChip("Heuristic", "warn")}${sourceChip("AI-assisted: not used", "warn")}${sourceChip("Post-publish evidence", "accent")}${sourceChip("Unavailable", "warn")}</div>`;
+}
+
 function renderPackagingPanel(root) {
   const panel = root.getElementById("outputContent");
   const results = root.getElementById("resultsPanel");
@@ -406,7 +466,7 @@ function renderPackagingPanel(root) {
     <div class="creator-score-grid">
       <div class="creator-score-card"><span>Opportunity score</span><strong>${displayValue(opportunity.score)} / 100</strong><small>Local heuristic, not a performance guarantee.</small></div>
       <div class="creator-score-card"><span>Selected title quality</span><strong>${score === null ? "Unavailable" : `${num(score)} / 10`}</strong><small>Local title-quality heuristic, not measured CTR.</small></div>
-      <div class="creator-score-card"><span>Selection</span><strong>${esc(choice.label)}</strong><small>Local choice only; not persisted or published.</small></div>
+      <div class="creator-score-card"><span>Selection</span><strong>${esc(choice.label)}</strong><small>${creatorState.selectionStatus === "saved" ? "Saved to History; not published." : creatorState.selectionStatus === "saving" ? "Saving to History..." : creatorState.selectionStatus === "error" ? "Could not save; retry selection." : "Preview only until you select it."}</small></div>
     </div>
     <div class="creator-analysis-grid creator-package-fields">
       <div class="creator-analysis-card wide"><div class="creator-card-heading"><span>Selected title</span>${copyButton("title", choice.id, "Copy title")}</div><p class="creator-output-title">${esc(choice.title)}</p></div>
@@ -444,7 +504,7 @@ function renderComparePanel(root) {
       <div class="creator-inline-actions"><button type="button" class="btn creator-copy-btn" data-copy-field="title" data-copy-package-id="${esc(option.id)}">Copy title</button><button type="button" class="btn ${selected ? "btn-primary" : ""} creator-select-btn" data-select-package="${esc(option.id)}" data-testid="select-${esc(option.id)}" aria-pressed="${selected}">${selected ? "Selected locally" : `Select ${esc(option.label)}`}</button></div>
     </article>`;
   }).join("");
-  panel.innerHTML = `<div class="card-title"><span>Compare title and thumbnail approaches</span>${sourceChip("Selection is local", "ok")}</div><p class="metric-sub creator-panel-intro">Scores and best-for labels are local heuristics or generated suggestions. They are not measured CTR, reach, or performance predictions.</p><div class="creator-package-grid">${cards}</div>`;
+  panel.innerHTML = `<div class="card-title"><span>Compare title and thumbnail approaches</span>${sourceChip(creatorState.selectionStatus === "saved" ? "Selection saved" : "Choose to save", creatorState.selectionStatus === "error" ? "bad" : "ok")}</div><p class="metric-sub creator-panel-intro">Scores and best-for labels are local heuristics or generated suggestions. They are not measured CTR, reach, or performance predictions.</p><div class="creator-package-grid">${cards}</div>`;
 }
 
 function renderDecisionPanel(root) {
@@ -459,7 +519,7 @@ function renderDecisionPanel(root) {
   const publicCount = listOf(data.youtube_results).length;
   const opportunity = objectOf(objectOf(data.opportunity_gap_analysis).opportunity_score);
   panel.innerHTML = `<div class="card-title"><span>Final local decision</span>${sourceChip("Not published", "warn")}</div>
-    <div class="creator-decision-hero"><span>${esc(choice.label)} selected locally</span><h3>${esc(choice.title)}</h3><p>This choice remains in this browser session. It does not change the saved History record or any YouTube video.</p></div>
+    <div class="creator-decision-hero"><span>${esc(choice.label)} ${creatorState.selectionStatus === "saved" ? "recorded in History" : "selected for preview"}</span><h3>${esc(choice.title)}</h3><p>The recorded choice supports later attribution. It never changes or publishes a YouTube video.</p></div>
     <div class="creator-analysis-grid">
       <div class="creator-analysis-card"><div class="creator-card-heading">Why it was suggested ${sourceChip(choice.source, choice.source === "AI suggestion" ? "accent" : "warn")}</div><p>${esc(choice.whySuggested)}</p><p class="metric-sub">Approach: ${esc(choice.approach)} / Intended use: ${esc(choice.bestFor)}</p></div>
       <div class="creator-analysis-card"><div class="creator-card-heading">Public context ${sourceChip(publicCount ? "Public observation" : "Unavailable", publicCount ? "accent" : "warn")}</div><p>${publicCount ? `${num(publicCount)} public YouTube result${publicCount === 1 ? " was" : "s were"} returned as context.` : "No public YouTube result was returned."}</p><p class="metric-sub">Public counts and patterns do not prove why another video performed.</p></div>
@@ -490,6 +550,7 @@ function renderChecklistPanel(root) {
 
 function renderAnalysisPanels(root) {
   renderAnglePanel(root);
+  renderRetentionPanel(root);
   renderPackagingPanel(root);
   renderComparePanel(root);
   renderDecisionPanel(root);
@@ -531,6 +592,8 @@ function resetGeneratedState(root) {
   creatorState.inferredBrief = null;
   creatorState.packageOptions = [];
   creatorState.selectedPackageId = null;
+  creatorState.selectionStatus = "unrecorded";
+  creatorState.selectionError = null;
   creatorState.checklist = freshChecklist();
   creatorState.error = null;
   creatorState.researchError = null;
@@ -564,7 +627,7 @@ async function submitAnalyze(root) {
     language: values.language || "english",
     region: values.region || "global",
   };
-  ["target_audience", "viewer_promise", "unique_angle", "proof", "video_format", "title_style", "thumbnail_idea"].forEach((field) => {
+  ["target_audience", "viewer_promise", "unique_angle", "proof", "video_format", "title_style", "thumbnail_idea", "duration_seconds", "exact_quote", "voice_over", "visual_requirements", "factual_claims", "claim_restrictions", "creator_intent", "content_constraints"].forEach((field) => {
     if (values[field]) payload[field] = values[field];
   });
   try {
@@ -579,6 +642,7 @@ async function submitAnalyze(root) {
     creatorState.inferredBrief = data.creator_brief || null;
     creatorState.packageOptions = buildPackageOptions(data);
     creatorState.selectedPackageId = creatorState.packageOptions[0]?.id || null;
+    creatorState.selectionStatus = "unrecorded";
     creatorState.checklist = freshChecklist();
     creatorState.generationStatus = "success";
     creatorState.researchStatus = researchHasEvidence(data) ? "available" : "unavailable";
@@ -675,7 +739,7 @@ function exportAnalysis(root) {
       selected_package_id: choice.id,
       selected_package: { ...choice },
       checklist: { ...creatorState.checklist },
-      persistence: "Local browser state only; not saved to SQLite or YouTube.",
+      persistence: creatorState.selectionStatus === "saved" ? "Creator selection saved to SQLite History; never sent to YouTube." : "Selection was not confirmed as saved.",
       publishing: "Manual publishing outside Win-Engine OS.",
     },
   };
@@ -691,14 +755,40 @@ function exportAnalysis(root) {
   if (typeof callbacks.notify === "function") callbacks.notify("Full analysis and local decision exported.");
 }
 
-function selectPackage(root, packageId) {
+async function selectPackage(root, packageId) {
   if (!creatorState.packageOptions.some((item) => item.id === packageId)) return;
+  if (creatorState.selectedPackageId === packageId && ["saving", "saved"].includes(creatorState.selectionStatus)) return;
   if (creatorState.selectedPackageId !== packageId) creatorState.checklist = freshChecklist();
   creatorState.selectedPackageId = packageId;
+  creatorState.selectionStatus = "saving";
+  creatorState.selectionError = null;
   renderPackagingPanel(root);
   renderComparePanel(root);
   renderDecisionPanel(root);
   renderChecklistPanel(root);
+  const runId = Number(creatorState.analysis?.history_run_id || 0);
+  if (!runId) {
+    creatorState.selectionStatus = "error";
+    creatorState.selectionError = "The saved analysis ID is unavailable; selection was not recorded.";
+  } else {
+    try {
+      await apiRequest(`/api/history/runs/${runId}/selection`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ package_id: packageId }),
+      });
+      creatorState.selectionStatus = "saved";
+      if (typeof callbacks.onAnalysisSaved === "function") callbacks.onAnalysisSaved(creatorState.analysis);
+    } catch (error) {
+      creatorState.selectionStatus = "error";
+      creatorState.selectionError = formatApiError(error, "Package selection could not be saved.");
+      renderAlert(root, "error", [creatorState.selectionError]);
+    }
+  }
+  renderPackagingPanel(root);
+  renderComparePanel(root);
+  renderDecisionPanel(root);
+  renderRetentionPanel(root);
 }
 
 function moveStage(root, offset) {

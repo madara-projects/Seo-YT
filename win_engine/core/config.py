@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
     app_name: str = "YouTube Win-Engine"
-    app_version: str = "0.9.0"
+    app_version: str = "0.13.0"
     app_environment: str = "development"
     bind_host: str = "127.0.0.1"
     admin_api_token: str | None = None

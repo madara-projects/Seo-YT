@@ -1,7 +1,7 @@
 /**
  * Explicit frontend state shared by the extracted modules.
- * Values are intentionally in-memory only; the backend remains the source of
- * truth and no browser persistence is introduced by Phase 3C.
+ * Transient workflow values stay in memory; explicit package selection is
+ * persisted by the Phase 4 History endpoint.
  */
 export const frontendState = {
   historySummaryCache: null,
@@ -22,6 +22,8 @@ export const frontendState = {
     generatedPackage: null,
     packageOptions: [],
     selectedPackageId: null,
+    selectionStatus: "unrecorded",
+    selectionError: null,
     checklist: {
       title: false,
       description: false,

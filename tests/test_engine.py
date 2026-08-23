@@ -582,10 +582,10 @@ class TestGeminiGeneration(unittest.TestCase):
             "hashtags": ["#SpecificTopic"],
         }
         packages, source = seo_writer.write_multilang_packages_with_source(
-            "A specific script", languages=["tamil"]
+            "A specific script", languages=["english"]
         )
         self.assertEqual(mocked_generate.call_count, 1)
-        self.assertEqual(set(packages), {"tamil"})
+        self.assertEqual(set(packages), {"english"})
         self.assertEqual(source, "gemini")
 
     def test_recent_title_pattern_is_not_selected_when_fresh_variant_exists(self):

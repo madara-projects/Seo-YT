@@ -13,7 +13,7 @@ from win_engine.feedback.migrations import (
     initialize_memory_database,
     prepare_database,
 )
-from win_engine.feedback.evidence_policy import confidence_payload, mature_snapshot
+from win_engine.feedback.evidence_policy import confidence_payload, mature_snapshot, sample_is_eligible
 
 _INITIALIZED_DATABASES: set[str] = set()
 _INITIALIZATION_LOCK = Lock()
@@ -34,6 +34,12 @@ FORMAT_VALUES = {
     "unknown",
 }
 DURATION_VALUES = {"under_60s", "60_to_180s", "3_to_10m", "over_10m", "unknown"}
+IDEA_STATUSES = {"idea", "scripted", "package_generated", "published", "archived"}
+IDEA_CREATOR_FIELDS = {
+    "topic", "notes", "format", "language", "region", "visual_or_background",
+    "on_screen_text", "target_duration_seconds", "emotion_or_intent",
+    "search_angle", "browse_angle", "audience_angle", "status",
+}
 
 
 class HistoryStore:
@@ -184,14 +190,193 @@ class HistoryStore:
                 (title, json.dumps(payload), run_id),
             )
 
+    # --- Stage G1: Idea backlog and topic opportunity workspace ---
+
+    def create_content_idea(self, values: dict[str, Any]) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        status = str(values.get("status") or "idea")
+        if status not in IDEA_STATUSES:
+            raise ValueError("Unknown idea status.")
+        if status in {"package_generated", "published"}:
+            raise ValueError("A new idea cannot skip its generated-package and verified-publication lifecycle.")
+        topic = str(values.get("topic") or "").strip()
+        if not topic:
+            raise ValueError("Idea topic is required.")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """INSERT INTO content_ideas (
+                       topic, notes, format, language, region, visual_or_background,
+                       on_screen_text, target_duration_seconds, emotion_or_intent,
+                       search_angle, browse_angle, audience_angle, evidence_json,
+                       status, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)""",
+                (
+                    topic, values.get("notes") or "", values.get("format") or "unknown",
+                    values.get("language") or "english", values.get("region") or "global",
+                    values.get("visual_or_background") or "", values.get("on_screen_text") or "",
+                    values.get("target_duration_seconds"), values.get("emotion_or_intent") or "",
+                    values.get("search_angle") or "", values.get("browse_angle") or "",
+                    values.get("audience_angle") or "", status, now, now,
+                ),
+            )
+            idea_id = int(cursor.lastrowid)
+        return self.content_idea(idea_id) or {}
+
+    def content_ideas(self, *, status: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        if status and status not in IDEA_STATUSES:
+            raise ValueError("Unknown idea status filter.")
+        safe_limit = max(1, min(int(limit), 100))
+        safe_offset = max(0, int(offset))
+        where = "WHERE i.status = ?" if status else ""
+        params: tuple[Any, ...] = (status,) if status else ()
+        with self._connect() as connection:
+            total = int(connection.execute(f"SELECT COUNT(*) FROM content_ideas i {where}", params).fetchone()[0])
+            rows = connection.execute(
+                f"""SELECT i.id, i.topic, i.status, i.format, i.language, i.region,
+                           i.created_at, i.updated_at, i.analysis_run_id, i.published_video_link_id,
+                           i.evidence_json,
+                           (SELECT MAX(s.captured_at) FROM content_idea_research_snapshots s
+                            WHERE s.content_idea_id = i.id),
+                           (SELECT COUNT(*) FROM content_idea_research_snapshots s
+                            WHERE s.content_idea_id = i.id)
+                    FROM content_ideas i {where}
+                    ORDER BY i.created_at DESC, i.id DESC LIMIT ? OFFSET ?""",
+                (*params, safe_limit, safe_offset),
+            ).fetchall()
+        ideas = []
+        for row in rows:
+            evidence = _json_value(row[10])
+            ideas.append({
+                "id": row[0], "topic": row[1], "status": row[2], "format": row[3],
+                "language": row[4], "region": row[5], "created_at": row[6], "updated_at": row[7],
+                "analysis_run_id": row[8], "published_video_link_id": row[9],
+                "last_researched_at": row[11], "research_snapshot_count": int(row[12] or 0),
+                "opportunity_explanation": evidence.get("opportunity_explanation") or "Research has not been run for this idea.",
+                "personal_evidence_status": (evidence.get("personal_evidence") or {}).get("status", "insufficient_evidence"),
+            })
+        return {"ideas": ideas, "total": total, "limit": safe_limit, "offset": safe_offset, "status": status}
+
+    def content_idea(self, idea_id: int) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id, topic, notes, format, language, region, visual_or_background,
+                          on_screen_text, target_duration_seconds, emotion_or_intent,
+                          search_angle, browse_angle, audience_angle, evidence_json, status,
+                          analysis_run_id, published_video_link_id, created_at, updated_at
+                   FROM content_ideas WHERE id = ?""",
+                (idea_id,),
+            ).fetchone()
+            if not row:
+                return None
+            snapshots = connection.execute(
+                """SELECT id, captured_at, evidence_json FROM content_idea_research_snapshots
+                   WHERE content_idea_id = ? ORDER BY captured_at DESC, id DESC LIMIT 20""",
+                (idea_id,),
+            ).fetchall()
+            demand_rows = connection.execute(
+                """SELECT id, classification, evidence_json, captured_at, idea_fingerprint
+                   FROM demand_research_snapshots WHERE idea_id = ? ORDER BY captured_at DESC, id DESC LIMIT 20""",
+                (idea_id,),
+            ).fetchall()
+        keys = (
+            "id", "topic", "notes", "format", "language", "region", "visual_or_background",
+            "on_screen_text", "target_duration_seconds", "emotion_or_intent", "search_angle",
+            "browse_angle", "audience_angle", "evidence", "status", "analysis_run_id",
+            "published_video_link_id", "created_at", "updated_at",
+        )
+        result = dict(zip(keys, row))
+        result["evidence"] = _json_value(row[13])
+        result["research_snapshots"] = [
+            {"id": item[0], "captured_at": item[1], "evidence": _json_value(item[2])}
+            for item in snapshots
+        ]
+        result["latest_research"] = result["research_snapshots"][0] if result["evidence"] and result["research_snapshots"] else None
+        result["research_is_stale"] = bool(result["research_snapshots"] and not result["evidence"])
+        from win_engine.analysis.demand_explorer import idea_fingerprint
+        current_fingerprint = idea_fingerprint(result)
+        result["demand_research"] = [
+            {"id": row[0], "classification": row[1], "evidence": _json_value(row[2]),
+             "captured_at": row[3], "stale": row[4] != current_fingerprint}
+            for row in demand_rows
+        ]
+        result["latest_demand_research"] = result["demand_research"][0] if result["demand_research"] else None
+        return result
+
+    def update_content_idea(self, idea_id: int, changes: dict[str, Any]) -> dict[str, Any] | None:
+        unknown = set(changes) - IDEA_CREATOR_FIELDS
+        if unknown:
+            raise ValueError("Unsupported idea field(s): " + ", ".join(sorted(unknown)))
+        if not changes:
+            raise ValueError("Provide at least one idea field to update.")
+        if any(value is None for value in changes.values()):
+            raise ValueError("Idea fields cannot be set to null.")
+        status = changes.get("status")
+        if status is not None and status not in IDEA_STATUSES:
+            raise ValueError("Unknown idea status.")
+        if "topic" in changes and not str(changes["topic"]).strip():
+            raise ValueError("Idea topic is required.")
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT analysis_run_id, published_video_link_id FROM content_ideas WHERE id = ?", (idea_id,)
+            ).fetchone()
+            if not existing:
+                return None
+            if status == "package_generated" and not existing[0]:
+                raise ValueError("Generate a package before setting package_generated status.")
+            if status == "published" and not existing[1]:
+                raise ValueError("Link the generated package to an owned YouTube video before marking this idea published.")
+            assignments = [f"{field} = ?" for field in changes]
+            research_inputs_changed = bool(set(changes) - {"status"})
+            if research_inputs_changed:
+                assignments.append("evidence_json = '{}'")
+            now = datetime.now(timezone.utc).isoformat()
+            connection.execute(
+                f"UPDATE content_ideas SET {', '.join(assignments)}, updated_at = ? WHERE id = ?",
+                (*changes.values(), now, idea_id),
+            )
+        return self.content_idea(idea_id)
+
+    def save_content_idea_research(self, idea_id: int, evidence: dict[str, Any]) -> dict[str, Any] | None:
+        captured_at = str(evidence.get("captured_at") or datetime.now(timezone.utc).isoformat())
+        serialized = json.dumps(evidence)
+        with self._connect() as connection:
+            if not connection.execute("SELECT 1 FROM content_ideas WHERE id = ?", (idea_id,)).fetchone():
+                return None
+            cursor = connection.execute(
+                "INSERT INTO content_idea_research_snapshots (content_idea_id, captured_at, evidence_json) VALUES (?, ?, ?)",
+                (idea_id, captured_at, serialized),
+            )
+            connection.execute(
+                "UPDATE content_ideas SET evidence_json = ?, updated_at = ? WHERE id = ?",
+                (serialized, captured_at, idea_id),
+            )
+            snapshot_id = int(cursor.lastrowid)
+        return {"id": snapshot_id, "content_idea_id": idea_id, "captured_at": captured_at, "evidence": evidence}
+
+    def attach_content_idea_analysis(self, idea_id: int, analysis_run_id: int) -> dict[str, Any] | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            if not connection.execute("SELECT 1 FROM analysis_runs WHERE id = ?", (analysis_run_id,)).fetchone():
+                raise ValueError("Generated analysis run does not exist.")
+            cursor = connection.execute(
+                """UPDATE content_ideas SET analysis_run_id = ?, status = 'package_generated', updated_at = ?
+                   WHERE id = ?""",
+                (analysis_run_id, now, idea_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.content_idea(idea_id)
+
     def history_runs(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """Return saved packages in newest-first order without the large payload."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT a.id, a.created_at, a.title, a.opportunity_score, a.title_score,
-                       a.query, a.payload_json, p.id, p.youtube_video_id
+                       a.query, a.payload_json, p.id, p.youtube_video_id,
+                       ps.generated_package_id, ps.selected_at
                 FROM analysis_runs a
+                LEFT JOIN analysis_package_selections ps ON ps.analysis_run_id = a.id
                 LEFT JOIN published_video_links p ON p.id = (
                     SELECT linked.id FROM published_video_links linked
                     WHERE linked.analysis_run_id = a.id
@@ -209,6 +394,8 @@ class HistoryStore:
                 "has_full_package": bool(row[6]),
                 "linked_video_link_id": row[7],
                 "linked_youtube_video_id": row[8],
+                "selected_package_id": row[9],
+                "package_selected_at": row[10],
             }
             for row in rows
         ]
@@ -222,6 +409,187 @@ class HistoryStore:
                 (max(1, min(limit, 50)),),
             ).fetchall()
         return [str(row[0]).strip() for row in rows if row[0] and str(row[0]).strip()]
+
+    def recent_published_titles(self, limit: int = 10) -> list[str]:
+        """Return observed uploaded titles without inferring package selection."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT COALESCE(json_extract(youtube_metadata_json, '$.title'), selected_title)
+                   FROM published_video_links
+                   WHERE COALESCE(json_extract(youtube_metadata_json, '$.title'), selected_title) IS NOT NULL
+                   ORDER BY updated_at DESC LIMIT ?""",
+                (max(1, min(limit, 50)),),
+            ).fetchall()
+        return [str(row[0]).strip() for row in rows if row[0] and str(row[0]).strip()]
+
+    def retention_learning_summary(
+        self,
+        *,
+        format_filter: str | None = None,
+        language_filter: str | None = None,
+        snapshot_window: str = "24h",
+    ) -> dict[str, Any]:
+        """Derive cautious retention correlations from eligible Phase 5 History only."""
+        if snapshot_window not in _SCHEDULED_WINDOWS:
+            raise ValueError("Retention learning requires a 24h, 7d, or 28d evidence window.")
+        eligible: list[dict[str, Any]] = []
+        for link in self.published_video_links_list():
+            comparable = link.get("comparable_metadata") if isinstance(link.get("comparable_metadata"), dict) else {}
+            effective_format = str(comparable.get("format") or link.get("format") or "unknown")
+            effective_language = str(comparable.get("language") or link.get("language") or "unknown")
+            if format_filter and effective_format != format_filter:
+                continue
+            if language_filter and effective_language != language_filter:
+                continue
+            snapshot = self.completed_evidence_snapshot(str(link.get("youtube_video_id") or ""), snapshot_window)
+            policy_link = dict(link)
+            policy_link["format"] = effective_format
+            policy_link["language"] = effective_language
+            if not sample_is_eligible(policy_link, snapshot, expected_window=snapshot_window):
+                continue
+            retention = _optional_number((snapshot or {}).get("avg_view_percentage"))
+            if retention is None:
+                continue
+            run = self.history_run(int(link.get("analysis_run_id") or 0))
+            payload = run.get("package") if run and isinstance(run.get("package"), dict) else {}
+            assistant = payload.get("retention_assistant") if isinstance(payload.get("retention_assistant"), dict) else {}
+            if assistant.get("rule_version") != "phase5-v1":
+                continue
+            opening = assistant.get("opening") if isinstance(assistant.get("opening"), dict) else {}
+            pacing = assistant.get("pacing") if isinstance(assistant.get("pacing"), dict) else {}
+            quote = assistant.get("quote_presentation") if isinstance(assistant.get("quote_presentation"), dict) else {}
+            selection = run.get("selected_package") if run and isinstance(run.get("selected_package"), dict) else None
+            hook_structure = (
+                "generic_setup" if opening.get("generic_setup") else
+                "subject_clear" if opening.get("clarity") == "clear" else "subject_needs_review"
+            )
+            quote_structure = "quote_present" if quote.get("status") == "available" else "no_exact_quote"
+            eligible.append({
+                "analysis_run_id": link.get("analysis_run_id"),
+                "youtube_video_id": link.get("youtube_video_id"),
+                "selected_package_id": selection.get("generated_package_id") if selection else None,
+                "hook_structure": hook_structure,
+                "pacing_structure": str(pacing.get("format_assessment") or "unknown"),
+                "quote_structure": quote_structure,
+                "average_view_percentage": retention,
+            })
+        sample_size = len(eligible)
+        policy = confidence_payload(sample_size)
+        if not policy["learning_allowed"]:
+            return {
+                "status": "insufficient_evidence", "learning_allowed": False,
+                "sample_size": sample_size, "minimum_samples": 5,
+                "confidence_label": policy["confidence_label"],
+                "snapshot_window": snapshot_window, "patterns": [],
+                "retention_curve_status": "unavailable",
+                "message": (
+                    f"Only {sample_size} verified comparable Phase 5 video(s) have completed {snapshot_window} "
+                    "retention evidence; at least 5 are required before surfacing correlations."
+                ),
+            }
+        patterns: list[dict[str, Any]] = []
+        for feature in ("hook_structure", "pacing_structure", "quote_structure"):
+            groups: dict[str, list[float]] = {}
+            for item in eligible:
+                groups.setdefault(str(item[feature]), []).append(float(item["average_view_percentage"]))
+            for value, measurements in groups.items():
+                patterns.append({
+                    "feature": feature, "value": value, "sample_size": len(measurements),
+                    "median_average_viewed_percentage": _median(sorted(measurements)),
+                    "observation": (
+                        f"In {len(measurements)} eligible creator video(s), {feature.replace('_', ' ')} "
+                        f"'{value}' has a median average viewed value of {_median(sorted(measurements)):.1f}%."
+                    ),
+                    "interpretation": "observed_correlation_not_causation",
+                    "provenance": "verified_completed_youtube_analytics_snapshot",
+                })
+        patterns.sort(key=lambda item: (-int(item["sample_size"]), -float(item["median_average_viewed_percentage"] or 0)))
+        return {
+            "status": "observed_correlations", "learning_allowed": True,
+            "sample_size": sample_size, "minimum_samples": 5,
+            "confidence_label": policy["confidence_label"],
+            "snapshot_window": snapshot_window, "patterns": patterns,
+            "retention_curve_status": "unavailable",
+            "message": (
+                "Eligible creator-history correlations are available. YouTube average viewed data does not "
+                "identify a causal hook effect or exact drop timestamp."
+            ),
+        }
+
+    def package_selection(self, run_id: int) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT s.generated_package_id, s.package_json, s.quality_gate_json,
+                          s.selection_source, s.selected_at, s.updated_at, p.id, p.youtube_video_id
+                   FROM analysis_package_selections s
+                   LEFT JOIN published_video_links p ON p.id = (
+                       SELECT linked.id FROM published_video_links linked
+                       WHERE linked.analysis_run_id = s.analysis_run_id
+                       ORDER BY linked.updated_at DESC LIMIT 1)
+                   WHERE s.analysis_run_id = ?""",
+                (run_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "analysis_run_id": run_id, "generated_package_id": row[0],
+            "package": _json_object(row[1]), "quality_gate": _json_object(row[2]),
+            "selection_source": row[3], "selected_at": row[4], "updated_at": row[5],
+            "linked_video_link_id": row[6], "linked_youtube_video_id": row[7],
+            "later_associated_with_video": bool(row[7]),
+        }
+
+    def select_generated_package(self, run_id: int, package_id: str) -> dict[str, Any] | None:
+        """Persist a server-known generated package; client metadata is never trusted."""
+        run = self.history_run(run_id)
+        if not run:
+            return None
+        payload = run.get("package") if isinstance(run.get("package"), dict) else {}
+        match: dict[str, Any] | None = None
+        for index, candidate in enumerate(payload.get("title_thumbnail_packages") or []):
+            if not isinstance(candidate, dict):
+                continue
+            candidate_id = str(candidate.get("package_id") or f"package-{chr(97 + index)}")
+            if candidate_id == package_id:
+                match = dict(candidate)
+                match["package_id"] = candidate_id
+                break
+        if match is None:
+            raise ValueError("The selected package is not part of this saved generation run.")
+        for field in ("description", "tags", "hashtags", "selected_language"):
+            if field in payload:
+                match[field] = payload[field]
+        assistant = payload.get("retention_assistant") if isinstance(payload.get("retention_assistant"), dict) else {}
+        matching_alignment = next(
+            (
+                item for item in (assistant.get("package_alignment") or [])
+                if isinstance(item, dict) and str(item.get("package_id")) == package_id
+            ),
+            None,
+        )
+        if assistant:
+            match["retention_trace"] = {
+                "rule_version": assistant.get("rule_version"),
+                "risk_level": assistant.get("risk_level"),
+                "package_alignment": matching_alignment,
+                "evidence_status": (assistant.get("retention_learning") or {}).get("status"),
+            }
+        gate = match.get("quality_gate") or payload.get("generation_quality") or {}
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO analysis_package_selections
+                       (analysis_run_id, generated_package_id, package_json, quality_gate_json,
+                        selection_source, selected_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'creator', ?, ?)
+                   ON CONFLICT(analysis_run_id) DO UPDATE SET
+                       generated_package_id = excluded.generated_package_id,
+                       package_json = excluded.package_json,
+                       quality_gate_json = excluded.quality_gate_json,
+                       selection_source = 'creator', updated_at = excluded.updated_at""",
+                (run_id, package_id, json.dumps(match), json.dumps(gate), now, now),
+            )
+        return self.package_selection(run_id)
 
     def history_run(self, run_id: int) -> dict[str, Any] | None:
         """Return a saved SEO package and its historical metadata."""
@@ -240,17 +608,26 @@ class HistoryStore:
             package = json.loads(row[10]) if row[10] else None
         except json.JSONDecodeError:
             package = None
-        return {
+        result = {
             "id": row[0], "created_at": row[1], "query": row[2], "intent": row[3],
             "content_angle": row[4], "title": row[5], "title_score": round(float(row[6] or 0), 2),
             "retention_risk": row[7], "opportunity_label": row[8],
             "opportunity_score": round(float(row[9] or 0), 2), "package": package,
         }
+        result["selected_package"] = self.package_selection(run_id)
+        return result
 
     def delete_analysis_run(self, run_id: int) -> bool:
         """Atomically delete a package and link-owned dependents, or roll back all."""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """UPDATE content_ideas SET analysis_run_id = NULL, published_video_link_id = NULL,
+                          status = CASE WHEN status IN ('package_generated', 'published') THEN 'scripted' ELSE status END,
+                          updated_at = ?
+                   WHERE analysis_run_id = ?""",
+                (datetime.now(timezone.utc).isoformat(), run_id),
+            )
             cursor = connection.execute("DELETE FROM analysis_runs WHERE id = ?", (run_id,))
             violations = connection.execute("PRAGMA foreign_key_check").fetchall()
             if violations:
@@ -554,6 +931,18 @@ class HistoryStore:
     def reset_database(self) -> None:
         """Clear all historical test data for a fresh workspace setup."""
         with self._connect() as connection:
+            connection.execute("DELETE FROM experiment_result_snapshots")
+            connection.execute("DELETE FROM experiment_video_assignments")
+            connection.execute("DELETE FROM experiments")
+            connection.execute("DELETE FROM published_video_audits")
+            connection.execute("DELETE FROM demand_research_snapshots")
+            connection.execute("DELETE FROM watchlist_outlier_analyses")
+            connection.execute("DELETE FROM watchlist_video_snapshots")
+            connection.execute("DELETE FROM watchlist_videos")
+            connection.execute("DELETE FROM watchlist_channel_snapshots")
+            connection.execute("DELETE FROM watchlist_channels")
+            connection.execute("DELETE FROM content_idea_research_snapshots")
+            connection.execute("DELETE FROM content_ideas")
             connection.execute("DELETE FROM video_snapshots")
             connection.execute("DELETE FROM owned_video_snapshots")
             connection.execute("DELETE FROM youtube_channel_syncs")
@@ -645,6 +1034,13 @@ class HistoryStore:
             ).fetchone()
             link_id = int(row[0]) if row else int(cursor.lastrowid or 0)
             connection.execute(
+                """UPDATE content_ideas SET published_video_link_id = NULL,
+                          status = CASE WHEN status = 'published' THEN 'package_generated' ELSE status END,
+                          updated_at = ?
+                   WHERE published_video_link_id = ? AND analysis_run_id != ?""",
+                (now, link_id, analysis_run_id),
+            )
+            connection.execute(
                 """INSERT OR IGNORE INTO published_video_comparable_metadata
                    (published_video_link_id, language, format, duration_bucket, topic_category,
                     language_source, format_source, duration_bucket_source, topic_category_source,
@@ -652,6 +1048,12 @@ class HistoryStore:
                    VALUES (?, ?, ?, 'unknown', 'unknown', ?, ?, 'unknown', 'unknown', ?, ?)""",
                 (link_id, language or "unknown", format_val or "unknown",
                  "package" if language else "unknown", "package" if format_val else "unknown", now, now),
+            )
+            connection.execute(
+                """UPDATE content_ideas
+                   SET published_video_link_id = ?, status = 'published', updated_at = ?
+                   WHERE analysis_run_id = ?""",
+                (link_id, now, analysis_run_id),
             )
             return link_id
 
@@ -1174,6 +1576,8 @@ class HistoryStore:
             return {"linked": False}
 
         package = run.get("package") if isinstance(run.get("package"), dict) else {}
+        selection = run.get("selected_package") if isinstance(run.get("selected_package"), dict) else None
+        selected_package = selection.get("package") if selection and isinstance(selection.get("package"), dict) else {}
         metadata = link.get("youtube_metadata") if isinstance(link.get("youtube_metadata"), dict) else {}
         snapshots = self.performance_snapshots(str(link.get("youtube_video_id") or ""))
         current = self.current_performance_snapshot(str(link.get("youtube_video_id") or "")) or {}
@@ -1189,13 +1593,14 @@ class HistoryStore:
         published_at = _parse_datetime_safe(str(link.get("published_at") or ""))
         age_hours = max(0.0, (datetime.now(timezone.utc) - published_at).total_seconds() / 3600) if published_at else 0.0
 
-        generated_title = str(package.get("title") or run.get("title") or "").strip()
+        primary_generated_title = str(package.get("title") or run.get("title") or "").strip()
+        generated_title = str(selected_package.get("title") or primary_generated_title).strip()
         uploaded_title = str(metadata.get("title") or link.get("selected_title") or "").strip()
-        generated_description = str(package.get("description") or link.get("selected_description") or "").strip()
+        generated_description = str(selected_package.get("description") or package.get("description") or link.get("selected_description") or "").strip()
         uploaded_description = str(metadata.get("description") or "").strip()
-        generated_tags = _normalized_list(package.get("tags") or link.get("selected_tags") or [])
+        generated_tags = _normalized_list(selected_package.get("tags") or package.get("tags") or link.get("selected_tags") or [])
         uploaded_tags = _normalized_list(metadata.get("tags") or [])
-        generated_hashtags = _normalized_list(package.get("hashtags") or link.get("selected_hashtags") or [])
+        generated_hashtags = _normalized_list(selected_package.get("hashtags") or package.get("hashtags") or link.get("selected_hashtags") or [])
         uploaded_hashtags = _normalized_list(__import__("re").findall(r"#[A-Za-z0-9_]+", uploaded_description))
 
         matching_tags = [tag for tag in generated_tags if tag in set(uploaded_tags)]
@@ -1226,6 +1631,20 @@ class HistoryStore:
         )
 
         diagnosis_policy = confidence_payload(baseline.get("sample_size", 0))
+        comparable = self.comparable_metadata(int(link.get("id") or 0))
+        comparable_ready = all(str(comparable.get(field) or "unknown") != "unknown" for field in COMPARABLE_FIELDS)
+        try:
+            retention_learning = self.retention_learning_summary(
+                format_filter=str(comparable.get("format") or "").strip() or None,
+                language_filter=str(comparable.get("language") or "").strip() or None,
+                snapshot_window=str(evidence.get("snapshot_window") or "24h") if evidence else "24h",
+            )
+        except (ValueError, sqlite3.Error):
+            retention_learning = {
+                "status": "insufficient_evidence", "learning_allowed": False,
+                "sample_size": 0, "minimum_samples": 5, "patterns": [],
+                "message": "Retention learning is unavailable; no pattern is inferred.",
+            }
         return {
             "linked": True,
             "link_id": link.get("id"),
@@ -1235,8 +1654,17 @@ class HistoryStore:
             "age_hours": round(age_hours, 1),
             "metadata_synced_at": link.get("metadata_synced_at"),
             "youtube": metadata,
-            "comparable_metadata": self.comparable_metadata(int(link.get("id") or 0)),
+            "comparable_metadata": comparable,
             "package_usage": {
+                "attribution_status": "creator_selected" if selection else "unknown",
+                "generated_primary_title": primary_generated_title,
+                "selected_package_id": selection.get("generated_package_id") if selection else None,
+                "selected_package": selected_package if selection else None,
+                "attribution_note": (
+                    "The creator explicitly recorded this generated package before linkage."
+                    if selection else
+                    "No package selection was recorded. The system cannot infer which generated alternative was published."
+                ),
                 "generated_title": generated_title,
                 "uploaded_title": uploaded_title,
                 "title_match": _normalize_text(uploaded_title) == _normalize_text(generated_title),
@@ -1266,6 +1694,7 @@ class HistoryStore:
             },
             "current_performance": current or None,
             "learning_evidence": evidence or None,
+            "retention_learning": retention_learning,
             "baseline": baseline,
             "diagnosis": {
                 "verdict": verdict,
@@ -1277,6 +1706,8 @@ class HistoryStore:
                     link.get("ownership_state") == "verified"
                     and link.get("ownership_verified")
                     and mature_snapshot(evidence)
+                    and diagnosis_policy["learning_allowed"]
+                    and comparable_ready
                 ),
                 "attribution_note": (
                     "YouTube APIs report video-level performance, not views caused by individual tags. "
@@ -1290,16 +1721,20 @@ class HistoryStore:
         window = str(latest.get("snapshot_window") or "")
         if not mature_snapshot(latest):
             return {"sample_size": 0, "window": window or "none", "median_views": None, "median_retention_percentage": None}
+        comparable = self.comparable_metadata(int(link.get("id") or 0))
+        if any(str(comparable.get(field) or "unknown") == "unknown" for field in COMPARABLE_FIELDS):
+            return {"sample_size": 0, "window": window, "median_views": None, "median_retention_percentage": None}
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT s.views, s.avg_view_percentage
                    FROM video_performance_snapshots s
                    JOIN published_video_links p ON p.youtube_video_id = s.youtube_video_id
+                   JOIN published_video_comparable_metadata m ON m.published_video_link_id = p.id
                    WHERE s.snapshot_window = ? AND s.youtube_video_id != ?
                      AND s.snapshot_status = 'complete'
                      AND p.ownership_state = 'verified' AND p.ownership_verified = 1
-                     AND COALESCE(p.format, '') = COALESCE(?, '')
-                     AND COALESCE(p.language, '') = COALESCE(?, '')
+                     AND m.format = ? AND m.language = ?
+                     AND m.duration_bucket = ? AND m.topic_category = ?
                      AND s.id = (
                          SELECT x.id FROM video_performance_snapshots x
                          WHERE x.youtube_video_id = s.youtube_video_id
@@ -1307,7 +1742,8 @@ class HistoryStore:
                            AND x.snapshot_status = 'complete'
                          ORDER BY x.completed_at DESC, x.id DESC LIMIT 1
                      )""",
-                (window, link.get("youtube_video_id"), link.get("format"), link.get("language")),
+                (window, link.get("youtube_video_id"), comparable.get("format"), comparable.get("language"),
+                 comparable.get("duration_bucket"), comparable.get("topic_category")),
             ).fetchall()
         views = sorted(float(row[0]) for row in rows if row[0] is not None)
         retention = sorted(float(row[1]) for row in rows if row[1] is not None)
@@ -1619,6 +2055,16 @@ def _first_number(*values: Any) -> int:
             except (TypeError, ValueError):
                 continue
     return 0
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _parse_datetime_safe(value: str) -> datetime | None:

@@ -8,6 +8,12 @@ from typing import Any
 
 from win_engine.analysis.content_auditor import audit_content_package
 from win_engine.analysis.creator_brief import creator_topic
+from win_engine.analysis.generation_quality import (
+    apply_quality_gate,
+    candidate_mechanism,
+    evaluate_package_quality,
+    evidence_trace,
+)
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
 from win_engine.analysis.language_engine import build_language_strategy
@@ -95,6 +101,7 @@ def build_seo_package(
         logger.warning("Channel performance learning is unavailable: %s", type(exc).__name__)
         channel_learning = {}
     channel_learning["recent_titles"] = history_store.recent_generated_titles(limit=10)
+    channel_learning["published_titles"] = history_store.recent_published_titles(limit=10)
     channel_learning["cohort"] = history_store.cohort_analytics(
         format_filter=str((creator_brief or {}).get("video_format") or "").strip() or None,
         language_filter=selected_language,
@@ -132,16 +139,23 @@ def build_seo_package(
 
     # The selected-language package backs the top-level fields and downstream analysis.
     pkg = multilang[selected_language]
+    generation_trace = dict(pkg.get("generation_trace") or {})
+    quality_gate = evaluate_package_quality(
+        pkg, script=script, creator_brief=creator_brief, language=selected_language,
+        recent_titles=channel_learning.get("recent_titles") or [],
+        published_titles=channel_learning.get("published_titles") or [],
+    )
+    pkg = apply_quality_gate(pkg, quality_gate)
+    multilang[selected_language] = pkg
 
     title = pkg["title"]
     description = pkg["description"]
     tags = pkg["tags"]
     hashtags = pkg["hashtags"]
     variant_titles = list(pkg["variants"]) or [title]
-    while len(variant_titles) < 5:
-        variant_titles.append(variant_titles[-1])
 
-    package_intents = ["Search", "Browse", "Existing audience", "Alternative", "Alternative"]
+    package_intents = ["Search", "Browse", "Alternative", "Alternative", "Alternative"]
+    personalization = evidence_trace(channel_learning)
     competitor_titles = [
         str(item.get("title") or "")
         for item in research.get("youtube_results", [])
@@ -152,6 +166,7 @@ def build_seo_package(
         for field in ("content", "target_audience", "viewer_promise", "unique_angle")
     )
     title_variants_data = []
+    accepted_by_title = {item["title"]: item for item in quality_gate.get("accepted_candidates", [])}
     for index, variant in enumerate(variant_titles[:5]):
         quality_score = _deterministic_score(
             variant,
@@ -159,12 +174,19 @@ def build_seo_package(
             context_text=title_context,
             competitor_titles=competitor_titles,
         )
+        mechanism = str((accepted_by_title.get(variant) or {}).get("mechanism") or candidate_mechanism(variant))
         title_variants_data.append({
             "title": variant,
             "score": quality_score,
             "estimated_ctr": None,
             "character_count": len(variant),
             "package_intent": package_intents[index] if index < len(package_intents) else "Alternative",
+            "mechanism": mechanism,
+            "reason": f"Offers a distinct {mechanism} framing while preserving the creator source.",
+            "discovery_surface": package_intents[index] if index < len(package_intents) else "Alternative",
+            "evidence_used": personalization,
+            "tradeoffs": ["Generated suggestion, not observed performance evidence.", "No reach or CTR outcome is guaranteed."],
+            "quality_gate": {"status": "pass", "source": "phase4_local_gate"},
         })
 
     title_optimization = {
@@ -264,6 +286,8 @@ def build_seo_package(
             "session_expansion": session_expansion, "binge_bridge": binge_bridge,
             "automation_workflow": automation_workflow, "feedback_package": feedback_package,
             "multilang": multilang, "generation_source": generation_source,
+            "creator_brief": creator_brief, "generation_quality": quality_gate,
+            "personalization": personalization, "generation_trace": generation_trace,
         },
     )
 
@@ -291,6 +315,10 @@ def build_seo_package(
         "multilang": multilang,
         "fallback_languages": fallback_languages,
         "generation_source": generation_source,
+        "generation_quality": quality_gate,
+        "personalization": personalization,
+        "generation_trace": generation_trace,
+        "creator_brief": creator_brief,
         "history_run_id": history_run_id,
     }
 
@@ -395,7 +423,7 @@ def _content_specific_fallback(
     topic = (primary_topic or "the video topic").strip()
     pretty = topic.title()
     content = str(brief.get("content") or "").strip()
-    quote = _quoted_text(content)
+    quote = str(brief.get("exact_quote") or "").strip() or _quoted_text(content)
     video_format = str(brief.get("video_format") or "").lower()
     is_shorts = video_format in {"youtube_shorts", "shorts", "quote", "reels"}
     promise = str(brief.get("viewer_promise") or "").strip()
@@ -425,13 +453,14 @@ def _content_specific_fallback(
             f"The words are the focus, while the visual supports their mood without changing their meaning."
         )
     else:
-        variants = [
-            _fit_title(f"{pretty}: What You Need to Know", suffix),
-            _fit_title(f"The Honest Truth About {pretty}", suffix),
-            _fit_title(f"What {pretty} Really Means", suffix),
-            _fit_title(f"A Different Way to See {pretty}", suffix),
-            _fit_title(f"The Most Useful Lesson From {pretty}", suffix),
-        ]
+        variants = [_fit_title(f"{pretty}, Shown Clearly", suffix)]
+        if unique_angle:
+            variants.append(_fit_title(f"{pretty} Through {unique_angle}", suffix))
+        if proof:
+            variants.append(_fit_title(f"See {pretty} With {proof}", suffix))
+        if promise:
+            variants.append(_fit_title(f"{pretty}: {promise}", suffix))
+        variants.append(_fit_title(f"A Direct Look at {pretty}", suffix))
         rotation = sum(ord(char) for char in topic.casefold()) % len(variants)
         variants = variants[rotation:] + variants[:rotation]
         description_parts = [
