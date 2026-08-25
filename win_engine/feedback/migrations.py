@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 _APPLICATION_TABLES = {
     "analysis_runs",
     "video_snapshots",
@@ -153,26 +153,34 @@ def prepare_database(database_path: str, *, backup_before_migration: bool = True
             _migrate_v3_to_v4(connection)
             _migrate_v4_to_v5(connection)
             _migrate_v5_to_v6(connection)
+            _migrate_v6_to_v7(connection)
         elif old_version == 1:
             _migrate_v1_to_v2(connection)
             _migrate_v2_to_v3(connection)
             _migrate_v3_to_v4(connection)
             _migrate_v4_to_v5(connection)
             _migrate_v5_to_v6(connection)
+            _migrate_v6_to_v7(connection)
         elif old_version == 2:
             _migrate_v2_to_v3(connection)
             _migrate_v3_to_v4(connection)
             _migrate_v4_to_v5(connection)
             _migrate_v5_to_v6(connection)
+            _migrate_v6_to_v7(connection)
         elif old_version == 3:
             _migrate_v3_to_v4(connection)
             _migrate_v4_to_v5(connection)
             _migrate_v5_to_v6(connection)
+            _migrate_v6_to_v7(connection)
         elif old_version == 4:
             _migrate_v4_to_v5(connection)
             _migrate_v5_to_v6(connection)
+            _migrate_v6_to_v7(connection)
         elif old_version == 5:
             _migrate_v5_to_v6(connection)
+            _migrate_v6_to_v7(connection)
+        elif old_version == 6:
+            _migrate_v6_to_v7(connection)
         else:
             raise MigrationError(f"No migration path exists from schema version {old_version}.")
         configure_connection(connection)
@@ -218,7 +226,7 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
         (
             CURRENT_SCHEMA_VERSION,
             datetime.now(timezone.utc).isoformat(),
-            "Phase 8 immutable published audits and structured experiments",
+            "Offline-first cloud package synchronization",
         ),
     )
     connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
@@ -433,6 +441,21 @@ def _migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_v6_to_v7(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_cloud_sync_tables(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (7, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), "Offline-first cloud package synchronization"),
+        )
+        connection.execute("PRAGMA user_version = 7")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 def _create_comparable_metadata_tables(connection: sqlite3.Connection) -> None:
     connection.execute(
         """CREATE TABLE IF NOT EXISTS published_video_comparable_metadata (
@@ -548,6 +571,39 @@ def _create_relational_tables(connection: sqlite3.Connection) -> None:
     _create_content_idea_tables(connection)
     _create_watchlist_demand_tables(connection)
     _create_audit_experiment_tables(connection)
+    _create_cloud_sync_tables(connection)
+
+
+def _create_cloud_sync_tables(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS cloud_sync_packages (
+               sync_uuid TEXT PRIMARY KEY,
+               analysis_run_id INTEGER NOT NULL UNIQUE,
+               origin_device_id TEXT NOT NULL,
+               revision INTEGER NOT NULL DEFAULT 1,
+               content_hash TEXT NOT NULL,
+               last_synced_hash TEXT,
+               remote_updated_at TEXT,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id) ON DELETE CASCADE
+           )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS cloud_sync_outbox (
+               sync_uuid TEXT PRIMARY KEY,
+               revision INTEGER NOT NULL,
+               payload_json TEXT NOT NULL,
+               content_hash TEXT NOT NULL,
+               queued_at TEXT NOT NULL,
+               attempt_count INTEGER NOT NULL DEFAULT 0,
+               last_attempted_at TEXT,
+               last_error TEXT,
+               FOREIGN KEY(sync_uuid) REFERENCES cloud_sync_packages(sync_uuid) ON DELETE CASCADE
+           )"""
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_cloud_sync_run ON cloud_sync_packages(analysis_run_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_cloud_outbox_time ON cloud_sync_outbox(queued_at)")
 
 
 def _create_audit_experiment_tables(connection: sqlite3.Connection) -> None:

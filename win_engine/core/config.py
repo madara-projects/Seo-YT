@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     snapshot_collector_retry_base_seconds: int = Field(default=21600, ge=60)
     snapshot_collector_retry_max_seconds: int = Field(default=172800, ge=60)
 
+    cloud_sync_enabled: bool = False
+    cloud_sync_device_id: str | None = None
+    cloud_sync_host: str | None = None
+    cloud_sync_port: int = Field(default=3306, ge=1, le=65535)
+    cloud_sync_database: str = "seo_yt_sync"
+    cloud_sync_user: str | None = None
+    cloud_sync_password: str | None = None
+    cloud_sync_ssl_ca_path: str = "/run/secrets/aiven-ca.pem"
+    cloud_sync_interval_seconds: int = Field(default=60, ge=30)
+    cloud_sync_initial_delay_seconds: int = Field(default=10, ge=0)
+
     model_config = SettingsConfigDict(env_file=".env", env_prefix="WIN_ENGINE_", extra="ignore")
 
     @property

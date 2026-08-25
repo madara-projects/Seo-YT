@@ -17,6 +17,7 @@ from win_engine.core.logging import configure_logging
 from win_engine.core.middleware import request_context_middleware
 from win_engine.core.rate_limit import InMemoryRateLimiter
 from win_engine.feedback.snapshot_collector import SnapshotCollector
+from win_engine.feedback.cloud_sync import CloudSyncService
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -28,13 +29,16 @@ def create_app() -> FastAPI:
 
     settings = get_settings()
     collector = SnapshotCollector(settings)
+    cloud_sync = CloudSyncService(settings)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         collector.start()
+        cloud_sync.start()
         try:
             yield
         finally:
+            cloud_sync.stop()
             collector.stop()
 
     app = FastAPI(
@@ -44,6 +48,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.state.snapshot_collector = collector
+    app.state.cloud_sync = cloud_sync
     # The extracted frontend is served by FastAPI itself. Keeping the mount
     # same-origin avoids a second frontend server and works identically in
     # local and Docker deployments.

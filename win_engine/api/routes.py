@@ -73,6 +73,22 @@ def snapshot_collector_status(request: Request):
     return collector.status()
 
 
+@router.get("/api/cloud-sync/status")
+def cloud_sync_status(request: Request):
+    service = getattr(request.app.state, "cloud_sync", None)
+    if service is None:
+        return {"state": "disabled", "enabled": False, "configured": False}
+    return service.status()
+
+
+@router.post("/api/cloud-sync/run")
+def run_cloud_sync(request: Request):
+    service = getattr(request.app.state, "cloud_sync", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Cloud synchronization is unavailable.")
+    return service.run_once()
+
+
 @router.get("/ready")
 def readiness_check(request: Request):
     settings = get_settings()
@@ -114,6 +130,45 @@ def diagnostics():
     research = ResearchService(settings)
 
     return {**research.diagnostics(), "gemini": gemini_client.diagnostics()}
+
+
+@router.get("/api/settings/status")
+def settings_status(request: Request):
+    """Return configuration and local state without exposing any secret value."""
+    settings = get_settings()
+    store = HistoryStore(settings.database_path)
+    with store._connect() as connection:
+        schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        counts = {
+            "packages": int(connection.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0]),
+            "ideas": int(connection.execute("SELECT COUNT(*) FROM content_ideas").fetchone()[0]),
+            "published_links": int(connection.execute("SELECT COUNT(*) FROM published_video_links").fetchone()[0]),
+            "performance_snapshots": int(connection.execute("SELECT COUNT(*) FROM video_performance_snapshots").fetchone()[0]),
+        }
+    database_path = Path(settings.database_path)
+    try:
+        database_bytes = database_path.stat().st_size
+    except OSError:
+        database_bytes = None
+    backup_dir = database_path.resolve().parent / "backups"
+    backups = sorted(backup_dir.glob(f"{database_path.stem}.backup-*.sqlite3"), key=lambda item: item.stat().st_mtime, reverse=True) if backup_dir.exists() else []
+    youtube = YouTubeChannelService(settings).status()
+    collector = getattr(request.app.state, "snapshot_collector", None)
+    cloud = getattr(request.app.state, "cloud_sync", None)
+    return {
+        "app": {"name": settings.app_name, "version": settings.app_version, "environment": settings.app_environment},
+        "database": {"healthy": True, "name": database_path.name, "schema_version": schema_version,
+                     "size_bytes": database_bytes, "counts": counts,
+                     "last_backup_at": datetime.fromtimestamp(backups[0].stat().st_mtime, timezone.utc).isoformat() if backups else None},
+        "providers": {"gemini": gemini_client.diagnostics(),
+                      "youtube_data_api": {"configured": bool(settings.youtube_api_key_pool), "key_count": len(settings.youtube_api_key_pool)},
+                      "local_fallback": {"available": True}, "redis": {"configured": bool(settings.redis_url)}},
+        "youtube_oauth": {"configured": youtube.get("configured", False), "connected": youtube.get("connected", False),
+                          "channel_title": (youtube.get("channel") or {}).get("title"),
+                          "last_synced_at": (youtube.get("latest_sync") or {}).get("synced_at")},
+        "collector": collector.status() if collector else {"state": "disabled", "enabled": False},
+        "cloud_sync": cloud.status() if cloud else {"state": "disabled", "enabled": False},
+    }
 
 
 @router.get("/youtube/channel/status")

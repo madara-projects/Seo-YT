@@ -658,14 +658,47 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
 
     $("runDiagBtn").addEventListener("click", async () => {
       const out = $("settDiagOut");
-      out.textContent = "Running diagnostics...";
+      const button = $("runDiagBtn");
+      button.disabled = true;
+      out.textContent = "Running one live YouTube Data API search check...";
       try {
         const data = await apiRequest("/diagnostics");
-        out.textContent = JSON.stringify(data, null, 2);
+        const yt = data.youtube || {};
+        const gemini = data.gemini || {};
+        out.innerHTML = `<div class="kv-list"><div class="kv-item"><span class="kv-key">YouTube live request</span><span class="kv-val"><span class="chip ${yt.status === "ok" ? "chip-ok" : ""}">${esc(yt.status || "unavailable")}</span></span></div><div class="kv-item"><span class="kv-key">YouTube result</span><span class="kv-val">${esc(yt.error || yt.warning || "Request succeeded; one configured key was used.")}</span></div><div class="kv-item"><span class="kv-key">Gemini configuration</span><span class="kv-val"><span class="chip ${gemini.configured ? "chip-ok" : ""}">${gemini.configured ? `Configured / ${esc(gemini.model)}` : "Not configured; fallback will be used"}</span></span></div></div>`;
       } catch (e) {
         renderApiError(out, e, "Diagnostics failed.");
+      } finally {
+        button.disabled = false;
       }
     });
+
+    function formatBytes(value) {
+      const bytes = Number(value);
+      if (!Number.isFinite(bytes)) return "Unavailable";
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / 1048576).toFixed(1)} MB`;
+    }
+
+    async function loadSettingsStatus() {
+      try {
+        const data = await apiRequest("/api/settings/status", { cache: "no-store" });
+        const app = data.app || {}, db = data.database || {}, providers = data.providers || {};
+        const gemini = providers.gemini || {}, yt = providers.youtube_data_api || {}, counts = db.counts || {};
+        if ($("appVersionBadge")) $("appVersionBadge").textContent = `OS v${app.version || "unknown"}`;
+        if ($("sidebarRuntimeStatus")) $("sidebarRuntimeStatus").innerHTML = `<span class="dot"></span> ${gemini.configured ? `Gemini ${esc(gemini.model)}` : "Local fallback"} / DB ${db.healthy ? "healthy" : "error"}`;
+        $("settGeminiProvider").innerHTML = `<span class="chip ${gemini.configured ? "chip-ok" : ""}">${gemini.configured ? `Configured / ${esc(gemini.model)}` : "Not configured"}</span>`;
+        $("settFallbackProvider").innerHTML = `<span class="chip chip-ok">Available / used when Gemini fails</span>`;
+        $("settYouTubeKeys").innerHTML = `<span class="chip ${yt.configured ? "chip-ok" : ""}">${yt.configured ? `${num(yt.key_count)} configured` : "Not configured"}</span>`;
+        $("settRedisStatus").innerHTML = `<span class="chip ${providers.redis?.configured ? "chip-ok" : ""}">${providers.redis?.configured ? "Configured" : "Not configured"}</span>`;
+        $("settDatabaseStatus").innerHTML = `<span class="chip ${db.healthy ? "chip-ok" : ""}">${db.healthy ? "Healthy" : "Error"}</span> ${esc(db.name || "Unknown")} / schema v${num(db.schema_version)} / ${formatBytes(db.size_bytes)}`;
+        $("settDatabaseCounts").textContent = `${num(counts.packages)} packages / ${num(counts.ideas)} ideas / ${num(counts.published_links)} linked videos / ${num(counts.performance_snapshots)} performance snapshots`;
+        $("settBackupStatus").textContent = db.last_backup_at ? historyDate(db.last_backup_at) : "No migration backup recorded";
+      } catch (error) {
+        ["settGeminiProvider","settFallbackProvider","settYouTubeKeys","settRedisStatus","settDatabaseStatus","settDatabaseCounts","settBackupStatus"].forEach(id => { if ($(id)) $(id).textContent = "Status unavailable"; });
+      }
+    }
 
     async function loadChannelStatus(force = false) {
       try {
@@ -715,7 +748,8 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
         if ($("anaWatchTime")) $("anaWatchTime").textContent = num(current.estimatedMinutesWatched) + " mins";
         if ($("anaSyncStatus")) $("anaSyncStatus").textContent = data.latest_sync?.synced_at ? "Last synced: " + historyDate(data.latest_sync.synced_at) : "No completed YouTube sync.";
         $("anaRecommendation").textContent = recStr;
-        settStatus.textContent = `Connected to ${channelTitle}. (${statsStr})`;
+        const lastChannelSync = data.latest_sync?.synced_at ? historyDate(data.latest_sync.synced_at) : "not refreshed yet";
+        settStatus.textContent = `Connected to ${channelTitle}. ${statsStr}. Last analytics refresh: ${lastChannelSync}.`;
 
         connectBtn.style.display = "none";
         refreshBtn.style.display = "inline-flex";
@@ -750,7 +784,7 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
        if (detailsNode) {
           const counts = data.last_counts || {};
           detailsNode.textContent = data.dry_run
-            ? "Dry-run mode: no YouTube/Gemini calls or database writes."
+            ? `Dry-run: no YouTube calls or snapshot writes. Last check: ${data.last_finished_at ? historyDate(data.last_finished_at) : "not run"}; planned ${num(counts.links)} linked videos / ${num(counts.windows)} due windows. Next check: ${data.next_run_at ? historyDate(data.next_run_at) : "not scheduled"}.`
             : state === "disabled"
               ? "Automatic collection is disabled by configuration."
               : state === "unconfigured"
@@ -764,6 +798,35 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
         if (detailsNode) detailsNode.textContent = formatApiError(error, "Collector status unavailable.");
       }
     }
+    async function loadCloudSyncStatus() {
+      const statusNode = $("settCloudSyncStatus");
+      const detailsNode = $("settCloudSyncDetails");
+      if (!statusNode) return;
+      try {
+        const data = await apiRequest("/api/cloud-sync/status", { cache: "no-store" });
+        statusNode.textContent = `Status: ${String(data.state || "unknown")} / Device: ${String(data.device_id || "unconfigured")}`;
+        const counts = data.last_counts || {};
+        detailsNode.textContent = data.enabled
+          ? `Local ${num(data.local_packages)} / synced ${num(data.synced_packages)} / cloud ${num(data.remote_packages)} / pending ${num(data.pending_uploads)}. Last check: ${data.last_finished_at ? historyDate(data.last_finished_at) : "not run"}; uploaded ${num(counts.pushed)}, downloaded ${num(counts.pulled)}. Next: ${data.next_run_at ? historyDate(data.next_run_at) : "not scheduled"}${data.last_error ? ` / ${String(data.last_error)}` : ""}`
+          : "Cloud synchronization is disabled. Packages remain safely stored in local SQLite.";
+      } catch (error) {
+        statusNode.textContent = "Cloud sync status unavailable";
+        detailsNode.textContent = formatApiError(error, "Cloud sync status unavailable.");
+      }
+    }
+    if ($("settCloudSyncBtn")) $("settCloudSyncBtn").onclick = async () => {
+      const button = $("settCloudSyncBtn");
+      button.disabled = true;
+      try {
+        const data = await apiRequest("/api/cloud-sync/run", { method: "POST" });
+        showToast(`Sync ${String(data.state || "finished")}.`);
+        await loadCloudSyncStatus();
+        await loadSavedHistory();
+        await loadSettingsStatus();
+      } catch (error) {
+        showToast(formatApiError(error, "Cloud sync failed; local packages are unchanged."));
+      } finally { button.disabled = false; }
+    };
     if ($("anaRefreshBtn")) $("anaRefreshBtn").onclick = () => refreshYouTubeAnalytics($("anaRefreshBtn"));
     // Page modules own their guarded lifecycle seams. The Creator receives only
     // explicit app-shell callbacks and owns all of its rendering and behavior.
@@ -785,6 +848,8 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
     mountExperimentsPage();
     route();
     loadCollectorStatus();
+    loadCloudSyncStatus();
+    loadSettingsStatus();
     if ((window.location.hash || "#dashboard") !== "#analytics") loadChannelStatus();
 
     // History and shell markup still use these narrow compatibility handlers.
