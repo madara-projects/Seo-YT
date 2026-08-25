@@ -266,6 +266,48 @@ class TestEngineStages(unittest.TestCase):
         for required in ("shorts", "yt", "youtube shorts", "viral shorts"):
             self.assertIn(required, tags)
 
+    @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
+    def test_generated_history_preserves_the_full_creator_script(self, mocked_writer):
+        mocked_writer.return_value = ({"english": None}, "fallback")
+        script = "A reflective rainy-road quote Short. " + ("Full creator detail. " * 12)
+        research = {
+            "main_topic": "rainy road quote",
+            "keyword_signals": [{"keyword": "rainy road quote"}],
+            "entity_signals": [],
+            "top_opportunities": [],
+            "youtube_results": [],
+            "category": "youtube_shorts",
+            "creator_brief": {"video_format": "youtube_shorts"},
+            "language_context": {"language": "english", "region": "global"},
+        }
+
+        package = build_seo_package("generate seo", script, research, self.store)
+
+        saved = self.store.history_run(package["history_run_id"])
+        self.assertEqual(saved["query"], script)
+        self.assertGreater(len(saved["query"]), 120)
+
+    def test_history_detail_recovers_full_script_from_legacy_package(self):
+        script = "Exact creator script. " * 12
+        run_id = self.store.record_analysis_run(
+            script[:120], "SUGGESTED", "Story", "Saved title", 8.0,
+            "LOW", "WORKABLE", 60.0,
+            payload={"creator_brief": {"content": script}, "title": "Saved title"},
+        )
+
+        saved = self.store.history_run(run_id)
+
+        self.assertEqual(saved["query"], script)
+
+    def test_long_inferred_topic_does_not_create_an_invalid_tag(self):
+        tags = force_topic_in_tags(
+            ["missing people", "heart vs mind", "shorts", "yt", "youtube shorts", "viral shorts"],
+            "heart has a strange habit of missing people the mind",
+            "youtube_shorts",
+        )
+        self.assertEqual(tags[0], "heart has a strange habit of missing people")
+        self.assertTrue(all(len(tag.split()) <= 8 for tag in tags))
+
     def test_local_fallback_changes_with_the_video_topic(self):
         food = _content_specific_fallback("Chennai street food", [], {"video_format": "youtube_shorts"})
         coding = _content_specific_fallback("Python automation", [], {"video_format": "tutorial"})
