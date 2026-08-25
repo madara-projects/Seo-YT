@@ -65,7 +65,7 @@ class Phase8MigrationTests(Phase8Fixture):
     def test_schema_v6_tables_and_integrity(self):
         with self.history._connect() as c:
             names = {row[0] for row in c.execute("select name from sqlite_master where type='table'")}
-            self.assertEqual(c.execute("pragma user_version").fetchone()[0], 6)
+            self.assertEqual(c.execute("pragma user_version").fetchone()[0], CURRENT_SCHEMA_VERSION)
             self.assertEqual(c.execute("pragma integrity_check").fetchone()[0], "ok")
             self.assertEqual(c.execute("pragma foreign_key_check").fetchall(), [])
         self.assertTrue({"published_video_audits", "experiments", "experiment_video_assignments", "experiment_result_snapshots"} <= names)

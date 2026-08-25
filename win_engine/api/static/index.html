@@ -21,7 +21,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="#ffffff"><path d="M21.6 7.2a2.7 2.7 0 0 0-1.9-1.9C18 5 12 5 12 5s-6 0-7.7.3A2.7 2.7 0 0 0 2.4 7.2 28 28 0 0 0 2 12a28 28 0 0 0 .4 4.8 2.7 2.7 0 0 0 1.9 1.9C6 19 12 19 12 19s6 0 7.7-.3a2.7 2.7 0 0 0 1.9-1.9A28 28 0 0 0 22 12a28 28 0 0 0-.4-4.8ZM10 15V9l5 3-5 3Z"/></svg>
         </div>
         <div class="brand-title">
-          <h1 style="display:flex;align-items:center;gap:6px">Win-Engine <span style="font-size:9.5px;padding:2px 5px;background:var(--accent);color:#fff;border-radius:4px;font-weight:800;letter-spacing:0.04em">OS v0.13</span></h1>
+          <h1 style="display:flex;align-items:center;gap:6px">Win-Engine <span id="appVersionBadge" style="font-size:9.5px;padding:2px 5px;background:var(--accent);color:#fff;border-radius:4px;font-weight:800;letter-spacing:0.04em">Loading</span></h1>
           <p>Creator Intelligence Operating System</p>
         </div>
       </div>
@@ -78,7 +78,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div class="status-badge"><span class="dot"></span> Optional Gemini / local fallback available</div>
+      <div class="status-badge" id="sidebarRuntimeStatus"><span class="dot"></span> Loading runtime status...</div>
     </div>
   </aside>
 
@@ -835,13 +835,29 @@
             <div class="metric-sub" id="settCollectorDetails" style="margin-top:6px">Automatic collection is opt-in and quota-capped.</div>
           </div>
 
+          <div class="bento-card span-6" data-testid="cloud-sync-status-card">
+            <div class="card-title">Multi-device Package Sync</div>
+            <div class="metric-sub" id="settCloudSyncStatus">Loading cloud synchronization status...</div>
+            <div class="metric-sub" id="settCloudSyncDetails" style="margin-top:6px">SQLite remains local; only package records are exchanged.</div>
+            <button class="btn" id="settCloudSyncBtn" style="margin-top:14px">Sync now</button>
+          </div>
+
           <div class="bento-card span-6">
             <div class="card-title">AI &amp; API Provider Status</div>
             <div class="kv-list" style="margin-top:12px">
-              <div class="kv-item"><span class="kv-key">Primary AI Engine</span><span class="kv-val"><span class="chip chip-accent">Optional Google Gemini</span></span></div>
-              <div class="kv-item"><span class="kv-key">Offline Fallback</span><span class="kv-val"><span class="chip">Available locally</span></span></div>
-              <div class="kv-item"><span class="kv-key">YouTube Data API v3 Pool</span><span class="kv-val"><span class="chip">Configured status shown when diagnostics run</span></span></div>
-              <div class="kv-item"><span class="kv-key">SQLite Local DB</span><span class="kv-val"><span class="chip chip-ok">win_engine.db</span></span></div>
+              <div class="kv-item"><span class="kv-key">Gemini generator</span><span class="kv-val" id="settGeminiProvider">Loading...</span></div>
+              <div class="kv-item"><span class="kv-key">Local fallback</span><span class="kv-val" id="settFallbackProvider">Loading...</span></div>
+              <div class="kv-item"><span class="kv-key">YouTube Data API keys</span><span class="kv-val" id="settYouTubeKeys">Loading...</span></div>
+              <div class="kv-item"><span class="kv-key">Redis research cache</span><span class="kv-val" id="settRedisStatus">Loading...</span></div>
+            </div>
+          </div>
+
+          <div class="bento-card span-6">
+            <div class="card-title">Local Data Store</div>
+            <div class="kv-list" style="margin-top:12px">
+              <div class="kv-item"><span class="kv-key">SQLite</span><span class="kv-val" id="settDatabaseStatus">Loading...</span></div>
+              <div class="kv-item"><span class="kv-key">Stored records</span><span class="kv-val" id="settDatabaseCounts">Loading...</span></div>
+              <div class="kv-item"><span class="kv-key">Last migration backup</span><span class="kv-val" id="settBackupStatus">Loading...</span></div>
             </div>
           </div>
 
@@ -850,7 +866,7 @@
               <span>System Maintenance &amp; Diagnostics</span>
               <button class="btn btn-sm" id="runDiagBtn">Run Diagnostics</button>
             </div>
-            <pre id="settDiagOut" style="max-height:300px;overflow:auto;margin-top:12px">No diagnostic probe has run. The live probe can use YouTube API quota.</pre>
+            <div id="settDiagOut" class="metric-sub" style="margin-top:12px">Not run. This probe performs one live YouTube search request; Gemini is configuration-checked without generating content.</div>
           </div>
         </div>
       </section>

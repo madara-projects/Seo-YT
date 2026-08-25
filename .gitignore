@@ -10,6 +10,7 @@ client_secret*.json
 token*.json
 *.pem
 *.key
+secrets/
 
 # Python environments and tooling
 .env.*.local

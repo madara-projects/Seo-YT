@@ -14,6 +14,7 @@ services:
     volumes:
       - ./win_engine.db:/app/win_engine.db
       - ./backups:/app/backups
+      - ./secrets/aiven-ca.pem:/run/secrets/aiven-ca.pem:ro
     restart: unless-stopped
   redis:
     image: redis:7-alpine
