@@ -608,8 +608,18 @@ class HistoryStore:
             package = json.loads(row[10]) if row[10] else None
         except json.JSONDecodeError:
             package = None
+        stored_query = str(row[2] or "")
+        creator_content = ""
+        if isinstance(package, dict):
+            brief = package.get("creator_brief")
+            if isinstance(brief, dict):
+                creator_content = str(brief.get("content") or "")
+        # Older builds stored only the first 120 characters in `query`. The
+        # complete creator input is still present in the saved package, so use
+        # it for History detail without rewriting or changing that package.
+        full_query = creator_content if len(creator_content) > len(stored_query) else stored_query
         result = {
-            "id": row[0], "created_at": row[1], "query": row[2], "intent": row[3],
+            "id": row[0], "created_at": row[1], "query": full_query, "intent": row[3],
             "content_angle": row[4], "title": row[5], "title_score": round(float(row[6] or 0), 2),
             "retention_risk": row[7], "opportunity_label": row[8],
             "opportunity_score": round(float(row[9] or 0), 2), "package": package,

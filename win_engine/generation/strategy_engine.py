@@ -266,7 +266,7 @@ def build_seo_package(
     )
 
     history_run_id = history_store.record_analysis_run(
-        query=script[:120],
+        query=script,
         intent=intent,
         content_angle=angle,
         title=title,

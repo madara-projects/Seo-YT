@@ -392,9 +392,15 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
     out: list[str] = []
     seen: set[str] = set()
     reserved = min(len(required), max_tags)
-    if topic and max_tags > reserved:
-        out.append(topic.lower())
-        seen.add(topic.lower())
+    # The final package quality gate accepts one focused phrase per tag and
+    # rejects tags longer than eight words. Creator topics can legitimately be
+    # longer (especially when inferred from an exact quote), so do not let the
+    # topic-lock post-process make an otherwise valid provider package fail its
+    # own final validation.
+    topic_tag = " ".join(str(topic or "").strip().lower().split()[:8])
+    if topic_tag and not _is_junk_tag(topic_tag) and max_tags > reserved:
+        out.append(topic_tag)
+        seen.add(topic_tag)
     for raw in tags or []:
         t = (raw or "").strip().lower()
         if t in pinned or not t or t in seen or _is_junk_tag(t) or len(out) >= max_tags - reserved:
