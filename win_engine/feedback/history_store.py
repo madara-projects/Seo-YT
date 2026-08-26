@@ -628,15 +628,36 @@ class HistoryStore:
         return result
 
     def delete_analysis_run(self, run_id: int) -> bool:
-        """Atomically delete a package and link-owned dependents, or roll back all."""
+        """Atomically delete a package and queue its cloud tombstone, or roll back all."""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now = datetime.now(timezone.utc).isoformat()
+            mapping = connection.execute(
+                """SELECT sync_uuid, origin_device_id, revision
+                   FROM cloud_sync_packages WHERE analysis_run_id = ?""",
+                (run_id,),
+            ).fetchone()
+            if mapping:
+                connection.execute(
+                    """INSERT INTO cloud_sync_tombstones
+                           (sync_uuid, origin_device_id, revision, deleted_at, pending,
+                            attempt_count, last_attempted_at, last_error)
+                       VALUES (?, ?, ?, ?, 1, 0, NULL, NULL)
+                       ON CONFLICT(sync_uuid) DO UPDATE SET
+                           revision = MAX(cloud_sync_tombstones.revision, excluded.revision),
+                           deleted_at = excluded.deleted_at,
+                           pending = 1,
+                           attempt_count = 0,
+                           last_attempted_at = NULL,
+                           last_error = NULL""",
+                    (str(mapping[0]), str(mapping[1]), int(mapping[2]) + 1, now),
+                )
             connection.execute(
                 """UPDATE content_ideas SET analysis_run_id = NULL, published_video_link_id = NULL,
                           status = CASE WHEN status IN ('package_generated', 'published') THEN 'scripted' ELSE status END,
                           updated_at = ?
                    WHERE analysis_run_id = ?""",
-                (datetime.now(timezone.utc).isoformat(), run_id),
+                (now, run_id),
             )
             cursor = connection.execute("DELETE FROM analysis_runs WHERE id = ?", (run_id,))
             violations = connection.execute("PRAGMA foreign_key_check").fetchall()

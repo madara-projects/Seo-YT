@@ -63,12 +63,16 @@ class CloudSyncService:
         result = dict(self._status)
         try:
             with connect_managed(self.settings.database_path) as connection:
-                result["pending_uploads"] = int(connection.execute("SELECT COUNT(*) FROM cloud_sync_outbox").fetchone()[0])
+                pending_packages = int(connection.execute("SELECT COUNT(*) FROM cloud_sync_outbox").fetchone()[0])
+                pending_deletions = int(connection.execute("SELECT COUNT(*) FROM cloud_sync_tombstones WHERE pending = 1").fetchone()[0])
+                result["pending_uploads"] = pending_packages + pending_deletions
+                result["pending_deletions"] = pending_deletions
                 result["local_packages"] = int(connection.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0])
                 result["mapped_packages"] = int(connection.execute("SELECT COUNT(*) FROM cloud_sync_packages").fetchone()[0])
                 result["synced_packages"] = int(connection.execute("SELECT COUNT(*) FROM cloud_sync_packages WHERE last_synced_hash IS NOT NULL").fetchone()[0])
         except Exception:
             result["pending_uploads"] = None
+            result["pending_deletions"] = None
             result["local_packages"] = None
             result["mapped_packages"] = None
             result["synced_packages"] = None
@@ -93,7 +97,7 @@ class CloudSyncService:
                 counts["pushed"] = self._push(remote)
                 counts["pulled"] = self._pull(remote)
                 with remote.cursor() as cursor:
-                    cursor.execute("SELECT COUNT(*) FROM seo_yt_synced_packages")
+                    cursor.execute("SELECT COUNT(*) FROM seo_yt_synced_packages WHERE deleted_at IS NULL")
                     self._status["remote_packages"] = int(cursor.fetchone()[0])
             finally:
                 remote.close()
@@ -184,37 +188,110 @@ class CloudSyncService:
             cursor.execute("""CREATE TABLE IF NOT EXISTS seo_yt_synced_packages (
                 sync_uuid CHAR(36) PRIMARY KEY, origin_device_id VARCHAR(120) NOT NULL,
                 revision INT NOT NULL, content_hash CHAR(64) NOT NULL, payload_json LONGTEXT NOT NULL,
-                created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL,
+                created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL, deleted_at VARCHAR(40) NULL,
                 INDEX idx_synced_updated(updated_at)) CHARACTER SET utf8mb4""")
+            cursor.execute("SHOW COLUMNS FROM seo_yt_synced_packages LIKE 'deleted_at'")
+            if cursor.fetchone() is None:
+                cursor.execute("ALTER TABLE seo_yt_synced_packages ADD COLUMN deleted_at VARCHAR(40) NULL AFTER updated_at")
         connection.commit()
 
     def _push(self, remote) -> int:
         with connect_managed(self.settings.database_path) as local:
+            deletion_rows = local.execute(
+                """SELECT sync_uuid,revision,deleted_at FROM cloud_sync_tombstones
+                   WHERE pending = 1 ORDER BY deleted_at LIMIT 100"""
+            ).fetchall()
+            for sync_uuid, revision, deleted_at in deletion_rows:
+                now = _now()
+                tombstone_hash = _hash({
+                    "schema": 1, "deleted": True, "sync_uuid": sync_uuid,
+                    "revision": int(revision), "deleted_at": deleted_at,
+                })
+                with remote.cursor() as cursor:
+                    cursor.execute("""INSERT INTO seo_yt_synced_packages
+                        (sync_uuid,origin_device_id,revision,content_hash,payload_json,created_at,updated_at,deleted_at)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE
+                        content_hash=IF(VALUES(revision)>=revision,VALUES(content_hash),content_hash),
+                        payload_json=IF(VALUES(revision)>=revision,VALUES(payload_json),payload_json),
+                        updated_at=IF(VALUES(revision)>=revision,VALUES(updated_at),updated_at),
+                        deleted_at=IF(VALUES(revision)>=revision,VALUES(deleted_at),deleted_at),
+                        origin_device_id=IF(VALUES(revision)>=revision,VALUES(origin_device_id),origin_device_id),
+                        revision=GREATEST(revision,VALUES(revision))""",
+                        (sync_uuid, self.settings.cloud_sync_device_id, revision, tombstone_hash,
+                         "{}", now, now, deleted_at))
+                remote.commit()
+                local.execute(
+                    """UPDATE cloud_sync_tombstones SET pending = 0, last_attempted_at = ?,
+                              attempt_count = attempt_count + 1, last_error = NULL
+                       WHERE sync_uuid = ?""",
+                    (now, sync_uuid),
+                )
             rows = local.execute("SELECT sync_uuid,revision,payload_json,content_hash FROM cloud_sync_outbox ORDER BY queued_at LIMIT 100").fetchall()
             for sync_uuid, revision, payload_json, content_hash in rows:
                 now = _now()
                 with remote.cursor() as cursor:
                     cursor.execute("""INSERT INTO seo_yt_synced_packages
-                        (sync_uuid,origin_device_id,revision,content_hash,payload_json,created_at,updated_at)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE
-                        content_hash=IF(VALUES(revision)>=revision,VALUES(content_hash),content_hash),
-                        payload_json=IF(VALUES(revision)>=revision,VALUES(payload_json),payload_json),
-                        updated_at=IF(VALUES(revision)>=revision,VALUES(updated_at),updated_at),
-                        origin_device_id=IF(VALUES(revision)>=revision,VALUES(origin_device_id),origin_device_id),
-                        revision=GREATEST(revision,VALUES(revision))""",
+                        (sync_uuid,origin_device_id,revision,content_hash,payload_json,created_at,updated_at,deleted_at)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,NULL) ON DUPLICATE KEY UPDATE
+                        content_hash=IF(deleted_at IS NULL AND VALUES(revision)>=revision,VALUES(content_hash),content_hash),
+                        payload_json=IF(deleted_at IS NULL AND VALUES(revision)>=revision,VALUES(payload_json),payload_json),
+                        updated_at=IF(deleted_at IS NULL AND VALUES(revision)>=revision,VALUES(updated_at),updated_at),
+                        origin_device_id=IF(deleted_at IS NULL AND VALUES(revision)>=revision,VALUES(origin_device_id),origin_device_id),
+                        revision=IF(deleted_at IS NULL,GREATEST(revision,VALUES(revision)),revision)""",
                         (sync_uuid, self.settings.cloud_sync_device_id, revision, content_hash, payload_json, now, now))
                 remote.commit()
                 local.execute("UPDATE cloud_sync_packages SET last_synced_hash=?,remote_updated_at=? WHERE sync_uuid=?", (content_hash, now, sync_uuid))
                 local.execute("DELETE FROM cloud_sync_outbox WHERE sync_uuid=?", (sync_uuid,))
-        return len(rows)
+        return len(deletion_rows) + len(rows)
 
     def _pull(self, remote) -> int:
         with remote.cursor() as cursor:
-            cursor.execute("SELECT sync_uuid,origin_device_id,revision,content_hash,payload_json,updated_at FROM seo_yt_synced_packages ORDER BY updated_at,sync_uuid")
+            cursor.execute("""SELECT sync_uuid,origin_device_id,revision,content_hash,payload_json,updated_at,deleted_at
+                              FROM seo_yt_synced_packages ORDER BY updated_at,sync_uuid""")
             rows = cursor.fetchall()
         pulled = 0
         with connect_managed(self.settings.database_path) as local:
-            for sync_uuid, origin, revision, content_hash, payload_json, updated_at in rows:
+            for sync_uuid, origin, revision, content_hash, payload_json, updated_at, deleted_at in rows:
+                seen_tombstone = local.execute(
+                    "SELECT revision FROM cloud_sync_tombstones WHERE sync_uuid = ?", (sync_uuid,)
+                ).fetchone()
+                if deleted_at:
+                    if seen_tombstone and int(seen_tombstone[0]) >= int(revision):
+                        continue
+                    mapping = local.execute(
+                        "SELECT analysis_run_id FROM cloud_sync_packages WHERE sync_uuid = ?", (sync_uuid,)
+                    ).fetchone()
+                    if mapping:
+                        now = _now()
+                        local.execute(
+                            """UPDATE content_ideas SET analysis_run_id = NULL,
+                                      published_video_link_id = NULL,
+                                      status = CASE WHEN status IN ('package_generated', 'published')
+                                                    THEN 'scripted' ELSE status END,
+                                      updated_at = ? WHERE analysis_run_id = ?""",
+                            (now, int(mapping[0])),
+                        )
+                        local.execute("DELETE FROM analysis_runs WHERE id = ?", (int(mapping[0]),))
+                    local.execute(
+                        """INSERT INTO cloud_sync_tombstones
+                               (sync_uuid,origin_device_id,revision,deleted_at,pending,
+                                attempt_count,last_attempted_at,last_error)
+                           VALUES(?,?,?,?,0,0,NULL,NULL)
+                           ON CONFLICT(sync_uuid) DO UPDATE SET
+                               origin_device_id=excluded.origin_device_id,
+                               revision=excluded.revision,
+                               deleted_at=excluded.deleted_at,
+                               pending=0,
+                               last_error=NULL""",
+                        (sync_uuid, origin, revision, deleted_at),
+                    )
+                    local.execute("DELETE FROM cloud_sync_outbox WHERE sync_uuid = ?", (sync_uuid,))
+                    pulled += 1
+                    continue
+                if seen_tombstone:
+                    # A locally queued or previously applied deletion always
+                    # wins over an older active cloud row.
+                    continue
                 mapping = local.execute("SELECT analysis_run_id,revision FROM cloud_sync_packages WHERE sync_uuid=?", (sync_uuid,)).fetchone()
                 if mapping and int(mapping[1]) >= int(revision):
                     continue
