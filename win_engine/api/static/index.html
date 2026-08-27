@@ -14,7 +14,7 @@
   </div>
 
   <!-- Left Sidebar SaaS Navigation -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="appSidebar">
     <div>
       <div class="sidebar-brand">
         <div class="brand-icon">
@@ -24,6 +24,9 @@
           <h1 style="display:flex;align-items:center;gap:6px">Win-Engine <span id="appVersionBadge" style="font-size:9.5px;padding:2px 5px;background:var(--accent);color:#fff;border-radius:4px;font-weight:800;letter-spacing:0.04em">Loading</span></h1>
           <p>Creator Intelligence Operating System</p>
         </div>
+        <button type="button" class="sidebar-toggle" id="sidebarToggle" aria-controls="appSidebar" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" aria-hidden="true"><path d="m14 18-6-6 6-6"/></svg>
+        </button>
       </div>
 
       <nav class="nav-menu">
