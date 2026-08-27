@@ -68,6 +68,58 @@ class CloudSyncTests(unittest.TestCase):
         self.assertEqual(payload["analysis"]["package"]["description"], "Complete package")
         self.assertEqual(payload["selection"]["generated_package_id"], "package-a")
 
+    def test_linked_video_metadata_and_snapshots_round_trip_with_package(self):
+        run_id = self.store.record_analysis_run(
+            "rainy road", "browse", "emotion", "Rainy title", 8.2, "LOW", "WORKABLE", 62,
+            {"description": "Complete package", "tags": ["rain"]},
+        )
+        link_id = self.store.link_published_video(
+            run_id, "video-123", "2026-08-20T10:00:00+00:00", selected_title="Rainy title",
+            selected_tags_json=json.dumps(["rain"]), format_val="short", language="english",
+            ownership_state="verified", ownership_verified=True, verified_channel_id="channel-1",
+        )
+        self.store.update_linked_video_metadata(link_id, {"title": "Published rainy title", "tags": ["rain"]})
+        self.store.update_comparable_metadata(link_id, {"duration_bucket": "under_60s", "topic_category": "quotes"})
+        self.store.record_performance_snapshot("video-123", 1, views=125, likes=10, snapshot_window="current")
+        self.store.record_performance_snapshot("video-123", 24, views=500, likes=30, avg_view_percentage=68, snapshot_window="24h")
+        source_service = CloudSyncService(self.settings())
+        self.assertEqual(source_service._stage_local_packages(), 1)
+        with sqlite3.connect(self.path) as connection:
+            sync_uuid, revision, content_hash, payload_json = connection.execute(
+                "SELECT sync_uuid,revision,content_hash,payload_json FROM cloud_sync_outbox"
+            ).fetchone()
+        payload = json.loads(payload_json)
+        self.assertEqual(payload["schema"], 2)
+        self.assertEqual(payload["linked_video"]["youtube_video_id"], "video-123")
+        self.assertEqual(len(payload["linked_video"]["snapshots"]), 2)
+
+        target_handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        target_path = target_handle.name
+        target_handle.close()
+        self.addCleanup(lambda: os.path.exists(target_path) and os.unlink(target_path))
+        target_service = CloudSyncService(self.settings(database_path=target_path, cloud_sync_device_id="laptop-b"))
+        HistoryStore(target_path)
+
+        class RemoteCursor:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def execute(self, _query): return None
+            def fetchall(self):
+                return [(sync_uuid, "laptop-a", revision, content_hash, payload_json, "2026-08-20T10:00:00+00:00", None)]
+
+        class Remote:
+            def cursor(self): return RemoteCursor()
+
+        self.assertEqual(target_service._pull(Remote()), 1)
+        target_store = HistoryStore(target_path)
+        synced_run = target_store.history_runs()[0]
+        report = target_store.linked_package_report(synced_run["id"])
+        self.assertTrue(report["linked"])
+        self.assertEqual(report["video_id"], "video-123")
+        self.assertEqual(report["youtube"]["title"], "Published rainy title")
+        self.assertEqual(len(report["snapshots"]), 2)
+        self.assertEqual(report["comparable_metadata"]["duration_bucket"], "under_60s")
+
     def test_deleting_a_synced_package_queues_a_durable_tombstone(self):
         run_id = self.store.record_analysis_run(
             "temporary test", "browse", "emotion", "Delete me", 7.0,

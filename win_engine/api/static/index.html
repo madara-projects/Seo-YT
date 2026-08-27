@@ -804,18 +804,37 @@
 
       <!-- PAGE 4: SAVED SEO PACKAGE HISTORY -->
       <section class="page-view" id="view-history">
-        <div class="bento-grid">
-          <div class="bento-card span-12">
-            <div class="card-title"><span>All Generated SEO Video Packages</span><span class="chip chip-accent">Permanent Records</span></div>
-            <div class="metric-sub">Open a package to review its saved title, description, tags, thumbnails, and chapters.</div>
-            <div style="overflow-x:auto;margin-top:12px">
-              <table class="history-table">
-                <thead><tr><th>Date &amp; Time (IST)</th><th>Primary Title / Topic</th><th>Opportunity Score</th><th>Title Quality Score</th><th>Action</th></tr></thead>
-                <tbody id="historyPageBody"><tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:16px">Loading saved packages...</td></tr></tbody>
-              </table>
+        <div class="history-page-shell">
+          <header class="history-hero">
+            <div>
+              <div class="eyebrow">PACKAGE LIBRARY</div>
+              <h2>Generated video packages</h2>
+              <p>Review the exact metadata, script and publishing plan saved for every generation. Link a package after it is published to keep its performance history together.</p>
+            </div>
+            <div class="history-hero-meta">
+              <span class="chip chip-accent" id="historyRunCount">Loading records</span>
+              <span class="metric-sub">Stored locally and synced when cloud sync is enabled.</span>
+            </div>
+          </header>
+
+          <div class="history-library bento-card">
+            <div class="history-library-toolbar">
+              <div>
+                <div class="card-title">Saved packages</div>
+                <div class="metric-sub" id="historyResultSummary">Loading saved packages...</div>
+              </div>
+              <label class="history-search" for="historySearch">
+                <span class="sr-only">Search saved packages</span>
+                <span aria-hidden="true">⌕</span>
+                <input id="historySearch" type="search" placeholder="Search title or topic" autocomplete="off" oninput="filterHistoryRuns(this.value)">
+              </label>
+            </div>
+            <div class="history-list" id="historyPageBody" aria-live="polite">
+              <div class="history-empty">Loading saved packages...</div>
             </div>
           </div>
-          <div class="bento-card span-12 hidden" id="historyDetail"></div>
+
+          <section class="history-detail hidden" id="historyDetail" aria-live="polite"></section>
         </div>
       </section>
 
