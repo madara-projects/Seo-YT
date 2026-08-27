@@ -262,6 +262,40 @@ aside.sidebar {
   z-index: 100;
   overflow-y: auto;
   scrollbar-width: thin;
+  transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1), padding 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sidebar-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  flex: 0 0 32px;
+  margin-left: auto;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.sidebar-toggle:hover {
+  color: var(--text);
+  background: var(--panel-hover);
+  border-color: var(--border-subtle);
+}
+
+.sidebar-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sidebar-toggle svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .sidebar-brand {
@@ -385,6 +419,75 @@ aside.sidebar {
   background: var(--ok);
   box-shadow: 0 0 8px var(--ok);
   flex-shrink: 0;
+}
+
+.brand-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+@media (min-width: 769px) {
+  body.sidebar-collapsed aside.sidebar {
+    width: 76px;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  body.sidebar-collapsed .sidebar-toggle svg {
+    transform: rotate(180deg);
+  }
+
+  body.sidebar-collapsed .sidebar-brand {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  body.sidebar-collapsed .brand-icon,
+  body.sidebar-collapsed .brand-title,
+  body.sidebar-collapsed .nav-section-label,
+  body.sidebar-collapsed .sidebar-footer {
+    display: none;
+  }
+
+  body.sidebar-collapsed .sidebar-toggle {
+    margin-left: 0;
+    width: 42px;
+    height: 42px;
+    flex-basis: 42px;
+  }
+
+  body.sidebar-collapsed aside.sidebar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  body.sidebar-collapsed aside.sidebar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
+  body.sidebar-collapsed .nav-menu {
+    margin-top: 12px;
+    gap: 6px;
+  }
+
+  body.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 11px 8px;
+    font-size: 0;
+  }
+
+  body.sidebar-collapsed .nav-item:hover {
+    transform: none;
+  }
+
+  body.sidebar-collapsed .nav-item svg {
+    width: 19px;
+    height: 19px;
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -2270,6 +2373,9 @@ pre {
     position: sticky;
     top: 0;
     z-index: 200;
+  }
+  .sidebar-toggle {
+    display: none;
   }
   .sidebar-brand {
     padding-bottom: 10px;

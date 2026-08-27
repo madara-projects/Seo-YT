@@ -21,7 +21,11 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
     def setUpClass(cls):
         cls.base_url = os.environ.get("SEO_YT_BROWSER_BASE_URL", "http://127.0.0.1:8000")
         cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(headless=True)
+        executable_path = os.environ.get("SEO_YT_BROWSER_EXECUTABLE")
+        launch_options = {"headless": True}
+        if executable_path:
+            launch_options["executable_path"] = executable_path
+        cls.browser = cls.playwright.chromium.launch(**launch_options)
 
     @classmethod
     def tearDownClass(cls):
@@ -83,6 +87,44 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.page.locator("#nav-creator").click()
         self.assertEqual(self.page.evaluate("window.location.hash"), "#creator")
         self.assertEqual(self.page.locator(".page-view.active").get_attribute("id"), "view-creator")
+        self.assert_clean_browser()
+
+    def test_sidebar_collapses_persists_and_navigation_still_works(self):
+        self.open("#dashboard")
+        expanded_width = self.page.locator("#appSidebar").evaluate("el => el.getBoundingClientRect().width")
+        self.assertGreater(expanded_width, 200)
+
+        self.page.locator("#sidebarToggle").click()
+        self.page.wait_for_timeout(300)
+        collapsed_width = self.page.locator("#appSidebar").evaluate("el => el.getBoundingClientRect().width")
+        self.assertLess(collapsed_width, 100)
+        self.assertEqual(self.page.locator("#sidebarToggle").get_attribute("aria-expanded"), "false")
+        toggle_center = self.page.locator("#sidebarToggle").evaluate(
+            "el => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; }"
+        )
+        icon_center = self.page.locator("#nav-dashboard svg").evaluate(
+            "el => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; }"
+        )
+        self.assertAlmostEqual(toggle_center, icon_center, delta=1)
+        self.assertEqual(
+            self.page.locator("#appSidebar").evaluate("el => getComputedStyle(el).scrollbarWidth"),
+            "none",
+        )
+        self.assertEqual(
+            self.page.locator("#sidebarToggle").evaluate("el => getComputedStyle(el).borderRadius"),
+            self.page.locator("#nav-dashboard").evaluate("el => getComputedStyle(el).borderRadius"),
+        )
+
+        self.page.locator("#nav-settings").click()
+        self.assertEqual(self.page.evaluate("window.location.hash"), "#settings")
+        self.assertEqual(self.page.locator(".page-view.active").get_attribute("id"), "view-settings")
+
+        self.page.reload(wait_until="domcontentloaded")
+        self.page.wait_for_timeout(300)
+        self.assertTrue(self.page.locator("body").evaluate("el => el.classList.contains('sidebar-collapsed')"))
+        self.page.locator("#sidebarToggle").click()
+        self.page.wait_for_timeout(300)
+        self.assertGreater(self.page.locator("#appSidebar").evaluate("el => el.getBoundingClientRect().width"), 200)
         self.assert_clean_browser()
 
     def test_extracted_assets_and_legacy_rollback_route(self):

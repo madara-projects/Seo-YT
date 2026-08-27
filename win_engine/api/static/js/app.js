@@ -52,6 +52,38 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
     const savedTheme = (function() { try { return localStorage.getItem("yt_seo_theme") || "obsidian"; } catch(_) { return "obsidian"; } })();
     setTheme(savedTheme);
 
+    const SIDEBAR_STORAGE_KEY = "yt_seo_sidebar_collapsed";
+
+    function setSidebarCollapsed(collapsed, persist = true) {
+      const isCollapsed = Boolean(collapsed);
+      document.body.classList.toggle("sidebar-collapsed", isCollapsed);
+      const toggle = $("sidebarToggle");
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", String(!isCollapsed));
+        toggle.setAttribute("aria-label", isCollapsed ? "Expand sidebar" : "Collapse sidebar");
+        toggle.title = isCollapsed ? "Expand sidebar" : "Collapse sidebar";
+      }
+      document.querySelectorAll(".nav-item").forEach((item) => {
+        if (isCollapsed) item.title = item.textContent.trim().replace(/\s+/g, " ");
+        else item.removeAttribute("title");
+      });
+      if (persist) {
+        try { localStorage.setItem(SIDEBAR_STORAGE_KEY, isCollapsed ? "1" : "0"); } catch (_) {}
+      }
+    }
+
+    const savedSidebarCollapsed = (function() {
+      try { return localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1"; } catch (_) { return false; }
+    })();
+    setSidebarCollapsed(savedSidebarCollapsed, false);
+
+    const sidebarToggle = $("sidebarToggle");
+    if (sidebarToggle) {
+      sidebarToggle.addEventListener("click", () => {
+        setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+      });
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
       const sel = $("themeSelector");
       if (sel) {
@@ -784,7 +816,7 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
        if (detailsNode) {
           const counts = data.last_counts || {};
           detailsNode.textContent = data.dry_run
-            ? `Dry-run: no YouTube calls or snapshot writes. Last check: ${data.last_finished_at ? historyDate(data.last_finished_at) : "not run"}; planned ${num(counts.links)} linked videos / ${num(counts.windows)} due windows. Next check: ${data.next_run_at ? historyDate(data.next_run_at) : "not scheduled"}.`
+            ? `Dry-run: no YouTube/Gemini calls or database writes. Last check: ${data.last_finished_at ? historyDate(data.last_finished_at) : "not run"}; planned ${num(counts.links)} linked videos / ${num(counts.windows)} due windows. Next check: ${data.next_run_at ? historyDate(data.next_run_at) : "not scheduled"}.`
             : state === "disabled"
               ? "Automatic collection is disabled by configuration."
               : state === "unconfigured"
