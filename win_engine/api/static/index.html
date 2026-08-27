@@ -509,7 +509,12 @@
 
       <!-- STAGE G2 & G5: DEMAND EXPLORER -->
       <section class="page-view" id="view-demand" data-testid="demand-page">
-        <div class="intel-layout">
+        <div class="experiment-page-shell">
+          <header class="experiment-hero">
+            <div><div class="eyebrow">DELIBERATE COMPARISONS</div><h2>Test one content decision at a time</h2><p>Use this only when you intentionally compare two approaches across your own published videos. It reads verified YouTube evidence and never changes your channel.</p></div>
+            <div class="experiment-connection" id="experimentChannelStatus">Checking connected channel…</div>
+          </header>
+        <div class="intel-layout experiment-layout">
           <div class="intel-main">
             <form class="bento-card" id="demandForm">
               <div class="card-title"><span>Demand Explorer</span><span class="chip">Observed evidence only</span></div>
@@ -612,11 +617,22 @@
 
       <!-- STAGE G3: PUBLISHED AUDITS -->
       <section class="page-view" id="view-audits" data-testid="audits-page">
-        <div class="intel-layout">
+        <div class="audit-page-shell">
+          <header class="audit-hero">
+            <div>
+              <div class="eyebrow">POST-PUBLISH REVIEW</div>
+              <h2>Published video audits</h2>
+              <p>Compare the package you generated, the package you selected, and the metadata actually on your connected YouTube channel. Each audit is an immutable record of the data available at that time.</p>
+            </div>
+            <div class="audit-hero-meta">
+              <span class="chip chip-accent">Connected-channel evidence</span>
+              <span class="metric-sub" id="auditConnectionStatus">Checking connected channel...</span>
+            </div>
+          </header>
+        <div class="intel-layout audit-layout">
           <div class="intel-main">
-            <div class="bento-card">
-              <div class="card-title"><span>Published Audits</span><span class="chip">Historical truth</span></div>
-              <p class="metric-sub">Compare what you intended with what actually happened. Compare generated, explicitly selected, and actually published metadata with saved pre-publish intelligence and real observation windows.</p>
+            <div class="bento-card audit-library">
+              <div class="audit-library-heading"><div><div class="card-title">Linked channel videos</div><p class="metric-sub">Choose a linked package, then refresh YouTube data and capture a new audit version.</p></div><span class="chip" id="auditCountChip">Loading</span></div>
               <div class="ideas-toolbar">
                 <select id="auditStateFilter">
                   <option value="">All audit states</option>
@@ -634,11 +650,8 @@
                 </select>
                 <button class="btn" id="auditRefreshList">Refresh list</button>
               </div>
-              <div id="auditStatus" class="metric-sub" aria-live="polite"></div>
-            </div>
-            <div class="bento-card">
-              <div class="card-title"><span>Linked published videos</span><span class="chip chip-accent">Read-only YouTube evidence</span></div>
-              <div id="auditList" class="ideas-list"></div>
+              <div id="auditStatus" class="metric-sub audit-status" aria-live="polite"></div>
+                <div id="auditList" class="ideas-list audit-list"></div>
             </div>
           </div>
           <aside class="bento-card ideas-detail phase8-detail" id="auditDetail" aria-live="polite">
@@ -663,15 +676,22 @@
             </div>
           </aside>
         </div>
+        </div>
       </section>
 
       <!-- STAGE G4: EXPERIMENT CENTER -->
       <section class="page-view" id="view-experiments" data-testid="experiments-page">
-        <div class="intel-layout">
+        <div class="experiment-page-shell">
+          <header class="experiment-hero">
+            <div><div class="eyebrow">DELIBERATE COMPARISONS</div><h2>Test one content decision at a time</h2><p>Use this only when you intentionally compare two approaches across your own published videos. It reads verified YouTube evidence and never changes your channel.</p></div>
+            <div class="experiment-connection" id="experimentChannelStatus">Checking connected channel…</div>
+          </header>
+        <div class="intel-layout experiment-layout">
           <div class="intel-main">
-            <form class="bento-card" id="experimentForm">
-              <div class="card-title"><span>Experiment Center</span><span class="chip">Explicit assignments only</span></div>
-              <p class="metric-sub">Compare content decisions without pretending correlation is causation. Plan a controlled comparison or explore an observational pattern; results remain directional and are not causal proof.</p>
+            <form class="bento-card experiment-create" id="experimentForm">
+              <div class="card-title"><span>New comparison</span><span class="chip">Optional setup</span></div>
+              <details><summary>Create a comparison</summary>
+              <p class="metric-sub">Example: compare a direct title against a question title. Assign channel-verified videos deliberately after publishing, then compare the same completed time window for both groups.</p>
               <div class="ideas-form-grid">
                 <div class="field-group ideas-wide"><label for="experimentName">Name</label><input id="experimentName" required maxlength="160" /></div>
                 <div class="field-group ideas-wide"><label for="experimentHypothesis">Hypothesis</label><textarea id="experimentHypothesis" required maxlength="1000" placeholder="What association are you testing?"></textarea></div>
@@ -683,9 +703,12 @@
                 <div class="field-group"><label for="experimentWindow">Comparable window</label><select id="experimentWindow"><option value="24h">24 hours</option><option value="7d">7 days</option><option value="28d">28 days</option></select></div>
               </div>
               <div id="experimentCreateStatus" class="metric-sub" aria-live="polite"></div>
-              <button class="btn btn-primary" id="experimentCreateBtn" type="submit" style="margin-top:14px">Create comparison</button>
+              <button class="btn btn-primary experiment-create-button" id="experimentCreateBtn" type="submit">Create comparison</button>
+              </details>
             </form>
-            <div class="bento-card">
+            <div class="bento-card experiment-library">
+              <div class="card-title">Saved comparisons</div>
+              <p class="metric-sub">Only videos verified for the currently connected channel can be assigned.</p>
               <div class="ideas-toolbar">
                 <select id="experimentStatusFilter"><option value="">All statuses</option><option value="draft">Draft</option><option value="planned">Planned</option><option value="active">Active</option><option value="completed">Completed</option><option value="inconclusive">Inconclusive</option></select>
                 <select id="experimentModeFilter"><option value="">All types</option><option value="controlled">Planned experiments</option><option value="observational">Observational</option></select>
@@ -694,27 +717,10 @@
               <div id="experimentList" class="ideas-list"></div>
             </div>
           </div>
-          <aside class="bento-card ideas-detail phase8-detail" id="experimentDetail" aria-live="polite">
-            <div class="empty-blueprint">
-              <div class="empty-blueprint-head">
-                <span>Hypothesis &amp; Lab Inspector</span>
-                <span class="chip">Controlled Comparisons</span>
-              </div>
-              <div class="empty-state-card" style="margin:6px 0">
-                <div class="empty-state-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M8 15h8"/></svg>
-                </div>
-                <h4>No Comparison Selected</h4>
-                <p>Choose an active or planned comparison on the left or formulate a new hypothesis to assign Control vs Variant videos and calculate directional evidence.</p>
-              </div>
-              <div class="empty-blueprint-preview">
-                <div class="empty-blueprint-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Planned Controlled vs Observational Comparison Lab</span></div>
-                <div class="empty-blueprint-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Explicit Video Group Assignment Management</span></div>
-                <div class="empty-blueprint-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Median Metric Comparisons (AVP, Views, Engagement)</span></div>
-                <div class="empty-blueprint-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Honest Directional Badges (No Causal Claims)</span></div>
-              </div>
-            </div>
+          <aside class="bento-card ideas-detail phase8-detail experiment-detail" id="experimentDetail" aria-live="polite">
+            <div class="experiment-empty"><div class="eyebrow">NO COMPARISON SELECTED</div><h3>Start only when you have a real question to test.</h3><p class="metric-sub">Create a comparison, assign verified videos into Control or Variant, then compare the same completed window for both groups.</p><div class="experiment-empty-steps"><span>1. Create</span><span>2. Assign</span><span>3. Compare</span></div></div>
           </aside>
+        </div>
         </div>
       </section>
 
@@ -835,6 +841,7 @@
           </div>
 
           <section class="history-detail hidden" id="historyDetail" aria-live="polite"></section>
+        </div>
         </div>
       </section>
 

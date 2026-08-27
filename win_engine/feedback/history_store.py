@@ -1662,7 +1662,10 @@ class HistoryStore:
         )
 
         diagnosis_policy = confidence_payload(baseline.get("sample_size", 0))
-        comparable = self.comparable_metadata(int(link.get("id") or 0))
+        # Legacy links may predate comparable metadata.  They remain valid
+        # published-video records; absence of this optional record must not
+        # prevent a channel refresh or an audit snapshot from being saved.
+        comparable = self.comparable_metadata(int(link.get("id") or 0)) or {}
         comparable_ready = all(str(comparable.get(field) or "unknown") != "unknown" for field in COMPARABLE_FIELDS)
         try:
             retention_learning = self.retention_learning_summary(
@@ -1752,7 +1755,9 @@ class HistoryStore:
         window = str(latest.get("snapshot_window") or "")
         if not mature_snapshot(latest):
             return {"sample_size": 0, "window": window or "none", "median_views": None, "median_retention_percentage": None}
-        comparable = self.comparable_metadata(int(link.get("id") or 0))
+        # Comparable labels are optional for older links.  A missing label
+        # simply means no cohort baseline can be calculated yet.
+        comparable = self.comparable_metadata(int(link.get("id") or 0)) or {}
         if any(str(comparable.get(field) or "unknown") == "unknown" for field in COMPARABLE_FIELDS):
             return {"sample_size": 0, "window": window, "median_views": None, "median_retention_percentage": None}
         with self._connect() as connection:

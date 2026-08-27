@@ -4,6 +4,7 @@ import { $, arr, chip, esc, num } from "../utils.js";
 
 let selectedExperimentId = null;
 let publishedCandidates = [];
+let connectedChannel = null;
 const label = (value) => String(value || "unavailable").replaceAll("_", " ").toUpperCase();
 
 function cards(items) {
@@ -18,15 +19,12 @@ function cards(items) {
       </div>`;
   }
   return items.map((item) => `
-    <button type="button" class="ideas-card ${Number(item.id) === Number(selectedExperimentId) ? "selected" : ""}" data-experiment-id="${Number(item.id)}">
+    <button type="button" class="ideas-card experiment-card ${Number(item.id) === Number(selectedExperimentId) ? "selected" : ""}" data-experiment-id="${Number(item.id)}">
       <div class="ideas-card-head">
         <strong>${esc(item.name)}</strong>
         ${chip(label(item.mode), item.mode === "observational" ? "warn" : "accent")}
       </div>
-      <div class="ideas-card-meta" style="font-size:11px;color:var(--text-sub);margin:4px 0">
-        Status: <strong>${esc(label(item.status))}</strong> &bull; Variable: <strong>${esc(item.variable)}</strong> &bull; Window: <strong>${esc(item.observation_window)}</strong>
-      </div>
-      <p style="font-size:12px;color:var(--text-muted);margin:4px 0">Control: <strong>${num(item.assignment_counts?.control)}</strong> &bull; Variant: <strong>${num(item.assignment_counts?.variant)}</strong> &bull; Result: <strong>${esc(label(item.latest_result?.state || "not compared"))}</strong></p>
+      <div class="experiment-card-meta"><span>${esc(label(item.status))}</span><span>${esc(label(item.variable))}</span><span>${esc(item.observation_window)}</span><span>${num(item.assignment_counts?.control)} control / ${num(item.assignment_counts?.variant)} variant</span></div>
     </button>`).join("");
 }
 
@@ -35,19 +33,27 @@ export async function loadExperiments() {
   if ($("experimentStatusFilter")?.value) params.set("status", $("experimentStatusFilter").value);
   if ($("experimentModeFilter")?.value) params.set("mode", $("experimentModeFilter").value);
   try {
-    const [data, audits] = await Promise.all([
+    const [data, audits, channel] = await Promise.all([
       apiRequest(`/api/experiment-center/experiments${params.size ? `?${params}` : ""}`, { cache: "no-store" }),
       apiRequest("/api/audits", { cache: "no-store" }),
+      apiRequest("/youtube/channel/status", { cache: "no-store" }),
     ]);
-    publishedCandidates = arr(audits.candidates);
+    connectedChannel = channel.connected ? channel.channel : null;
+    publishedCandidates = arr(audits.candidates).filter((item) => item.ownership_verified && item.verified_channel_id === connectedChannel?.id);
     $("experimentList").innerHTML = cards(arr(data.experiments));
+    if ($("experimentChannelStatus")) $("experimentChannelStatus").textContent = connectedChannel
+      ? `Connected: ${connectedChannel.title} · ${num(publishedCandidates.length)} verified linked video(s) available`
+      : "No connected YouTube channel — assignments and comparisons are unavailable.";
   } catch (error) {
     if ($("experimentCreateStatus")) $("experimentCreateStatus").textContent = formatApiError(error, "Experiment Center is unavailable.");
   }
 }
 
-function assignmentOptions() {
-  return publishedCandidates.map((item) => `<option value="${Number(item.id)}">${esc(item.youtube_metadata?.title || item.package_topic || item.youtube_video_id)}</option>`).join("");
+function assignmentOptions(experiment) {
+  const assigned = new Set(arr(experiment.assignments).map((item) => Number(item.published_video_link_id)));
+  const available = publishedCandidates.filter((item) => !assigned.has(Number(item.id)));
+  if (!available.length) return '<option value="">No other verified linked videos available</option>';
+  return available.map((item) => `<option value="${Number(item.id)}">${esc(item.youtube_metadata?.title || item.package_topic || item.youtube_video_id)}</option>`).join("");
 }
 
 function groupRows(items, role) {
@@ -70,7 +76,7 @@ function metricRows(metrics) {
       <td>${item.control?.median == null ? "UNAVAILABLE" : num(item.control.median)} <span class="ideas-card-meta">(n=${num(item.control?.sample_size)})</span></td>
       <td>${item.variant?.median == null ? "UNAVAILABLE" : num(item.variant.median)} <span class="ideas-card-meta">(n=${num(item.variant?.sample_size)})</span></td>
       <td><strong>${item.relative_difference_percent == null ? "UNAVAILABLE" : `${num(item.relative_difference_percent)}%`}</strong></td>
-      <td>${chip(label(item.observed_direction), item.observed_direction === "positive" ? "ok" : item.observed_direction === "negative" ? "bad" : "")}</td>
+      <td>${chip(label(item.observed_direction), item.observed_direction === "variant" ? "ok" : item.observed_direction === "control" ? "warn" : "")}</td>
     </tr>`).join("");
 }
 
@@ -112,26 +118,26 @@ function renderExperiment(item, versions = []) {
     ${isObservational ? `<h3 class="creator-section-heading">Observational references</h3>${groupRows(item.assignments, "observational_reference")}` : ""}
 
     <div class="phase8-assign">
-      <select id="experimentAssignVideo"><option value="">Select verified linked video</option>${assignmentOptions()}</select>
+      <select id="experimentAssignVideo"><option value="">Select a channel-verified video</option>${assignmentOptions(item)}</select>
       <select id="experimentAssignRole">
         <option value="control">Control</option>
         <option value="variant">Variant</option>
         ${isObservational ? '<option value="observational_reference">Observational reference</option>' : ""}
       </select>
-      <button type="button" class="btn" data-experiment-action="assign">Assign explicitly</button>
+      <button type="button" class="btn" data-experiment-action="assign">Add video</button>
     </div>
 
     <div class="creator-inline-actions ideas-actions" style="margin:14px 0">
-      <button type="button" class="btn btn-primary" data-experiment-action="compare">Calculate comparison</button>
+      <button type="button" class="btn btn-primary audit-refresh-button" data-experiment-action="compare">Compare saved evidence</button>
       ${next ? `<button type="button" class="btn" data-experiment-action="status" data-next-status="${next}">Mark ${esc(next)}</button>` : ""}
     </div>
     <div id="experimentActionStatus" class="metric-sub" aria-live="polite"></div>
 
-    <h3 class="creator-section-heading">Comparative Result &amp; Observations</h3>
+    <h3 class="creator-section-heading">Result</h3>
     ${result ? `
       <div class="phase8-result">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
-          <strong>${esc(result.label || "Comparison Result")}</strong>
+          <strong>${esc(result.interpretation || result.label || "Comparison Result")}</strong>
           ${chip(label(result.state), result.state === "insufficient_evidence" ? "warn" : "ok")}
         </div>
         <p>${esc(result.interpretation)}</p>
@@ -159,8 +165,8 @@ function renderExperiment(item, versions = []) {
             <strong>Learning candidate observation</strong>
             <p>${esc(result.learning_candidate.variable)}: ${esc(label(result.learning_candidate.evidence_state))} / Sample: ${num(result.learning_candidate.sample_size)}. ${esc(result.learning_candidate.interpretation)}</p>
           </div>` : ""}
-      </div>` : '<div class="creator-empty-state">INSUFFICIENT EVIDENCE until a comparison is calculated from assigned videos. No fake statistical significance is assumed.</div>'}
-    <p class="metric-sub" style="margin-top:10px">${num(versions.length)} immutable comparison snapshot(s). No result is automatically applied to future generation.</p>`;
+      </div>` : '<div class="creator-empty-state">INSUFFICIENT EVIDENCE until completed snapshots exist for enough assigned videos. No fake statistical significance is assumed and no direction is claimed.</div>'}
+    <p class="metric-sub" style="margin-top:10px">${num(versions.length)} saved comparison snapshot(s). Results never update YouTube or automatically change future generation.</p>`;
 }
 
 async function openExperiment(id) {
@@ -179,6 +185,7 @@ async function action(button) {
   button.disabled = true;
   try {
     const kind = button.dataset.experimentAction;
+    let message = "Experiment updated.";
     if (kind === "assign") {
       const linkId = Number($("experimentAssignVideo").value);
       if (!linkId) throw new Error("Select a verified linked video.");
@@ -187,17 +194,22 @@ async function action(button) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ published_video_link_id: linkId, role: $("experimentAssignRole").value }),
       });
+      message = "Video added. It will be eligible once the selected evidence window is complete.";
     } else if (kind === "compare") {
       await apiRequest(`/api/experiment-center/experiments/${selectedExperimentId}/compare`, { method: "POST" });
+      message = "Comparison saved from verified completed snapshots.";
     } else if (kind === "status") {
       await apiRequest(`/api/experiment-center/experiments/${selectedExperimentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: button.dataset.nextStatus }),
       });
+      message = `Status changed to ${label(button.dataset.nextStatus)}.`;
     }
     await openExperiment(selectedExperimentId);
     await loadExperiments();
+    const status = $("experimentActionStatus");
+    if (status) status.textContent = message;
   } catch (error) {
     const status = $("experimentActionStatus");
     if (status) status.textContent = formatApiError(error, error.message || "Experiment action failed.");

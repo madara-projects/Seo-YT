@@ -189,7 +189,15 @@ class AuditExperimentStore:
             connection.execute("UPDATE experiments SET " + ",".join(f"{key}=?" for key in changes) + " WHERE id=?", (*changes.values(), experiment_id))
         return self.experiment(experiment_id)
 
-    def assign_video(self, experiment_id: int, link_id: int, role: str, notes: str = "") -> dict[str, Any]:
+    def assign_video(
+        self,
+        experiment_id: int,
+        link_id: int,
+        role: str,
+        notes: str = "",
+        *,
+        connected_channel_id: str | None = None,
+    ) -> dict[str, Any]:
         experiment = self.experiment(experiment_id)
         if not experiment:
             raise LookupError("Experiment not found.")
@@ -198,6 +206,8 @@ class AuditExperimentStore:
         link = self.history.published_video_link(link_id)
         if not link or not link.get("ownership_verified"):
             raise ValueError("Only a verified linked published video can be assigned.")
+        if connected_channel_id and str(link.get("verified_channel_id") or "") != connected_channel_id:
+            raise ValueError("This video is not verified for the currently connected YouTube channel.")
         if experiment["mode"] == "controlled" and role == "observational_reference":
             raise ValueError("A controlled experiment accepts only explicit control or variant assignments.")
         now = datetime.now(timezone.utc).isoformat()
@@ -216,12 +226,19 @@ class AuditExperimentStore:
             cursor = connection.execute("DELETE FROM experiment_video_assignments WHERE id=? AND experiment_id=?", (assignment_id, experiment_id))
         return cursor.rowcount > 0
 
-    def refresh_experiment_result(self, experiment_id: int) -> dict[str, Any] | None:
+    def refresh_experiment_result(self, experiment_id: int, *, connected_channel_id: str | None = None) -> dict[str, Any] | None:
         experiment = self.experiment(experiment_id)
         if not experiment:
             return None
         assignments = []
         for assignment in experiment["assignments"]:
+            link = self.history.published_video_link(int(assignment["published_video_link_id"]))
+            if connected_channel_id and (
+                not link
+                or not link.get("ownership_verified")
+                or str(link.get("verified_channel_id") or "") != connected_channel_id
+            ):
+                raise ValueError("An assigned video is not verified for the currently connected YouTube channel.")
             item = dict(assignment)
             item["evidence_snapshot"] = self.history.completed_evidence_snapshot(item["youtube_video_id"], experiment["observation_window"])
             assignments.append(item)
