@@ -327,7 +327,7 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
     }
 
     async function deleteHistoryRun(runId) {
-      if (!confirm("Are you sure you want to delete this saved package from your SQLite database?")) return;
+      if (!confirm("Delete this saved package? It will be removed from this device and marked deleted for your synced devices.")) return;
       try {
         await apiRequest(`/api/history/runs/${runId}`, { method: "DELETE" });
         showToast("Saved package deleted successfully.");
@@ -498,34 +498,61 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
       }) + " IST";
     }
 
+    let savedHistoryRuns = [];
+
+    function historyRowHtml(run) {
+      const title = run.title || run.query || "Untitled package";
+      const isLinked = Boolean(run.linked_youtube_video_id);
+      const selection = run.selected_package_id
+        ? "<span class='chip chip-ok'>Selected package</span>"
+        : "<span class='chip'>Selection unknown</span>";
+      const linkAction = isLinked
+        ? "<button class='btn history-action-btn' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Change link</button>"
+        : "<button class='btn history-action-btn' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Link video</button>";
+      return "<article class='history-row' data-history-run='" + Number(run.id) + "'>" +
+        "<div class='history-row-main'><div class='history-row-title' title='" + esc(title) + "'><button onclick='openHistoryRun(" + Number(run.id) + ")'>" + esc(title) + "</button></div>" +
+          "<div class='history-row-meta'><span>" + historyDate(run.created_at) + "</span><span aria-hidden='true'>·</span><span>" + esc(run.content_angle || run.intent || "General") + "</span>" + selection + (isLinked ? "<span class='chip chip-ok'>YouTube linked</span>" : "") + "</div></div>" +
+        "<div class='history-score-group' aria-label='Package scores'><div class='history-score'><span class='history-score-label'>Opportunity</span><span class='history-score-value'>" + num(run.opportunity_score) + "/100</span></div><div class='history-score'><span class='history-score-label'>Title quality</span><span class='history-score-value'>" + num(run.title_score) + "/10</span></div></div>" +
+        "<div class='history-row-actions'><button class='btn btn-primary history-action-btn' onclick='openHistoryRun(" + Number(run.id) + ")'>View package</button>" + linkAction + "<button class='btn history-action-btn history-action-danger' onclick='deleteHistoryRun(" + Number(run.id) + ")'>Delete</button></div>" +
+      "</article>";
+    }
+
+    function renderSavedHistory(query = "") {
+      const body = $("historyPageBody");
+      if (!body) return;
+      const needle = String(query || "").trim().toLowerCase();
+      const visibleRuns = needle ? savedHistoryRuns.filter((run) =>
+        [run.title, run.query, run.content_angle, run.intent].some((value) => String(value || "").toLowerCase().includes(needle))
+      ) : savedHistoryRuns;
+      const count = $("historyRunCount");
+      const summary = $("historyResultSummary");
+      if (count) count.textContent = savedHistoryRuns.length + " saved " + (savedHistoryRuns.length === 1 ? "package" : "packages");
+      if (summary) summary.textContent = needle
+        ? visibleRuns.length + " of " + savedHistoryRuns.length + " packages match “" + String(query) + "”"
+        : savedHistoryRuns.length + " package" + (savedHistoryRuns.length === 1 ? "" : "s") + " available";
+      if (!visibleRuns.length) {
+        body.innerHTML = "<div class='history-empty'>" + (savedHistoryRuns.length ? "No saved packages match your search." : "No saved packages yet. Generate an SEO package and it will appear here.") + "</div>";
+        return;
+      }
+      body.innerHTML = visibleRuns.map(historyRowHtml).join("");
+    }
+
+    function filterHistoryRuns(query = "") {
+      renderSavedHistory(query);
+    }
+
     async function loadSavedHistory() {
       const body = $("historyPageBody");
       if (!body) return;
       try {
         const data = await apiRequest("/api/history/runs");
-        const runs = data.runs || [];
-        if (!runs.length) {
-          body.innerHTML = "<tr><td colspan='5' style='color:var(--text-muted);text-align:center;padding:16px'>No saved packages yet.</td></tr>";
-          return;
-        }
-        body.innerHTML = runs.map((run) => {
-          const linkControl = run.linked_youtube_video_id
-            ? "<span class='chip chip-ok'>Linked</span><button class='btn' style='padding:4px 10px;font-size:11px' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Change link</button>"
-            : "<button class='btn' style='padding:4px 10px;font-size:11px;background:rgba(229,9,20,0.15);border-color:rgba(229,9,20,0.3)' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Link</button>";
-          return "<tr>" +
-          "<td style='font-size:12px;color:var(--text-muted)'>" + historyDate(run.created_at) + "</td>" +
-          "<td style='font-weight:600;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(run.title) + "'>" + esc(run.title || run.query || "Untitled package") + (run.selected_package_id ? " <span class='chip chip-ok'>Choice saved</span>" : " <span class='chip'>Choice unknown</span>") + "</td>" +
-          "<td><span style='font-weight:700;color:var(--accent)'>" + num(run.opportunity_score) + "</span> / 100</td>" +
-          "<td><span class='chip chip-ok'>" + num(run.title_score) + " / 10</span></td>" +
-          "<td style='display:flex;gap:6px'>" +
-          "<button class='btn' style='padding:4px 10px;font-size:11px' onclick='openHistoryRun(" + Number(run.id) + ")'>Open</button>" +
-          linkControl +
-          "<button class='btn' style='padding:4px 10px;font-size:11px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#ef4444' onclick='deleteHistoryRun(" + Number(run.id) + ")'>Delete</button>" +
-          "</td>" +
-          "</tr>";
-        }).join("");
+        savedHistoryRuns = data.runs || [];
+        renderSavedHistory($("historySearch") ? $("historySearch").value : "");
       } catch (error) {
-        body.innerHTML = "<tr><td colspan='5' style='color:var(--bad);text-align:center;padding:16px'>" + esc(formatApiError(error, "Could not load saved packages.")) + "</td></tr>";
+        savedHistoryRuns = [];
+        if ($("historyRunCount")) $("historyRunCount").textContent = "Records unavailable";
+        if ($("historyResultSummary")) $("historyResultSummary").textContent = "Could not load saved packages.";
+        body.innerHTML = "<div class='history-empty' style='color:var(--bad)'>" + esc(formatApiError(error, "Could not load saved packages.")) + "</div>";
       }
     }
 
@@ -548,33 +575,27 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
         const selection = run.selected_package || null;
         const selectedData = selection && selection.package ? selection.package : null;
         const selectionHtml = selectedData
-          ? "<div class='bento-card' style='margin-top:18px'><div class='card-title'><span>Creator-selected generated package</span><span class='chip chip-ok'>Explicitly recorded</span></div><div style='font-weight:750'>" + esc(selectedData.title || "Selected package") + "</div><div class='metric-sub'>Package ID " + esc(selection.generated_package_id || "unknown") + " / Selected " + historyDate(selection.selected_at) + (selection.later_associated_with_video ? " / Associated with linked video" : " / Not linked yet") + "</div></div>"
-          : "<div class='bento-card' style='margin-top:18px'><div class='card-title'><span>Creator-selected generated package</span><span class='chip'>Unknown</span></div><div class='metric-sub'>No explicit selection was recorded. The tool will not infer one after publishing.</div></div>";
+          ? "<div class='history-link-callout'><div><strong>Creator-selected package</strong><div class='metric-sub'>" + esc(selectedData.title || "Selected package") + " · selected " + historyDate(selection.selected_at) + "</div></div><span class='chip chip-ok'>Explicitly recorded</span></div>"
+          : "<div class='history-link-callout'><div><strong>Creator-selected package</strong><div class='metric-sub'>No explicit selection was recorded. The tool will not infer one after publishing.</div></div><span class='chip'>Unknown</span></div>";
         const retention = packageData.retention_assistant || {};
         const retentionRisks = arr(retention.risk_map).flatMap((stage) => arr((stage || {}).risks));
         const retentionHtml = Object.keys(retention).length
-          ? "<div class='bento-card' style='margin-top:18px'><div class='card-title'><span>Saved hook, pacing &amp; retention trace</span><span class='chip'>" + esc(retention.rule_version || "Local rules") + "</span></div><div style='font-weight:750'>Risk level: " + esc(retention.risk_level || "unknown") + "</div><div class='metric-sub'>" + esc((retention.trace || {}).timing_basis || "relative stage") + " / " + retentionRisks.length + " deterministic finding(s). This is pre-publish heuristic guidance, not measured retention.</div></div>"
+          ? "<div class='history-link-callout'><div><strong>Retention guidance: " + esc(retention.risk_level || "unknown") + " risk</strong><div class='metric-sub'>" + esc((retention.trace || {}).timing_basis || "relative stage") + " · " + retentionRisks.length + " deterministic finding(s). This is pre-publish guidance, not measured retention.</div></div><span class='chip'>" + esc(retention.rule_version || "Local rules") + "</span></div>"
           : "";
         const linkedHtml = report.linked ? linkedVideoReportHtml(report, run.id) :
-          "<div class='bento-card' style='margin-top:18px'><div class='card-title'>Published-video learning</div><div class='metric-sub'>No YouTube video is linked to this package yet. Use Link on the History row after publishing.</div></div>";
+          "<div class='history-link-callout'><div><strong>Published-video learning</strong><div class='metric-sub'>No YouTube video is linked yet. Link it after publishing to keep performance evidence with this package.</div></div><button class='btn' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Link video</button></div>";
         const legacy = !run.package
           ? "<div class='alert-banner' style='background:var(--warn-bg);border:1px solid rgba(245,158,11,.3);color:#fcd34d;margin-top:16px'>This package was created before full-package history was added. Its saved title, script, and scores are shown below; future packages retain the complete generated output.</div>"
           : "";
+        const linkState = report.linked ? "Linked to YouTube" : "Not linked";
         panel.innerHTML =
-          "<div class='card-title'><span>Saved Package / " + historyDate(run.created_at) + "</span><div style='display:flex;gap:8px'><button class='btn' style='padding:4px 10px;font-size:11px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#ef4444' onclick='deleteHistoryRun(" + Number(run.id) + ")'>Delete Package</button><button class='btn' style='padding:4px 10px;font-size:11px' onclick='closeHistoryDetail()'>Close</button></div></div>" +
-          "<div class='metric-value' style='font-size:24px'>" + esc(packageData.title || run.title || "Untitled package") + "</div>" +
-          "<div class='metric-sub' style='margin-top:8px'>Opportunity " + num(run.opportunity_score) + "/100 / Title score " + num(run.title_score) + "/10 / " + esc(run.content_angle || "General") + "</div>" +
-          legacy +
-          selectionHtml +
-          retentionHtml +
-          linkedHtml +
-          "<div class='bento-grid' style='margin-top:18px'>" +
-          "<div class='bento-card span-6'><div class='card-title'>Description</div><div style='white-space:pre-wrap;line-height:1.6'>" + esc(packageData.description || "Not stored in this older record.") + "</div></div>" +
-          "<div class='bento-card span-6'><div class='card-title'>Original video content / script</div><div style='white-space:pre-wrap;line-height:1.6;max-height:420px;overflow-y:auto'>" + esc(fullScript || "Not stored.") + "</div></div>" +
-          "<div class='bento-card span-6'><div class='card-title'>Tags</div><div class='tag-list'>" + tags + "</div><div class='card-title' style='margin-top:18px'>Hashtags</div><div class='tag-list'>" + hashtags + "</div></div>" +
-          "<div class='bento-card span-6'><div class='card-title'>Title variations</div><ol style='padding-left:20px;line-height:1.8'>" + variants + "</ol><div class='card-title' style='margin-top:18px'>Chapters</div><ol style='padding-left:20px;line-height:1.8'>" + chapters + "</ol></div>" +
-          "</div>";
-        panel.scrollIntoView({ behavior: "smooth", block: "start" });
+          "<div class='history-detail-header'><div><div class='eyebrow'>SAVED PACKAGE · " + historyDate(run.created_at) + "</div><h2 class='history-detail-title'>" + esc(packageData.title || run.title || "Untitled package") + "</h2><div class='history-detail-meta'><span>" + esc(run.content_angle || run.intent || "General") + "</span><span aria-hidden='true'>·</span><span>" + esc(run.opportunity_label || "Saved generation") + "</span></div></div><div class='history-detail-actions'><button class='btn history-action-danger' onclick='deleteHistoryRun(" + Number(run.id) + ")'>Delete package</button><button class='btn' onclick='closeHistoryDetail()'>Close</button></div></div>" +
+          "<div class='history-detail-body'><div class='history-summary-grid'><div class='history-summary-stat'><span>Opportunity</span><strong>" + num(run.opportunity_score) + " / 100</strong></div><div class='history-summary-stat'><span>Title quality</span><strong>" + num(run.title_score) + " / 10</strong></div><div class='history-summary-stat'><span>Package selection</span><strong>" + (selectedData ? "Recorded" : "Unknown") + "</strong></div><div class='history-summary-stat'><span>Publishing status</span><strong>" + linkState + "</strong></div></div>" +
+          legacy + selectionHtml + retentionHtml + linkedHtml +
+          "<div class='history-detail-grid'><section class='history-section'><div class='history-section-heading'>Description</div><div class='history-longform'>" + esc(packageData.description || "Not stored in this older record.") + "</div></section>" +
+          "<section class='history-section'><div class='history-section-heading'>Original video content / script</div><div class='history-longform'>" + esc(fullScript || "Not stored.") + "</div></section>" +
+          "<section class='history-section'><div class='history-section-heading'>Tags &amp; hashtags</div><div class='tag-list'>" + tags + "</div><div class='history-section-heading' style='margin-top:18px'>Hashtags</div><div class='tag-list'>" + hashtags + "</div></section>" +
+          "<section class='history-section'><details open><summary>Title variations</summary><div><ol class='history-detail-list'>" + variants + "</ol></div></details><details><summary>Chapters</summary><div><ol class='history-detail-list'>" + chapters + "</ol></div></details></section></div></div>";
         const syncedAt = report.metadata_synced_at || (report.performance || {}).captured_at;
         const stale = !syncedAt || Date.now() - new Date(syncedAt).getTime() > 10 * 60 * 1000;
         if (report.linked && stale && !historyPerformanceAutoRefresh.has(Number(report.link_id))) {
@@ -605,49 +626,36 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
       const attribution = usage.attribution_status === "creator_selected" ? "Creator-selected package" : "Package selection unknown";
       const comparable = report.comparable_metadata || {};
       const retentionLearning = report.retention_learning || {};
-      const retentionLearningHtml = "<div class='bento-card span-12'><div class='card-title'>Retention learning status</div><div style='font-weight:750'>" + esc(retentionLearning.status || "insufficient_evidence") + "</div><div class='metric-sub'>" + esc(retentionLearning.message || "No eligible retention pattern is available.") + " Sample: " + num(retentionLearning.sample_size || 0) + " / Minimum: " + num(retentionLearning.minimum_samples || 5) + ". Correlation is not causation.</div></div>";
+      const learningCount = num(retentionLearning.sample_size || 0);
+      const learningMinimum = num(retentionLearning.minimum_samples || 5);
+      const retentionLearningHtml = "<section class='history-learning-panel'><div class='history-panel-heading'><div><div class='eyebrow'>CHANNEL LEARNING</div><h3>Retention evidence</h3></div><span class='chip'>" + esc(retentionLearning.status || "insufficient_evidence").replaceAll("_", " ") + "</span></div>" +
+        "<div class='history-learning-progress'><div><strong>" + learningCount + " of " + learningMinimum + " comparable videos</strong><span>with verified 24-hour retention data</span></div><div class='history-progress-track' aria-label='" + learningCount + " of " + learningMinimum + " comparable videos'><span style='width:" + Math.min(100, Math.round((Number(retentionLearning.sample_size || 0) / Math.max(1, Number(retentionLearning.minimum_samples || 5))) * 100)) + "%'></span></div></div>" +
+        "<p class='metric-sub'>" + esc(retentionLearning.message || "No eligible retention pattern is available.") + " The tool surfaces patterns only after enough like-for-like videos exist; it does not claim that a package caused views or retention.</p></section>";
       const sources = comparable.sources || {};
       const sourceLabel = (source) => ({creator:"Creator confirmed", youtube_verified:"YouTube verified", package:"From package", unknown:"Unknown"}[source] || "Unknown");
-      const metadataEditor = "<div class='bento-card span-12' style='margin-top:12px'><div class='card-title'>Comparable learning metadata</div><div class='metric-sub'>These local labels control future cohort comparisons. They do not edit YouTube.</div><div class='bento-grid' style='margin-top:10px'>" +
-        ["language","format","duration_bucket","topic_category"].map((field) => "<label class='field span-3' style='display:block'><span class='field-label'>" + esc(field.replaceAll("_", " ")) + " <small class='chip'>" + esc(sourceLabel(sources[field])) + "</small></span><input id='comparable-" + field + "' value='" + esc(comparable[field] === "unknown" ? "" : comparable[field] || "") + "' maxlength='80' placeholder='Unknown'></label>").join("") +
-        "</div><div style='display:flex;gap:8px;margin-top:10px'><button class='btn btn-primary' onclick='saveComparableMetadata(" + Number(report.link_id) + "," + Number(runId) + ")'>Save metadata</button><button class='btn' onclick='openHistoryRun(" + Number(runId) + ")'>Cancel</button></div><div id='comparable-meta-error' class='metric-sub' style='color:var(--bad);margin-top:8px'></div></div>";
-      const snapshotRows = arr(report.snapshots).map((snapshot) =>
-        "<tr><td>" + esc(snapshot.snapshot_window || "current") + "</td><td>" + metric(snapshot.views) + "</td><td>" + metric(snapshot.likes) + "</td><td>" + metric(snapshot.avg_view_percentage, "%") + "</td><td>" + historyDate(snapshot.captured_at) + "</td></tr>"
-      ).join("") || "<tr><td colspan='5' class='metric-sub'>No performance snapshot has been captured yet.</td></tr>";
-      return "<div class='bento-card' style='margin-top:18px;border-top:3px solid var(--ok)'>" +
-       "<div class='card-title'><span>Linked YouTube performance &amp; learning</span><div style='display:flex;gap:8px;flex-wrap:wrap'>" +
-       "<span class='chip chip-ok'>" + esc(diagnosis.confidence || "LOW") + " confidence</span>" +
-       "<a class='btn' target='_blank' rel='noopener' href='" + esc(report.video_url) + "'>Watch video</a>" +
-        "<button class='btn' onclick='refreshHistoryPerformance(" + Number(report.link_id) + "," + Number(runId) + ",this)'>Refresh YouTube data</button></div></div>" +
-        "<div style='font-size:18px;font-weight:800;margin-top:8px'>" + esc(diagnosis.verdict || "Collecting evidence") + "</div>" +
-        "<div class='metric-sub' style='margin-top:6px'>Published " + historyDate(report.published_at) + " / Video ID " + esc(report.video_id) + " / Last data " + historyDate(report.metadata_synced_at || perf.captured_at) + "</div>" +
-        "<div class='bento-grid' style='margin-top:16px'>" +
-          "<div class='bento-card span-6'><div class='card-title'>Actual YouTube upload</div>" +
-            (yt.thumbnail_url ? "<img src='" + esc(yt.thumbnail_url) + "' alt='' style='width:180px;max-width:100%;border-radius:10px;margin-bottom:12px'>" : "") +
-            "<div style='font-weight:750;line-height:1.5'>" + esc(yt.title || usage.uploaded_title || "Metadata not refreshed yet") + "</div>" +
-            "<div class='metric-sub' style='margin:8px 0'>" + esc(attribution) + " / " + esc(titleStatus) + " / Description adoption " + metric(usage.description_match_percent, "%") + "</div>" +
-            "<details style='margin:12px 0'><summary style='cursor:pointer;font-weight:700'>Description currently on YouTube</summary><div style='white-space:pre-wrap;line-height:1.55;max-height:220px;overflow-y:auto;margin-top:10px'>" + esc(yt.description || "No description returned.") + "</div></details>" +
-            "<div class='card-title' style='margin-top:14px'>Tags actually on YouTube</div>" + tagList(usage.uploaded_tags, "No uploaded tags were returned by YouTube.") +
-            "<div class='card-title' style='margin-top:14px'>Generated tags used</div>" + tagList(usage.matching_tags, "None of the generated tags currently match the uploaded tags.") +
-            "<div class='card-title' style='margin-top:14px'>Hashtags actually in description</div>" + tagList(usage.uploaded_hashtags, "No hashtags were detected in the uploaded description.") +
-          "</div>" +
-          "<div class='bento-card span-6'><div class='card-title'>Current real performance</div>" +
-            "<div class='kv-list'>" +
-              "<div class='kv-item'><span class='kv-key'>Views</span><span class='kv-val'>" + metric(perf.views) + "</span></div>" +
-              "<div class='kv-item'><span class='kv-key'>Likes / like rate</span><span class='kv-val'>" + metric(perf.likes) + " / " + metric(perf.like_rate_percent, "%") + "</span></div>" +
-              "<div class='kv-item'><span class='kv-key'>Comments</span><span class='kv-val'>" + metric(perf.comments) + "</span></div>" +
-              "<div class='kv-item'><span class='kv-key'>Average viewed</span><span class='kv-val'>" + metric(perf.average_view_percentage, "%") + "</span></div>" +
-              "<div class='kv-item'><span class='kv-key'>Average view duration</span><span class='kv-val'>" + metric(perf.average_view_duration_seconds, " sec") + "</span></div>" +
-              "<div class='kv-item'><span class='kv-key'>Subscribers gained</span><span class='kv-val'>" + metric(perf.subscribers_gained) + "</span></div>" +
-            "</div><div class='metric-sub' style='margin-top:10px'>Analytics retention can lag behind public view/like counts. Comparable baseline: " + num(baseline.sample_size || 0) + " other videos at " + esc(baseline.window || "no scheduled window") + ".</div>" +
-          "</div>" +
-          "<div class='bento-card span-6'><div class='card-title'>What worked / positive observations</div>" + list(diagnosis.what_worked, "No positive conclusion is supported yet.") + "</div>" +
-          "<div class='bento-card span-6'><div class='card-title'>What to improve / still unknown</div>" + list(diagnosis.needs_improvement, "No issue has been detected from the available evidence.") + "</div>" +
-          retentionLearningHtml +
-          metadataEditor +
-          "<div class='bento-card span-12'><div class='card-title'>Performance snapshots</div><div style='overflow-x:auto'><table><thead><tr><th>Window</th><th>Views</th><th>Likes</th><th>Average viewed</th><th>Captured</th></tr></thead><tbody>" + snapshotRows + "</tbody></table></div>" +
-            "<div class='metric-sub' style='margin-top:10px'>" + esc(diagnosis.attribution_note || "") + "</div></div>" +
-        "</div></div>";
+      const metadataEditor = "<section class='history-comparable-panel'><div class='history-panel-heading'><div><div class='eyebrow'>COMPARISON SETUP</div><h3>Comparable learning metadata</h3></div><span class='chip'>Local only</span></div><p class='metric-sub'>These labels group similar videos for future learning. Saving them does not edit the YouTube video.</p><div class='history-metadata-grid'>" +
+        ["language","format","duration_bucket","topic_category"].map((field) => "<label class='history-metadata-field'><span>" + esc(field.replaceAll("_", " ")) + " <small class='chip'>" + esc(sourceLabel(sources[field])) + "</small></span><input id='comparable-" + field + "' value='" + esc(comparable[field] === "unknown" ? "" : comparable[field] || "") + "' maxlength='80' placeholder='Not set'></label>").join("") +
+        "</div><div class='history-form-actions'><button class='btn btn-primary' onclick='saveComparableMetadata(" + Number(report.link_id) + "," + Number(runId) + ")'>Save local labels</button><button class='btn' onclick='openHistoryRun(" + Number(runId) + ")'>Discard changes</button></div><div id='comparable-meta-error' class='metric-sub' style='color:var(--bad);margin-top:8px'></div></section>";
+      const snapshots = arr(report.snapshots);
+      const snapshotRows = snapshots.map((snapshot) => {
+        const complete = snapshot.avg_view_percentage !== null && snapshot.avg_view_percentage !== undefined;
+        const windowLabel = snapshot.snapshot_window || "current";
+        const state = complete ? "Retention available" : windowLabel === "current" ? "Live counts" : "Retention pending";
+        return "<div class='history-snapshot-row'><div><strong>" + esc(windowLabel) + "</strong><span class='chip " + (complete ? "chip-ok" : "") + "'>" + state + "</span></div><div><span>Views</span><strong>" + metric(snapshot.views) + "</strong></div><div><span>Likes</span><strong>" + metric(snapshot.likes) + "</strong></div><div><span>Average viewed</span><strong>" + metric(snapshot.avg_view_percentage, "%") + "</strong></div><div><span>Captured</span><strong>" + historyDate(snapshot.captured_at) + "</strong></div></div>";
+      }).join("") || "<div class='history-empty'>No performance snapshot has been captured yet.</div>";
+      return "<section class='history-linked-report'>" +
+       "<header class='history-linked-header'><div><div class='eyebrow'>LINKED YOUTUBE VIDEO</div><h3>" + esc(diagnosis.verdict || "Collecting evidence") + "</h3><p>Published " + historyDate(report.published_at) + " · Last refreshed " + historyDate(report.metadata_synced_at || perf.captured_at) + "</p></div><div class='history-detail-actions'><span class='chip chip-ok'>" + esc(diagnosis.confidence || "LOW") + " confidence</span><a class='btn' target='_blank' rel='noopener' href='" + esc(report.video_url) + "'>Watch video</a><button class='btn' onclick='refreshHistoryPerformance(" + Number(report.link_id) + "," + Number(runId) + ",this)'>Refresh data</button></div></header>" +
+        "<div class='history-linked-grid'><section class='history-section'><div class='history-section-heading'>Actual YouTube upload</div>" +
+          (yt.thumbnail_url ? "<img class='history-youtube-thumb' src='" + esc(yt.thumbnail_url) + "' alt=''>" : "") +
+          "<div class='history-upload-title'>" + esc(yt.title || usage.uploaded_title || "Metadata not refreshed yet") + "</div><div class='history-detail-meta'><span>" + esc(attribution) + "</span><span>·</span><span>" + esc(titleStatus) + "</span><span>·</span><span>Description match " + metric(usage.description_match_percent, "%") + "</span></div>" +
+          "<details><summary>Description currently on YouTube</summary><div class='history-longform'>" + esc(yt.description || "No description returned.") + "</div></details><details><summary>Tags &amp; hashtags found on YouTube</summary><div><div class='history-mini-label'>Uploaded tags</div>" + tagList(usage.uploaded_tags, "No uploaded tags were returned by YouTube.") + "<div class='history-mini-label'>Generated tags used</div>" + tagList(usage.matching_tags, "None of the generated tags currently match the uploaded tags.") + "<div class='history-mini-label'>Hashtags in description</div>" + tagList(usage.uploaded_hashtags, "No hashtags were detected in the uploaded description.") + "</div></details></section>" +
+          "<section class='history-section'><div class='history-section-heading'>Current observed performance <span class='chip'>Video-level data</span></div><div class='history-performance-grid'>" +
+            "<div><span>Views</span><strong>" + metric(perf.views) + "</strong></div><div><span>Likes</span><strong>" + metric(perf.likes) + "</strong></div><div><span>Comments</span><strong>" + metric(perf.comments) + "</strong></div><div><span>Average viewed</span><strong>" + metric(perf.average_view_percentage, "%") + "</strong></div><div><span>Avg. view duration</span><strong>" + metric(perf.average_view_duration_seconds, " sec") + "</strong></div><div><span>Subscribers gained</span><strong>" + metric(perf.subscribers_gained) + "</strong></div></div>" +
+            "<p class='metric-sub'>Public counts can update before retention analytics. Comparable baseline: " + num(baseline.sample_size || 0) + " other videos at " + esc(baseline.window || "no scheduled window") + ".</p></section>" +
+          "<section class='history-section'><div class='history-section-heading'>What the evidence supports</div>" + list(diagnosis.what_worked, "No positive conclusion is supported yet.") + "</section><section class='history-section'><div class='history-section-heading'>What remains unknown</div>" + list(diagnosis.needs_improvement, "No issue has been detected from the available evidence.") + "</section></div>" +
+          retentionLearningHtml + metadataEditor +
+          "<section class='history-snapshots-panel'><div class='history-panel-heading'><div><div class='eyebrow'>OBSERVATION HISTORY</div><h3>Performance snapshots</h3></div><span class='metric-sub'>Video ID " + esc(report.video_id) + "</span></div><div class='history-snapshot-list'>" + snapshotRows + "</div><p class='metric-sub'>" + esc(diagnosis.attribution_note || "YouTube reports video-level performance; it cannot attribute views to individual tags.") + "</p></section>" +
+        "</section>";
     }
 
     async function saveComparableMetadata(linkId, runId) {
@@ -685,7 +693,8 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
     }
 
     function closeHistoryDetail() {
-      $("historyDetail").classList.add("hidden");
+      const panel = $("historyDetail");
+      if (panel) panel.classList.add("hidden");
     }
 
     $("runDiagBtn").addEventListener("click", async () => {
@@ -889,5 +898,6 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
     Object.assign(window, {
       applyTemplate, switchPage, deleteHistoryRun,
       linkVideoPrompt, refreshLinkedVideo, openHistoryRun, closeHistoryDetail,
+      filterHistoryRuns,
       saveComparableMetadata, refreshHistoryPerformance,
     });

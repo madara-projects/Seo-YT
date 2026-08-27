@@ -127,16 +127,59 @@ class CloudSyncService:
                       selected_at, updated_at FROM analysis_package_selections WHERE analysis_run_id = ?""",
             (run_id,),
         ).fetchone()
+        link = connection.execute(
+            """SELECT id,youtube_video_id,published_at,selected_title,selected_thumbnail_package,
+                      selected_description,selected_tags_json,selected_hashtags_json,format,language,
+                      region,notes,linked_at,updated_at,youtube_metadata_json,metadata_synced_at,
+                      ownership_state,ownership_verified,verified_channel_id,ownership_verified_at
+               FROM published_video_links WHERE analysis_run_id = ?""", (run_id,),
+        ).fetchone()
+        linked_video = None
+        if link:
+            comparable = connection.execute(
+                """SELECT language,format,duration_bucket,topic_category,language_source,format_source,
+                          duration_bucket_source,topic_category_source,updated_at
+                   FROM published_video_comparable_metadata WHERE published_video_link_id = ?""", (link[0],),
+            ).fetchone()
+            snapshot_rows = connection.execute(
+                """SELECT age_hours,views,watch_time_minutes,avg_view_duration_seconds,avg_view_percentage,
+                          likes,comments,shares,subscribers_gained,impressions,impressions_ctr,snapshot_window,
+                          snapshot_status,attempt_count,last_failure_reason,last_attempted_at,completed_at,
+                          source_start_date,source_end_date,captured_at
+                   FROM video_performance_snapshots WHERE youtube_video_id = ? ORDER BY captured_at,id""", (link[1],),
+            ).fetchall()
+            keys = ("age_hours", "views", "watch_time_minutes", "avg_view_duration_seconds", "avg_view_percentage",
+                    "likes", "comments", "shares", "subscribers_gained", "impressions", "impressions_ctr",
+                    "snapshot_window", "snapshot_status", "attempt_count", "last_failure_reason", "last_attempted_at",
+                    "completed_at", "source_start_date", "source_end_date", "captured_at")
+            linked_video = {
+                "youtube_video_id": link[1], "published_at": link[2], "selected_title": link[3],
+                "selected_thumbnail_package": link[4], "selected_description": link[5],
+                "selected_tags": json.loads(link[6]) if link[6] else [],
+                "selected_hashtags": json.loads(link[7]) if link[7] else [], "format": link[8],
+                "language": link[9], "region": link[10], "notes": link[11], "linked_at": link[12],
+                "updated_at": link[13], "youtube_metadata": json.loads(link[14]) if link[14] else None,
+                "metadata_synced_at": link[15], "ownership_state": link[16],
+                "ownership_verified": bool(link[17]), "verified_channel_id": link[18],
+                "ownership_verified_at": link[19],
+                "comparable_metadata": ({"language": comparable[0], "format": comparable[1],
+                    "duration_bucket": comparable[2], "topic_category": comparable[3],
+                    "sources": {"language": comparable[4], "format": comparable[5],
+                                "duration_bucket": comparable[6], "topic_category": comparable[7]},
+                    "updated_at": comparable[8]} if comparable else None),
+                "snapshots": [dict(zip(keys, row)) for row in snapshot_rows],
+            }
         return {
-            "schema": 1,
+            "schema": 2,
             "analysis": {"query": row[0], "created_at": row[1], "intent": row[2], "content_angle": row[3],
                          "title": row[4], "title_score": row[5], "retention_risk": row[6],
                          "opportunity_label": row[7], "opportunity_score": row[8],
                          "package": json.loads(row[9]) if row[9] else None},
             "selection": ({"generated_package_id": selection[0], "package": json.loads(selection[1]),
-                           "quality_gate": json.loads(selection[2]) if selection[2] else {},
+                          "quality_gate": json.loads(selection[2]) if selection[2] else {},
                            "selection_source": selection[3], "selected_at": selection[4], "updated_at": selection[5]}
                           if selection else None),
+            "linked_video": linked_video,
         }
 
     def _stage_local_packages(self) -> int:
@@ -244,6 +287,88 @@ class CloudSyncService:
                 local.execute("DELETE FROM cloud_sync_outbox WHERE sync_uuid=?", (sync_uuid,))
         return len(deletion_rows) + len(rows)
 
+    @staticmethod
+    def _apply_linked_video(local, run_id: int, linked_video: Any, fallback_time: str) -> None:
+        """Restore the link and observations belonging to a synced package revision."""
+        if linked_video is None:
+            local.execute("DELETE FROM published_video_links WHERE analysis_run_id = ?", (run_id,))
+            return
+        if not isinstance(linked_video, dict):
+            return
+        video_id = str(linked_video.get("youtube_video_id") or "").strip()
+        if not video_id:
+            local.execute("DELETE FROM published_video_links WHERE analysis_run_id = ?", (run_id,))
+            return
+        local.execute("DELETE FROM published_video_links WHERE analysis_run_id = ? AND youtube_video_id != ?", (run_id, video_id))
+        local.execute(
+            """INSERT INTO published_video_links(
+                   analysis_run_id,youtube_video_id,published_at,selected_title,selected_thumbnail_package,
+                   selected_description,selected_tags_json,selected_hashtags_json,format,language,region,notes,
+                   linked_at,updated_at,youtube_metadata_json,metadata_synced_at,ownership_state,ownership_verified,
+                   verified_channel_id,ownership_verified_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(analysis_run_id) DO UPDATE SET
+                   youtube_video_id=excluded.youtube_video_id,published_at=excluded.published_at,
+                   selected_title=excluded.selected_title,selected_thumbnail_package=excluded.selected_thumbnail_package,
+                   selected_description=excluded.selected_description,selected_tags_json=excluded.selected_tags_json,
+                   selected_hashtags_json=excluded.selected_hashtags_json,format=excluded.format,
+                   language=excluded.language,region=excluded.region,notes=excluded.notes,linked_at=excluded.linked_at,
+                   updated_at=excluded.updated_at,youtube_metadata_json=excluded.youtube_metadata_json,
+                   metadata_synced_at=excluded.metadata_synced_at,ownership_state=excluded.ownership_state,
+                   ownership_verified=excluded.ownership_verified,verified_channel_id=excluded.verified_channel_id,
+                   ownership_verified_at=excluded.ownership_verified_at""",
+            (run_id, video_id, linked_video.get("published_at") or fallback_time,
+             linked_video.get("selected_title"), linked_video.get("selected_thumbnail_package"),
+             linked_video.get("selected_description"), json.dumps(linked_video.get("selected_tags") or [], ensure_ascii=False),
+             json.dumps(linked_video.get("selected_hashtags") or [], ensure_ascii=False), linked_video.get("format"),
+             linked_video.get("language"), linked_video.get("region"), linked_video.get("notes"),
+             linked_video.get("linked_at") or fallback_time, linked_video.get("updated_at") or fallback_time,
+             json.dumps(linked_video.get("youtube_metadata"), ensure_ascii=False) if linked_video.get("youtube_metadata") is not None else None,
+             linked_video.get("metadata_synced_at"), linked_video.get("ownership_state") or "unverified",
+             1 if linked_video.get("ownership_verified") else 0, linked_video.get("verified_channel_id"),
+             linked_video.get("ownership_verified_at")),
+        )
+        link_id = int(local.execute("SELECT id FROM published_video_links WHERE analysis_run_id = ?", (run_id,)).fetchone()[0])
+        metadata = linked_video.get("comparable_metadata")
+        if isinstance(metadata, dict):
+            sources = metadata.get("sources") if isinstance(metadata.get("sources"), dict) else {}
+            local.execute(
+                """INSERT INTO published_video_comparable_metadata(
+                       published_video_link_id,language,format,duration_bucket,topic_category,language_source,
+                       format_source,duration_bucket_source,topic_category_source,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(published_video_link_id) DO UPDATE SET
+                       language=excluded.language,format=excluded.format,duration_bucket=excluded.duration_bucket,
+                       topic_category=excluded.topic_category,language_source=excluded.language_source,
+                       format_source=excluded.format_source,duration_bucket_source=excluded.duration_bucket_source,
+                       topic_category_source=excluded.topic_category_source,updated_at=excluded.updated_at""",
+                (link_id, metadata.get("language") or "unknown", metadata.get("format") or "unknown",
+                 metadata.get("duration_bucket") or "unknown", metadata.get("topic_category") or "unknown",
+                 sources.get("language") or "unknown", sources.get("format") or "unknown",
+                 sources.get("duration_bucket") or "unknown", sources.get("topic_category") or "unknown",
+                 fallback_time, metadata.get("updated_at") or fallback_time),
+            )
+        local.execute("DELETE FROM video_performance_snapshots WHERE youtube_video_id = ?", (video_id,))
+        for snapshot in linked_video.get("snapshots") or []:
+            if not isinstance(snapshot, dict):
+                continue
+            local.execute(
+                """INSERT INTO video_performance_snapshots(
+                       published_video_link_id,youtube_video_id,age_hours,views,watch_time_minutes,
+                       avg_view_duration_seconds,avg_view_percentage,likes,comments,shares,subscribers_gained,
+                       impressions,impressions_ctr,snapshot_window,snapshot_status,attempt_count,last_failure_reason,
+                       last_attempted_at,completed_at,source_start_date,source_end_date,captured_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (link_id, video_id, snapshot.get("age_hours") or 0, snapshot.get("views"),
+                 snapshot.get("watch_time_minutes"), snapshot.get("avg_view_duration_seconds"),
+                 snapshot.get("avg_view_percentage"), snapshot.get("likes"), snapshot.get("comments"),
+                 snapshot.get("shares"), snapshot.get("subscribers_gained"), snapshot.get("impressions"),
+                 snapshot.get("impressions_ctr"), snapshot.get("snapshot_window"),
+                 snapshot.get("snapshot_status") or "legacy_unverified", snapshot.get("attempt_count") or 0,
+                 snapshot.get("last_failure_reason"), snapshot.get("last_attempted_at"), snapshot.get("completed_at"),
+                 snapshot.get("source_start_date"), snapshot.get("source_end_date"), snapshot.get("captured_at") or fallback_time),
+            )
+
     def _pull(self, remote) -> int:
         with remote.cursor() as cursor:
             cursor.execute("""SELECT sync_uuid,origin_device_id,revision,content_hash,payload_json,updated_at,deleted_at
@@ -310,6 +435,8 @@ class CloudSyncService:
                     local.execute("""INSERT INTO analysis_package_selections(analysis_run_id,generated_package_id,package_json,quality_gate_json,selection_source,selected_at,updated_at)
                         VALUES(?,?,?,?,?,?,?) ON CONFLICT(analysis_run_id) DO UPDATE SET generated_package_id=excluded.generated_package_id,package_json=excluded.package_json,quality_gate_json=excluded.quality_gate_json,selection_source=excluded.selection_source,selected_at=excluded.selected_at,updated_at=excluded.updated_at""",
                         (run_id,selection["generated_package_id"],json.dumps(selection.get("package") or {},ensure_ascii=False),json.dumps(selection.get("quality_gate") or {},ensure_ascii=False),"creator",selection.get("selected_at") or updated_at,selection.get("updated_at") or updated_at))
+                if int(payload.get("schema") or 1) >= 2:
+                    self._apply_linked_video(local, run_id, payload.get("linked_video"), updated_at)
                 if mapping:
                     local.execute("UPDATE cloud_sync_packages SET revision=?,content_hash=?,last_synced_hash=?,remote_updated_at=?,updated_at=? WHERE sync_uuid=?", (revision,content_hash,content_hash,updated_at,_now(),sync_uuid))
                 else:

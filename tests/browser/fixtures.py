@@ -52,8 +52,8 @@ def history_runs():
     }
 
 
-def history_run_detail():
-    return {
+def history_run_detail(*, include_link: bool = False):
+    payload = {
         "id": 1,
         "created_at": "2026-08-15T10:00:00+00:00",
         "title": "Rainy Highway Reflection",
@@ -72,6 +72,27 @@ def history_run_detail():
         },
         "linked_video_report": {"linked": False},
     }
+    if include_link:
+        payload["linked_video_report"] = {
+            "linked": True,
+            "link_id": 9,
+            "video_id": "fixture-video-1",
+            "video_url": "https://www.youtube.com/watch?v=fixture-video-1",
+            "published_at": "2026-08-14T10:00:00+00:00",
+            "metadata_synced_at": "2026-08-15T10:00:00+00:00",
+            "youtube": {"title": "Rainy Highway Reflection", "description": "Published description #Shorts", "tags": ["rainy road", "shorts"]},
+            "package_usage": {"attribution_status": "creator_selected", "title_match": True, "description_match_percent": 88, "uploaded_tags": ["rainy road", "shorts"], "matching_tags": ["rainy road"], "uploaded_hashtags": ["#Shorts"]},
+            "performance": {"views": 1152, "likes": 15, "comments": 2, "average_view_percentage": None, "average_view_duration_seconds": None, "subscribers_gained": 0},
+            "diagnosis": {"confidence": "LOW", "verdict": "Collecting evidence", "what_worked": [], "needs_improvement": ["24-hour retention is not available yet."], "attribution_note": "YouTube reports video-level performance; it cannot attribute views to individual tags."},
+            "baseline": {"sample_size": 0, "window": "no scheduled window"},
+            "comparable_metadata": {"language": "english", "format": "short", "duration_bucket": "unknown", "topic_category": "unknown", "sources": {"language": "package", "format": "package", "duration_bucket": "unknown", "topic_category": "unknown"}},
+            "retention_learning": {"status": "insufficient_evidence", "message": "Only 0 verified comparable videos have completed 24-hour retention evidence; at least 5 are required before surfacing correlations.", "sample_size": 0, "minimum_samples": 5},
+            "snapshots": [
+                {"snapshot_window": "24h", "views": None, "likes": None, "avg_view_percentage": None, "captured_at": "2026-08-15T10:00:00+00:00"},
+                {"snapshot_window": "current", "views": 1152, "likes": 15, "avg_view_percentage": None, "captured_at": "2026-08-15T10:00:00+00:00"},
+            ],
+        }
+    return payload
 
 
 def _research_fixture(mode: str = "full"):
@@ -388,7 +409,7 @@ class FixtureRouter:
             _json_response(route, history_runs())
             return
         if path == "/api/history/runs/1" and method == "GET":
-            _json_response(route, history_run_detail())
+            _json_response(route, history_run_detail(include_link=self.include_link))
             return
         if path == "/api/published-videos":
             links = []
