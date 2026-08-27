@@ -806,11 +806,23 @@ def get_published_audit(link_id: int, audit_id: int | None = None):
 
 @router.post("/api/audits/{link_id}/refresh", status_code=201)
 def refresh_published_audit(link_id: int):
-    store = AuditExperimentStore(HistoryStore(get_settings().database_path))
+    settings = get_settings()
+    history = HistoryStore(settings.database_path)
+    link = history.published_video_link(link_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Published video link not found.")
+    try:
+        video_refresh = YouTubeChannelService(settings).refresh_linked_video_performance(link)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store = AuditExperimentStore(history)
     audit = store.refresh_audit(link_id)
     if not audit:
         raise HTTPException(status_code=404, detail="Published video link or saved analysis was not found.")
-    return {"status": "audited", "audit": audit, "versions": store.audit_versions(link_id)}
+    return {
+        "status": "audited", "audit": audit, "versions": store.audit_versions(link_id),
+        "video_refresh": video_refresh,
+    }
 
 
 @router.get("/api/audits/{link_id}/findings")
@@ -870,9 +882,19 @@ def update_structured_experiment(experiment_id: int, payload: UpdateStructuredEx
 
 @router.post("/api/experiment-center/experiments/{experiment_id}/assignments", status_code=201)
 def assign_structured_experiment_video(experiment_id: int, payload: AssignExperimentVideoRequest):
-    store = AuditExperimentStore(HistoryStore(get_settings().database_path))
+    settings = get_settings()
+    channel = (YouTubeChannelService(settings).status().get("channel") or {}).get("id")
+    if not channel:
+        raise HTTPException(status_code=409, detail="Connect the YouTube channel before assigning experiment videos.")
+    store = AuditExperimentStore(HistoryStore(settings.database_path))
     try:
-        item = store.assign_video(experiment_id, payload.published_video_link_id, payload.role, payload.notes)
+        item = store.assign_video(
+            experiment_id,
+            payload.published_video_link_id,
+            payload.role,
+            payload.notes,
+            connected_channel_id=str(channel),
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -890,8 +912,15 @@ def remove_structured_experiment_assignment(experiment_id: int, assignment_id: i
 
 @router.post("/api/experiment-center/experiments/{experiment_id}/compare", status_code=201)
 def compare_structured_experiment(experiment_id: int):
-    store = AuditExperimentStore(HistoryStore(get_settings().database_path))
-    result = store.refresh_experiment_result(experiment_id)
+    settings = get_settings()
+    channel = (YouTubeChannelService(settings).status().get("channel") or {}).get("id")
+    if not channel:
+        raise HTTPException(status_code=409, detail="Connect the YouTube channel before comparing experiment results.")
+    store = AuditExperimentStore(HistoryStore(settings.database_path))
+    try:
+        result = store.refresh_experiment_result(experiment_id, connected_channel_id=str(channel))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not result:
         raise HTTPException(status_code=404, detail="Experiment not found.")
     return {"status": "compared", "result": result, "experiment": store.experiment(experiment_id)}

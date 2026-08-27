@@ -2329,6 +2329,90 @@ details.accordion summary:hover {
    Stage G3 & G4: Published Audits & Experiment Center Workspaces
    -------------------------------------------------------------------------- */
 
+.audit-page-shell { display: grid; gap: 18px; }
+.experiment-page-shell { display: grid; gap: 14px; }
+.experiment-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel-solid); }
+.experiment-hero h2 { margin: 4px 0; color: var(--text); font-size: 22px; letter-spacing: -.02em; }
+.experiment-hero p { max-width: 760px; margin: 0; color: var(--text-sub); font-size: 12px; line-height: 1.5; }
+.experiment-connection { max-width: 300px; color: var(--text-sub); font-size: 11.5px; line-height: 1.45; text-align: right; }
+.experiment-layout { grid-template-columns: 1fr; gap: 14px; }
+.experiment-create { padding: 14px 16px; }
+.experiment-create details { margin-top: 10px; }
+.experiment-create summary { color: var(--text); cursor: pointer; font-size: 13px; font-weight: 700; }
+.experiment-create details > .metric-sub { margin: 10px 0 12px; }
+.experiment-create-button { margin-top: 12px; padding: 8px 12px; font-size: 12px; }
+.experiment-library { padding: 14px 16px; }
+.experiment-library > .metric-sub { margin: 4px 0 10px; }
+.experiment-library #experimentList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.experiment-card { padding: 11px 13px; }
+.experiment-card-meta { display: flex; flex-wrap: wrap; gap: 4px 9px; margin-top: 7px; color: var(--text-sub); font-size: 10.5px; }
+.experiment-card-meta span + span::before { margin-right: 9px; color: var(--border-bright); content: "•"; }
+.experiment-detail { position: static; max-height: none; padding: 18px; }
+.experiment-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.experiment-detail-header h2 { margin: 4px 0; color: var(--text); font-size: 19px; }
+.experiment-method-note { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; color: var(--text-sub); background: var(--panel-card); font-size: 11.5px; line-height: 1.45; }
+.experiment-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; }
+.experiment-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.experiment-groups section, .experiment-actions, .experiment-result, .experiment-reference { margin-top: 14px; padding: 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-card); }
+.experiment-groups h3, .experiment-actions h3, .experiment-result h3, .experiment-reference h3 { margin: 0; color: var(--text); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.experiment-groups p { min-height: 32px; margin: 6px 0 9px; color: var(--text-sub); font-size: 11.5px; line-height: 1.4; }
+.experiment-actions > .metric-sub { margin: 5px 0 9px; }
+.experiment-inline-actions { margin: 12px 0 0; }
+.experiment-result .phase8-result { margin-top: 10px; }
+.experiment-result-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; color: var(--text); font-size: 12px; line-height: 1.45; }
+.experiment-result-next { margin: 8px 0 0; color: var(--text-sub); font-size: 11.5px; }
+.experiment-empty { display: grid; gap: 9px; max-width: 620px; }
+.experiment-empty h3 { margin: 0; color: var(--text); font-size: 18px; }
+.experiment-empty-steps { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.experiment-empty-steps span { padding: 6px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-sub); font-size: 10.5px; font-weight: 700; }
+.audit-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel-solid); }
+.audit-hero h2 { margin: 4px 0; font-size: 22px; letter-spacing: -.02em; }
+.audit-hero p { max-width: 720px; margin: 0; color: var(--text-sub); font-size: 12px; line-height: 1.5; }
+.audit-hero-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; text-align: right; }
+.audit-layout { grid-template-columns: 1fr; gap: 14px; }
+.audit-library { padding: 16px; }
+.audit-library-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.audit-library-heading .metric-sub { max-width: 570px; margin: 5px 0 0; }
+.audit-status { margin-top: 10px; }
+.audit-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.audit-card { position: relative; padding: 11px 13px 11px 15px; overflow: hidden; }
+.audit-card::before { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; background: var(--border); content: ""; }
+.audit-card.audit-card-observed::before { background: var(--accent); }
+.audit-card.audit-card-mature::before { background: var(--ok); }
+.audit-card .ideas-card-head { align-items: center; }
+.audit-card-title { overflow: hidden; color: var(--text); font-size: 13.5px; font-weight: 750; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.audit-card-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 7px; color: var(--text-sub); font-size: 10.5px; }
+.audit-card-meta span + span::before { margin-right: 10px; color: var(--border-bright); content: "•"; }
+.audit-empty-detail { display: grid; gap: 14px; padding: 6px 0; }
+.audit-empty-detail h3 { margin: 0; font-size: 19px; }
+.audit-empty-detail .audit-explainer { display: grid; gap: 7px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-card); }
+.audit-empty-detail .audit-explainer strong { font-size: 12px; }
+.audit-detail-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.audit-detail-header .eyebrow, .audit-detail-header h2, .audit-detail-header p { grid-column: 1; }
+.audit-detail-header h2 { margin: 4px 0; font-size: 18px; line-height: 1.3; }
+.audit-detail-actions { grid-column: 2; grid-row: 1 / span 3; display: flex; align-items: center; align-self: center; flex-wrap: wrap; gap: 8px; }
+.audit-refresh-button { padding: 7px 11px; font-size: 11.5px; box-shadow: none; }
+.audit-section { margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--border); }
+.audit-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; color: var(--text); font-size: 12px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.audit-evidence-note { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-sub); background: var(--panel-card); font-size: 11.5px; line-height: 1.5; }
+.audit-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.audit-summary-grid { margin-top: 12px; }
+.audit-secondary { opacity: .9; }
+.audit-conclusion { display: grid; gap: 4px; padding: 11px 13px; border: 1px solid var(--border); border-left: 3px solid var(--warn); border-radius: 8px; background: var(--panel-card); }
+.audit-conclusion.is-mature { border-left-color: var(--ok); }
+.audit-conclusion strong { color: var(--text); font-size: 12px; }
+.audit-conclusion span { color: var(--text-sub); font-size: 11.5px; line-height: 1.45; }
+.audit-details { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-card); }
+.audit-details summary { padding: 10px 12px; color: var(--text-sub); cursor: pointer; font-size: 11.5px; font-weight: 700; }
+.audit-details[open] summary { border-bottom: 1px solid var(--border); }
+.audit-details .audit-facts, .audit-details .audit-findings, .audit-details .metric-sub { margin: 12px; }
+.audit-findings { display: grid; gap: 8px; }
+.audit-finding { padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-card); }
+.audit-finding strong, .audit-finding span, .audit-finding small { display: block; }
+.audit-finding strong { color: var(--text); font-size: 11.5px; }
+.audit-finding span { margin-top: 5px; color: var(--text-sub); font-size: 11.5px; line-height: 1.45; }
+.audit-finding small { margin-top: 6px; color: var(--text-muted); font-size: 10px; }
+
 .phase8-table-wrap {
   overflow-x: auto;
   margin: 12px 0 18px;
@@ -2336,9 +2420,33 @@ details.accordion summary:hover {
   border: 1px solid var(--border);
 }
 
+@media (max-width: 850px) {
+  .audit-hero, .audit-library-heading { align-items: flex-start; flex-direction: column; }
+  .audit-hero-meta { align-items: flex-start; text-align: left; }
+  .audit-list, .audit-facts { grid-template-columns: 1fr; }
+  .audit-detail-header { display: block; }
+  .audit-detail-actions { margin-top: 10px; }
+  .experiment-hero { align-items: flex-start; flex-direction: column; }
+  .experiment-connection { max-width: none; text-align: left; }
+  .experiment-library #experimentList, .experiment-facts, .experiment-groups { grid-template-columns: 1fr; }
+}
+
 .phase8-table-wrap .history-table {
-  min-width: 680px;
+  min-width: 560px;
   margin: 0;
+}
+
+.phase8-table-wrap .history-table td {
+  max-width: 280px;
+  color: var(--text-sub);
+  line-height: 1.45;
+  vertical-align: top;
+}
+
+.phase8-table-wrap .history-table td:first-child,
+.phase8-table-wrap .history-table td:last-child {
+  max-width: 130px;
+  color: var(--text);
 }
 
 .phase8-warning {

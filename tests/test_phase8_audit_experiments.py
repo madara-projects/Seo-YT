@@ -118,6 +118,17 @@ class PublishedAuditTests(Phase8Fixture):
         self.assertEqual(audit["summary"]["state"], "observable")
         self.assertEqual(audit["observed_performance"]["maturity"], "collecting_evidence")
 
+    def test_legacy_link_without_comparable_metadata_can_still_be_audited(self):
+        _, link_id, _ = self.add_video()
+        with self.history._connect() as connection:
+            connection.execute(
+                "DELETE FROM published_video_comparable_metadata WHERE published_video_link_id = ?",
+                (link_id,),
+            )
+        audit = self.store.refresh_audit(link_id)
+        self.assertEqual(audit["summary"]["state"], "mature_observation")
+        self.assertEqual(audit["evidence"]["cohort"]["sample_size"], 0)
+
     def test_mature_observation_never_claims_causality(self):
         _, link_id, _ = self.add_video()
         audit = self.store.refresh_audit(link_id)
@@ -207,6 +218,12 @@ class StructuredExperimentTests(Phase8Fixture):
         _, verified, _ = self.add_video()
         with self.assertRaisesRegex(ValueError, "controlled"):
             self.store.assign_video(item["id"], verified, "observational_reference")
+
+    def test_assignment_rejects_a_video_verified_for_another_channel(self):
+        item = self.experiment()
+        _, link_id, _ = self.add_video()
+        with self.assertRaisesRegex(ValueError, "currently connected"):
+            self.store.assign_video(item["id"], link_id, "control", connected_channel_id="different-channel")
 
     def test_small_sample_is_insufficient(self):
         item = self.experiment()
