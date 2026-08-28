@@ -13,7 +13,7 @@ import re
 from difflib import SequenceMatcher
 from typing import Any, Optional, Union
 
-from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality
+from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality, is_short_content
 from win_engine.llm import gemini_client
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,8 @@ _SYSTEM_PROMPT = (
     "You are an expert YouTube SEO strategist. You analyze the user's video script, quote, or idea "
     "to write high-CTR title variants, descriptions, tags, and hashtags. "
     "Output ONLY valid JSON with keys: \"title\", \"variants\" (array of 5 strings), "
-    "\"description\", \"tags\" (array of 10 strings), and \"hashtags\" (array of 3 strings)."
+    "\"description\", \"tags\" (array of up to 10 contextual strings), and \"hashtags\" (array of up to 3 strings). "
+    "Every title must be an exact, upload-ready value rather than a stem or template."
 )
 
 
@@ -263,6 +264,16 @@ def _build_user_prompt(
     repair_feedback: Optional[list[dict[str, Any]]] = None,
     previous_package: Optional[dict[str, Any]] = None,
 ) -> str:
+    short_title_rule = (
+        "If this package is for a YouTube Short, the final upload-ready title MUST contain #shorts exactly once. "
+        "This package is a YouTube Short, so every title variant must follow the same rule. "
+        "Use one or at most two natural, semantically relevant emojis when the "
+        "mood or visual supports them; do not recycle a fixed emoji template."
+        if is_short_content(script, creator_brief)
+        else
+        "This is not identified as a YouTube Short. Do not add #shorts to the title or variants. "
+        "Do not add an emoji merely as decoration."
+    )
     repair_block = ""
     if repair_feedback:
         safe_reasons = [str(item.get("message") or item.get("code") or "quality failure") for item in repair_feedback[:12]]
@@ -288,6 +299,7 @@ Audience type: {audience_type}
 
 Constraints:
 - {_language_instruction(language)}
+- {short_title_rule}
 - the title, description, and tags must accurately match the creator brief and real video
 - treat the video script/idea as the only source of factual events. Audience notes describe who may relate; they are not events that happened in the video
 - for an on-screen quote video, preserve the exact quote and its actual meaning. Do not invent a breakup, departure, betrayal, relationship status, motive, action, or claim (such as "they left", "you stayed", or "just an option") that the source does not state
@@ -296,7 +308,7 @@ Constraints:
 - choose a description structure that fits this video. Do not reuse a universal hook, bullet list, chapter template, CTA, or "watch until the end" wording
 - include chapters only when real timestamps or a sufficiently detailed script supports them
 - tags must be natural phrases that a person might type into search. Preserve contractions such as "didn't"; never make a tag by deleting grammar words from a quote, and never return a bag of unrelated quote words
-- tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Do not add generic viral/trending filler
+- tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Return only tags justified by this specific video; do not pad the list to a fixed count and do not add generic viral/trending filler
 - title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
 - return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are additional truthful alternatives
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above

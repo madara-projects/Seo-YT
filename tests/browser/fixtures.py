@@ -181,14 +181,14 @@ def _research_fixture(mode: str = "full"):
 def analyze_success(*, creator_research: str = "full", generation_source: str = "gemini", title_prefix: str = ""):
     research = _research_fixture(creator_research)
     package = {
-        "title": f"{title_prefix}The Truth About Letting Go #Shorts",
+        "title": f"{title_prefix}The Truth About Letting Go 💔 #shorts",
         "description": "A reflective short about letting go.",
         "tags": ["letting go", "quotes", "shorts"],
         "hashtags": ["#shorts", "#quotes"],
         "variants": [
-            f"{title_prefix}The Truth About Letting Go #Shorts",
-            "When You Finally Stop Waiting #Shorts",
-            "A Quiet Reminder About Letting Go #Shorts",
+            f"{title_prefix}The Truth About Letting Go 💔 #shorts",
+            "When You Finally Stop Waiting 🌧️ #shorts",
+            "Letting Go Without Forgetting Them 🌙 #shorts",
         ],
     }
     title_thumbnail_packages = [
@@ -263,13 +263,26 @@ def analyze_success(*, creator_research: str = "full", generation_source: str = 
             "viewer_promise": "Feel understood in under a minute",
             "unique_angle": "A quiet first-person reflection over moving traffic",
             "proof": "Original on-screen quote",
-            "video_format": "story",
+            "video_format": "youtube_shorts",
             "title_style": "curiosity",
             "thumbnail_idea": "Rainy road with high-contrast quote text",
         },
         **research,
         "multilang": {"english": package},
-        "upload_timing": {"recommended_day": "Not enough evidence", "sample_size": 0, "confidence": "LOW", "target_region": "GLOBAL"},
+        "upload_timing": {
+            "recommended_day": "Thursday",
+            "recommended_time": "6:00 PM - 8:00 PM",
+            "timezone": "Asia/Kolkata",
+            "confidence": "LOW",
+            "basis": "general_recommendation",
+            "today_recommendation": "Today is a weaker-evidence day. If publishing today, use the general starting window.",
+            "today_time": "6:00 PM - 8:00 PM",
+            "today_timezone": "Asia/Kolkata",
+            "explanation": "Personalized upload timing is not yet established. This is a general starting window, not a prediction of reach.",
+            "sample_size": 0,
+            "personalized": False,
+            "target_region": "GLOBAL",
+        },
         "opportunity_gap_analysis": {"opportunity_score": {"score": 64.2, "label": "WORKABLE", "reason": "Fixture score"}, "competition_score": {}},
         "competitor_shadow": {},
         "language_strategy": {},

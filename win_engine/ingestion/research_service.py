@@ -60,7 +60,16 @@ class ResearchService:
         research_text = brief_research_text(script, creator_brief)
         keyword_signals = extract_keyword_signals(research_text, scored_results, region, primary_language)
         entity_signals = extract_entity_signals(research_text, scored_results)
-        upload_timing = build_upload_timing(scored_results, region=region)
+        owned_performance = self._history.owned_performance_summary()
+        upload_timing = build_upload_timing(
+            scored_results,
+            region=region,
+            channel_analytics=owned_performance.get("latest_sync") or {},
+            historical_videos=owned_performance.get("videos") or [],
+            video_format=str((creator_brief or {}).get("video_format") or ""),
+            strategy=str((creator_brief or {}).get("title_style") or "balanced"),
+            timezone_name=self._settings.creator_timezone,
+        )
         thumbnail_intelligence = analyze_thumbnails(scored_results)
         runtime_state = self._youtube.runtime_state()
         research_warnings = [runtime_state["warning"]] if runtime_state.get("warning") else []

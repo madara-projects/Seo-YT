@@ -240,7 +240,7 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(recent[0]["title"], "Linkable package")
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
-    def test_shorts_keep_all_required_fixed_tags(self, mocked_writer):
+    def test_shorts_keep_contextual_tags_without_generic_padding(self, mocked_writer):
         mocked_writer.return_value = ({"english": None}, "fallback")
         research = {
             "main_topic": "street food in Chennai",
@@ -254,17 +254,57 @@ class TestEngineStages(unittest.TestCase):
         }
         package = build_seo_package("generate seo", "A short about Chennai street food", research, self.store)
         tags = package["tags"]
-        for required in ("shorts", "yt", "youtube shorts", "viral shorts"):
-            self.assertIn(required, tags)
+        self.assertIn("chennai street food", tags)
+        self.assertIn("shorts", tags)
+        self.assertTrue({"yt", "youtube shorts", "viral shorts"}.isdisjoint(tags))
 
-    def test_required_shorts_tags_survive_a_full_tag_list(self):
+    def test_only_useful_shorts_format_tag_survives_a_full_tag_list(self):
         incoming = [f"topic tag {index}" for index in range(12)] + [
             "shorts", "yt", "youtube shorts", "viral shorts"
         ]
         tags = force_topic_in_tags(incoming, "specific video topic", "general", max_tags=12)
         self.assertEqual(len(tags), 12)
-        for required in ("shorts", "yt", "youtube shorts", "viral shorts"):
-            self.assertIn(required, tags)
+        self.assertIn("shorts", tags)
+        self.assertTrue({"yt", "youtube shorts", "viral shorts"}.isdisjoint(tags))
+
+    @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
+    def test_search_browse_and_returning_audience_package_intents_remain_distinct(self, mocked_writer):
+        mocked_writer.return_value = ({
+            "english": {
+                "title": "How to Parse CSV Files Without Breaking Rows",
+                "variants": [
+                    "How to Parse CSV Files Without Breaking Rows",
+                    "The CSV Bug Hiding in Your Automation",
+                    "I Finally Fixed My Most Annoying CSV Bug",
+                    "Why CSV Rows Break in Python Automation",
+                    "A Safer Way to Parse CSV Files in Python",
+                ],
+                "description": "A practical CSV parsing tutorial for safer Python automation.",
+                "tags": ["csv parsing tutorial", "python automation"],
+                "hashtags": ["#Python", "#CSV"],
+            }
+        }, "gemini")
+        brief = {
+            "content": "A practical CSV parsing tutorial for Python automation.",
+            "video_format": "tutorial",
+            "viewer_promise": "Parse CSV rows safely",
+        }
+        research = {
+            "main_topic": "csv parsing tutorial",
+            "keyword_signals": [{"keyword": "csv parsing tutorial"}],
+            "entity_signals": [],
+            "top_opportunities": [],
+            "youtube_results": [],
+            "category": "education",
+            "creator_brief": brief,
+            "language_context": {"language": "english", "region": "global"},
+        }
+        package = build_seo_package("generate seo", brief["content"], research, self.store)
+        self.assertEqual(
+            [item["package_intent"] for item in package["title_variants"][:3]],
+            ["Search", "Browse", "Existing audience"],
+        )
+        self.assertEqual(package["title_thumbnail_packages"][2]["best_for"], "Returning viewers / existing audience")
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
     def test_generated_history_preserves_the_full_creator_script(self, mocked_writer):
@@ -332,6 +372,25 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(summary["total_views"], 456)
         self.assertEqual(summary["subscribers"], 321)
 
+    def test_owned_performance_preserves_optional_timing_evidence_without_inventing_it(self):
+        payload = {
+            "channel": {"real_total_views": 100, "timezone": "Asia/Kolkata"},
+            "current_28_days": {"views": 20},
+            "audience_activity": {
+                "reliable": True,
+                "sample_size": 14,
+                "windows": [{"day": "Thursday", "start_hour": 18, "end_hour": 20, "activity": 80}],
+            },
+        }
+        with self.store._connect() as conn:
+            conn.execute(
+                "INSERT INTO youtube_channel_syncs (synced_at, payload_json) VALUES (?, ?)",
+                ("2026-08-10T12:00:00Z", json.dumps(payload)),
+            )
+        latest = self.store.owned_performance_summary()["latest_sync"]
+        self.assertEqual(latest["timezone"], "Asia/Kolkata")
+        self.assertEqual(latest["audience_activity"]["sample_size"], 14)
+
     def test_youtube_upload_rows_are_newest_first_even_when_details_are_random(self):
         playlist = [
             {"contentDetails": {"videoId": "older"}, "snippet": {"position": 1}},
@@ -354,13 +413,11 @@ class TestEngineStages(unittest.TestCase):
         topic = creator_topic(brief)
         package = _content_specific_fallback(topic, [], brief)
         self.assertEqual(topic, "some sunsets look beautiful because they're endings")
-        self.assertEqual(
-            package["title"],
-            "Some sunsets look beautiful because they're endings #Shorts",
-        )
+        self.assertTrue(package["title"].startswith("Some sunsets look beautiful because they're endings "))
+        self.assertTrue(package["title"].endswith("#shorts"))
         self.assertIn("a beach scene", package["description"])
         self.assertNotIn("Gemini was unavailable", package["description"])
-        self.assertIn("beautiful endings", package["tags"])
+        self.assertIn("beautiful because they're endings", package["tags"])
         self.assertNotIn("background visual", package["tags"])
 
     def test_quote_topic_keeps_a_natural_search_phrase(self):
@@ -515,15 +572,65 @@ class TestEngineStages(unittest.TestCase):
         )
         self.assertEqual(timing["sample_size"], 2)
         self.assertEqual(timing["confidence"], "LOW")
-        self.assertIn("not that this timing caused", timing["reasoning"])
+        self.assertEqual(timing["basis"], "public_research_pattern")
+        self.assertIn("does not show that publishing then caused", timing["reasoning"])
         self.assertNotIn("best upload window", timing["reasoning"])
+        self.assertEqual(timing["timezone"], "UTC")
 
     def test_upload_timing_day_matches_the_displayed_ist_timezone(self):
         timing = build_upload_timing(
             [{"published_at": "2026-08-05T23:30:00Z"}],
             region="india",
+            timezone_name="Asia/Kolkata",
         )
         self.assertEqual(timing["recommended_day"], "Thursday")
+
+    def test_upload_timing_prefers_reliable_personal_audience_activity(self):
+        timing = build_upload_timing(
+            [{"published_at": "2026-08-05T10:00:00Z"}],
+            channel_analytics={
+                "timezone": "Asia/Kolkata",
+                "audience_activity": {
+                    "reliable": True,
+                    "sample_size": 30,
+                    "windows": [{"day": "Friday", "start_hour": 19, "end_hour": 21, "activity": 92}],
+                },
+            },
+            historical_videos=[{"published_at": "2026-08-01T10:00:00Z", "views": 10}] * 5,
+            now=datetime(2026, 8, 28, 9, tzinfo=timezone.utc),
+        )
+        self.assertEqual(timing["basis"], "personal_audience_activity")
+        self.assertEqual(timing["recommended_day"], "Friday")
+        self.assertEqual(timing["recommended_time"], "7:00 PM - 9:00 PM")
+        self.assertEqual(timing["timezone"], "Asia/Kolkata")
+        self.assertTrue(timing["personalized"])
+
+    def test_upload_timing_uses_owned_history_before_public_patterns(self):
+        owned = [
+            {"published_at": f"2026-08-{day:02d}T13:30:00Z", "views": 100 + day, "average_view_percentage": 70}
+            for day in (1, 8, 15, 22, 29)
+        ]
+        timing = build_upload_timing(
+            [{"published_at": "2026-08-05T10:00:00Z"}],
+            historical_videos=owned,
+            timezone_name="Asia/Kolkata",
+        )
+        self.assertEqual(timing["basis"], "historical_channel_data")
+        self.assertEqual(timing["sample_size"], 5)
+        self.assertTrue(timing["personalized"])
+
+    def test_upload_timing_general_fallback_is_honest_and_today_is_dynamic(self):
+        timing = build_upload_timing(
+            [],
+            video_format="youtube_shorts",
+            timezone_name="Asia/Kolkata",
+            now=datetime(2026, 8, 28, 6, tzinfo=timezone.utc),
+        )
+        self.assertEqual(timing["basis"], "general_recommendation")
+        self.assertFalse(timing["personalized"])
+        self.assertIn("Personalized upload timing is not yet established", timing["explanation"])
+        self.assertEqual(timing["today_timezone"], "Asia/Kolkata")
+        self.assertIn("weaker-evidence day", timing["today_recommendation"])
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
     def test_selected_package_description_is_upload_ready(self, mocked_writer):

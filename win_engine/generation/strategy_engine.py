@@ -13,6 +13,7 @@ from win_engine.analysis.generation_quality import (
     candidate_mechanism,
     evaluate_package_quality,
     evidence_trace,
+    is_short_content,
 )
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
@@ -123,16 +124,11 @@ def build_seo_package(
 
     def _resolve(lang: str) -> dict[str, Any]:
         p = multilang_raw.get(lang) or _content_specific_fallback(primary_topic, keyword_signals, creator_brief)
-        video_fmt = str((creator_brief or {}).get("video_format") or "").lower()
-        script_lower = (script or "").lower()
-        is_short_form = video_fmt in {"youtube_shorts", "shorts", "quote", "reels"} or bool(
-            re.search(r"\b(?:short|shorts|reel|reels|quote)\b", script_lower)
-        )
-        if is_short_form:
+        if is_short_content(script, creator_brief):
             existing_tags = [str(t).strip().lower() for t in (p.get("tags") or []) if str(t).strip()]
-            required_tags = ["shorts", "yt", "youtube shorts", "viral shorts"]
-            topic_tags = [tag for tag in existing_tags if tag not in required_tags]
-            p["tags"] = topic_tags[: 12 - len(required_tags)] + required_tags
+            generic_format_tags = {"yt", "youtube shorts", "viral shorts", "trending shorts", "short video"}
+            topic_tags = [tag for tag in existing_tags if tag not in generic_format_tags and tag != "shorts"]
+            p["tags"] = topic_tags[:11] + ["shorts"]
         return p
 
     multilang = {lang: _resolve(lang) for lang in _LANGS}
@@ -154,7 +150,7 @@ def build_seo_package(
     hashtags = pkg["hashtags"]
     variant_titles = list(pkg["variants"]) or [title]
 
-    package_intents = ["Search", "Browse", "Alternative", "Alternative", "Alternative"]
+    package_intents = ["Search", "Browse", "Existing audience", "Alternative", "Alternative"]
     personalization = evidence_trace(channel_learning)
     competitor_titles = [
         str(item.get("title") or "")
@@ -413,6 +409,30 @@ def _fit_title(body: str, suffix: str = "", max_chars: int = 70) -> str:
     return clean + suffix
 
 
+def _semantic_emoji(text: str) -> str:
+    """Choose a relevant fallback emoji from the actual content, never a fixed template."""
+
+    lowered = (text or "").casefold()
+    groups = (
+        (("rain", "rainy", "storm", "monsoon"), ("🌧️", "☔", "🌦️")),
+        (("heartbreak", "heart", "missing", "miss", "love"), ("💔", "🫶", "❤️‍🩹")),
+        (("moon", "night", "stars", "sky"), ("🌙", "✨", "🌌")),
+        (("sunset", "beach", "ocean", "sea"), ("🌅", "🌊", "☀️")),
+        (("mountain", "hill", "nature", "green"), ("⛰️", "🌿", "🌄")),
+        (("road", "traffic", "vehicle", "car", "bus"), ("🚦", "🚗", "🛣️")),
+        (("funny", "comedy", "laugh"), ("😂", "😄", "🤣")),
+    )
+    for terms, emojis in groups:
+        if any(term in lowered for term in terms):
+            return emojis[sum(ord(char) for char in lowered) % len(emojis)]
+    return ""
+
+
+def _topic_hashtag(value: str) -> str:
+    words = re.findall(r"[A-Za-z0-9]+", value or "")[:3]
+    return "#" + "".join(word.capitalize() for word in words) if words else ""
+
+
 def _content_specific_fallback(
     primary_topic: str,
     keyword_signals: list[dict[str, Any]],
@@ -424,14 +444,14 @@ def _content_specific_fallback(
     pretty = topic.title()
     content = str(brief.get("content") or "").strip()
     quote = str(brief.get("exact_quote") or "").strip() or _quoted_text(content)
-    video_format = str(brief.get("video_format") or "").lower()
-    is_shorts = video_format in {"youtube_shorts", "shorts", "quote", "reels"}
+    is_shorts = is_short_content(content or topic, brief)
     promise = str(brief.get("viewer_promise") or "").strip()
     audience = str(brief.get("target_audience") or "").strip()
     unique_angle = str(brief.get("unique_angle") or "").strip()
     proof = str(brief.get("proof") or "").strip()
 
-    suffix = " #Shorts" if is_shorts else ""
+    emoji = _semantic_emoji(" ".join([topic, content, quote, str(brief.get("visual_requirements") or "")]))
+    suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
     if quote:
         variants = [
             _fit_title(quote, suffix),
@@ -477,29 +497,36 @@ def _content_specific_fallback(
 
     tags: list[str] = []
     seen: set[str] = set()
-    quote_words = [word.lower() for word in re.findall(r"[A-Za-z]{4,}", quote)]
+    quote_words = [word.lower() for word in re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", quote)]
     quote_tags = []
     if quote_words:
-        meaningful = [word for word in quote_words if word not in {"some", "look", "looks", "because", "they", "theyre"}]
-        quote_tags = [
-            f"{meaningful[0]} quote" if meaningful else "",
-            " ".join(meaningful[-2:]) if len(meaningful) >= 2 else "",
-            f"{meaningful[-1]} quote" if meaningful else "",
-            "emotional quotes",
-            "life reflections",
-            "aesthetic quote shorts",
-        ]
+        quote_tags = [" ".join(quote_words[:5]), " ".join(quote_words[-4:])]
     candidates = [topic, *quote_tags] if quote else [topic, *[str(item.get("keyword") or "") for item in keyword_signals or []]]
+    for field in ("viewer_promise", "unique_angle", "visual_requirements"):
+        value = " ".join(str(brief.get(field) or "").strip().lower().split()[:6])
+        if value:
+            candidates.append(value)
     for candidate in candidates:
         cleaned = candidate.strip().lower()
         if cleaned and cleaned not in seen:
             seen.add(cleaned)
             tags.append(cleaned)
 
+    if is_shorts and "shorts" not in seen:
+        tags.append("shorts")
+
+    hashtags = [_topic_hashtag(topic)]
+    if is_shorts:
+        hashtags.append("#shorts")
+    visual_hashtag = _topic_hashtag(str(brief.get("visual_requirements") or ""))
+    if visual_hashtag:
+        hashtags.append(visual_hashtag)
+    hashtags = list(dict.fromkeys(item for item in hashtags if item))[:3]
+
     return {
         "title": variants[0],
         "variants": variants,
         "description": description,
         "tags": tags[:8],
-        "hashtags": ["#Shorts", "#Quotes", "#LifeLessons"] if is_shorts else [f"#{re.sub(r'[^A-Za-z0-9]', '', pretty)}"],
+        "hashtags": hashtags,
     }
