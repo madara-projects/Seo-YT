@@ -46,7 +46,7 @@ def build_title_thumbnail_packages(
                 "thumbnail_text": _thumbnail_text(title, brief),
                 "thumbnail_visual": str(brief.get("thumbnail_idea") or _default_visual(brief)).strip(),
                 "viewer_promise": str(brief.get("viewer_promise") or "A clear, truthful reason to watch.").strip(),
-                "why_click": _why_click(style, brief),
+                "why_click": _why_click(style, brief, package_intent),
                 "approach": style,
                 "package_intent": package_intent,
                 "best_for": _best_for(style, brief, package_intent),
@@ -111,10 +111,14 @@ def _title_style(title: str) -> str:
     return "balanced"
 
 
-def _why_click(style: str, brief: dict[str, Any]) -> str:
+def _why_click(style: str, brief: dict[str, Any], package_intent: str = "") -> str:
     promise = str(brief.get("viewer_promise") or "the specific viewer payoff").strip()
     proof = str(brief.get("proof") or "real evidence from the video").strip()
-    if style == "searchable":
+    if package_intent == "Existing audience":
+        return f"It reconnects returning viewers with the subject they already care about: {promise}"
+    if package_intent == "Browse":
+        return f"It creates a feed-friendly curiosity hook, backed by {proof}."
+    if style == "searchable" or package_intent == "Search":
         return f"It makes the outcome searchable while promising: {promise}"
     if style == "curiosity-led":
         return f"It creates curiosity, backed by {proof}."

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import List
+from typing import Iterable, List
 
 # ---------------------------------------------------------------------------
 # Fix 2: Category awareness — keyword sets per category
@@ -141,6 +141,10 @@ STOP_TAGS: set[str] = {
     "description", "descriptions", "result", "results", "free",
     "channel", "follow", "share", "watch", "click", "below",
     "common", "general", "basic", "simple", "easy",
+    # Platform/distribution filler is not a subject tag. ``shorts`` is kept
+    # separately when the creator actually supplied a Short.
+    "youtube", "yt", "viral", "trending", "youtube shorts", "viral shorts",
+    "trending shorts", "short video", "fyp",
 }
 
 # ---------------------------------------------------------------------------
@@ -377,14 +381,20 @@ def force_topic_in_description(description: str, topic: str) -> str:
 
 
 def force_topic_in_tags(tags: list[str], topic: str, category: str,
-                        max_tags: int = 12, min_before_fallback: int = 6) -> list[str]:
+                        max_tags: int = 12, min_before_fallback: int = 6,
+                        context: str | Iterable[str] | None = None) -> list[str]:
     """Drop junk tags, ensure the real topic is first, and preserve model tags.
 
     Generic category filler is intentionally not added. A Short keeps only the
     useful format tag ``shorts``; every other tag must describe the actual video.
     """
     pinned = {"shorts"}
-    generic_format_tags = {"yt", "youtube shorts", "viral shorts", "trending shorts", "short video"}
+    generic_format_tags = {
+        "yt", "youtube", "viral", "trending", "youtube shorts", "viral shorts",
+        "trending shorts", "short video", "video", "fyp",
+    }
+    context_text = context if isinstance(context, str) else " ".join(str(item) for item in (context or []))
+    context_words = set(re.findall(r"[a-z0-9]+", (" ".join([topic or "", context_text])).casefold()))
     required = list(dict.fromkeys(
         str(tag).strip().lower()
         for tag in (tags or [])
@@ -405,6 +415,12 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
     for raw in tags or []:
         t = (raw or "").strip().lower()
         if t in pinned or t in generic_format_tags or not t or t in seen or _is_junk_tag(t) or len(out) >= max_tags - reserved:
+            continue
+        if context is not None:
+            tag_words = set(re.findall(r"[a-z0-9]+", t))
+            if tag_words and not (tag_words & context_words):
+                continue
+        if len(out) >= max_tags - reserved:
             continue
         out.append(t)
         seen.add(t)

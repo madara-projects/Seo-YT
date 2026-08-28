@@ -39,7 +39,10 @@ _EMOJI_CONTEXT_TERMS = {
     "moon", "mountain", "nature", "night", "quote", "rain", "rainy", "road",
     "sad", "sky", "storm", "sunset", "surprise", "travel", "unexpected",
 }
-_GENERIC_FORMAT_TAGS = {"shorts", "yt", "youtube shorts", "viral shorts", "trending shorts", "short video"}
+_GENERIC_FORMAT_TAGS = {
+    "shorts", "yt", "youtube", "youtube shorts", "viral", "viral shorts",
+    "trending", "trending shorts", "short video", "video", "fyp",
+}
 
 
 def normalize_unicode(value: Any) -> str:
@@ -122,6 +125,7 @@ def evaluate_package_quality(
     recent_titles: Iterable[str] | None = None,
     published_titles: Iterable[str] | None = None,
     require_shorts_tags: bool = True,
+    tag_context: Any = None,
 ) -> dict[str, Any]:
     """Return a structured, deterministic quality decision for one package."""
 
@@ -224,13 +228,14 @@ def evaluate_package_quality(
         missing = [tag for tag in _REQUIRED_SHORTS_TAGS if tag not in tags]
         if missing:
             issues.append(_issue("missing_required_shorts_tags", "tags", "Missing required Shorts tags: " + ", ".join(missing)))
+    context_text = " ".join(normalize_unicode(item) for item in tag_context) if isinstance(tag_context, (list, tuple, set)) else normalize_unicode(tag_context)
     source_tokens = set(unicode_words(" ".join([
         source,
         *(normalize_unicode(brief.get(field)) for field in (
             "content", "exact_quote", "on_screen_text", "visual_requirements",
             "viewer_promise", "unique_angle", "topic",
         )),
-    ])))
+    ]))) | set(unicode_words(context_text))
     contextual_tags = [
         tag for tag in tags
         if tag not in _GENERIC_FORMAT_TAGS
@@ -238,6 +243,15 @@ def evaluate_package_quality(
     ]
     if tags and not contextual_tags:
         issues.append(_issue("non_contextual_tags", "tags", "At least one tag must be derived from the actual video or creator brief."))
+    generic_count = sum(1 for tag in tags if tag in _GENERIC_FORMAT_TAGS)
+    if generic_count and generic_count >= max(2, len(contextual_tags) + 1):
+        issues.append(_issue(
+            "generic_tag_filler", "tags",
+            "Generic platform tags outnumber subject-specific tags; remove filler rather than pad the package.",
+        ))
+    for tag in tags:
+        if tag not in _GENERIC_FORMAT_TAGS and not (set(unicode_words(tag)) & source_tokens):
+            issues.append(_issue("unrelated_tag", "tags", f"Tag is not grounded in the supplied topic: {tag}"))
 
     hashtags = [normalize_unicode(item) for item in (package.get("hashtags") or []) if normalize_unicode(item)]
     normalized_hashtags = [item.casefold().lstrip("#") for item in hashtags]
@@ -272,7 +286,7 @@ def evaluate_package_quality(
         "required_shorts_tags_checked": is_short and require_shorts_tags,
         "short_title_contract_checked": True,
         "emoji_context_recommended": emoji_recommended,
-        "rules_version": "phase2a-v1",
+        "rules_version": "phase2b-v1",
     }
 
 

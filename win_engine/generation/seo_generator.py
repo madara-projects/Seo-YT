@@ -77,7 +77,18 @@ def generate_seo_suggestions(
     # force_hashtags accepts the LLM's hashtags and only tops up if missing.
     locked_title = force_topic_in_title(seo_package["title"], main_topic, category)
     locked_description = force_topic_in_description(seo_package["description"], main_topic)
-    locked_tags = force_topic_in_tags(seo_package["tags"], main_topic, category)
+    tag_context = [safe_script]
+    if isinstance(creator_brief, dict):
+        tag_context.extend(str(creator_brief.get(field) or "") for field in (
+            "content", "target_audience", "viewer_promise", "unique_angle", "proof",
+        ))
+    tag_context.extend(
+        str(item.get(key) or "")
+        for item in (research_payload.get("keyword_signals") or [])
+        if isinstance(item, dict)
+        for key in ("keyword", "entity")
+    )
+    locked_tags = force_topic_in_tags(seo_package["tags"], main_topic, category, context=tag_context)
     locked_hashtags = force_hashtags(seo_package.get("hashtags") or [], main_topic, category)
     locked_description = format_upload_ready_description(
         locked_description,
@@ -97,6 +108,7 @@ def generate_seo_suggestions(
         script=safe_script,
         creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
         language=str(ctx.get("language") or "english"),
+        tag_context=tag_context,
     )
     gated = apply_quality_gate(
         {"title": locked_title, "variants": locked_variants, "description": locked_description,
@@ -133,7 +145,7 @@ def generate_seo_suggestions(
             force_topic_in_title(v, main_topic, category, variant_index=i)
             for i, v in enumerate(p.get("variants", []) or [])
         ]
-        tags = force_topic_in_tags(p.get("tags", []) or [], main_topic, category)
+        tags = force_topic_in_tags(p.get("tags", []) or [], main_topic, category, context=tag_context)
         hashtags = force_hashtags(p.get("hashtags", []) or [], main_topic, category)
         description = p.get("description", "") or ""
         # Only English gets the topic-presence fallback; Tamil / Tanglish

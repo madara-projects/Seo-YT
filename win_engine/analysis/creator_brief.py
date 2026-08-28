@@ -250,4 +250,10 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
 
     if not candidates:
         return "deep quote"
-    return " ".join(candidates[:3])
+    # Preserve the full inferred subject for ordinary instructional or
+    # experience-led input.  Truncating to three words dropped the terms that
+    # make otherwise similar topics distinct (for example ``csv files`` or a
+    # food/route name), which then weakened fallback titles and tags.  Keep a
+    # compact deterministic phrase, while retaining enough source vocabulary
+    # for topic locking and contextual validation.
+    return " ".join(candidates[:8])
