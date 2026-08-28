@@ -140,6 +140,10 @@ def build_seo_package(
         pkg, script=script, creator_brief=creator_brief, language=selected_language,
         recent_titles=channel_learning.get("recent_titles") or [],
         published_titles=channel_learning.get("published_titles") or [],
+        tag_context=[
+            *(str(item.get("keyword") or "") for item in keyword_signals if isinstance(item, dict)),
+            *(str(item.get("entity") or "") for item in entity_signals if isinstance(item, dict)),
+        ],
     )
     pkg = apply_quality_gate(pkg, quality_gate)
     multilang[selected_language] = pkg
@@ -441,7 +445,11 @@ def _content_specific_fallback(
     """Honest, content-specific package used only when Gemini is unavailable."""
     brief = creator_brief or {}
     topic = (primary_topic or "the video topic").strip()
-    pretty = topic.title()
+    # Titles need a compact phrase so distinct mechanisms remain readable and
+    # do not collapse into near-duplicates after the upload-length limit is
+    # applied.  Keep the full ``topic`` for descriptions/tags.
+    title_topic = " ".join(topic.split()[:5]) or "the video topic"
+    pretty = title_topic.title()
     content = str(brief.get("content") or "").strip()
     quote = str(brief.get("exact_quote") or "").strip() or _quoted_text(content)
     is_shorts = is_short_content(content or topic, brief)
@@ -473,20 +481,33 @@ def _content_specific_fallback(
             f"The words are the focus, while the visual supports their mood without changing their meaning."
         )
     else:
-        variants = [_fit_title(f"{pretty}, Shown Clearly", suffix)]
+        # Keep the fallback useful when Gemini is unavailable: each option is
+        # a different discovery mechanism, but all are derived from the same
+        # creator-supplied subject rather than a niche-specific template.
+        variants = [
+            _fit_title(f"How {pretty} Works in Practice", suffix),
+            _fit_title(f"The Practical Side of {pretty}", suffix),
+            _fit_title(f"A Closer Look at {pretty}", suffix),
+            _fit_title(f"{pretty}: A Clear Step-by-Step Look", suffix),
+            _fit_title(f"What to Know About {pretty}", suffix),
+        ]
         if unique_angle:
-            variants.append(_fit_title(f"{pretty} Through {unique_angle}", suffix))
+            variants[1] = _fit_title(f"{pretty} Through {unique_angle}", suffix)
         if proof:
-            variants.append(_fit_title(f"See {pretty} With {proof}", suffix))
+            variants[2] = _fit_title(f"See {pretty} With {proof}", suffix)
         if promise:
-            variants.append(_fit_title(f"{pretty}: {promise}", suffix))
-        variants.append(_fit_title(f"A Direct Look at {pretty}", suffix))
+            variants[3] = _fit_title(f"{pretty}: {promise}", suffix)
         rotation = sum(ord(char) for char in topic.casefold()) % len(variants)
         variants = variants[rotation:] + variants[:rotation]
+        source_excerpt = re.sub(r"\s+", " ", content or topic).strip(" .")
+        if len(source_excerpt) > 220:
+            source_excerpt = source_excerpt[:217].rsplit(" ", 1)[0] + "…"
         description_parts = [
-            f"This video focuses on {topic}.",
-            promise or "It explains the idea using the actual details shown in the video.",
+            f"A focused look at {topic}, grounded in the creator's supplied material.",
+            promise or f"The video walks through the specific details of {topic} shown in the source.",
         ]
+        if source_excerpt and source_excerpt.casefold() != topic.casefold():
+            description_parts.append(f"Source context: {source_excerpt}.")
         if unique_angle:
             description_parts.append(f"Its distinct angle is {unique_angle}.")
         if proof:
