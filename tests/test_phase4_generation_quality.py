@@ -52,13 +52,13 @@ DIVERSE_BRIEFS = [
 ]
 
 
-def valid_package(title: str = "Did I Deserve More Than the Bare Minimum?") -> dict:
+def valid_package(title: str = "Did I Deserve More Than the Bare Minimum? 💔 #shorts") -> dict:
     quote = "Didn't I at least deserve the bare minimum from them?"
     return {
         "title": title,
-        "variants": [title, "The Question I Could Never Ask Them"],
+        "variants": [title, "The Question I Could Never Ask Them 🌧️ #shorts"],
         "description": f'"{quote}" A rainy-road quote Short that preserves the creator\'s exact question.',
-        "tags": ["bare minimum quote", "rainy road quote", "shorts", "yt", "youtube shorts", "viral shorts"],
+        "tags": ["bare minimum quote", "rainy road quote", "shorts"],
         "hashtags": ["#Shorts", "#Quotes", "#SelfWorth"],
     }
 
@@ -103,15 +103,52 @@ class Phase4QualityTests(unittest.TestCase):
         gate = evaluate_package_quality(package, script="A quote Short")
         self.assertIn("missing_required_shorts_tags", {item["code"] for item in gate["issues"]})
 
+    def test_short_title_contract_requires_one_shorts_hashtag_and_contextual_emoji(self):
+        missing = valid_package("Did I Deserve More Than the Bare Minimum?")
+        gate = evaluate_package_quality(
+            missing,
+            script='A rainy quote Short: "Didn\'t I at least deserve the bare minimum from them?"',
+        )
+        rejected = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
+        self.assertIn("missing_shorts_title_hashtag", rejected)
+        self.assertIn("missing_contextual_title_emoji", rejected)
+
+        duplicated = valid_package("Did I Deserve More? 💔 #shorts #Shorts")
+        gate = evaluate_package_quality(duplicated, script="A rainy quote Short")
+        rejected = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
+        self.assertIn("duplicate_shorts_title_hashtag", rejected)
+
+    def test_non_short_title_does_not_accept_shorts_label(self):
+        package = {
+            "title": "How to Parse a CSV Safely #shorts",
+            "variants": ["How to Parse a CSV Safely #shorts"],
+            "description": "A practical CSV parsing tutorial.",
+            "tags": ["csv parsing tutorial"],
+            "hashtags": [],
+        }
+        gate = evaluate_package_quality(package, script="A long-form CSV parsing tutorial")
+        rejected = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
+        self.assertIn("unexpected_shorts_title_hashtag", rejected)
+
+    def test_repeated_emoji_template_is_rejected_from_recent_history(self):
+        package = valid_package()
+        gate = evaluate_package_quality(
+            package,
+            script='A rainy quote Short: "Didn\'t I at least deserve the bare minimum from them?"',
+            recent_titles=["First reflection 💔 #shorts", "Second reflection 💔 #shorts", "Third reflection 💔 #shorts"],
+        )
+        rejected = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
+        self.assertIn("repeated_emoji_template", rejected)
+
     def test_tamil_and_tanglish_unicode_validation(self):
-        tamil = {"title": "மழையில் ஒரு நினைவு", "variants": ["மழையில் ஒரு நினைவு"], "description": "மழையில் தோன்றிய ஒரு உண்மையான நினைவு.", "tags": ["rain quote"], "hashtags": []}
+        tamil = {"title": "மழையில் ஒரு நினைவு", "variants": ["மழையில் ஒரு நினைவு"], "description": "மழையில் தோன்றிய ஒரு உண்மையான நினைவு.", "tags": ["மழை காட்சி"], "hashtags": []}
         self.assertTrue(evaluate_package_quality(tamil, script="மழை காட்சி", language="tamil")["passed"])
         tanglish = {"title": "Mazhaiyil vandha oru ninaivu", "variants": ["Mazhaiyil vandha oru ninaivu"], "description": "Indha mazhai oru pazhaya ninaivai thirumba kondu vandhadhu.", "tags": ["rain quote"], "hashtags": []}
         self.assertTrue(evaluate_package_quality(tanglish, script="Rain visual", language="tanglish")["passed"])
         self.assertTrue(unicode_words("தமிழ் mixed English"))
 
     def test_recent_title_similarity_rejects_repetition(self):
-        package = valid_package("A Better Way to Plan a Chennai Day Trip")
+        package = {"title": "A Better Way to Plan a Chennai Day Trip", "variants": ["A Better Way to Plan a Chennai Day Trip"], "description": "Plan a Chennai day trip.", "tags": ["chennai day trip"], "hashtags": []}
         gate = evaluate_package_quality(package, script="Plan a Chennai day trip", recent_titles=["A Better Way to Plan Your Chennai Day Trip"])
         codes = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
         self.assertIn("recent_title_repetition", codes)
@@ -133,6 +170,21 @@ class Phase4QualityTests(unittest.TestCase):
         )
         self.assertEqual(mocked_generate.call_count, 2)
         self.assertEqual(source, "gemini")
+        self.assertTrue(packages["english"]["generation_trace"]["repair_succeeded"])
+
+    @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
+    @patch("win_engine.llm.seo_writer._generate_one")
+    def test_missing_shorts_title_format_uses_the_single_repair(self, mocked_generate, _available):
+        broken = valid_package("Did I Deserve More Than the Bare Minimum?")
+        broken["variants"] = ["Did I Deserve More Than the Bare Minimum?", "The Question I Could Never Ask Them"]
+        mocked_generate.side_effect = [broken, valid_package()]
+        packages, source = seo_writer.write_multilang_packages_with_source(
+            'A rainy quote Short: "Didn\'t I at least deserve the bare minimum from them?"',
+            languages=["english"],
+        )
+        self.assertEqual(mocked_generate.call_count, 2)
+        self.assertEqual(source, "gemini")
+        self.assertEqual(packages["english"]["title"].lower().count("#shorts"), 1)
         self.assertTrue(packages["english"]["generation_trace"]["repair_succeeded"])
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)

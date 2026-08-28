@@ -380,10 +380,11 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
                         max_tags: int = 12, min_before_fallback: int = 6) -> list[str]:
     """Drop junk tags, ensure the real topic is first, and preserve model tags.
 
-    Generic category filler is intentionally not added. The separate Shorts rule
-    in the strategy engine keeps shorts, yt, youtube shorts, and viral shorts.
+    Generic category filler is intentionally not added. A Short keeps only the
+    useful format tag ``shorts``; every other tag must describe the actual video.
     """
-    pinned = {"shorts", "yt", "youtube shorts", "viral shorts"}
+    pinned = {"shorts"}
+    generic_format_tags = {"yt", "youtube shorts", "viral shorts", "trending shorts", "short video"}
     required = list(dict.fromkeys(
         str(tag).strip().lower()
         for tag in (tags or [])
@@ -403,7 +404,7 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
         seen.add(topic_tag)
     for raw in tags or []:
         t = (raw or "").strip().lower()
-        if t in pinned or not t or t in seen or _is_junk_tag(t) or len(out) >= max_tags - reserved:
+        if t in pinned or t in generic_format_tags or not t or t in seen or _is_junk_tag(t) or len(out) >= max_tags - reserved:
             continue
         out.append(t)
         seen.add(t)

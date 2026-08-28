@@ -30,7 +30,16 @@ _UNSUPPORTED_CLAIMS = (
     ("invented_relationship", re.compile(r"\b(?:breakup|toxic relationship|one-sided relationship|just an option)\b", re.IGNORECASE)),
 )
 _SHORT_FORMATS = {"short", "shorts", "youtube_shorts", "quote", "reel", "reels"}
-_REQUIRED_SHORTS_TAGS = ("shorts", "yt", "youtube shorts", "viral shorts")
+_REQUIRED_SHORTS_TAGS = ("shorts",)
+_SHORTS_TITLE_RE = re.compile(r"(?<![\w#])#shorts(?!\w)", re.IGNORECASE)
+_TITLE_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
+_EMOJI_CONTEXT_TERMS = {
+    "aesthetic", "beach", "beautiful", "breakup", "city", "comedy", "emotional",
+    "food", "funny", "heart", "heartbreak", "hill", "love", "memory", "miss",
+    "moon", "mountain", "nature", "night", "quote", "rain", "rainy", "road",
+    "sad", "sky", "storm", "sunset", "surprise", "travel", "unexpected",
+}
+_GENERIC_FORMAT_TAGS = {"shorts", "yt", "youtube shorts", "viral shorts", "trending shorts", "short video"}
 
 
 def normalize_unicode(value: Any) -> str:
@@ -87,6 +96,23 @@ def candidate_mechanism(title: str) -> str:
     return "direct topic framing"
 
 
+def is_short_content(script: str, creator_brief: dict[str, Any] | None = None) -> bool:
+    """Resolve Short intent from the structured brief first, then explicit source wording."""
+
+    brief = creator_brief or {}
+    format_value = normalize_unicode(brief.get("video_format")).casefold().replace("-", "_").replace(" ", "_")
+    if format_value in _SHORT_FORMATS or any(token in format_value for token in ("youtube_short", "short_form", "quote_short")):
+        return True
+    source = normalize_unicode(script or brief.get("content"))
+    return bool(re.search(r"\b(?:youtube\s+shorts?|short[- ]form|shorts?|reels?|quote\s+short)\b", source, re.IGNORECASE))
+
+
+def title_emojis(value: Any) -> list[str]:
+    """Return visible emoji bases for deterministic count/template checks."""
+
+    return _TITLE_EMOJI_RE.findall(normalize_unicode(value))
+
+
 def evaluate_package_quality(
     package: dict[str, Any],
     *,
@@ -103,8 +129,12 @@ def evaluate_package_quality(
     source = normalize_unicode(script or brief.get("content"))
     source_folded = " ".join(unicode_words(source))
     exact_quote = normalize_unicode(brief.get("exact_quote") or _extract_quote(source))
-    format_value = normalize_unicode(brief.get("video_format")).casefold()
-    is_short = format_value in _SHORT_FORMATS or bool(re.search(r"\b(?:shorts?|reels?)\b", source, re.IGNORECASE))
+    is_short = is_short_content(source, brief)
+    emoji_context = " ".join(unicode_words(" ".join(
+        normalize_unicode(brief.get(field))
+        for field in ("content", "exact_quote", "on_screen_text", "visual_requirements", "viewer_promise", "unique_angle")
+    ) + " " + source))
+    emoji_recommended = is_short and any(term in set(emoji_context.split()) for term in _EMOJI_CONTEXT_TERMS)
     requested_language = normalize_unicode(language).casefold() or "english"
 
     title_values = [package.get("title"), *(package.get("variants") or [])]
@@ -119,6 +149,26 @@ def evaluate_package_quality(
 
     for index, title in enumerate(titles):
         reasons: list[dict[str, Any]] = []
+        shorts_count = len(_SHORTS_TITLE_RE.findall(title))
+        emojis = title_emojis(title)
+        if is_short and shorts_count == 0:
+            reasons.append(_issue("missing_shorts_title_hashtag", "title", "A YouTube Short title must contain #shorts exactly once.", index=index))
+        elif shorts_count > 1:
+            reasons.append(_issue("duplicate_shorts_title_hashtag", "title", "The title contains #shorts more than once.", index=index))
+        elif not is_short and shorts_count:
+            reasons.append(_issue("unexpected_shorts_title_hashtag", "title", "A non-Short title must not be labelled #shorts.", index=index))
+        if len(title) > 100:
+            reasons.append(_issue("title_too_long", "title", "The upload-ready title exceeds YouTube's 100-character limit.", index=index))
+        if len(emojis) > 2:
+            reasons.append(_issue("excessive_title_emojis", "title", "Use no more than two relevant emojis in a title.", index=index))
+        if any(left == right for left, right in zip(emojis, emojis[1:])):
+            reasons.append(_issue("repeated_title_emoji", "title", "The title repeats the same emoji in sequence.", index=index))
+        if emoji_recommended and not emojis:
+            reasons.append(_issue("missing_contextual_title_emoji", "title", "This Short has clear mood or visual context where one relevant emoji should be considered.", index=index))
+        signature = "".join(emojis)
+        recent_signatures = ["".join(title_emojis(old)) for old in recent[-3:]]
+        if signature and len(recent_signatures) == 3 and all(item == signature for item in recent_signatures):
+            reasons.append(_issue("repeated_emoji_template", "title", "The emoji pattern repeats across the three most recent generated titles.", index=index))
         if any(pattern.search(title) for pattern in _GENERIC_TITLE_PATTERNS):
             reasons.append(_issue("generic_template", "title", "Title uses a repeatedly generic template.", index=index))
         unsupported = _unsupported_claims(title, source_folded)
@@ -174,6 +224,20 @@ def evaluate_package_quality(
         missing = [tag for tag in _REQUIRED_SHORTS_TAGS if tag not in tags]
         if missing:
             issues.append(_issue("missing_required_shorts_tags", "tags", "Missing required Shorts tags: " + ", ".join(missing)))
+    source_tokens = set(unicode_words(" ".join([
+        source,
+        *(normalize_unicode(brief.get(field)) for field in (
+            "content", "exact_quote", "on_screen_text", "visual_requirements",
+            "viewer_promise", "unique_angle", "topic",
+        )),
+    ])))
+    contextual_tags = [
+        tag for tag in tags
+        if tag not in _GENERIC_FORMAT_TAGS
+        and set(unicode_words(tag)) & source_tokens
+    ]
+    if tags and not contextual_tags:
+        issues.append(_issue("non_contextual_tags", "tags", "At least one tag must be derived from the actual video or creator brief."))
 
     hashtags = [normalize_unicode(item) for item in (package.get("hashtags") or []) if normalize_unicode(item)]
     normalized_hashtags = [item.casefold().lstrip("#") for item in hashtags]
@@ -206,7 +270,9 @@ def evaluate_package_quality(
         "requested_language": requested_language,
         "exact_quote_checked": bool(exact_quote),
         "required_shorts_tags_checked": is_short and require_shorts_tags,
-        "rules_version": "phase4-v1",
+        "short_title_contract_checked": True,
+        "emoji_context_recommended": emoji_recommended,
+        "rules_version": "phase2a-v1",
     }
 
 

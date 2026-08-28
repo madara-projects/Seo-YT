@@ -460,6 +460,15 @@ function renderPackagingPanel(root) {
   }
   const opportunity = objectOf(objectOf(data.opportunity_gap_analysis).opportunity_score);
   const score = choice.titleQualityScore;
+  const timing = objectOf(data.upload_timing);
+  const timingZone = String(timing.timezone || timing.today_timezone || "").trim();
+  const timingBasis = String(timing.basis || "unavailable").replaceAll("_", " ");
+  const recurringWindow = timing.recommended_time && timingZone
+    ? `${timing.recommended_time} ${timingZone}`
+    : "Unavailable until a timezone-explicit recommendation is calculated";
+  const todayWindow = timing.today_time && (timing.today_timezone || timingZone)
+    ? `${timing.today_time} ${timing.today_timezone || timingZone}`
+    : "Unavailable";
   const variants = creatorState.packageOptions.map((option) => `
     <div class="creator-variant-row ${option.id === choice.id ? "selected" : ""}">
       <div><strong>${esc(option.label)}${option.primary ? " / Primary recommendation" : ""} <span class="chip" style="font-family:var(--mono);font-size:9.5px;padding:1px 6px">${option.title.length} chars</span></strong><div>${esc(option.title)}</div></div>
@@ -476,6 +485,7 @@ function renderPackagingPanel(root) {
       <div class="creator-analysis-card wide"><div class="creator-card-heading"><span style="display:flex;align-items:center;gap:6px">Description <span class="chip" style="font-family:var(--mono);font-size:10px;padding:2px 6px">${choice.description.length} chars</span></span>${copyButton("description", choice.id, "Copy description")}</div><div class="creator-output-text">${esc(choice.description)}</div></div>
       <div class="creator-analysis-card"><div class="creator-card-heading"><span>Video tags</span>${copyButton("tags", choice.id, "Copy tags")}</div><div class="tag-list">${tagsHtml(choice.tags, "No tags returned.")}</div></div>
       <div class="creator-analysis-card"><div class="creator-card-heading"><span>Hashtags</span>${copyButton("hashtags", choice.id, "Copy hashtags")}</div><div class="tag-list">${tagsHtml(choice.hashtags, "No hashtags returned.")}</div></div>
+      <div class="creator-analysis-card wide" data-testid="upload-timing-guidance"><div class="creator-card-heading"><span>Upload timing guidance</span>${sourceChip(String(timing.confidence || "unavailable").toUpperCase(), timing.confidence === "HIGH" ? "ok" : "warn")}</div><div class="creator-research-list"><div class="creator-research-item"><strong>Best recurring window</strong><div class="creator-research-meta">${displayValue(timing.recommended_day)} / ${esc(recurringWindow)}</div></div><div class="creator-research-item"><strong>If uploading today</strong><div class="creator-research-meta">${displayValue(timing.today_recommendation)}<br>Window: ${esc(todayWindow)}</div></div></div><p class="metric-sub"><strong>Basis:</strong> ${esc(timingBasis)}. ${displayValue(timing.explanation, "Personalized upload timing is not yet established.")}</p></div>
       <div class="creator-analysis-card"><div class="creator-card-heading">Thumbnail direction ${sourceChip("Generated suggestion", "warn")}</div><p>${displayValue(choice.thumbnailVisual)}</p><p class="metric-sub">Suggested text: ${displayValue(choice.thumbnailText)}</p></div>
       <div class="creator-analysis-card"><div class="creator-card-heading">Viewer promise ${sourceChip("Generated suggestion", "warn")}</div><p>${displayValue(choice.viewerPromise)}</p></div>
     </div>

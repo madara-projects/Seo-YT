@@ -711,6 +711,8 @@ class HistoryStore:
                         "channel": payload.get("channel", {}),
                         "period": payload.get("period", {}),
                         "current_28_days": payload.get("current_28_days", {}),
+                        "timezone": payload.get("timezone") or (payload.get("channel") or {}).get("timezone"),
+                        "audience_activity": payload.get("audience_activity", {}),
                     }
                 except Exception:
                     pass
