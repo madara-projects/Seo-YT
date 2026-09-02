@@ -37,11 +37,13 @@ class CloudSyncService:
             "enabled": bool(settings.cloud_sync_enabled), "running": False,
             "device_id": settings.cloud_sync_device_id or "unconfigured",
             "last_started_at": None, "last_finished_at": None, "next_run_at": None,
-            "last_error": None, "last_counts": {"queued": 0, "pushed": 0, "pulled": 0, "failed": 0},
+            "last_error": None, "last_counts": {"queued": 0, "pushed": 0, "pulled": 0, "failed": 0, "conflicts": 0},
             "last_activity_at": None,
             "last_activity_counts": {"queued": 0, "pushed": 0, "pulled": 0},
             "remote_packages": None,
         }
+        self._last_push_failures = 0
+        self._last_pull_conflicts = 0
 
     def configured(self) -> bool:
         s = self.settings
@@ -70,12 +72,14 @@ class CloudSyncService:
                 result["local_packages"] = int(connection.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0])
                 result["mapped_packages"] = int(connection.execute("SELECT COUNT(*) FROM cloud_sync_packages").fetchone()[0])
                 result["synced_packages"] = int(connection.execute("SELECT COUNT(*) FROM cloud_sync_packages WHERE last_synced_hash IS NOT NULL").fetchone()[0])
+                result["conflicts_detected"] = int(connection.execute("SELECT COUNT(*) FROM cloud_sync_conflicts").fetchone()[0])
         except Exception:
             result["pending_uploads"] = None
             result["pending_deletions"] = None
             result["local_packages"] = None
             result["mapped_packages"] = None
             result["synced_packages"] = None
+            result["conflicts_detected"] = None
         result["configured"] = self.configured()
         return result
 
@@ -87,24 +91,35 @@ class CloudSyncService:
             return {"state": "unconfigured", "counts": self._status["last_counts"]}
         if not self._lock.acquire(blocking=False):
             return {"state": "running", "counts": self._status["last_counts"]}
-        counts = {"queued": 0, "pushed": 0, "pulled": 0, "failed": 0}
+        counts = {"queued": 0, "pushed": 0, "pulled": 0, "failed": 0, "conflicts": 0}
         self._status.update({"state": "running", "running": True, "last_started_at": _now(), "last_error": None})
         try:
             counts["queued"] = self._stage_local_packages()
-            remote = self._remote_connection()
+            try:
+                remote = self._remote_connection()
+            except Exception:
+                raise
             try:
                 self._ensure_remote_schema(remote)
                 counts["pushed"] = self._push(remote)
+                counts["failed"] += self._last_push_failures
                 counts["pulled"] = self._pull(remote)
+                counts["conflicts"] = self._last_pull_conflicts
                 with remote.cursor() as cursor:
                     cursor.execute("SELECT COUNT(*) FROM seo_yt_synced_packages WHERE deleted_at IS NULL")
                     self._status["remote_packages"] = int(cursor.fetchone()[0])
             finally:
                 remote.close()
-            self._status["state"] = "healthy/idle"
+            if counts["failed"]:
+                self._status.update({"state": "offline/pending", "last_error": "One or more sync operations remain pending."})
+            else:
+                self._status["state"] = "healthy/idle"
         except Exception as exc:
             counts["failed"] += 1
-            self._status.update({"state": "offline/pending", "last_error": f"{type(exc).__name__}: {exc}"})
+            self._mark_all_pending_failures(type(exc).__name__)
+            # Error details from database drivers can contain endpoint or
+            # account information; status remains useful without exposing it.
+            self._status.update({"state": "offline/pending", "last_error": type(exc).__name__})
             logger.warning("Cloud package sync remains pending: %s", type(exc).__name__)
         finally:
             if counts["queued"] or counts["pushed"] or counts["pulled"]:
@@ -225,6 +240,46 @@ class CloudSyncService:
             connect_timeout=10, read_timeout=20, write_timeout=20,
             ssl={"ca": str(ca), "check_hostname": True})
 
+    def _mark_all_pending_failures(self, error_type: str) -> None:
+        """Persist a retry marker without storing cloud connection details."""
+        now = _now()
+        with connect_managed(self.settings.database_path) as local:
+            local.execute(
+                """UPDATE cloud_sync_outbox
+                   SET attempt_count = attempt_count + 1, last_attempted_at = ?, last_error = ?""",
+                (now, error_type),
+            )
+            local.execute(
+                """UPDATE cloud_sync_tombstones
+                   SET attempt_count = attempt_count + 1, last_attempted_at = ?, last_error = ?
+                   WHERE pending = 1""",
+                (now, error_type),
+            )
+
+    @staticmethod
+    def _record_conflict(local, *, sync_uuid: str, local_revision: int, local_hash: str,
+                         remote_revision: int, remote_hash: str, winner: str) -> None:
+        local.execute(
+            """INSERT OR IGNORE INTO cloud_sync_conflicts
+                   (sync_uuid,local_revision,local_content_hash,remote_revision,remote_content_hash,winner,detected_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            (sync_uuid, local_revision, local_hash, remote_revision, remote_hash, winner, _now()),
+        )
+
+    @staticmethod
+    def _remote_active_wins(*, local_revision: int, local_hash: str,
+                            remote_revision: int, remote_hash: str) -> bool:
+        """Resolve active-record conflicts by revision, then stable content hash.
+
+        A revision is the primary ordering. Concurrent equal revisions are
+        resolved by the lexicographically greater SHA-256 payload hash, making
+        every device converge without wall-clock dependence. Tombstones are
+        handled separately and always block active resurrection.
+        """
+        if remote_revision != local_revision:
+            return remote_revision > local_revision
+        return remote_hash > local_hash
+
     @staticmethod
     def _ensure_remote_schema(connection) -> None:
         with connection.cursor() as cursor:
@@ -239,6 +294,9 @@ class CloudSyncService:
         connection.commit()
 
     def _push(self, remote) -> int:
+        """Push each durable operation independently so one failure does not block peers."""
+        self._last_push_failures = 0
+        pushed = 0
         with connect_managed(self.settings.database_path) as local:
             deletion_rows = local.execute(
                 """SELECT sync_uuid,revision,deleted_at FROM cloud_sync_tombstones
@@ -250,42 +308,75 @@ class CloudSyncService:
                     "schema": 1, "deleted": True, "sync_uuid": sync_uuid,
                     "revision": int(revision), "deleted_at": deleted_at,
                 })
-                with remote.cursor() as cursor:
-                    cursor.execute("""INSERT INTO seo_yt_synced_packages
-                        (sync_uuid,origin_device_id,revision,content_hash,payload_json,created_at,updated_at,deleted_at)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE
-                        content_hash=IF(VALUES(revision)>=revision,VALUES(content_hash),content_hash),
-                        payload_json=IF(VALUES(revision)>=revision,VALUES(payload_json),payload_json),
-                        updated_at=IF(VALUES(revision)>=revision,VALUES(updated_at),updated_at),
-                        deleted_at=IF(VALUES(revision)>=revision,VALUES(deleted_at),deleted_at),
-                        origin_device_id=IF(VALUES(revision)>=revision,VALUES(origin_device_id),origin_device_id),
-                        revision=GREATEST(revision,VALUES(revision))""",
-                        (sync_uuid, self.settings.cloud_sync_device_id, revision, tombstone_hash,
-                         "{}", now, now, deleted_at))
-                remote.commit()
+                try:
+                    with remote.cursor() as cursor:
+                        cursor.execute("""INSERT INTO seo_yt_synced_packages
+                            (sync_uuid,origin_device_id,revision,content_hash,payload_json,created_at,updated_at,deleted_at)
+                            VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE
+                            payload_json=IF(VALUES(revision)>=revision,VALUES(payload_json),payload_json),
+                            updated_at=IF(VALUES(revision)>=revision,VALUES(updated_at),updated_at),
+                            deleted_at=IF(VALUES(revision)>=revision,VALUES(deleted_at),deleted_at),
+                            origin_device_id=IF(VALUES(revision)>=revision,VALUES(origin_device_id),origin_device_id),
+                            content_hash=IF(VALUES(revision)>=revision,VALUES(content_hash),content_hash),
+                            revision=GREATEST(revision,VALUES(revision))""",
+                            (sync_uuid, self.settings.cloud_sync_device_id, revision, tombstone_hash,
+                             "{}", now, now, deleted_at))
+                    remote.commit()
+                except Exception as exc:
+                    try:
+                        remote.rollback()
+                    except Exception:
+                        pass
+                    local.execute(
+                        """UPDATE cloud_sync_tombstones SET last_attempted_at = ?,
+                                      attempt_count = attempt_count + 1, last_error = ?
+                           WHERE sync_uuid = ?""",
+                        (now, type(exc).__name__, sync_uuid),
+                    )
+                    self._last_push_failures += 1
+                    continue
                 local.execute(
                     """UPDATE cloud_sync_tombstones SET pending = 0, last_attempted_at = ?,
-                              attempt_count = attempt_count + 1, last_error = NULL
+                                  attempt_count = attempt_count + 1, last_error = NULL
                        WHERE sync_uuid = ?""",
                     (now, sync_uuid),
                 )
+                pushed += 1
             rows = local.execute("SELECT sync_uuid,revision,payload_json,content_hash FROM cloud_sync_outbox ORDER BY queued_at LIMIT 100").fetchall()
             for sync_uuid, revision, payload_json, content_hash in rows:
                 now = _now()
-                with remote.cursor() as cursor:
-                    cursor.execute("""INSERT INTO seo_yt_synced_packages
-                        (sync_uuid,origin_device_id,revision,content_hash,payload_json,created_at,updated_at,deleted_at)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,NULL) ON DUPLICATE KEY UPDATE
-                        content_hash=IF(deleted_at IS NULL AND VALUES(revision)>=revision,VALUES(content_hash),content_hash),
-                        payload_json=IF(deleted_at IS NULL AND VALUES(revision)>=revision,VALUES(payload_json),payload_json),
-                        updated_at=IF(deleted_at IS NULL AND VALUES(revision)>=revision,VALUES(updated_at),updated_at),
-                        origin_device_id=IF(deleted_at IS NULL AND VALUES(revision)>=revision,VALUES(origin_device_id),origin_device_id),
-                        revision=IF(deleted_at IS NULL,GREATEST(revision,VALUES(revision)),revision)""",
-                        (sync_uuid, self.settings.cloud_sync_device_id, revision, content_hash, payload_json, now, now))
-                remote.commit()
+                try:
+                    with remote.cursor() as cursor:
+                        cursor.execute("""INSERT INTO seo_yt_synced_packages
+                            (sync_uuid,origin_device_id,revision,content_hash,payload_json,created_at,updated_at,deleted_at)
+                            VALUES(%s,%s,%s,%s,%s,%s,%s,NULL) ON DUPLICATE KEY UPDATE
+                            payload_json=IF(deleted_at IS NULL AND (VALUES(revision)>revision OR
+                                (VALUES(revision)=revision AND VALUES(content_hash)>content_hash)),VALUES(payload_json),payload_json),
+                            updated_at=IF(deleted_at IS NULL AND (VALUES(revision)>revision OR
+                                (VALUES(revision)=revision AND VALUES(content_hash)>content_hash)),VALUES(updated_at),updated_at),
+                            origin_device_id=IF(deleted_at IS NULL AND (VALUES(revision)>revision OR
+                                (VALUES(revision)=revision AND VALUES(content_hash)>content_hash)),VALUES(origin_device_id),origin_device_id),
+                            content_hash=IF(deleted_at IS NULL AND (VALUES(revision)>revision OR
+                                (VALUES(revision)=revision AND VALUES(content_hash)>content_hash)),VALUES(content_hash),content_hash),
+                            revision=IF(deleted_at IS NULL,GREATEST(revision,VALUES(revision)),revision)""",
+                            (sync_uuid, self.settings.cloud_sync_device_id, revision, content_hash, payload_json, now, now))
+                    remote.commit()
+                except Exception as exc:
+                    try:
+                        remote.rollback()
+                    except Exception:
+                        pass
+                    local.execute(
+                        """UPDATE cloud_sync_outbox SET attempt_count = attempt_count + 1,
+                                      last_attempted_at = ?, last_error = ? WHERE sync_uuid = ?""",
+                        (now, type(exc).__name__, sync_uuid),
+                    )
+                    self._last_push_failures += 1
+                    continue
                 local.execute("UPDATE cloud_sync_packages SET last_synced_hash=?,remote_updated_at=? WHERE sync_uuid=?", (content_hash, now, sync_uuid))
                 local.execute("DELETE FROM cloud_sync_outbox WHERE sync_uuid=?", (sync_uuid,))
-        return len(deletion_rows) + len(rows)
+                pushed += 1
+        return pushed
 
     @staticmethod
     def _apply_linked_video(local, run_id: int, linked_video: Any, fallback_time: str) -> None:
@@ -348,9 +439,42 @@ class CloudSyncService:
                  sources.get("duration_bucket") or "unknown", sources.get("topic_category") or "unknown",
                  fallback_time, metadata.get("updated_at") or fallback_time),
             )
-        local.execute("DELETE FROM video_performance_snapshots WHERE youtube_video_id = ?", (video_id,))
         for snapshot in linked_video.get("snapshots") or []:
             if not isinstance(snapshot, dict):
+                continue
+            window = str(snapshot.get("snapshot_window") or "")
+            incoming_status = str(snapshot.get("snapshot_status") or "legacy_unverified")
+            existing = local.execute(
+                """SELECT id,snapshot_status FROM video_performance_snapshots
+                   WHERE youtube_video_id = ? AND snapshot_window = ?
+                   ORDER BY captured_at DESC,id DESC LIMIT 1""",
+                (video_id, window),
+            ).fetchone()
+            # Completed learning windows are immutable local evidence. A cloud
+            # mirror may fill a missing/unfinished window on a restored device,
+            # but it must never replace a completed local observation or a
+            # current local display snapshot.
+            if existing and (str(existing[1]) == "complete" or incoming_status != "complete"):
+                continue
+            values = (
+                link_id, video_id, snapshot.get("age_hours") or 0, snapshot.get("views"),
+                snapshot.get("watch_time_minutes"), snapshot.get("avg_view_duration_seconds"),
+                snapshot.get("avg_view_percentage"), snapshot.get("likes"), snapshot.get("comments"),
+                snapshot.get("shares"), snapshot.get("subscribers_gained"), snapshot.get("impressions"),
+                snapshot.get("impressions_ctr"), window, incoming_status,
+                snapshot.get("attempt_count") or 0, snapshot.get("last_failure_reason"),
+                snapshot.get("last_attempted_at"), snapshot.get("completed_at"),
+                snapshot.get("source_start_date"), snapshot.get("source_end_date"), snapshot.get("captured_at") or fallback_time,
+            )
+            if existing:
+                local.execute(
+                    """UPDATE video_performance_snapshots SET published_video_link_id=?,age_hours=?,views=?,
+                       watch_time_minutes=?,avg_view_duration_seconds=?,avg_view_percentage=?,likes=?,comments=?,
+                       shares=?,subscribers_gained=?,impressions=?,impressions_ctr=?,snapshot_status=?,attempt_count=?,
+                       last_failure_reason=?,last_attempted_at=?,completed_at=?,source_start_date=?,source_end_date=?,captured_at=?
+                       WHERE id=?""",
+                    (values[0], *values[2:13], values[14], *values[15:], int(existing[0])),
+                )
                 continue
             local.execute(
                 """INSERT INTO video_performance_snapshots(
@@ -359,17 +483,11 @@ class CloudSyncService:
                        impressions,impressions_ctr,snapshot_window,snapshot_status,attempt_count,last_failure_reason,
                        last_attempted_at,completed_at,source_start_date,source_end_date,captured_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (link_id, video_id, snapshot.get("age_hours") or 0, snapshot.get("views"),
-                 snapshot.get("watch_time_minutes"), snapshot.get("avg_view_duration_seconds"),
-                 snapshot.get("avg_view_percentage"), snapshot.get("likes"), snapshot.get("comments"),
-                 snapshot.get("shares"), snapshot.get("subscribers_gained"), snapshot.get("impressions"),
-                 snapshot.get("impressions_ctr"), snapshot.get("snapshot_window"),
-                 snapshot.get("snapshot_status") or "legacy_unverified", snapshot.get("attempt_count") or 0,
-                 snapshot.get("last_failure_reason"), snapshot.get("last_attempted_at"), snapshot.get("completed_at"),
-                 snapshot.get("source_start_date"), snapshot.get("source_end_date"), snapshot.get("captured_at") or fallback_time),
+                values,
             )
 
     def _pull(self, remote) -> int:
+        self._last_pull_conflicts = 0
         with remote.cursor() as cursor:
             cursor.execute("""SELECT sync_uuid,origin_device_id,revision,content_hash,payload_json,updated_at,deleted_at
                               FROM seo_yt_synced_packages ORDER BY updated_at,sync_uuid""")
@@ -417,11 +535,41 @@ class CloudSyncService:
                     # A locally queued or previously applied deletion always
                     # wins over an older active cloud row.
                     continue
-                mapping = local.execute("SELECT analysis_run_id,revision FROM cloud_sync_packages WHERE sync_uuid=?", (sync_uuid,)).fetchone()
-                if mapping and int(mapping[1]) >= int(revision):
+                mapping = local.execute(
+                    "SELECT analysis_run_id,revision,content_hash FROM cloud_sync_packages WHERE sync_uuid=?", (sync_uuid,)
+                ).fetchone()
+                if mapping:
+                    local_revision, local_hash = int(mapping[1]), str(mapping[2])
+                    remote_revision, remote_hash = int(revision), str(content_hash)
+                    if local_revision > remote_revision:
+                        continue
+                    if local_revision == remote_revision:
+                        if local_hash == remote_hash:
+                            continue
+                        remote_wins = self._remote_active_wins(
+                            local_revision=local_revision, local_hash=local_hash,
+                            remote_revision=remote_revision, remote_hash=remote_hash,
+                        )
+                        self._record_conflict(
+                            local, sync_uuid=str(sync_uuid), local_revision=local_revision,
+                            local_hash=local_hash, remote_revision=remote_revision,
+                            remote_hash=remote_hash, winner="remote" if remote_wins else "local",
+                        )
+                        self._last_pull_conflicts += 1
+                        if not remote_wins:
+                            continue
+                try:
+                    payload = json.loads(payload_json)
+                    if not isinstance(payload, dict) or int(payload.get("schema") or 0) not in {1, 2}:
+                        raise ValueError("unsupported_payload_schema")
+                    if _hash(payload) != str(content_hash):
+                        raise ValueError("payload_hash_mismatch")
+                    analysis = payload.get("analysis")
+                    if not isinstance(analysis, dict) or not str(analysis.get("query") or "").strip():
+                        raise ValueError("invalid_analysis_payload")
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    logger.warning("Skipped invalid cloud package payload: %s", type(exc).__name__)
                     continue
-                payload = json.loads(payload_json)
-                analysis = payload["analysis"]
                 if mapping:
                     run_id = int(mapping[0])
                     local.execute("""UPDATE analysis_runs SET query=?,created_at=?,intent=?,content_angle=?,title=?,title_score=?,retention_risk=?,opportunity_label=?,opportunity_score=?,payload_json=? WHERE id=?""",
