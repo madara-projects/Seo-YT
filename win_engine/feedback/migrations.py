@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 _APPLICATION_TABLES = {
     "analysis_runs",
     "video_snapshots",
@@ -155,6 +155,7 @@ def prepare_database(database_path: str, *, backup_before_migration: bool = True
             _migrate_v5_to_v6(connection)
             _migrate_v6_to_v7(connection)
             _migrate_v7_to_v8(connection)
+            _migrate_v8_to_v9(connection)
         elif old_version == 1:
             _migrate_v1_to_v2(connection)
             _migrate_v2_to_v3(connection)
@@ -163,6 +164,7 @@ def prepare_database(database_path: str, *, backup_before_migration: bool = True
             _migrate_v5_to_v6(connection)
             _migrate_v6_to_v7(connection)
             _migrate_v7_to_v8(connection)
+            _migrate_v8_to_v9(connection)
         elif old_version == 2:
             _migrate_v2_to_v3(connection)
             _migrate_v3_to_v4(connection)
@@ -170,26 +172,34 @@ def prepare_database(database_path: str, *, backup_before_migration: bool = True
             _migrate_v5_to_v6(connection)
             _migrate_v6_to_v7(connection)
             _migrate_v7_to_v8(connection)
+            _migrate_v8_to_v9(connection)
         elif old_version == 3:
             _migrate_v3_to_v4(connection)
             _migrate_v4_to_v5(connection)
             _migrate_v5_to_v6(connection)
             _migrate_v6_to_v7(connection)
             _migrate_v7_to_v8(connection)
+            _migrate_v8_to_v9(connection)
         elif old_version == 4:
             _migrate_v4_to_v5(connection)
             _migrate_v5_to_v6(connection)
             _migrate_v6_to_v7(connection)
             _migrate_v7_to_v8(connection)
+            _migrate_v8_to_v9(connection)
         elif old_version == 5:
             _migrate_v5_to_v6(connection)
             _migrate_v6_to_v7(connection)
             _migrate_v7_to_v8(connection)
+            _migrate_v8_to_v9(connection)
         elif old_version == 6:
             _migrate_v6_to_v7(connection)
             _migrate_v7_to_v8(connection)
+            _migrate_v8_to_v9(connection)
         elif old_version == 7:
             _migrate_v7_to_v8(connection)
+            _migrate_v8_to_v9(connection)
+        elif old_version == 8:
+            _migrate_v8_to_v9(connection)
         else:
             raise MigrationError(f"No migration path exists from schema version {old_version}.")
         configure_connection(connection)
@@ -235,7 +245,7 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
         (
             CURRENT_SCHEMA_VERSION,
             datetime.now(timezone.utc).isoformat(),
-            "Cross-device cloud package deletion tombstones",
+            "Cloud sync conflict audit and deterministic equal-revision resolution",
         ),
     )
     connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
@@ -480,6 +490,22 @@ def _migrate_v7_to_v8(connection: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_v8_to_v9(connection: sqlite3.Connection) -> None:
+    """Record deterministic equal-revision cloud-sync conflict decisions."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_cloud_sync_tables(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (9, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), "Cloud sync conflict audit and deterministic equal-revision resolution"),
+        )
+        connection.execute("PRAGMA user_version = 9")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 def _create_comparable_metadata_tables(connection: sqlite3.Connection) -> None:
     connection.execute(
         """CREATE TABLE IF NOT EXISTS published_video_comparable_metadata (
@@ -638,9 +664,23 @@ def _create_cloud_sync_tables(connection: sqlite3.Connection) -> None:
                last_error TEXT
            )"""
     )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS cloud_sync_conflicts (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               sync_uuid TEXT NOT NULL,
+               local_revision INTEGER NOT NULL,
+               local_content_hash TEXT NOT NULL,
+               remote_revision INTEGER NOT NULL,
+               remote_content_hash TEXT NOT NULL,
+               winner TEXT NOT NULL CHECK(winner IN ('local', 'remote', 'tombstone')),
+               detected_at TEXT NOT NULL,
+               UNIQUE(sync_uuid, local_revision, local_content_hash, remote_revision, remote_content_hash)
+           )"""
+    )
     connection.execute("CREATE INDEX IF NOT EXISTS idx_cloud_sync_run ON cloud_sync_packages(analysis_run_id)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_cloud_outbox_time ON cloud_sync_outbox(queued_at)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_cloud_tombstones_pending ON cloud_sync_tombstones(pending, deleted_at)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_cloud_conflicts_uuid ON cloud_sync_conflicts(sync_uuid, detected_at)")
 
 
 def _create_audit_experiment_tables(connection: sqlite3.Connection) -> None:

@@ -8,6 +8,9 @@ from typing import Any
 from win_engine.analysis.entity_extractor import extract_entity_signals
 from win_engine.analysis.keyword_extractor import extract_keyword_signals
 from win_engine.analysis.research_insights import build_research_decision
+from win_engine.analysis.semantic_research import analyze_script_semantics
+from win_engine.analysis.keyword_research import build_keyword_research
+from win_engine.analysis.search_opportunities import discover_search_opportunities
 from win_engine.analysis.research_planner import brief_research_text, plan_research_queries
 from win_engine.analysis.strategy_layer import build_upload_timing
 from win_engine.analysis.thumbnail_intelligence import analyze_thumbnails
@@ -41,9 +44,11 @@ class ResearchService:
         primary_language: str = "english",
         creator_brief: dict[str, Any] | None = None,
     ) -> dict[str, object]:
+        semantic_analysis = analyze_script_semantics(script, creator_brief)
         research_queries = plan_research_queries(
             script=script,
             creator_brief=creator_brief,
+            semantic_analysis=semantic_analysis,
             region=region,
             primary_language=primary_language,
             max_queries=self._settings.youtube_max_research_queries,
@@ -51,7 +56,7 @@ class ResearchService:
         query = research_queries[0]["query"] if research_queries else script[:120]
         cache_policy, ttl_seconds = self._select_cache_policy(query)
 
-        youtube_results = self._search_research_queries(research_queries, cache_policy, ttl_seconds)
+        youtube_results, query_diagnostics = self._search_research_queries(research_queries, cache_policy, ttl_seconds)
 
         scored_results = score_outliers(youtube_results, region=region, primary_language=primary_language)
         scored_results = self._attach_velocity_signals(scored_results)
@@ -60,6 +65,22 @@ class ResearchService:
         research_text = brief_research_text(script, creator_brief)
         keyword_signals = extract_keyword_signals(research_text, scored_results, region, primary_language)
         entity_signals = extract_entity_signals(research_text, scored_results)
+        search_opportunities = discover_search_opportunities(
+            script=script,
+            semantic=semantic_analysis,
+            youtube_results=scored_results,
+            creator_brief=creator_brief,
+        )
+        keyword_research = build_keyword_research(
+            script=script,
+            semantic=semantic_analysis,
+            youtube_results=scored_results,
+            research_queries=research_queries,
+            entity_signals=entity_signals,
+            creator_brief=creator_brief,
+            search_opportunities=search_opportunities,
+            query_diagnostics=query_diagnostics,
+        )
         owned_performance = self._history.owned_performance_summary()
         upload_timing = build_upload_timing(
             scored_results,
@@ -83,10 +104,13 @@ class ResearchService:
             "youtube_results": scored_results,
             "top_opportunities": top_opportunities,
             "keyword_signals": keyword_signals,
+            "semantic_analysis": semantic_analysis,
+            "keyword_research": keyword_research,
             "entity_signals": entity_signals,
             "upload_timing": upload_timing,
             "thumbnail_intelligence": thumbnail_intelligence,
             "research_queries": research_queries,
+            "research_diagnostics": query_diagnostics,
             "research_decision": build_research_decision(creator_brief, scored_results),
             "research_warnings": research_warnings,
             "cache_policy": cache_policy,
@@ -99,19 +123,28 @@ class ResearchService:
         research_queries: list[dict[str, str]],
         cache_policy: str,
         ttl_seconds: int,
-    ) -> list[dict[str, object]]:
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
         """Search each planned angle and de-duplicate videos across the result set."""
 
         merged: dict[str, dict[str, object]] = {}
+        attempts: list[dict[str, object]] = []
         for item in research_queries:
             query = item["query"]
             query_type = item["type"]
             cache_id = sha256(query.casefold().encode("utf-8")).hexdigest()[:20]
             youtube_key = f"yt:{cache_policy}:{cache_id}"
             results = self._cache.get(youtube_key)
+            cached = results is not None
             if results is None:
                 results = self._youtube.search_videos(query, self._settings.youtube_max_results)
                 self._cache.set(youtube_key, results, ttl_seconds=ttl_seconds)
+            runtime = self._youtube.runtime_state()
+            warning = runtime.get("warning")
+            attempts.append({
+                "type": query_type, "query": query, "cache": "hit" if cached else "miss",
+                "result_count": len(results or []),
+                "status": "failed" if warning and not results else "success",
+            })
 
             for result in results or []:
                 video_id = str(result.get("video_id") or "")
@@ -129,7 +162,15 @@ class ResearchService:
                     "research_query": query,
                     "matched_queries": [query_type],
                 }
-        return list(merged.values())
+        return list(merged.values()), {
+            "queries_generated": len(research_queries),
+            "queries_successful": sum(1 for item in attempts if item["status"] == "success"),
+            "queries_failed": sum(1 for item in attempts if item["status"] == "failed"),
+            "youtube_results_collected": sum(int(item["result_count"]) for item in attempts),
+            "youtube_results_unique": len(merged),
+            "query_attempts": attempts,
+            "quota_policy": "Queries are de-duplicated, bounded by YOUTUBE_MAX_RESEARCH_QUERIES, cached, and each query is bounded by YOUTUBE_MAX_RESULTS.",
+        }
 
     def diagnostics(self) -> dict[str, object]:
         """Return a quick health check for external integrations."""

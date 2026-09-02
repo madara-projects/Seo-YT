@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from win_engine.analysis.creator_brief import build_creator_brief, creator_topic
 from win_engine.analysis.content_auditor import audit_content_package
 from win_engine.analysis.research_planner import plan_research_queries
-from win_engine.analysis.topic_lock import force_topic_in_tags
+from win_engine.analysis.topic_lock import force_hashtags, force_topic_in_tags
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.channel_learning import learning_summary as channel_learning_summary
 from win_engine.analysis.gap_engine import _opportunity_score
@@ -255,7 +255,8 @@ class TestEngineStages(unittest.TestCase):
         package = build_seo_package("generate seo", "A short about Chennai street food", research, self.store)
         tags = package["tags"]
         self.assertIn("chennai street food", tags)
-        self.assertIn("shorts", tags)
+        self.assertNotIn("shorts", tags)
+        self.assertIn("#shorts", package["hashtags"])
         self.assertTrue({"yt", "youtube shorts", "viral shorts"}.isdisjoint(tags))
 
     def test_only_useful_shorts_format_tag_survives_a_full_tag_list(self):
@@ -266,6 +267,16 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(len(tags), 12)
         self.assertIn("shorts", tags)
         self.assertTrue({"yt", "youtube shorts", "viral shorts"}.isdisjoint(tags))
+
+    def test_quote_length_hashtag_is_rejected_in_favor_of_compact_topic_or_category_tags(self):
+        hashtags = force_hashtags(
+            ["#shorts", "#quotes", "#InTheEndIWasntAbandonedIWasErased"],
+            "in the end i wasn't abandoned i was erased",
+            "quotes",
+        )
+        self.assertNotIn("#InTheEndIWasntAbandonedIWasErased", hashtags)
+        self.assertIn("#shorts", hashtags)
+        self.assertTrue(all(len(tag) <= 30 for tag in hashtags))
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
     def test_search_browse_and_returning_audience_package_intents_remain_distinct(self, mocked_writer):
@@ -415,9 +426,10 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(topic, "some sunsets look beautiful because they're endings")
         self.assertTrue(package["title"].startswith("Some sunsets look beautiful because they're endings "))
         self.assertTrue(package["title"].endswith("#shorts"))
-        self.assertIn("a beach scene", package["description"])
+        self.assertIn("A beach scene", package["description"])
         self.assertNotIn("Gemini was unavailable", package["description"])
-        self.assertIn("beautiful because they're endings", package["tags"])
+        self.assertNotIn("feeling of being forgotten", package["description"].casefold())
+        self.assertIn("some sunsets look beautiful because they're endings", package["tags"])
         self.assertNotIn("background visual", package["tags"])
 
     def test_quote_topic_keeps_a_natural_search_phrase(self):
@@ -427,6 +439,38 @@ class TestEngineStages(unittest.TestCase):
         )
         topic = creator_topic(build_creator_brief(script=script))
         self.assertEqual(topic, "didn't i at least deserve the bare minimum from them")
+
+    def test_structured_quote_beats_unquoted_production_directions_for_fallback_topic(self):
+        quote = "In the end, I wasn't abandonded. I was erased."
+        brief = build_creator_brief(
+            script="Short-form quote video. Background: a road under evening clouds.",
+            exact_quote=quote,
+            on_screen_text=quote,
+            video_format="youtube_shorts",
+            visual_requirements="Road with clouds in the evening.",
+        )
+        self.assertEqual(creator_topic(brief), "in the end i wasn't abandonded i was erased")
+        tags = force_topic_in_tags(
+            _content_specific_fallback(creator_topic(brief), [], brief)["tags"],
+            creator_topic(brief),
+            "quotes",
+            context=[brief["content"], quote],
+        )
+        self.assertIn("wasn't abandonded i was erased", tags)
+        self.assertTrue(all(len(tag.split()) <= 8 for tag in tags))
+
+    def test_quote_fallback_title_drops_only_an_introductory_lead_in(self):
+        quote = "In the end, I wasn't abandoned. I was erased."
+        brief = build_creator_brief(
+            script="Quote Short over evening road traffic.",
+            exact_quote=quote,
+            on_screen_text=quote,
+            video_format="youtube_shorts",
+        )
+        package = _content_specific_fallback(creator_topic(brief), [], brief)
+        self.assertTrue(package["title"].startswith("I wasn't abandoned. I was erased"))
+        self.assertIn("“In the end, I wasn't abandoned. I was erased.”", package["description"])
+        self.assertIn("reflective backdrop", package["description"])
 
     def test_malformed_contraction_tag_is_removed_but_real_contraction_survives(self):
         tags = force_topic_in_tags(

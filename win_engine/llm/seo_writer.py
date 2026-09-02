@@ -13,7 +13,12 @@ import re
 from difflib import SequenceMatcher
 from typing import Any, Optional, Union
 
-from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality, is_short_content
+from win_engine.analysis.generation_quality import (
+    apply_quality_gate,
+    evaluate_package_quality,
+    is_short_content,
+    is_silent_quote_only_short,
+)
 from win_engine.llm import gemini_client
 
 logger = logging.getLogger(__name__)
@@ -199,6 +204,7 @@ def _build_creator_brief_block(creator_brief: Optional[dict[str, Any]]) -> str:
         ("Claim restrictions", creator_brief.get("claim_restrictions")),
         ("Creator intent", creator_brief.get("creator_intent")),
         ("Content constraints", creator_brief.get("content_constraints")),
+        ("Research-backed SEO targets", ", ".join(str(item) for item in (creator_brief.get("seo_research_targets") or []) if str(item).strip())),
     ]
     lines = [f"- {label}: {str(value).strip()}" for label, value in fields if value and str(value).strip()]
     if not lines:
@@ -275,6 +281,15 @@ def _build_user_prompt(
         "Do not add an emoji merely as decoration."
     )
     repair_block = ""
+    brief = creator_brief or {}
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip()
+    silent_quote_rule = ""
+    if quote and is_silent_quote_only_short(script, creator_brief):
+        silent_quote_rule = (
+            "- This is a silent quote-only Short. Research may expand semantic vocabulary, but it must never claim "
+            "the video teaches, explains, demonstrates, answers questions, gives advice, practical tips, coping steps, "
+            "or a guide unless that content is explicitly in the creator source. Keep the description reflective and faithful.\n"
+        )
     if repair_feedback:
         safe_reasons = [str(item.get("message") or item.get("code") or "quality failure") for item in repair_feedback[:12]]
         repair_block = (
@@ -308,7 +323,11 @@ Constraints:
 - choose a description structure that fits this video. Do not reuse a universal hook, bullet list, chapter template, CTA, or "watch until the end" wording
 - include chapters only when real timestamps or a sufficiently detailed script supports them
 - tags must be natural phrases that a person might type into search. Preserve contractions such as "didn't"; never make a tag by deleting grammar words from a quote, and never return a bag of unrelated quote words
+- research-backed SEO targets are candidates, not mandatory tags. Do not copy a title, exact quote, or competitor title into tags; use only targets that accurately describe the video
+- tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". Do not include #shorts, shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Return only tags justified by this specific video; do not pad the list to a fixed count and do not add generic viral/trending filler
+- research may inform topic vocabulary, but it cannot invent what the video teaches, explains, demonstrates, or advises
+{silent_quote_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
 - title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
 - return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are additional truthful alternatives
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
@@ -522,9 +541,11 @@ def _generate_one(
         return None
     parsed = _extract_json(raw)
     if parsed is None:
+        logger.warning("Gemini response was rejected because it did not contain a usable JSON package.")
         return None
     validated = _validate(parsed)
     if not validated:
+        logger.warning("Gemini response was rejected because required package fields were missing or invalid.")
         return None
     sanitized = _sanitize_generated_package(validated, script)
     return _prefer_fresh_titles(sanitized, channel_learning)

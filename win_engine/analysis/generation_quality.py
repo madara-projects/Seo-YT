@@ -43,6 +43,17 @@ _GENERIC_FORMAT_TAGS = {
     "shorts", "yt", "youtube", "youtube shorts", "viral", "viral shorts",
     "trending", "trending shorts", "short video", "video", "fyp",
 }
+_INSTRUCTIONAL_SOURCE_RE = re.compile(
+    r"\b(?:tutorial|walkthrough|step[- ]by[- ]step|how to|ways to|practical tips?|guide|"
+    r"we (?:explain|cover|break down|show)|here are|demonstrat(?:e|ion)|instructions?)\b",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_INSTRUCTIONAL_RE = re.compile(
+    r"\b(?:coping with|how to|ways to|dealing with|overcome|practical tips?|advice|"
+    r"common questions?|q\s*&\s*a|tutorial|explain(?:s|ing)?|break(?:ing)? down|"
+    r"step[- ]by[- ]step|beginner(?:-friendly)? guide|guide to|lessons?|how you can handle)\b",
+    re.IGNORECASE,
+)
 
 
 def normalize_unicode(value: Any) -> str:
@@ -106,8 +117,34 @@ def is_short_content(script: str, creator_brief: dict[str, Any] | None = None) -
     format_value = normalize_unicode(brief.get("video_format")).casefold().replace("-", "_").replace(" ", "_")
     if format_value in _SHORT_FORMATS or any(token in format_value for token in ("youtube_short", "short_form", "quote_short")):
         return True
-    source = normalize_unicode(script or brief.get("content"))
+    # The structured brief preserves the creator's original source.  The caller's
+    # `script` can be an expanded research query, so it must not turn a silent
+    # quote into an apparent tutorial merely because it contains helper text.
+    source = normalize_unicode(brief.get("content") or script)
     return bool(re.search(r"\b(?:youtube\s+shorts?|short[- ]form|shorts?|reels?|quote\s+short)\b", source, re.IGNORECASE))
+
+
+def is_silent_quote_only_short(script: str, creator_brief: dict[str, Any] | None = None) -> bool:
+    """Identify a quote-led Short that does not supply instructional content."""
+
+    brief = creator_brief or {}
+    # Prefer the creator's preserved source to the expanded request/query text.
+    # The latter is a research aid, not evidence that the video teaches anything.
+    source = normalize_unicode(brief.get("content") or script)
+    quote = normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text") or _extract_quote(source))
+    return bool(
+        quote
+        and normalize_unicode(brief.get("voice_over")).casefold() == "none"
+        and is_short_content(source, brief)
+        and not _INSTRUCTIONAL_SOURCE_RE.search(source)
+        and "tutorial" not in normalize_unicode(brief.get("video_format")).casefold()
+    )
+
+
+def has_unsupported_instructional_framing(value: Any) -> bool:
+    """Return whether text promises instruction a silent quote does not contain."""
+
+    return bool(_UNSUPPORTED_INSTRUCTIONAL_RE.search(normalize_unicode(value)))
 
 
 def title_emojis(value: Any) -> list[str]:
@@ -134,6 +171,7 @@ def evaluate_package_quality(
     source_folded = " ".join(unicode_words(source))
     exact_quote = normalize_unicode(brief.get("exact_quote") or _extract_quote(source))
     is_short = is_short_content(source, brief)
+    silent_quote_only = is_silent_quote_only_short(source, brief)
     emoji_context = " ".join(unicode_words(" ".join(
         normalize_unicode(brief.get(field))
         for field in ("content", "exact_quote", "on_screen_text", "visual_requirements", "viewer_promise", "unique_angle")
@@ -177,6 +215,8 @@ def evaluate_package_quality(
             reasons.append(_issue("generic_template", "title", "Title uses a repeatedly generic template.", index=index))
         unsupported = _unsupported_claims(title, source_folded)
         reasons.extend(_issue(code, "title", "Title introduces a claim not supported by the creator source.", index=index) for code in unsupported)
+        if silent_quote_only and has_unsupported_instructional_framing(title):
+            reasons.append(_issue("unsupported_instructional_framing", "title", "A silent quote-only Short must not be framed as advice, a guide, or instruction.", index=index))
         duplicate_index = next(
             (other for other, item in enumerate(accepted) if title_similarity(title, item["title"]) >= 0.82),
             None,
@@ -209,6 +249,8 @@ def evaluate_package_quality(
             issues.append(_issue("quote_fidelity", "description", "Description does not preserve the exact on-screen quote."))
         for code in _unsupported_claims(description, source_folded):
             issues.append(_issue(code, "description", "Description introduces a claim not supported by the creator source."))
+        if silent_quote_only and has_unsupported_instructional_framing(description):
+            issues.append(_issue("unsupported_instructional_framing", "description", "A silent quote-only Short must not claim tips, advice, explanations, or instructional content absent from the source."))
         if _looks_like_tag_list(description):
             issues.append(_issue("tag_list_contamination", "description", "Description reads like a repeated SEO tag list."))
         if normalize_unicode(brief.get("voice_over")).casefold() == "none" and re.search(
@@ -224,6 +266,8 @@ def evaluate_package_quality(
     for tag in tags:
         if len(unicode_words(tag)) > 8 or "," in tag:
             issues.append(_issue("tag_list_contamination", "tags", f"Tag is not one focused phrase: {tag}"))
+        if silent_quote_only and has_unsupported_instructional_framing(tag):
+            issues.append(_issue("unsupported_instructional_framing", "tags", f"Tag implies instruction not present in this silent quote-only Short: {tag}"))
     if is_short and require_shorts_tags:
         missing = [tag for tag in _REQUIRED_SHORTS_TAGS if tag not in tags]
         if missing:
@@ -286,6 +330,7 @@ def evaluate_package_quality(
         "required_shorts_tags_checked": is_short and require_shorts_tags,
         "short_title_contract_checked": True,
         "emoji_context_recommended": emoji_recommended,
+        "silent_quote_only_checked": silent_quote_only,
         "rules_version": "phase2b-v1",
     }
 

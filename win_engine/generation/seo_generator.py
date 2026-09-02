@@ -8,6 +8,7 @@ from win_engine.analysis.creator_brief import creator_topic
 from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
+from win_engine.analysis.keyword_research import select_final_tags
 from win_engine.analysis.research_planner import brief_research_text
 from win_engine.analysis.topic_lock import (
     _is_junk_tag,
@@ -88,7 +89,18 @@ def generate_seo_suggestions(
         if isinstance(item, dict)
         for key in ("keyword", "entity")
     )
-    locked_tags = force_topic_in_tags(seo_package["tags"], main_topic, category, context=tag_context)
+    locked_tags, keyword_research = select_final_tags(
+        seo_package.get("keyword_research") or research_payload.get("keyword_research") or {},
+        generated_tags=seo_package.get("tags") or [],
+        title=locked_title,
+        script=safe_script,
+        creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
+        is_short=category in {"quotes", "shorts", "youtube_shorts"},
+    )
+    tag_context.extend(
+        str(item.get("keyword") or "") for item in (keyword_research.get("selected_keywords") or [])
+        if isinstance(item, dict)
+    )
     locked_hashtags = force_hashtags(seo_package.get("hashtags") or [], main_topic, category)
     locked_description = format_upload_ready_description(
         locked_description,
@@ -108,6 +120,7 @@ def generate_seo_suggestions(
         script=safe_script,
         creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
         language=str(ctx.get("language") or "english"),
+        require_shorts_tags=False,
         tag_context=tag_context,
     )
     gated = apply_quality_gate(
@@ -145,7 +158,7 @@ def generate_seo_suggestions(
             force_topic_in_title(v, main_topic, category, variant_index=i)
             for i, v in enumerate(p.get("variants", []) or [])
         ]
-        tags = force_topic_in_tags(p.get("tags", []) or [], main_topic, category, context=tag_context)
+        tags = locked_tags if lang == str(ctx.get("language") or "english").lower() else p.get("tags", []) or []
         hashtags = force_hashtags(p.get("hashtags", []) or [], main_topic, category)
         description = p.get("description", "") or ""
         # Only English gets the topic-presence fallback; Tamil / Tanglish
@@ -181,7 +194,7 @@ def generate_seo_suggestions(
     generation_source = str(seo_package.get("generation_source") or "fallback")
     if generation_source == "fallback":
         research_warnings.append(
-            "Gemini was unavailable, so this run used the content-specific local fallback."
+            "No Gemini package passed the local validation checks, so this run used the content-specific local fallback."
         )
     if non_english_fallback:
         provider_hint = "Gemini" if generation_source == "fallback" else "the configured AI provider"
@@ -249,6 +262,7 @@ def generate_seo_suggestions(
         youtube_results=research_payload.get("youtube_results", []),
         top_opportunities=research_payload.get("top_opportunities", []),
         keyword_signals=locked_signals,
+        keyword_research=keyword_research,
         entity_signals=research_payload.get("entity_signals", []),
         upload_timing=research_payload.get("upload_timing", {}),
         thumbnail_intelligence=research_payload.get("thumbnail_intelligence", {}),

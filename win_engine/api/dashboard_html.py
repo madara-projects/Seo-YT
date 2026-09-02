@@ -1743,6 +1743,8 @@ DASHBOARD_HTML = """<!doctype html>
       const ctr = d.ctr_prediction || {};
       const ml = d.multilang || {};
       const genSrc = d.generation_source || "gemini";
+      const keywordResearch = d.keyword_research || {};
+      const selectedKeywords = arr(keywordResearch.selected_keywords).map((item) => item?.keyword).filter(Boolean);
       const warnings = Array.isArray(d.research_warnings) ? d.research_warnings : [];
       if (alertBox) {
         const fallbackMessage = genSrc === "fallback" && !warnings.some((item) => String(item).toLowerCase().includes("gemini"))
@@ -1800,6 +1802,12 @@ DASHBOARD_HTML = """<!doctype html>
           </div>
           <div class="metric-sub" style="margin-top:8px">Only the selected output language is generated per run to preserve Gemini quota.</div>
           <div id="langPanel">${pkgHtml(ml[primaryLanguage], primaryLanguage)}</div>
+        </div>
+
+        <div class="bento-card" style="margin-top:18px">
+          <div class="card-title">Research-backed tag selection ${chip(String(keywordResearch.status || "limited").replaceAll("_", " "), keywordResearch.status === "youtube_evidence" ? "ok" : "warn")}</div>
+          <div class="metric-sub">${esc(keywordResearch.confidence === "observed_youtube_relevance" ? "Selected from semantic analysis and observed YouTube research terminology; this is not search-volume data." : "Selected from semantic analysis because YouTube research was limited; this is not search-volume data.")}</div>
+          <div class="tag-list" style="margin-top:10px">${selectedKeywords.slice(0, 10).map((term) => `<span class="tag-item">${esc(term)}</span>`).join("") || "<span class='metric-sub'>No strong keyword candidates were available.</span>"}</div>
         </div>
 
         <!-- Strategy & Timing -->

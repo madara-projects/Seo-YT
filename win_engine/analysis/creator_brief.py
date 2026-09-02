@@ -181,7 +181,7 @@ def _extract_duration(content: str) -> float | None:
 
 def _extract_visual_requirement(content: str) -> str:
     match = re.search(
-        r"(?i)\b(?:background visual|background|visuals?)\s*(?:is|are|:)?\s*(.*?)(?=\s+(?:and|with)\s+.*(?:quote|text|screen)|[.;\n]|$)",
+        r"(?i)\b(?:background(?:\s+visuals?)?|visuals?)\s*(?:is|are|:)?\s*(.*?)(?=\s+(?:and|with)\s+.*(?:quote|text|screen)|[.;\n]|$)",
         content,
     )
     return re.sub(r"\s+", " ", match.group(1)).strip(" .") if match else ""
@@ -205,16 +205,19 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
     if structured_topic and (not brief.get("content") or topic_source == "creator_supplied"):
         return structured_topic
     content = str(brief.get("content") or "").strip()
-
-    quote_match = re.search(r'["“”]([^"“”]{6,})["“”]', content)
-    if not quote_match:
+    # The structured quote fields are more reliable than trying to recover a
+    # quote from free-form production directions. A creator can write
+    # ``quote is: ...`` without surrounding punctuation in ``content``.
+    explicit_quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip()
+    quote_match = None if explicit_quote else re.search(r'["“”]([^"“”]{6,})["“”]', content)
+    if not explicit_quote and not quote_match:
         quote_match = re.search(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", content)
-    if quote_match:
+    if explicit_quote or quote_match:
         # Keep a grammatical phrase instead of deleting stopwords and turning a
         # quote into a non-searchable bag of words (for example, "part always
         # wonder didn least deserve..."). When an ellipsis introduces the key
         # thought, the final clause is normally the useful search phrase.
-        quote_text = re.sub(r"\s+", " ", quote_match.group(1)).strip()
+        quote_text = explicit_quote or re.sub(r"\s+", " ", quote_match.group(1)).strip()
         clauses = [
             part.strip(" \t\r\n.,;:!?—–-")
             for part in re.split(r"\.{2,}|[;—–]", quote_text)

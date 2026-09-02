@@ -408,13 +408,29 @@ def force_topic_in_tags(tags: list[str], topic: str, category: str,
     # longer (especially when inferred from an exact quote), so do not let the
     # topic-lock post-process make an otherwise valid provider package fail its
     # own final validation.
-    topic_tag = " ".join(str(topic or "").strip().lower().split()[:8])
+    topic_words = str(topic or "").strip().lower().split()
+    # A full on-screen quote can exceed the one-tag contract.  Keep the first
+    # focused words rather than an arbitrary closing fragment: the opening
+    # phrase names the topic naturally and remains understandable on its own.
+    topic_tag = " ".join(topic_words[:8])
     if topic_tag and not _is_junk_tag(topic_tag) and max_tags > reserved:
         out.append(topic_tag)
         seen.add(topic_tag)
+    # If a quote needs truncating, retain its concise closing thought as a
+    # second specific tag.  This avoids losing the actual emotional resolution
+    # while still keeping every individual tag within the quality contract.
+    closing_tag = " ".join(topic_words[-5:]) if len(topic_words) > 8 else ""
+    if (
+        closing_tag
+        and closing_tag not in seen
+        and not _is_junk_tag(closing_tag)
+        and len(out) < max_tags - reserved
+    ):
+        out.append(closing_tag)
+        seen.add(closing_tag)
     for raw in tags or []:
         t = (raw or "").strip().lower()
-        if t in pinned or t in generic_format_tags or not t or t in seen or _is_junk_tag(t) or len(out) >= max_tags - reserved:
+        if t in pinned or t in generic_format_tags or not t or t in seen or _is_junk_tag(t) or len(t.split()) > 8 or len(out) >= max_tags - reserved:
             continue
         if context is not None:
             tag_words = set(re.findall(r"[a-z0-9]+", t))
@@ -442,7 +458,12 @@ def force_hashtags(existing: list[str] | None, topic: str, category: str,
     """
     def _slug(s: str) -> str:
         parts = re.findall(r"[A-Za-z0-9]+", s)
-        return "#" + "".join(p.title() for p in parts) if parts else ""
+        # A full quote makes an unreadable hashtag. Keep a compact topic phrase
+        # only; category fallbacks are more honest than truncating a sentence.
+        if not parts or len(parts) > 3:
+            return ""
+        tag = "#" + "".join(p.title() for p in parts)
+        return tag if len(tag) <= 30 else ""
 
     out: list[str] = []
     seen: set[str] = set()
@@ -454,7 +475,7 @@ def force_hashtags(existing: list[str] | None, topic: str, category: str,
         if not tag.startswith("#"):
             tag = "#" + tag.lstrip("#")
         body = tag.lstrip("#")
-        if not body or _is_junk_tag(body):
+        if not body or len(tag) > 30 or _is_junk_tag(body):
             continue
         key = tag.lower()
         if key in seen:

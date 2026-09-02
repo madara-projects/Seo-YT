@@ -79,6 +79,7 @@ class AnalyzeResponse(BaseModel):
     youtube_results: List[Dict[str, Any]]
     top_opportunities: List[Dict[str, Any]]
     keyword_signals: List[Dict[str, Any]]
+    keyword_research: Dict[str, Any] = Field(default_factory=dict)
     entity_signals: List[Dict[str, Any]]
     upload_timing: Dict[str, Any]
     thumbnail_intelligence: Dict[str, Any]

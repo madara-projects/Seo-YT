@@ -18,6 +18,7 @@ from win_engine.analysis.generation_quality import (
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
 from win_engine.analysis.language_engine import build_language_strategy
+from win_engine.analysis.keyword_research import select_final_tags
 from win_engine.analysis.pacing_engine import analyze_script_pacing
 from win_engine.analysis.strategy_layer import (
     build_channel_intelligence,
@@ -49,6 +50,7 @@ def build_seo_package(
     """Generate the full SEO package. Gemini is the primary generator."""
 
     keyword_signals = research.get("keyword_signals", []) or []
+    keyword_research = research.get("keyword_research", {}) or {}
     entity_signals = research.get("entity_signals", []) or []
     top_opportunities = research.get("top_opportunities", []) or []
     language_context = research.get("language_context", {})
@@ -109,6 +111,14 @@ def build_seo_package(
     )
     # Generate only the selected language. Additional languages must be explicit
     # creator actions so a single video does not consume three Gemini requests.
+    generation_brief = dict(creator_brief or {})
+    # Targets are selected *before* package writing, so research can affect the
+    # title/description proposal. Final tag selection still runs later and may
+    # reject any target that does not survive all relevance checks.
+    generation_brief["seo_research_targets"] = [
+        item.get("keyword") for item in (keyword_research.get("research_targets") or [])
+        if isinstance(item, dict) and item.get("keyword")
+    ][:8]
     _LANGS = [selected_language]
     multilang_raw, generation_source = write_multilang_packages_with_source(
         script,
@@ -117,24 +127,30 @@ def build_seo_package(
         region=region,
         audience_type=audience_type,
         category=category,
-        creator_brief=creator_brief,
+        creator_brief=generation_brief,
         channel_learning=channel_learning,
     )
     fallback_languages = [lang for lang in _LANGS if not multilang_raw.get(lang)]
 
     def _resolve(lang: str) -> dict[str, Any]:
         p = multilang_raw.get(lang) or _content_specific_fallback(primary_topic, keyword_signals, creator_brief)
-        if is_short_content(script, creator_brief):
-            existing_tags = [str(t).strip().lower() for t in (p.get("tags") or []) if str(t).strip()]
-            generic_format_tags = {"yt", "youtube shorts", "viral shorts", "trending shorts", "short video"}
-            topic_tags = [tag for tag in existing_tags if tag not in generic_format_tags and tag != "shorts"]
-            p["tags"] = topic_tags[:11] + ["shorts"]
+        tags, tag_evidence = select_final_tags(
+            keyword_research,
+            generated_tags=p.get("tags") or [],
+            title=str(p.get("title") or ""),
+            script=script,
+            creator_brief=creator_brief,
+            is_short=is_short_content(script, creator_brief),
+        )
+        p["tags"] = tags
+        p["keyword_research"] = tag_evidence
         return p
 
     multilang = {lang: _resolve(lang) for lang in _LANGS}
 
     # The selected-language package backs the top-level fields and downstream analysis.
     pkg = multilang[selected_language]
+    keyword_research = dict(pkg.get("keyword_research") or keyword_research)
     generation_trace = dict(pkg.get("generation_trace") or {})
     quality_gate = evaluate_package_quality(
         pkg, script=script, creator_brief=creator_brief, language=selected_language,
@@ -288,6 +304,7 @@ def build_seo_package(
             "multilang": multilang, "generation_source": generation_source,
             "creator_brief": creator_brief, "generation_quality": quality_gate,
             "personalization": personalization, "generation_trace": generation_trace,
+            "keyword_research": keyword_research,
         },
     )
 
@@ -318,6 +335,7 @@ def build_seo_package(
         "generation_quality": quality_gate,
         "personalization": personalization,
         "generation_trace": generation_trace,
+        "keyword_research": keyword_research,
         "creator_brief": creator_brief,
         "history_run_id": history_run_id,
     }
@@ -413,6 +431,19 @@ def _fit_title(body: str, suffix: str = "", max_chars: int = 70) -> str:
     return clean + suffix
 
 
+def _quote_title_focus(quote: str) -> str:
+    """Remove a purely introductory quote lead-in when a stronger clause follows."""
+
+    clean = re.sub(r"\s+", " ", quote or "").strip(" .")
+    focused = re.sub(
+        r"^(?:in the end|sometimes|honestly|maybe|the truth is)\s*,?\s+",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    return focused or clean
+
+
 def _semantic_emoji(text: str) -> str:
     """Choose a relevant fallback emoji from the actual content, never a fixed template."""
 
@@ -420,10 +451,10 @@ def _semantic_emoji(text: str) -> str:
     groups = (
         (("rain", "rainy", "storm", "monsoon"), ("🌧️", "☔", "🌦️")),
         (("heartbreak", "heart", "missing", "miss", "love"), ("💔", "🫶", "❤️‍🩹")),
+        (("road", "traffic", "vehicle", "car", "bus"), ("🚦", "🚗", "🛣️")),
         (("moon", "night", "stars", "sky"), ("🌙", "✨", "🌌")),
         (("sunset", "beach", "ocean", "sea"), ("🌅", "🌊", "☀️")),
         (("mountain", "hill", "nature", "green"), ("⛰️", "🌿", "🌄")),
-        (("road", "traffic", "vehicle", "car", "bus"), ("🚦", "🚗", "🛣️")),
         (("funny", "comedy", "laugh"), ("😂", "😄", "🤣")),
     )
     for terms, emojis in groups:
@@ -435,6 +466,21 @@ def _semantic_emoji(text: str) -> str:
 def _topic_hashtag(value: str) -> str:
     words = re.findall(r"[A-Za-z0-9]+", value or "")[:3]
     return "#" + "".join(word.capitalize() for word in words) if words else ""
+
+
+def _visual_hashtag(value: str) -> str:
+    """Return one compact, human-readable hashtag for a supplied visual."""
+
+    lowered = (value or "").casefold()
+    if "road" in lowered and "traffic" in lowered:
+        return "#RoadTraffic"
+    if "road" in lowered:
+        return "#EveningRoad" if "evening" in lowered else "#RoadScene"
+    if "rain" in lowered:
+        return "#RainyMood"
+    if "moon" in lowered or "night sky" in lowered:
+        return "#NightSky"
+    return _topic_hashtag(value)
 
 
 def _content_specific_fallback(
@@ -461,24 +507,26 @@ def _content_specific_fallback(
     emoji = _semantic_emoji(" ".join([topic, content, quote, str(brief.get("visual_requirements") or "")]))
     suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
     if quote:
+        title_quote = _quote_title_focus(quote)
         variants = [
-            _fit_title(quote, suffix),
-            _fit_title(f"The Meaning Behind: {quote}", suffix),
-            _fit_title(f"Read This Twice: {quote}", suffix),
+            _fit_title(title_quote, suffix),
+            _fit_title(f"The Meaning Behind: {title_quote}", suffix),
+            _fit_title(f"Read This Twice: {title_quote}", suffix),
             _fit_title(f"{pretty}: A Quiet Reminder", suffix),
             _fit_title(f"A Quote About {pretty}", suffix),
         ]
         visual_match = re.search(
-            r"(?i)\bbackground\s*visuals?\s*(?:is|:)?\s*(.*?)(?=\s+and\s+.*(?:screen|quote)|[.;]|$)",
+            r"(?i)\bbackground(?:\s+visuals?)?\s*(?:is|:)?\s*(.*?)(?=\s+and\s+.*(?:screen|quote)|[.;]|$)",
             content,
         )
-        visual = re.sub(r"\s+", " ", visual_match.group(1)).strip(" .") if visual_match else "the accompanying visual"
+        visual = re.sub(r"\s+", " ", visual_match.group(1)).strip(" .,:;") if visual_match else "the accompanying visual"
         if visual and not re.match(r"(?i)^(?:a|an|the)\s", visual):
             visual = "a " + visual
+        visual_sentence = visual.split(",", 1)[0].rstrip(" .")
         description = (
             f'“{quote}”\n\n'
-            f"This Short pairs the on-screen quote with {visual}, creating a quiet moment to reflect on {topic}. "
-            f"The words are the focus, while the visual supports their mood without changing their meaning."
+            f"{visual_sentence[:1].upper() + visual_sentence[1:]} sets a reflective backdrop for these words. "
+            "A quiet Short for anyone who connects with the idea expressed in these words."
         )
     else:
         # Keep the fallback useful when Gemini is unavailable: each option is
@@ -519,14 +567,24 @@ def _content_specific_fallback(
     tags: list[str] = []
     seen: set[str] = set()
     quote_words = [word.lower() for word in re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", quote)]
-    quote_tags = []
+    quote_tags: list[str] = []
     if quote_words:
-        quote_tags = [" ".join(quote_words[:5]), " ".join(quote_words[-4:])]
+        # Keep complete, meaningful clauses from a quote.  Splitting the
+        # quote into arbitrary first/last word bags made tags look broken and
+        # unhelpful even when the package otherwise passed validation.
+        quote_tags = [
+            " ".join(re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", sentence.lower())[:8])
+            for sentence in re.split(r"[.!?]+", quote)
+            if sentence.strip()
+        ]
+        quote_tags = [tag for tag in quote_tags if tag]
     candidates = [topic, *quote_tags] if quote else [topic, *[str(item.get("keyword") or "") for item in keyword_signals or []]]
     for field in ("viewer_promise", "unique_angle", "visual_requirements"):
         value = " ".join(str(brief.get(field) or "").strip().lower().split()[:6])
         if value:
             candidates.append(value)
+    if "emotional" in content.casefold():
+        candidates.append("emotional quote")
     for candidate in candidates:
         cleaned = candidate.strip().lower()
         if cleaned and cleaned not in seen:
@@ -539,7 +597,7 @@ def _content_specific_fallback(
     hashtags = [_topic_hashtag(topic)]
     if is_shorts:
         hashtags.append("#shorts")
-    visual_hashtag = _topic_hashtag(str(brief.get("visual_requirements") or ""))
+    visual_hashtag = _visual_hashtag(str(brief.get("visual_requirements") or ""))
     if visual_hashtag:
         hashtags.append(visual_hashtag)
     hashtags = list(dict.fromkeys(item for item in hashtags if item))[:3]

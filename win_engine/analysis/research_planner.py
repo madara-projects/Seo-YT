@@ -19,6 +19,7 @@ def plan_research_queries(
     *,
     script: str,
     creator_brief: dict[str, Any] | None = None,
+    semantic_analysis: dict[str, Any] | None = None,
     region: str = "global",
     primary_language: str = "english",
     max_queries: int = 5,
@@ -27,10 +28,10 @@ def plan_research_queries(
 
     brief = creator_brief or {}
     content = _short(brief.get("content") or script)
-    quote = _extract_quote(str(brief.get("content") or script))
+    semantic = semantic_analysis or {}
     topic_source = " ".join(
         str(value or "")
-        for value in (quote, brief.get("viewer_promise"), brief.get("target_audience"))
+        for value in (semantic.get("primary_topic"), *(semantic.get("secondary_topics") or []))
     )
     topic = _keyword_phrase(topic_source, 6) or _keyword_phrase(content, 6) or "YouTube video"
     audience_problem = _keyword_phrase(
@@ -38,16 +39,31 @@ def plan_research_queries(
         6,
     )
     video_format = _format_phrase(str(brief.get("video_format") or ""))
-    exact_quote = _short(quote, 12)
+    intent = _keyword_phrase(" ".join(str(value or "") for value in (semantic.get("search_intents") or [])), 7)
+    related = _keyword_phrase(" ".join(
+        str(item) for cluster in (semantic.get("keyword_clusters") or []) if isinstance(cluster, dict)
+        for item in cluster.get("candidates") or []
+    ), 7)
     local_modifier = _local_modifier(region, primary_language)
 
-    candidates = [
-        ("main topic", exact_quote or topic),
-        ("viewer problem", _join(audience_problem, "quotes")),
-        ("desired result", _join(topic, "relatable quote")),
-        ("local-language", _join(topic, local_modifier) if local_modifier else ""),
-        ("format and competitor framing", _join(topic, video_format)),
-    ]
+    # The plan is deliberately conditional: a video only spends an API search
+    # on an angle that the semantic source/brief actually supplies.
+    candidates = [("primary", topic)]
+    if intent:
+        candidates.append((f"intent:{semantic.get('viewer_intent') or 'viewer'}", intent))
+    elif audience_problem:
+        candidates.append(("viewer_problem", audience_problem))
+    if related:
+        candidates.append(("related_concept", related))
+    if audience_problem and audience_problem != intent:
+        candidates.append(("viewer_problem", _join(audience_problem, topic)))
+    entities = _keyword_phrase(" ".join(str(value or "") for value in (semantic.get("entities") or [])), 5)
+    if entities:
+        candidates.append(("entity", _join(entities, topic)))
+    if local_modifier:
+        candidates.append(("local_language", _join(topic, local_modifier)))
+    if video_format and str(semantic.get("viewer_intent") or "") in {"entertainment", "story_experience"}:
+        candidates.append(("format_context", _join(topic, video_format)))
 
     queries: list[dict[str, str]] = []
     seen: set[str] = set()
