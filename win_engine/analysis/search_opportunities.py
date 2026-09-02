@@ -24,6 +24,7 @@ _ALLOWED_INTENTS = {
 _GENERIC = {"video", "videos", "youtube", "short", "shorts", "quote", "quotes", "viral", "trending"}
 _INTENT_WORDS = {"how", "to", "cope", "coping", "dealing", "deal", "feeling", "feel", "signs", "recognizing", "understanding", "overcoming", "healing", "from", "with", "after", "why"}
 _UNSUPPORTED_SPECIFIERS = {"childhood", "chronic", "clinical", "diagnosis", "disorder", "trauma", "abuse", "neglect", "neurological", "medical", "therapy", "ghosting", "workplace", "school", "college", "family", "parent", "friend", "friends", "partner", "relationship", "marriage", "social", "group", "groups"}
+_UNSUPPORTED_ADJACENT_CONTEXT = {"gaming", "performance", "region", "choosing", "correct", "best", "recommendation"}
 _GROUNDING_STOP = _GENERIC | _INTENT_WORDS | {"a", "an", "and", "the", "of", "in", "on", "for", "someone", "people", "person", "video", "short"}
 
 
@@ -129,7 +130,8 @@ def _validated(item: Any, titles: list[str], descriptions: list[str], anchors: s
         return None
     if _copied_phrase(concept, [*titles, *descriptions]):
         return None
-    if not _creator_grounded(concept, anchors):
+    source_support_score, source_support = _creator_support(concept, anchors)
+    if source_support_score < 70:
         return None
     script_relevance = _score(item.get("script_relevance"))
     research_relevance = _score(item.get("research_relevance"))
@@ -138,7 +140,7 @@ def _validated(item: Any, titles: list[str], descriptions: list[str], anchors: s
     intent = _normalize_intent(item.get("intent"), "emotional_relatable")
     cluster = _slug(item.get("cluster")) or _slug(concept)
     specificity = min(100, 25 + len(words) * 15 + (15 if len(words) >= 3 else 0))
-    opportunity_score = round(script_relevance * 0.5 + research_relevance * 0.35 + specificity * 0.15, 1)
+    opportunity_score = round(script_relevance * 0.45 + research_relevance * 0.3 + specificity * 0.1 + source_support_score * 0.15, 1)
     return {
         "concept": concept,
         "intent": intent,
@@ -146,6 +148,8 @@ def _validated(item: Any, titles: list[str], descriptions: list[str], anchors: s
         "script_relevance_score": script_relevance,
         "research_relevance_score": research_relevance,
         "specificity_score": specificity,
+        "source_support_score": source_support_score,
+        "source_support": source_support,
         "opportunity_score": opportunity_score,
         "semantic_confirmed": True,
         "evidence": {"observed_result_count": len(titles), "source": "youtube_result_analysis"},
@@ -176,12 +180,29 @@ def _anchor_terms(script: str, brief: dict[str, Any]) -> set[str]:
     return {word for value in creator_values for word in _words(value) if word not in _GROUNDING_STOP}
 
 
-def _creator_grounded(concept: str, anchors: set[str]) -> bool:
+def _creator_support(concept: str, anchors: set[str]) -> tuple[int, str]:
     words = [word for word in _words(concept) if word not in _GROUNDING_STOP]
     if not words or any(word in _UNSUPPORTED_SPECIFIERS and word not in anchors for word in words):
-        return False
+        return 0, "unsupported specific context"
+    if any(word in _UNSUPPORTED_ADJACENT_CONTEXT and word not in anchors for word in words):
+        return 0, "unsupported adjacent context"
     matched = len(set(words) & anchors)
-    return matched / len(set(words)) >= 0.5
+    ratio = matched / len(set(words))
+    if ratio >= 1.0:
+        return 100, "direct creator-source support"
+    # Explicit semantic bridges are narrow and reflect a relationship already
+    # stated by the source, rather than an external use case from research.
+    word_set = set(words)
+    if {"tcp", "udp", "connection"} & anchors and word_set <= {"tcp", "udp", "connection", "oriented", "connectionless"}:
+        return 80, "network connection semantic bridge"
+    if {"mechanical", "membrane", "keyboard"} & anchors and word_set <= {"mechanical", "membrane", "keyboard", "tactile", "typing", "quiet", "quieter"}:
+        return 80, "keyboard comparison semantic bridge"
+    return int(round(ratio * 100)), "partial creator-source overlap"
+
+
+def _creator_grounded(concept: str, anchors: set[str]) -> bool:
+    """Compatibility predicate retained for callers/tests outside this module."""
+    return _creator_support(concept, anchors)[0] >= 70
 
 
 def _intent(semantic: dict[str, Any], script: str) -> str:

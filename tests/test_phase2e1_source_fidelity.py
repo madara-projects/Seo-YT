@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from win_engine.analysis.generation_quality import evaluate_package_quality
+from win_engine.analysis.generation_quality import (
+    evaluate_package_quality,
+    filter_source_hashtags,
+    is_silent_quote_only_short,
+)
 from win_engine.analysis.keyword_research import build_keyword_research, select_final_tags
 from win_engine.llm.seo_writer import _build_user_prompt
+from win_engine.generation.strategy_engine import _content_specific_fallback
 
 
 def _silent_quote_brief(quote: str) -> dict[str, str]:
@@ -77,6 +82,55 @@ class SourceFidelityTests(unittest.TestCase):
         self.assertNotIn("coping with being misunderstood", tags)
         self.assertTrue(tags)
         self.assertFalse(any("coping" in tag or "how to" in tag for tag in tags))
+
+    def test_relationship_quote_with_how_to_stay_remains_silent_and_blocks_advice(self):
+        quote = "Not everyone who walks away stopped caring. Sometimes they just stopped knowing how to stay."
+        brief = {**_silent_quote_brief(quote), "content": quote}
+        gate = evaluate_package_quality(
+            {
+                "title": "Why Some People Stop Knowing How to Stay #shorts",
+                "variants": ["When Staying Stops Feeling Possible #shorts"],
+                "description": f"{quote}\n\nDiscover practical ways to understand why people walk away.",
+                "tags": ["relationship reflection"], "hashtags": ["#shorts"],
+            }, script=quote, creator_brief=brief, require_shorts_tags=False,
+        )
+        self.assertTrue(is_silent_quote_only_short(quote, brief))
+        self.assertIn("unsupported_instructional_framing", {item["code"] for item in gate["issues"]})
+
+    def test_story_and_sparse_content_reject_tutorial_framing_and_filter_guide_hashtags(self):
+        story = "The message was only three words long, but he read it ten times before finally putting his phone down."
+        brief = {"content": story, "video_format": "youtube_shorts", "voice_over": "present", "creator_intent": "Short cinematic story"}
+        gate = evaluate_package_quality(
+            {
+                "title": "The Message Was Only Three Words Long #shorts",
+                "variants": ["A Three-Word Message #shorts"],
+                "description": "We break down practical tips and common questions behind this message.",
+                "tags": ["three word message"], "hashtags": ["#shorts"],
+            }, script=story, creator_brief=brief, require_shorts_tags=False,
+        )
+        self.assertIn("unsupported_instructional_framing", {item["code"] for item in gate["issues"]})
+        sparse = {**_silent_quote_brief("Keep going."), "content": "Keep going."}
+        self.assertEqual(filter_source_hashtags(["#shorts", "#CompleteGuide"], "Keep going.", sparse), ["#shorts"])
+
+    def test_non_instructional_fallback_does_not_turn_story_into_a_guide(self):
+        story = "We used to talk every day. Then one day, neither of us knew how to start the conversation anymore."
+        package = _content_specific_fallback("used to talk every day", [], {
+            "content": story, "video_format": "youtube_shorts", "voice_over": "present", "creator_intent": "Cinematic story",
+        })
+        self.assertNotIn("walks through", package["description"].casefold())
+        self.assertFalse(any("step-by-step" in title.casefold() or title.casefold().startswith("how ") for title in package["variants"]))
+
+    def test_story_withholds_message_words_from_titles_and_descriptions(self):
+        story = "The message was only three words long, but he read it ten times before finally putting his phone down."
+        brief = {"content": story, "video_format": "youtube_shorts", "voice_over": "present", "creator_intent": "Emotional short story"}
+        gate = evaluate_package_quality(
+            {
+                "title": "The Three-Word Message #shorts", "variants": ["A Message Read Ten Times #shorts"],
+                "description": "Discover the exact text he received and what those words reveal.",
+                "tags": ["three word message"], "hashtags": ["#shorts"],
+            }, script=story, creator_brief=brief, require_shorts_tags=False,
+        )
+        self.assertIn("invented_message_content", {item["code"] for item in gate["issues"]})
 
     def test_actual_bicycle_tutorial_keeps_instructional_language(self):
         script = "Here are three ways to fix a slipping bicycle chain. First inspect tension, then align the wheel, then test ride safely."

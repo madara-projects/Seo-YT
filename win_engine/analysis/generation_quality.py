@@ -44,14 +44,24 @@ _GENERIC_FORMAT_TAGS = {
     "trending", "trending shorts", "short video", "video", "fyp",
 }
 _INSTRUCTIONAL_SOURCE_RE = re.compile(
-    r"\b(?:tutorial|walkthrough|step[- ]by[- ]step|how to|ways to|practical tips?|guide|"
+    r"\b(?:tutorial|walkthrough|step[- ]by[- ]step|practical tips?|guide|"
     r"we (?:explain|cover|break down|show)|here are|demonstrat(?:e|ion)|instructions?)\b",
     re.IGNORECASE,
 )
 _UNSUPPORTED_INSTRUCTIONAL_RE = re.compile(
-    r"\b(?:coping with|how to|ways to|dealing with|overcome|practical tips?|advice|"
+    r"\b(?:coping with|dealing with|overcome|practical (?:tips?|ways?)|advice|"
     r"common questions?|q\s*&\s*a|tutorial|explain(?:s|ing)?|break(?:ing)? down|"
-    r"step[- ]by[- ]step|beginner(?:-friendly)? guide|guide to|lessons?|how you can handle)\b",
+    r"step[- ]by[- ]step|beginner(?:-friendly)? guide|complete guide|guide to|lessons?|"
+    r"how to (?:cope|deal|fix|make|clean|improve|handle|recover)|how you can handle|"
+    r"walk(?:s|ing)? through)\b",
+    re.IGNORECASE,
+)
+_INSTRUCTIONAL_CONTEXT_RE = re.compile(
+    r"\b(?:tutorial|how[- ]to|walkthrough|guide|educational|explainer|comparison|review|demonstration)\b",
+    re.IGNORECASE,
+)
+_PROCEDURAL_ACTION_RE = re.compile(
+    r"\b(?:check|inspect|adjust|reduce|lower|use|remove|blow|clean|try|reposition)\b",
     re.IGNORECASE,
 )
 
@@ -136,15 +146,71 @@ def is_silent_quote_only_short(script: str, creator_brief: dict[str, Any] | None
         quote
         and normalize_unicode(brief.get("voice_over")).casefold() == "none"
         and is_short_content(source, brief)
-        and not _INSTRUCTIONAL_SOURCE_RE.search(source)
-        and "tutorial" not in normalize_unicode(brief.get("video_format")).casefold()
+        and not source_supports_instructional_framing(source, brief)
     )
+
+
+def source_supports_instructional_framing(script: str, creator_brief: dict[str, Any] | None = None) -> bool:
+    """Return whether the creator source actually supports teaching/advice framing."""
+
+    brief = creator_brief or {}
+    source = normalize_unicode(brief.get("content") or script)
+    context = " ".join(normalize_unicode(brief.get(field)) for field in (
+        "video_format", "creator_intent", "content_constraints", "viewer_promise",
+    ))
+    if _INSTRUCTIONAL_CONTEXT_RE.search(context) or _INSTRUCTIONAL_SOURCE_RE.search(source):
+        return True
+    # A procedural source can be instructional even when the creator labels it
+    # as a Short rather than a tutorial (for example, check/inspect/adjust).
+    actions = _PROCEDURAL_ACTION_RE.findall(source)
+    return len(actions) >= 2 and bool(re.search(r"\b(?:if|then|to)\b", source, re.IGNORECASE))
+
+
+def source_requires_noninstructional_framing(script: str, creator_brief: dict[str, Any] | None = None) -> bool:
+    """Identify source-bound silent, story, and reflection content that cannot become a guide."""
+
+    brief = creator_brief or {}
+    if is_silent_quote_only_short(script, brief):
+        return True
+    context = " ".join(normalize_unicode(brief.get(field)) for field in (
+        "creator_intent", "content_constraints", "visual_requirements",
+    ))
+    return bool(
+        re.search(r"\b(?:story|storytelling|reflection|reflective|minimal|cinematic|narrative)\b", context, re.IGNORECASE)
+        or re.search(r"\bnot\s+(?:a\s+)?(?:tutorial|guide|advice|therapy)\b", context, re.IGNORECASE)
+    ) and not source_supports_instructional_framing(script, brief)
+
+
+def source_withholds_message_content(script: str, creator_brief: dict[str, Any] | None = None) -> bool:
+    """Identify story sources that mention an unread message but do not supply its words."""
+
+    brief = creator_brief or {}
+    source = normalize_unicode(brief.get("content") or script)
+    mentions_short_message = bool(re.search(
+        r"\bmessage\b.*?\b(?:only|just)?\s*(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+words?\b",
+        source,
+        re.IGNORECASE,
+    ))
+    quoted_content = bool(re.search(r'["\u201c][^"\u201d]{1,80}["\u201d]', source))
+    return mentions_short_message and not quoted_content
 
 
 def has_unsupported_instructional_framing(value: Any) -> bool:
     """Return whether text promises instruction a silent quote does not contain."""
 
-    return bool(_UNSUPPORTED_INSTRUCTIONAL_RE.search(normalize_unicode(value)))
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", normalize_unicode(value).replace("#", " "))
+    return bool(_UNSUPPORTED_INSTRUCTIONAL_RE.search(text))
+
+
+def filter_source_hashtags(
+    hashtags: Iterable[str], script: str, creator_brief: dict[str, Any] | None = None,
+) -> list[str]:
+    """Drop instructional hashtags when the creator source is non-instructional."""
+
+    values = [normalize_unicode(item) for item in hashtags if normalize_unicode(item)]
+    if not source_requires_noninstructional_framing(script, creator_brief):
+        return values
+    return [item for item in values if not has_unsupported_instructional_framing(item)]
 
 
 def title_emojis(value: Any) -> list[str]:
@@ -172,6 +238,7 @@ def evaluate_package_quality(
     exact_quote = normalize_unicode(brief.get("exact_quote") or _extract_quote(source))
     is_short = is_short_content(source, brief)
     silent_quote_only = is_silent_quote_only_short(source, brief)
+    non_instructional = source_requires_noninstructional_framing(source, brief)
     emoji_context = " ".join(unicode_words(" ".join(
         normalize_unicode(brief.get(field))
         for field in ("content", "exact_quote", "on_screen_text", "visual_requirements", "viewer_promise", "unique_angle")
@@ -213,10 +280,10 @@ def evaluate_package_quality(
             reasons.append(_issue("repeated_emoji_template", "title", "The emoji pattern repeats across the three most recent generated titles.", index=index))
         if any(pattern.search(title) for pattern in _GENERIC_TITLE_PATTERNS):
             reasons.append(_issue("generic_template", "title", "Title uses a repeatedly generic template.", index=index))
-        unsupported = _unsupported_claims(title, source_folded)
+        unsupported = _unsupported_claims(title, source)
         reasons.extend(_issue(code, "title", "Title introduces a claim not supported by the creator source.", index=index) for code in unsupported)
-        if silent_quote_only and has_unsupported_instructional_framing(title):
-            reasons.append(_issue("unsupported_instructional_framing", "title", "A silent quote-only Short must not be framed as advice, a guide, or instruction.", index=index))
+        if non_instructional and has_unsupported_instructional_framing(title):
+            reasons.append(_issue("unsupported_instructional_framing", "title", "A non-instructional source must not be framed as advice, a guide, or instruction.", index=index))
         duplicate_index = next(
             (other for other, item in enumerate(accepted) if title_similarity(title, item["title"]) >= 0.82),
             None,
@@ -247,10 +314,10 @@ def evaluate_package_quality(
         description_folded = " ".join(unicode_words(description))
         if exact_quote and " ".join(unicode_words(exact_quote)) not in description_folded:
             issues.append(_issue("quote_fidelity", "description", "Description does not preserve the exact on-screen quote."))
-        for code in _unsupported_claims(description, source_folded):
+        for code in _unsupported_claims(description, source):
             issues.append(_issue(code, "description", "Description introduces a claim not supported by the creator source."))
-        if silent_quote_only and has_unsupported_instructional_framing(description):
-            issues.append(_issue("unsupported_instructional_framing", "description", "A silent quote-only Short must not claim tips, advice, explanations, or instructional content absent from the source."))
+        if non_instructional and has_unsupported_instructional_framing(description):
+            issues.append(_issue("unsupported_instructional_framing", "description", "A non-instructional source must not claim tips, advice, explanations, or instructional content absent from the source."))
         if _looks_like_tag_list(description):
             issues.append(_issue("tag_list_contamination", "description", "Description reads like a repeated SEO tag list."))
         if normalize_unicode(brief.get("voice_over")).casefold() == "none" and re.search(
@@ -266,8 +333,8 @@ def evaluate_package_quality(
     for tag in tags:
         if len(unicode_words(tag)) > 8 or "," in tag:
             issues.append(_issue("tag_list_contamination", "tags", f"Tag is not one focused phrase: {tag}"))
-        if silent_quote_only and has_unsupported_instructional_framing(tag):
-            issues.append(_issue("unsupported_instructional_framing", "tags", f"Tag implies instruction not present in this silent quote-only Short: {tag}"))
+        if non_instructional and has_unsupported_instructional_framing(tag):
+            issues.append(_issue("unsupported_instructional_framing", "tags", f"Tag implies instruction not present in this source: {tag}"))
     if is_short and require_shorts_tags:
         missing = [tag for tag in _REQUIRED_SHORTS_TAGS if tag not in tags]
         if missing:
@@ -303,6 +370,10 @@ def evaluate_package_quality(
         issues.append(_issue("duplicate_hashtag", "hashtags", "Hashtags contain duplicates."))
     if len(hashtags) > 3:
         issues.append(_issue("excessive_hashtags", "hashtags", "Use no more than three focused hashtags."))
+    if non_instructional:
+        for hashtag in hashtags:
+            if has_unsupported_instructional_framing(hashtag):
+                issues.append(_issue("unsupported_instructional_framing", "hashtags", f"Hashtag implies instruction not present in this source: {hashtag}"))
 
     if not accepted:
         issues.append(_issue("no_acceptable_title", "titles", "No title candidate passed the local quality gate."))
@@ -393,9 +464,16 @@ def _unique(values: Iterable[str]) -> list[str]:
     return result
 
 
-def _unsupported_claims(text: str, source_folded: str) -> list[str]:
-    source = normalize_unicode(source_folded).casefold()
-    return [code for code, pattern in _UNSUPPORTED_CLAIMS if pattern.search(text) and not pattern.search(source)]
+def _unsupported_claims(text: str, source_text: str) -> list[str]:
+    source = normalize_unicode(source_text).casefold()
+    codes = [code for code, pattern in _UNSUPPORTED_CLAIMS if pattern.search(text) and not pattern.search(source)]
+    if source_withholds_message_content(source_text) and re.search(
+        r"\b(?:exact (?:text|message)|what those words reveal|find out what)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        codes.append("invented_message_content")
+    return codes
 
 
 def _looks_like_tag_list(description: str) -> bool:

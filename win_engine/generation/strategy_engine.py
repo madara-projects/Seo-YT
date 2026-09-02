@@ -14,6 +14,7 @@ from win_engine.analysis.generation_quality import (
     evaluate_package_quality,
     evidence_trace,
     is_short_content,
+    source_requires_noninstructional_framing,
 )
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
@@ -34,7 +35,7 @@ from win_engine.generation.expansion_engine import (
     build_chapters,
     build_session_expansion,
 )
-from win_engine.llm.seo_writer import write_multilang_packages_with_source
+from win_engine.llm.seo_writer import last_generation_diagnostics, write_multilang_packages_with_source
 
 
 _TOPIC_STOPWORDS = {"video", "youtube", "will", "what", "days", "today", "going"}
@@ -130,10 +131,25 @@ def build_seo_package(
         creator_brief=generation_brief,
         channel_learning=channel_learning,
     )
+    writer_diagnostics = last_generation_diagnostics()
     fallback_languages = [lang for lang in _LANGS if not multilang_raw.get(lang)]
 
     def _resolve(lang: str) -> dict[str, Any]:
-        p = multilang_raw.get(lang) or _content_specific_fallback(primary_topic, keyword_signals, creator_brief)
+        generated = multilang_raw.get(lang)
+        p = generated or _content_specific_fallback(primary_topic, keyword_signals, creator_brief)
+        if not generated:
+            diagnostic = dict(writer_diagnostics.get(lang) or {})
+            events = list(diagnostic.get("events") or [])
+            if not events:
+                events.append(str(diagnostic.get("status") or "gemini_unavailable"))
+            if "fallback_used" not in events:
+                events.append("fallback_used")
+            p["generation_trace"] = {
+                **diagnostic,
+                "events": events,
+                "fallback_used": True,
+                "fallback_reason": str(diagnostic.get("status") or "gemini_unavailable"),
+            }
         tags, tag_evidence = select_final_tags(
             keyword_research,
             generated_tags=p.get("tags") or [],
@@ -532,13 +548,22 @@ def _content_specific_fallback(
         # Keep the fallback useful when Gemini is unavailable: each option is
         # a different discovery mechanism, but all are derived from the same
         # creator-supplied subject rather than a niche-specific template.
-        variants = [
-            _fit_title(f"How {pretty} Works in Practice", suffix),
-            _fit_title(f"The Practical Side of {pretty}", suffix),
-            _fit_title(f"A Closer Look at {pretty}", suffix),
-            _fit_title(f"{pretty}: A Clear Step-by-Step Look", suffix),
-            _fit_title(f"What to Know About {pretty}", suffix),
-        ]
+        instructional = not source_requires_noninstructional_framing(content or topic, brief)
+        variants = (
+            [
+                _fit_title(f"How {pretty} Works in Practice", suffix),
+                _fit_title(f"The Practical Side of {pretty}", suffix),
+                _fit_title(f"A Closer Look at {pretty}", suffix),
+                _fit_title(f"{pretty}: A Clear Step-by-Step Look", suffix),
+                _fit_title(f"What to Know About {pretty}", suffix),
+            ] if instructional else [
+                _fit_title(f"A Quiet Look at {pretty}", suffix),
+                _fit_title(f"The Story Behind {pretty}", suffix),
+                _fit_title(f"A Moment About {pretty}", suffix),
+                _fit_title(f"What {pretty} Leaves Unsaid", suffix),
+                _fit_title(f"Reflecting on {pretty}", suffix),
+            ]
+        )
         if unique_angle:
             variants[1] = _fit_title(f"{pretty} Through {unique_angle}", suffix)
         if proof:
@@ -552,7 +577,11 @@ def _content_specific_fallback(
             source_excerpt = source_excerpt[:217].rsplit(" ", 1)[0] + "…"
         description_parts = [
             f"A focused look at {topic}, grounded in the creator's supplied material.",
-            promise or f"The video walks through the specific details of {topic} shown in the source.",
+            promise or (
+                f"The video walks through the specific details of {topic} shown in the source."
+                if instructional else
+                f"The video stays with the specific moment about {topic} shown in the source."
+            ),
         ]
         if source_excerpt and source_excerpt.casefold() != topic.casefold():
             description_parts.append(f"Source context: {source_excerpt}.")

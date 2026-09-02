@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from contextvars import ContextVar
 from difflib import SequenceMatcher
 from typing import Any, Optional, Union
 
@@ -18,12 +19,22 @@ from win_engine.analysis.generation_quality import (
     evaluate_package_quality,
     is_short_content,
     is_silent_quote_only_short,
+    source_requires_noninstructional_framing,
+    source_withholds_message_content,
 )
 from win_engine.llm import gemini_client
 
 logger = logging.getLogger(__name__)
+_LAST_LANGUAGE_DIAGNOSTICS: ContextVar[dict[str, dict[str, Any]]] = ContextVar(
+    "seo_writer_language_diagnostics", default={}
+)
 
 Competitor = Union[str, dict]
+
+
+def last_generation_diagnostics() -> dict[str, dict[str, Any]]:
+    """Return safe per-language diagnostics from the last writer invocation."""
+    return {language: dict(trace) for language, trace in _LAST_LANGUAGE_DIAGNOSTICS.get().items()}
 
 _SYSTEM_PROMPT = (
     "You are an expert YouTube SEO strategist. You analyze the user's video script, quote, or idea "
@@ -290,6 +301,18 @@ def _build_user_prompt(
             "the video teaches, explains, demonstrates, answers questions, gives advice, practical tips, coping steps, "
             "or a guide unless that content is explicitly in the creator source. Keep the description reflective and faithful.\n"
         )
+    non_instructional_rule = ""
+    if source_requires_noninstructional_framing(script, creator_brief):
+        non_instructional_rule = (
+            "- This source is not instructional. Do not frame it as a tutorial, how-to, guide, advice, practical tips, "
+            "common questions, methods, or steps. Keep story, reflection, and sparse content faithful to what is shown.\n"
+        )
+    undisclosed_message_rule = ""
+    if source_withholds_message_content(script, creator_brief):
+        undisclosed_message_rule = (
+            "- The source does not supply the message text. Do not say or imply that the video reveals the exact "
+            "message, what its words reveal, or a motive the source does not state.\n"
+        )
     if repair_feedback:
         safe_reasons = [str(item.get("message") or item.get("code") or "quality failure") for item in repair_feedback[:12]]
         repair_block = (
@@ -328,6 +351,8 @@ Constraints:
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Return only tags justified by this specific video; do not pad the list to a fixed count and do not add generic viral/trending filler
 - research may inform topic vocabulary, but it cannot invent what the video teaches, explains, demonstrates, or advises
 {silent_quote_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
+{non_instructional_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
+{undisclosed_message_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
 - title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
 - return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are additional truthful alternatives
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
@@ -537,18 +562,26 @@ def _generate_one(
         max_tokens=max_tokens,
         temperature=temperature,
     )
+    provider_trace = gemini_client.last_generation_diagnostic()
     if not raw:
         return None
     parsed = _extract_json(raw)
     if parsed is None:
         logger.warning("Gemini response was rejected because it did not contain a usable JSON package.")
+        provider_trace["status"] = "gemini_invalid_response"
+        _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
         return None
     validated = _validate(parsed)
     if not validated:
         logger.warning("Gemini response was rejected because required package fields were missing or invalid.")
+        provider_trace["status"] = "gemini_invalid_response"
+        _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
         return None
     sanitized = _sanitize_generated_package(validated, script)
-    return _prefer_fresh_titles(sanitized, channel_learning)
+    cleaned = _prefer_fresh_titles(sanitized, channel_learning)
+    cleaned["_provider_trace"] = provider_trace
+    _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
+    return cleaned
 
 
 def write_seo_package(
@@ -633,6 +666,7 @@ def write_multilang_packages_with_source(
         return {lang: None for lang in langs}, "fallback"
 
     out: dict[str, Optional[dict[str, Any]]] = {}
+    language_diagnostics: dict[str, dict[str, Any]] = {}
     gemini_ready = gemini_client.is_available()
     for lang in langs:
         first = _generate_one(
@@ -647,7 +681,9 @@ def write_multilang_packages_with_source(
             temperature=temperature,
             max_tokens=max_tokens,
         ) if gemini_ready else None
+        first_trace = dict((first or {}).pop("_provider_trace", {}) or gemini_client.last_generation_diagnostic())
         if first is None:
+            language_diagnostics[lang] = {**first_trace, "fallback_used": True}
             out[lang] = None
             continue
         gate = evaluate_package_quality(
@@ -662,11 +698,14 @@ def write_multilang_packages_with_source(
         first = apply_quality_gate(first, gate)
         first["generation_trace"] = {
             "provider_requests": 1, "repair_attempted": False, "repair_succeeded": False,
-            "initial_quality_status": gate["status"],
+            "initial_quality_status": gate["status"], "events": [str(first_trace.get("status") or "gemini_success")],
+            **first_trace,
         }
         if gate["passed"] or not gate["repairable"]:
+            language_diagnostics[lang] = dict(first["generation_trace"])
             out[lang] = first
             continue
+        first["generation_trace"]["events"].append("gemini_quality_rejection")
         repair_reasons = [*gate.get("issues", [])]
         repair_reasons.extend(reason for item in gate.get("rejected_candidates", []) for reason in item.get("issues", []))
         repaired = _generate_one(
@@ -675,7 +714,15 @@ def write_multilang_packages_with_source(
             temperature=temperature, max_tokens=max_tokens, repair_feedback=repair_reasons,
             previous_package=first,
         )
+        repaired_trace = dict((repaired or {}).pop("_provider_trace", {}) or gemini_client.last_generation_diagnostic())
         if repaired is None:
+            language_diagnostics[lang] = {
+                **repaired_trace, "provider_requests": 2, "repair_attempted": True,
+                "repair_succeeded": False, "initial_quality_status": gate["status"],
+                "events": [str(first_trace.get("status") or "gemini_success"), "gemini_quality_rejection",
+                           str(repaired_trace.get("status") or "gemini_validator_rejection"), "fallback_used"],
+                "fallback_used": True,
+            }
             out[lang] = None
             continue
         repaired_gate = evaluate_package_quality(
@@ -689,7 +736,14 @@ def write_multilang_packages_with_source(
             "provider_requests": 2, "repair_attempted": True,
             "repair_succeeded": bool(repaired_gate["passed"]),
             "initial_quality_status": gate["status"], "final_quality_status": repaired_gate["status"],
+            "events": [str(first_trace.get("status") or "gemini_success"), "gemini_quality_rejection",
+                       str(repaired_trace.get("status") or "gemini_success"),
+                       "gemini_repair_success" if repaired_gate["passed"] else "gemini_validator_rejection"],
+            "provider_attempts": int(first_trace.get("attempts") or 0) + int(repaired_trace.get("attempts") or 0),
+            "provider_retries": int(first_trace.get("retries") or 0) + int(repaired_trace.get("retries") or 0),
         }
+        language_diagnostics[lang] = dict(repaired["generation_trace"])
         out[lang] = repaired if repaired_gate["passed"] else None
 
+    _LAST_LANGUAGE_DIAGNOSTICS.set(language_diagnostics)
     return out, "gemini" if any(out.values()) else "fallback"
