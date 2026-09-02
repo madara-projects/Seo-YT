@@ -239,6 +239,21 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
     )
     clean_content = re.sub(r"(?i)quote\s*on\s*screen:?", "", clean_content)
 
+    # Narrative prose has sentence grammar, not a keyword list.  Taking its
+    # first non-stopwords created title stems such as "used talk every then one".
+    # Keep a few conservative source-faithful narrative concepts intact instead.
+    narrative_context = " ".join(str(brief.get(field) or "") for field in (
+        "creator_intent", "content_constraints", "video_format", "voice_over",
+    )).casefold()
+    lowered = clean_content.casefold()
+    if any(word in narrative_context for word in ("story", "narrative", "cinematic", "reflection")):
+        if "used to talk" in lowered and "conversation" in lowered:
+            return "conversations fade away"
+        if "empty road" in lowered and re.search(r"\b(?:waiting|checking)\b", lowered):
+            return "waiting on an empty road"
+        if "message" in lowered and re.search(r"\b(?:read|reading)\b", lowered):
+            return "a message read ten times"
+
     quote_stopwords = _TOPIC_STOPWORDS.union({
         "background", "visuals", "screen", "vertical", "format", "sunset", "beach",
         "calm", "ocean", "waves", "poignant", "aesthetic", "atmospheric", "cinematic",

@@ -748,13 +748,13 @@ class TestEngineStages(unittest.TestCase):
 
 class TestGeminiGeneration(unittest.TestCase):
     @patch("win_engine.llm.gemini_client.httpx.post")
-    def test_quota_response_is_not_retried(self, mocked_post):
+    def test_quota_response_uses_bounded_retries_before_safe_failure(self, mocked_post):
         response = MagicMock(status_code=429)
         mocked_post.return_value = response
         env = {"WIN_ENGINE_GEMINI_API_KEY": "test-key", "WIN_ENGINE_GEMINI_MODEL": "test-model"}
         with patch.dict(os.environ, env), patch("time.sleep"):
             self.assertEqual(gemini_client.generate("test"), "")
-        self.assertEqual(mocked_post.call_count, 1)
+        self.assertEqual(mocked_post.call_count, 3)
 
     @patch("win_engine.llm.gemini_client.httpx.post")
     def test_transient_server_error_gets_only_one_retry(self, mocked_post):

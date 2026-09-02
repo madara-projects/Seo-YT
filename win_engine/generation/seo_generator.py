@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from win_engine.analysis.intent_classifier import classify_intent
 from win_engine.analysis.creator_brief import creator_topic
-from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality
+from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality, filter_source_hashtags
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.keyword_research import select_final_tags
@@ -101,7 +101,11 @@ def generate_seo_suggestions(
         str(item.get("keyword") or "") for item in (keyword_research.get("selected_keywords") or [])
         if isinstance(item, dict)
     )
-    locked_hashtags = force_hashtags(seo_package.get("hashtags") or [], main_topic, category)
+    locked_hashtags = filter_source_hashtags(
+        force_hashtags(seo_package.get("hashtags") or [], main_topic, category),
+        safe_script,
+        creator_brief if isinstance(creator_brief, dict) else None,
+    )
     locked_description = format_upload_ready_description(
         locked_description,
         locked_hashtags,
@@ -159,7 +163,11 @@ def generate_seo_suggestions(
             for i, v in enumerate(p.get("variants", []) or [])
         ]
         tags = locked_tags if lang == str(ctx.get("language") or "english").lower() else p.get("tags", []) or []
-        hashtags = force_hashtags(p.get("hashtags", []) or [], main_topic, category)
+        hashtags = filter_source_hashtags(
+            force_hashtags(p.get("hashtags", []) or [], main_topic, category),
+            safe_script,
+            creator_brief if isinstance(creator_brief, dict) else None,
+        )
         description = p.get("description", "") or ""
         # Only English gets the topic-presence fallback; Tamil / Tanglish
         # descriptions stay in their own language, untouched.

@@ -272,7 +272,7 @@ class Phase2EResearchDiscoveryTests(unittest.TestCase):
             query_diagnostics={"queries_generated": 1, "queries_successful": 1, "youtube_results_unique": len(results if results is not None else [1])},
         )
 
-    def test_research_discovered_concept_can_change_final_package_after_semantic_confirmation(self):
+    def test_research_discovered_concept_cannot_turn_a_quote_into_coping_advice(self):
         research = self._research(
             script="A quote Short about the pain of being emotionally erased.",
             semantic={"primary_topic": "emotional abandonment", "secondary_topics": [], "search_intents": [], "keyword_clusters": []},
@@ -285,11 +285,8 @@ class Phase2EResearchDiscoveryTests(unittest.TestCase):
             research, generated_tags=[], title="Being erased hurts #shorts",
             script="A quote Short about the pain of being emotionally erased.",
         )
-        self.assertIn("coping with emotional abandonment", tags)
-        chosen = next(item for item in evidence["selected_keywords"] if item["keyword"] == "coping with emotional abandonment")
-        self.assertEqual(chosen["source_classification"], "research_discovered")
-        self.assertEqual(evidence["research_contribution"]["research_discovered_selected_count"], 1)
-        self.assertTrue(evidence["research_contribution"]["material_change"])
+        self.assertNotIn("coping with emotional abandonment", tags)
+        self.assertEqual(evidence["research_contribution"]["research_discovered_selected_count"], 0)
 
     @patch("win_engine.analysis.search_opportunities.gemini_client.generate")
     @patch("win_engine.analysis.search_opportunities.gemini_client.is_available", return_value=True)
@@ -317,7 +314,7 @@ class Phase2EResearchDiscoveryTests(unittest.TestCase):
         self.assertNotIn("chronic loneliness", text)
         self.assertNotIn("abandonment trauma", text)
 
-    def test_script_only_and_research_enhanced_comparison_is_explicit(self):
+    def test_research_cannot_promote_an_unstated_repair_mechanism(self):
         research = self._research(
             script="A practical tutorial for repairing a bicycle chain that keeps slipping.",
             semantic={"primary_topic": "bicycle chain repair", "secondary_topics": ["chain slipping"], "search_intents": ["fix a slipping bicycle chain"], "keyword_clusters": []},
@@ -331,7 +328,7 @@ class Phase2EResearchDiscoveryTests(unittest.TestCase):
             research, generated_tags=[], title="Fix a Slipping Bicycle Chain", script="A practical tutorial for repairing a bicycle chain that keeps slipping.",
         )
         comparison = evidence["research_contribution"]
-        self.assertIn("bicycle chain alignment", comparison["research_enhanced_tags"])
+        self.assertNotIn("bicycle chain alignment", comparison["research_enhanced_tags"])
         self.assertNotIn("bicycle chain alignment", comparison["script_only_tags"])
 
     def test_sparse_or_unavailable_research_has_no_discovered_final_concepts(self):

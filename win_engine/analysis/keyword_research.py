@@ -12,6 +12,7 @@ from typing import Any, Iterable
 from win_engine.analysis.generation_quality import (
     has_unsupported_instructional_framing,
     is_silent_quote_only_short,
+    source_requires_noninstructional_framing,
 )
 
 
@@ -20,6 +21,17 @@ _TOPIC_GENERIC = {"quote", "quotes", "emotional", "reflection", "reflections", "
 _STOP = _FORMAT_GENERIC | _TOPIC_GENERIC | {"the", "and", "with", "from", "that", "this", "your", "about", "into", "when", "what", "how", "was", "were", "have", "has", "for", "are", "but", "not", "just"}
 _VISUAL_TERMS = {"road", "traffic", "sunset", "sunrise", "sky", "rain", "rainy", "night", "moon", "beach", "mountain", "footage", "visual", "scene", "cloud", "clouds", "tree", "trees", "background", "backgrounds", "moving", "dark", "evening"}
 _NOISY_TERMS = {"instagram", "whatsapp", "status", "sadstatus", "aesthetic", "aha9a"}
+_CREATOR_META_TERMS = {
+    "creator", "content", "video", "concept", "script", "source", "internal", "instruction",
+    "guideline", "prompt", "context", "inventing", "invent", "making", "specific", "problem",
+}
+_CREATOR_META_PHRASES = (
+    "without inventing", "without making up", "do not invent", "video concept", "creator content",
+    "according to the prompt", "without context", "no specific life problem", "silent reflective quote",
+    "minimal reflection",
+)
+_FRAGMENT_EXAMPLES = {"fast near", "one room", "slow one", "then one", "used talk", "checking same", "evening even", "same empty", "between tcp", "udp user"}
+_FRAGMENT_ENDINGS = {"near", "one", "then", "every", "same", "even", "empty", "while", "neither", "after", "before", "with", "without", "of", "for", "to"}
 _ABSTRACT_CONCEPTS = {"heartbreak", "loneliness", "rejection", "healing", "loss", "abandonment", "forgotten", "unseen", "erased", "distance", "absence", "grief", "betrayal"}
 _PHRASE_CONCEPTS = (
     "coping with feeling forgotten", "being forgotten by someone", "feeling forgotten",
@@ -49,6 +61,7 @@ def build_keyword_research(
     result_rows = [item for item in youtube_results if isinstance(item, dict)]
     query_rows = [item for item in research_queries if isinstance(item, dict)]
     content_terms = _content_terms(sem, script, brief)
+    source_terms = _source_terms(script, brief)
     visual_terms = set(_tokens(brief.get("visual_requirements") or ""))
     candidates: dict[str, dict[str, Any]] = {}
     opportunities = search_opportunities or {}
@@ -79,7 +92,7 @@ def build_keyword_research(
     scored: list[dict[str, Any]] = []
     rejected_before_selection = 0
     for candidate in candidates.values():
-        entry = _score(candidate, result_rows, query_rows, quote, content_terms, visual_terms)
+        entry = _score(candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms)
         if entry:
             scored.append(entry)
         else:
@@ -118,7 +131,7 @@ def select_final_tags(
     del is_short  # Format belongs in hashtags/metadata, never consumes a tag slot.
     brief = creator_brief or {}
     quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "")
-    silent_quote_only = is_silent_quote_only_short(script, brief)
+    non_instructional = source_requires_noninstructional_framing(script, brief)
     content_terms = set(research.get("content_terms") or _tokens(script))
     visual_terms = set(research.get("visual_terms") or [])
     indexed = {
@@ -142,7 +155,7 @@ def select_final_tags(
     rejected_count = 0
     for item in indexed.values():
         entry = dict(item)
-        if silent_quote_only and has_unsupported_instructional_framing(entry.get("keyword")):
+        if non_instructional and has_unsupported_instructional_framing(entry.get("keyword")):
             rejected_count += 1
             continue
         if _reject_reason(entry, title, quote, content_terms):
@@ -205,7 +218,7 @@ def _add(
             entry["classification"] = classification
 
 
-def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: list[dict[str, Any]], quote: str, content_terms: set[str], visual_terms: set[str]) -> dict[str, Any] | None:
+def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: list[dict[str, Any]], quote: str, content_terms: set[str], source_terms: set[str], visual_terms: set[str]) -> dict[str, Any] | None:
     text = str(candidate["keyword"])
     classification = str(candidate.get("classification") or "generic")
     opportunity = candidate.get("opportunity") if isinstance(candidate.get("opportunity"), dict) else {}
@@ -215,6 +228,9 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     # a related-result theme from inventing a new situation, diagnosis, or
     # relationship event around the video.
     if not _semantic_support(text, content_terms):
+        return None
+    source_support_score, source_support = _source_support(text, source_terms)
+    if "research_discovery" in (candidate.get("sources") or []) and source_support_score < 70:
         return None
     content_relevance = max(
         _content_score(text, content_terms),
@@ -233,7 +249,7 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     evidence_score = max(min(24, evidence_count * 8 + query_support * 4), min(24, opportunity_evidence // 4))
     intent_score = _intent_score(classification)
     specificity = _specificity_score(text)
-    total = max(0, min(100, content_relevance + evidence_score + intent_score + specificity - (18 if _quote_like(text, quote) else 0)))
+    total = max(0, min(100, content_relevance + evidence_score + intent_score + specificity + source_support_score // 8 - (18 if _quote_like(text, quote) else 0)))
     if total < 28:
         return None
     sources = sorted(candidate.get("sources") or [])
@@ -242,6 +258,7 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
         "keyword": text, "sources": sources, "source": "+".join(sources), "source_classification": source_classification,
         "classification": classification,
         "content_relevance_score": content_relevance, "visual_relevance_score": visual_relevance,
+        "source_support_score": source_support_score, "source_support": source_support,
         "research_evidence_score": evidence_score, "intent_score": intent_score, "specificity_score": specificity,
         "diversity_score": None, "keyword_relevance_score": total, "evidence_count": evidence_count,
         "semantic_confirmed": semantic_confirmation,
@@ -260,6 +277,7 @@ def _model_entry(text: str, classification: str, content_terms: set[str], visual
     return {
         "keyword": text, "sources": ["model"], "source": "model", "source_classification": "script_derived", "classification": classification,
         "content_relevance_score": content, "visual_relevance_score": visual, "research_evidence_score": 0,
+        "source_support_score": 100, "source_support": "generated suggestion has direct semantic support",
         "intent_score": intent, "specificity_score": specificity, "diversity_score": None,
         "keyword_relevance_score": content + intent + specificity, "evidence_count": 0,
         "cluster": _family(text), "intent": _intent_label(classification),
@@ -306,6 +324,10 @@ def _classify(text: str, hint: str, content_terms: set[str], visual_terms: set[s
         return "malformed", "malformed"
     if _noisy(text):
         return "irrelevant", "noisy_competitor_phrase"
+    if _creator_instruction_leak(text):
+        return "irrelevant", "creator_instruction_leakage"
+    if _fragmented(text):
+        return "malformed", "fragmented_phrase"
     if hint == "search_intent" and _tokens(text) and _tokens(text)[0] in {"explore", "find", "watch", "lovers"}:
         return "malformed", "non_search_instruction"
     if _visual_score(text, visual_terms) > _content_score(text, content_terms):
@@ -323,7 +345,11 @@ def _reject_reason(entry: dict[str, Any], title: str, quote: str, content_terms:
     if not _semantic_support(text, content_terms):
         return "irrelevant"
     evidence = int(entry.get("research_evidence_score") or 0)
-    if _quote_like(text, quote) and evidence < 12:
+    # Search evidence can validate a source-grounded concept, but it cannot
+    # turn a chopped portion of the on-screen quote into a useful tag.  Exact
+    # quote fragments are both weak search language and a common source of
+    # malformed endings such as "some people only value when".
+    if _quote_like(text, quote):
         return "quote_copy"
     independently_supported = classification in {"core_topic", "secondary_topic", "search_intent", "long_tail"} and int(entry.get("content_relevance_score") or 0) >= 28
     if _title_copy(text, title) and evidence < 12 and not independently_supported:
@@ -356,6 +382,38 @@ def _content_terms(semantic: dict[str, Any], script: str, brief: dict[str, Any])
     values.extend([brief.get("creator_intent"), brief.get("viewer_promise"), script])
     visual_context = set(_tokens(brief.get("visual_requirements") or "")) | _VISUAL_TERMS
     return {token for value in values for token in _tokens(value) if token not in visual_context}
+
+
+def _source_terms(script: str, brief: dict[str, Any]) -> set[str]:
+    """Use only creator supplied material to prove a research-derived tag."""
+    values = [script]
+    values.extend(brief.get(field) for field in (
+        "content", "exact_quote", "on_screen_text", "topic", "viewer_promise", "unique_angle",
+        "factual_claims", "visual_requirements",
+    ))
+    return {token for value in values for token in _tokens(value)}
+
+
+def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
+    words = set(_tokens(text))
+    if not words:
+        return 0, "no source concept"
+    matched = words & source_terms
+    # A related search result cannot add an unrelated domain, use case, or
+    # decision frame merely because it is popular in YouTube search.
+    unsupported_context = {"gaming", "performance", "region", "choosing", "correct", "best"}
+    if any(word in unsupported_context and word not in source_terms for word in words):
+        return 0, "unsupported adjacent context"
+    ratio = len(matched) / len(words)
+    if ratio >= 1.0:
+        return 100, "direct creator-source support"
+    # Narrow, documented semantic bridges preserve useful search language
+    # without converting an adjacent use case into the video's subject.
+    if {"tcp", "udp", "connection"} & source_terms and words <= {"tcp", "udp", "connection", "oriented", "connectionless"}:
+        return 80, "network connection semantic bridge"
+    if {"mechanical", "membrane", "keyboard"} & source_terms and words <= {"mechanical", "membrane", "keyboard", "tactile", "typing", "quiet", "quieter"}:
+        return 80, "keyboard comparison semantic bridge"
+    return int(round(ratio * 100)), "partial creator-source overlap"
 
 
 def _result_relevant(row: dict[str, Any], content_terms: set[str]) -> bool:
@@ -403,6 +461,27 @@ def _malformed(text: str) -> bool:
 
 def _noisy(text: str) -> bool:
     return any(token in _NOISY_TERMS or any(char.isdigit() for char in token) for token in _tokens(text))
+
+
+def _creator_instruction_leak(text: str) -> bool:
+    folded = _normalize(text)
+    if any(phrase in folded for phrase in _CREATOR_META_PHRASES):
+        return True
+    words = set(_tokens(folded))
+    return bool(words & _CREATOR_META_TERMS) and bool(words & {"without", "no", "not", "must", "should"})
+
+
+def _fragmented(text: str) -> bool:
+    folded = _normalize(text)
+    if folded in _FRAGMENT_EXAMPLES:
+        return True
+    words = _tokens(folded)
+    if not words:
+        return False
+    if words[-1] in _FRAGMENT_ENDINGS and len(words) <= 6:
+        return True
+    temporal_word_soup = {"used", "talk", "every", "then", "neither", "same", "kept", "checking"}
+    return len(words) <= 7 and len(set(words) & temporal_word_soup) >= 4
 
 
 def _semantic_support(text: str, content_terms: set[str]) -> bool:
