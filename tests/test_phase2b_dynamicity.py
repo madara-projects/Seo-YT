@@ -56,11 +56,10 @@ class Phase2BDynamicityTests(unittest.TestCase):
         descriptions = {label: item["description"].casefold() for label, item in outputs.items()}
         self.assertEqual(len(set(descriptions.values())), len(cases))
         for label, package in outputs.items():
-            self.assertGreaterEqual(len(package["title_thumbnail_packages"]), 3, label)
-            self.assertEqual(
-                [item["package_intent"] for item in package["title_thumbnail_packages"][:3]],
-                ["Search", "Browse", "Existing audience"],
-            )
+            # Phase 2G does not manufacture weak title alternatives merely to
+            # fill a fixed comparison grid.
+            self.assertGreaterEqual(len(package["title_thumbnail_packages"]), 1, label)
+            self.assertEqual(package["title_thumbnail_packages"][0]["package_intent"], "Search")
             self.assertIn(" ".join(package["creator_brief"]["topic"].split()[:3]).casefold(), package["description"].casefold())
 
         forbidden = {
@@ -108,7 +107,7 @@ class Phase2BDynamicityTests(unittest.TestCase):
         )
         self.assertIn("generic_tag_filler", {item["code"] for item in gate["issues"]})
 
-    def test_short_fallback_keeps_semantic_emoji_and_single_shorts_tag(self):
+    def test_short_fallback_keeps_semantic_emoji_and_uses_shorts_as_a_hashtag(self):
         rain = build_creator_brief(script='Rainy road Short with the quote "I miss the quiet after goodbye."')
         moon = build_creator_brief(script='Night sky Short with the quote "Some memories glow after midnight."')
         rain_package = _content_specific_fallback(creator_topic(rain), [], rain)
@@ -116,8 +115,10 @@ class Phase2BDynamicityTests(unittest.TestCase):
         self.assertEqual(rain_package["title"].casefold().count("#shorts"), 1)
         self.assertEqual(moon_package["title"].casefold().count("#shorts"), 1)
         self.assertNotEqual(rain_package["title"], moon_package["title"])
-        self.assertIn("shorts", rain_package["tags"])
-        self.assertIn("shorts", moon_package["tags"])
+        self.assertNotIn("shorts", rain_package["tags"])
+        self.assertNotIn("shorts", moon_package["tags"])
+        self.assertIn("#shorts", [item.casefold() for item in rain_package["hashtags"]])
+        self.assertIn("#shorts", [item.casefold() for item in moon_package["hashtags"]])
 
 
 if __name__ == "__main__":

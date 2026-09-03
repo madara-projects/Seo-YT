@@ -22,6 +22,9 @@ _GENERIC_TITLE_PATTERNS = (
     re.compile(r"^a different way to see\b", re.IGNORECASE),
     re.compile(r"^the most useful lesson from\b", re.IGNORECASE),
     re.compile(r"^a quiet reminder about\b", re.IGNORECASE),
+    re.compile(r"^(?:how .+ works in practice|the practical side of|a closer look at|what to know about)\b", re.IGNORECASE),
+    re.compile(r"^(?:best .+ tips|complete guide to|everything you need to know|learn how to|methods for|ways to|common questions about)\b", re.IGNORECASE),
+    re.compile(r"^(?:a quiet look at|a moment about|reflecting on)\s*(?:your|the)?\s*(?:topic|video|story)?\s*$", re.IGNORECASE),
 )
 _UNSUPPORTED_CLAIMS = (
     ("relationship_event", re.compile(r"\b(?:they|he|she) (?:left|cheated|lied|returned|came back|walked away)\b", re.IGNORECASE)),
@@ -30,7 +33,13 @@ _UNSUPPORTED_CLAIMS = (
     ("invented_relationship", re.compile(r"\b(?:breakup|toxic relationship|one-sided relationship|just an option)\b", re.IGNORECASE)),
 )
 _SHORT_FORMATS = {"short", "shorts", "youtube_shorts", "quote", "reel", "reels"}
-_REQUIRED_SHORTS_TAGS = ("shorts",)
+# Platform-format words are useful as a title hashtag/hashtag, but they are not
+# meaningful search tags.  The old phase contract required ``shorts`` in the
+# tag list; that produced filler rather than a source-grounded search concept.
+_PLATFORM_TAGS = {
+    "short", "shorts", "yt", "youtube", "youtube shorts", "viral", "viral shorts",
+    "trending", "trending shorts", "short video", "video", "fyp",
+}
 _SHORTS_TITLE_RE = re.compile(r"(?<![\w#])#shorts(?!\w)", re.IGNORECASE)
 _TITLE_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
 _EMOJI_CONTEXT_TERMS = {
@@ -43,6 +52,15 @@ _GENERIC_FORMAT_TAGS = {
     "shorts", "yt", "youtube", "youtube shorts", "viral", "viral shorts",
     "trending", "trending shorts", "short video", "video", "fyp",
 }
+_UNSUPPORTED_CONTEXT_TERMS = {
+    "childhood", "workplace", "therapy", "therapist", "clinical", "diagnosis", "depression",
+    "anxiety", "trauma", "partner", "boyfriend", "girlfriend", "husband", "wife", "product",
+    "review", "comparison", "customer", "office", "school", "family",
+}
+_DESCRIPTION_BOILERPLATE = (
+    re.compile(r"\b(?:this video focuses on|this video explores|experience a brief moment of)\b", re.IGNORECASE),
+    re.compile(r"\b(?:perfect for anyone who|take a moment to breathe and process)\b", re.IGNORECASE),
+)
 _INSTRUCTIONAL_SOURCE_RE = re.compile(
     r"\b(?:tutorial|walkthrough|step[- ]by[- ]step|practical tips?|guide|"
     r"we (?:explain|cover|break down|show)|here are|demonstrat(?:e|ion)|instructions?)\b",
@@ -79,10 +97,13 @@ def normalize_unicode(value: Any) -> str:
 def unicode_words(value: Any) -> list[str]:
     """Tokenize letters and numbers from every Unicode script."""
 
+    # Python's ``\w`` does not consistently retain Indic combining marks on
+    # every supported runtime. Keep the Tamil block with its base characters
+    # so language validation and source-overlap checks do not erase Tamil text.
     return [
         token.casefold()
-        for token in re.findall(r"[^\W_]+(?:['’][^\W_]+)?", normalize_unicode(value), re.UNICODE)
-        if len(token) > 1
+        for token in re.findall(r"[\w\u0B80-\u0BFF]+(?:['’][\w\u0B80-\u0BFF]+)?", normalize_unicode(value), re.UNICODE)
+        if len(token.replace("_", "")) > 1
     ]
 
 
@@ -229,6 +250,9 @@ def evaluate_package_quality(
     published_titles: Iterable[str] | None = None,
     require_shorts_tags: bool = True,
     tag_context: Any = None,
+    tag_evidence: dict[str, Any] | None = None,
+    competitor_titles: Iterable[str] | None = None,
+    enforce_final_tag_rules: bool = True,
 ) -> dict[str, Any]:
     """Return a structured, deterministic quality decision for one package."""
 
@@ -250,6 +274,7 @@ def evaluate_package_quality(
     titles = _unique([normalize_unicode(item) for item in title_values if normalize_unicode(item)])
     recent = [normalize_unicode(item) for item in (recent_titles or []) if normalize_unicode(item)]
     published = [normalize_unicode(item) for item in (published_titles or []) if normalize_unicode(item)]
+    competitors = [normalize_unicode(item) for item in (competitor_titles or []) if normalize_unicode(item)]
 
     issues: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -273,13 +298,21 @@ def evaluate_package_quality(
         if any(left == right for left, right in zip(emojis, emojis[1:])):
             reasons.append(_issue("repeated_title_emoji", "title", "The title repeats the same emoji in sequence.", index=index))
         if emoji_recommended and not emojis:
-            reasons.append(_issue("missing_contextual_title_emoji", "title", "This Short has clear mood or visual context where one relevant emoji should be considered.", index=index))
+            warnings.append(_issue(
+                "missing_contextual_title_emoji", "title",
+                "A relevant emoji may improve visual fit, but it is not required for a source-faithful title.",
+                severity="warning", index=index,
+            ))
         signature = "".join(emojis)
         recent_signatures = ["".join(title_emojis(old)) for old in recent[-3:]]
         if signature and len(recent_signatures) == 3 and all(item == signature for item in recent_signatures):
             reasons.append(_issue("repeated_emoji_template", "title", "The emoji pattern repeats across the three most recent generated titles.", index=index))
         if any(pattern.search(title) for pattern in _GENERIC_TITLE_PATTERNS):
             reasons.append(_issue("generic_template", "title", "Title uses a repeatedly generic template.", index=index))
+        reasons.extend(_title_usefulness_issues(
+            title, source, brief, non_instructional, competitors, index=index,
+            source_overlap_supported=requested_language not in {"tamil", "tanglish", "hindi"},
+        ))
         unsupported = _unsupported_claims(title, source)
         reasons.extend(_issue(code, "title", "Title introduces a claim not supported by the creator source.", index=index) for code in unsupported)
         if non_instructional and has_unsupported_instructional_framing(title):
@@ -320,6 +353,10 @@ def evaluate_package_quality(
             issues.append(_issue("unsupported_instructional_framing", "description", "A non-instructional source must not claim tips, advice, explanations, or instructional content absent from the source."))
         if _looks_like_tag_list(description):
             issues.append(_issue("tag_list_contamination", "description", "Description reads like a repeated SEO tag list."))
+        issues.extend(_description_usefulness_issues(
+            description, source, brief, non_instructional,
+            source_overlap_supported=requested_language not in {"tamil", "tanglish", "hindi"},
+        ))
         if normalize_unicode(brief.get("voice_over")).casefold() == "none" and re.search(
             r"\b(?:listen to|hear (?:me|the)|voice[- ]?over|narrat(?:e|ed|ion))\b", description, re.IGNORECASE
         ):
@@ -335,10 +372,8 @@ def evaluate_package_quality(
             issues.append(_issue("tag_list_contamination", "tags", f"Tag is not one focused phrase: {tag}"))
         if non_instructional and has_unsupported_instructional_framing(tag):
             issues.append(_issue("unsupported_instructional_framing", "tags", f"Tag implies instruction not present in this source: {tag}"))
-    if is_short and require_shorts_tags:
-        missing = [tag for tag in _REQUIRED_SHORTS_TAGS if tag not in tags]
-        if missing:
-            issues.append(_issue("missing_required_shorts_tags", "tags", "Missing required Shorts tags: " + ", ".join(missing)))
+        if enforce_final_tag_rules and tag in _PLATFORM_TAGS:
+            issues.append(_issue("platform_tag_filler", "tags", f"Platform-format filler is not a useful video tag: {tag}"))
     context_text = " ".join(normalize_unicode(item) for item in tag_context) if isinstance(tag_context, (list, tuple, set)) else normalize_unicode(tag_context)
     source_tokens = set(unicode_words(" ".join([
         source,
@@ -363,6 +398,8 @@ def evaluate_package_quality(
     for tag in tags:
         if tag not in _GENERIC_FORMAT_TAGS and not (set(unicode_words(tag)) & source_tokens):
             issues.append(_issue("unrelated_tag", "tags", f"Tag is not grounded in the supplied topic: {tag}"))
+    if enforce_final_tag_rules:
+        issues.extend(_tag_provenance_issues(tags, tag_evidence))
 
     hashtags = [normalize_unicode(item) for item in (package.get("hashtags") or []) if normalize_unicode(item)]
     normalized_hashtags = [item.casefold().lstrip("#") for item in hashtags]
@@ -374,6 +411,8 @@ def evaluate_package_quality(
         for hashtag in hashtags:
             if has_unsupported_instructional_framing(hashtag):
                 issues.append(_issue("unsupported_instructional_framing", "hashtags", f"Hashtag implies instruction not present in this source: {hashtag}"))
+        if any(len(unicode_words(item.lstrip("#"))) > 4 for item in hashtags):
+            issues.append(_issue("hashtag_too_long", "hashtags", "A hashtag must be a short readable topic label, not a sentence."))
 
     if not accepted:
         issues.append(_issue("no_acceptable_title", "titles", "No title candidate passed the local quality gate."))
@@ -385,8 +424,24 @@ def evaluate_package_quality(
             severity="warning",
         ))
 
+    semantic_quality = _final_semantic_quality(
+        package=package,
+        accepted=accepted,
+        tags=tags,
+        source=source,
+        brief=brief,
+        tag_evidence=tag_evidence,
+        competitors=competitors,
+        source_overlap_supported=requested_language not in {"tamil", "tanglish", "hindi"},
+    )
+    issues.extend(semantic_quality["critical_issues"])
+    warnings.extend(semantic_quality["warnings"])
+
     all_errors = [*issues, *(reason for item in rejected for reason in item["issues"])]
     passed = not issues and bool(accepted)
+    verdict = "GREEN" if passed and semantic_quality["verdict"] == "GREEN" else (
+        "YELLOW" if passed and semantic_quality["verdict"] == "YELLOW" else "RED"
+    )
     return {
         "status": "pass" if passed else "fail",
         "passed": passed,
@@ -398,11 +453,13 @@ def evaluate_package_quality(
         "candidate_count": len(accepted),
         "requested_language": requested_language,
         "exact_quote_checked": bool(exact_quote),
-        "required_shorts_tags_checked": is_short and require_shorts_tags,
+        "required_shorts_tags_checked": False,
         "short_title_contract_checked": True,
         "emoji_context_recommended": emoji_recommended,
         "silent_quote_only_checked": silent_quote_only,
-        "rules_version": "phase2b-v1",
+        "final_seo_quality": {**semantic_quality, "verdict": verdict},
+        "verdict": verdict,
+        "rules_version": "phase2g-v1",
     }
 
 
@@ -416,6 +473,212 @@ def apply_quality_gate(package: dict[str, Any], gate: dict[str, Any]) -> dict[st
         cleaned["variants"] = accepted
     cleaned["quality_gate"] = gate
     return cleaned
+
+
+def _title_usefulness_issues(
+    title: str,
+    source: str,
+    brief: dict[str, Any],
+    non_instructional: bool,
+    competitors: Iterable[str],
+    *,
+    index: int,
+    source_overlap_supported: bool,
+) -> list[dict[str, Any]]:
+    """Reject valid-looking titles that do not describe this actual video."""
+
+    issues: list[dict[str, Any]] = []
+    clean = re.sub(r"(?<![\w#])#shorts(?!\w)", "", normalize_unicode(title), flags=re.IGNORECASE)
+    words = _meaningful_words(clean)
+    source_words = _source_words(source, brief)
+    sparse_source = len(_meaningful_words(source)) <= 2
+    if len(words) < 3 and not (sparse_source and words):
+        issues.append(_issue("title_too_vague", "title", "Title is too short to identify a useful topic.", index=index))
+    if words and words[0] in {"and", "but", "or", "with", "from", "about", "the"}:
+        issues.append(_issue("title_fragment", "title", "Title starts like a sentence fragment.", index=index))
+    if words and words[-1] in {"and", "but", "or", "with", "from", "about", "to", "for"}:
+        issues.append(_issue("title_fragment", "title", "Title ends like a sentence fragment.", index=index))
+    if any(term in words and term not in source_words for term in _UNSUPPORTED_CONTEXT_TERMS):
+        issues.append(_issue("unsupported_context", "title", "Title adds a context or entity absent from the creator source.", index=index))
+    if re.search(r"\b(?:prompt|creator instruction|video concept|without inventing|do not invent)\b", clean, re.IGNORECASE):
+        issues.append(_issue("creator_instruction_leakage", "title", "Title exposes internal creator instructions.", index=index))
+    if source_overlap_supported and words and source_words and not ({_quality_root(word) for word in words} & {_quality_root(word) for word in source_words}):
+        issues.append(_issue("title_not_source_specific", "title", "Title has no meaningful anchor in the creator source.", index=index))
+    for competitor in competitors:
+        if title_similarity(clean, competitor) >= 0.94:
+            issues.append(_issue("competitor_title_copy", "title", "Title is too close to a researched YouTube result.", index=index))
+            break
+    if non_instructional and re.search(r"\b(?:how to|tips?|methods?|guide|learn|complete)\b", clean, re.IGNORECASE):
+        issues.append(_issue("unsupported_instructional_framing", "title", "Title applies instructional framing unsupported by this source.", index=index))
+    return issues
+
+
+def _description_usefulness_issues(
+    description: str,
+    source: str,
+    brief: dict[str, Any],
+    non_instructional: bool,
+    *,
+    source_overlap_supported: bool,
+) -> list[dict[str, Any]]:
+    """Require a concise, source-faithful description rather than harmless filler."""
+
+    issues: list[dict[str, Any]] = []
+    words = _meaningful_words(description)
+    source_words = _source_words(source, brief)
+    overlap = set(words) & source_words
+    if len(words) < 3:
+        issues.append(_issue("description_too_thin", "description", "Description does not identify the actual video."))
+    if source_overlap_supported and words and source_words and not overlap:
+        issues.append(_issue("description_not_source_specific", "description", "Description has no meaningful anchor in the creator source."))
+    if any(term in words and term not in source_words for term in _UNSUPPORTED_CONTEXT_TERMS):
+        issues.append(_issue("unsupported_context", "description", "Description adds a context or entity absent from the creator source."))
+    if re.search(r"\b(?:the (?:creator|speaker) shares|my personal experience|our relationship story)\b", description, re.IGNORECASE):
+        source_folded = normalize_unicode(source).casefold()
+        if not any(phrase in source_folded for phrase in ("my personal experience", "our relationship", "the speaker", "the creator shares")):
+            issues.append(_issue("invented_story_detail", "description", "Description invents a personal story or relationship detail."))
+    if any(pattern.search(description) for pattern in _DESCRIPTION_BOILERPLATE) and len(overlap) < 3:
+        issues.append(_issue("generic_description_filler", "description", "Description uses generic framing instead of video-specific context."))
+    if non_instructional and re.search(r"\b(?:this (?:video|short) (?:teaches|explains|breaks down)|learn how|here are \d+|tips? for)\b", description, re.IGNORECASE):
+        issues.append(_issue("unsupported_instructional_framing", "description", "Description claims instruction the source does not provide."))
+    return issues
+
+
+def _tag_provenance_issues(tags: list[str], evidence: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Ensure final tags can be explained without trusting model/result text."""
+
+    if evidence is None:
+        return []
+    selected = {
+        normalize_unicode(item.get("keyword")).casefold(): item
+        for item in evidence.get("selected_keywords", [])
+        if isinstance(item, dict) and normalize_unicode(item.get("keyword"))
+    }
+    issues: list[dict[str, Any]] = []
+    allowed = {"script_derived", "combined", "research_discovered"}
+    for tag in tags:
+        row = selected.get(normalize_unicode(tag).casefold())
+        if not row:
+            issues.append(_issue("missing_tag_provenance", "tags", f"Tag has no deterministic selection provenance: {tag}"))
+            continue
+        provenance = str(row.get("source_classification") or "")
+        if provenance not in allowed:
+            issues.append(_issue("invalid_tag_provenance", "tags", f"Tag has unsupported provenance: {tag}"))
+        if provenance == "research_discovered" and int(row.get("source_support_score") or 0) < 70:
+            issues.append(_issue("weak_research_tag_support", "tags", f"Research-derived tag lacks strong creator-source support: {tag}"))
+        if provenance == "combined" and int(row.get("source_support_score") or 0) < 50:
+            issues.append(_issue("weak_combined_tag_support", "tags", f"Combined tag lacks sufficient creator-source support: {tag}"))
+        if not str(row.get("source_support") or "").strip():
+            issues.append(_issue("missing_tag_support", "tags", f"Tag has no recorded source support: {tag}"))
+    return issues
+
+
+def _final_semantic_quality(
+    *,
+    package: dict[str, Any],
+    accepted: list[dict[str, Any]],
+    tags: list[str],
+    source: str,
+    brief: dict[str, Any],
+    tag_evidence: dict[str, Any] | None,
+    competitors: list[str],
+    source_overlap_supported: bool,
+) -> dict[str, Any]:
+    """Score usefulness separately from structural validity.
+
+    The score is a local quality explanation, not a CTR/ranking prediction.  A
+    RED verdict represents a safety/usefulness failure; YELLOW means a usable
+    but conservative package with a non-critical limitation.
+    """
+
+    title = str((accepted[0] if accepted else {}).get("title") or package.get("title") or "")
+    description = normalize_unicode(package.get("description"))
+    source_words = _source_words(source, brief)
+    title_words = set(_meaningful_words(title))
+    description_words = set(_meaningful_words(description))
+    source_roots = {_quality_root(word) for word in source_words}
+    title_overlap = len({word for word in title_words if _quality_root(word) in source_roots}) / max(len(title_words), 1)
+    description_overlap = len({word for word in description_words if _quality_root(word) in source_roots}) / max(min(len(description_words), 12), 1)
+    title_score = _bounded_score(
+        35 + title_overlap * 45 + (10 if 3 <= len(title_words) <= 12 else 0)
+        + (10 if not any(title_similarity(title, item) >= 0.94 for item in competitors) else 0)
+    )
+    description_score = _bounded_score(
+        35 + min(description_overlap * 55, 45) + (10 if 4 <= len(description_words) <= 120 else 0)
+    )
+    if not source_overlap_supported:
+        # Preserve language checks while avoiding false semantic failures for
+        # scripts whose morphology cannot be safely judged by an English-only
+        # local lexical matcher.
+        title_score = max(title_score, 70.0 if title_words else 0.0)
+        description_score = max(description_score, 70.0 if description_words else 0.0)
+    if len(source_words) <= 1 and description_words:
+        description_score = max(description_score, 60.0)
+    selected_rows = [
+        item for item in (tag_evidence or {}).get("selected_keywords", [])
+        if isinstance(item, dict) and normalize_unicode(item.get("keyword")).casefold() in set(tags)
+    ]
+    tag_scores = [float(item.get("keyword_relevance_score") or 0) for item in selected_rows]
+    tag_score = round(sum(tag_scores) / len(tag_scores), 1) if tag_scores else None
+    title_description_agree = bool(
+        {_quality_root(word) for word in title_words} & {_quality_root(word) for word in description_words}
+    ) or not title_words or not description_words
+    supported_tags = all(int(item.get("source_support_score") or 0) >= 50 for item in selected_rows)
+    consistency = title_description_agree and supported_tags
+    critical: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    if accepted and title_score < 55:
+        critical.append(_issue("low_title_usefulness", "title", "Title is too weakly anchored to the supplied source."))
+    if description and description_score < 55:
+        critical.append(_issue("low_description_usefulness", "description", "Description is too weakly anchored to the supplied source."))
+    if not consistency:
+        critical.append(_issue("package_consistency_failure", "package", "Title, description, and tags do not agree on the source-supported topic."))
+    if tags and tag_score is not None and tag_score < 40:
+        warnings.append(_issue("weak_tag_usefulness", "tags", "Final tags are source-safe but have limited search specificity.", severity="warning"))
+    verdict = "RED" if critical else ("YELLOW" if warnings else "GREEN")
+    return {
+        "title_score": round(title_score, 1),
+        "description_score": round(description_score, 1),
+        "tag_score": tag_score,
+        "tag_count": len(tags),
+        "package_consistency": consistency,
+        "critical_issues": critical,
+        "warnings": warnings,
+        "verdict": verdict,
+        "policy": "source fidelity + natural language + specificity + grounded search usefulness; not a performance prediction",
+    }
+
+
+def _source_words(source: str, brief: dict[str, Any]) -> set[str]:
+    values = [source]
+    values.extend(brief.get(field) for field in (
+        "content", "topic", "exact_quote", "on_screen_text", "viewer_promise", "unique_angle", "factual_claims",
+    ))
+    return {word for value in values for word in _meaningful_words(value)}
+
+
+def _meaningful_words(value: Any) -> list[str]:
+    stop = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "how", "i", "in", "is", "it", "my", "of", "on", "or", "our", "that", "the", "this", "to", "was", "we", "with", "you", "your", "shorts"}
+    return [word for word in unicode_words(value) if len(word) > 2 and word not in stop]
+
+
+def _bounded_score(value: float) -> float:
+    return max(0.0, min(100.0, value))
+
+
+def _quality_root(value: str) -> str:
+    word = str(value or "").casefold()
+    if len(word) > 5 and word.endswith("ing"):
+        word = word[:-3]
+        if len(word) > 2 and word[-1:] == word[-2:-1]:
+            word = word[:-1]
+    elif len(word) > 4 and word.endswith("ied"):
+        word = word[:-3] + "y"
+    elif len(word) > 4 and word.endswith("ed"):
+        word = word[:-1] if word[-2:-1] == "e" else word[:-2]
+    elif len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    return word
 
 
 def evidence_trace(channel_learning: dict[str, Any] | None) -> dict[str, Any]:

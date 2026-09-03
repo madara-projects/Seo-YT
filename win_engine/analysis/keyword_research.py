@@ -80,8 +80,12 @@ def build_keyword_research(
             _add(candidates, entity.get("entity"), "entity", "entity", content_terms, visual_terms)
     for audience in sem.get("audience") or []:
         _add(candidates, audience, "semantic", "audience", content_terms, visual_terms)
-    _add(candidates, brief.get("creator_intent"), "creator_brief", "secondary_topic", content_terms, visual_terms)
-    _add(candidates, brief.get("viewer_promise"), "creator_brief", "search_intent", content_terms, visual_terms)
+    # Inferred creator-intent prose is an internal interpretation, not an SEO
+    # concept. Only explicit creator-supplied promises/intents can seed tags.
+    if _brief_field_is_creator_supplied(brief, "creator_intent"):
+        _add(candidates, brief.get("creator_intent"), "creator_brief", "secondary_topic", content_terms, visual_terms)
+    if _brief_field_is_creator_supplied(brief, "viewer_promise"):
+        _add(candidates, brief.get("viewer_promise"), "creator_brief", "search_intent", content_terms, visual_terms)
     for opportunity in opportunities.get("opportunities") or []:
         if isinstance(opportunity, dict):
             _add(
@@ -141,6 +145,7 @@ def select_final_tags(
 
     # Model tags are suggestions, not authority. They need semantic support and
     # cannot create an unsupported niche or bypass the same validation rules.
+    rejected_candidates: list[dict[str, Any]] = []
     for raw in generated_tags:
         for text in _atomic_concepts(raw):
             key = _normalize(text)
@@ -148,6 +153,11 @@ def select_final_tags(
                 continue
             classification, rejected = _classify(key, "model", content_terms, visual_terms)
             if rejected or not _semantic_support(key, content_terms):
+                rejected_candidates.append({
+                    "keyword": key or str(text),
+                    "reason": rejected or "missing_semantic_support",
+                    "source": "model_suggestion",
+                })
                 continue
             indexed[key] = _model_entry(key, classification, content_terms, visual_terms)
 
@@ -157,14 +167,25 @@ def select_final_tags(
         entry = dict(item)
         if non_instructional and has_unsupported_instructional_framing(entry.get("keyword")):
             rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "unsupported_instructional_framing", "source": entry.get("source")})
             continue
-        if _reject_reason(entry, title, quote, content_terms):
+        reject_reason = _reject_reason(entry, title, quote, content_terms)
+        if reject_reason:
             rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": reject_reason, "source": entry.get("source")})
+            continue
+        if int(entry.get("source_support_score") or 0) < 50:
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "weak_source_support", "source": entry.get("source")})
             continue
         eligible.append(entry)
     eligible.sort(key=lambda item: (-item["keyword_relevance_score"], item["keyword"]))
     chosen = _diverse(eligible, limit=10)
     tags = [item["keyword"] for item in chosen]
+    chosen_keys = set(tags)
+    for item in eligible:
+        if item["keyword"] not in chosen_keys:
+            rejected_candidates.append({"keyword": item["keyword"], "reason": "duplicate_or_low_diversity", "source": item.get("source")})
     baseline = _diverse(
         [item for item in eligible if item.get("source_classification") == "script_derived"],
         limit=10,
@@ -176,6 +197,21 @@ def select_final_tags(
     evidence = {
         **research, "selected_keywords": chosen, "selected_tags": tags,
         "rejected_candidate_count": rejected_count,
+        "rejected_candidates": rejected_candidates,
+        "tag_provenance": [
+            {
+                "tag": item["keyword"],
+                "provenance": item.get("source_classification"),
+                "source_support": item.get("source_support"),
+                "source_support_score": item.get("source_support_score"),
+                "intent": item.get("intent"),
+                "topic_cluster": item.get("cluster"),
+                "specificity": item.get("specificity_score"),
+                "evidence_strength": item.get("research_evidence_score"),
+                "score": item.get("keyword_relevance_score"),
+            }
+            for item in chosen
+        ],
         "research_contribution": {
             "research_selected_count": len(contribution),
             "combined_selected_count": sum(1 for item in contribution if item.get("source_classification") == "combined"),
@@ -194,7 +230,7 @@ def select_final_tags(
             "candidates_rejected_at_selection": rejected_count,
             "candidates_selected": len(chosen),
         },
-        "selection_policy": "Tags are atomic topic concepts. Weak generic, visual-only, title-copy, quote-copy, malformed, duplicate, and unsupported candidates are excluded; no slots are padded.",
+        "selection_policy": "Tags are atomic source-grounded search concepts. Weak generic, platform-format, visual-only, title-copy, quote-copy, malformed, duplicate, competitor-derived, and unsupported candidates are excluded; no slots are padded.",
     }
     return tags, evidence
 
@@ -379,7 +415,11 @@ def _content_terms(semantic: dict[str, Any], script: str, brief: dict[str, Any])
     # intents and cluster candidates are proposals to validate, never proof of
     # themselves.
     values: list[Any] = [semantic.get("primary_topic"), *(semantic.get("secondary_topics") or [])]
-    values.extend([brief.get("creator_intent"), brief.get("viewer_promise"), script])
+    if _brief_field_is_creator_supplied(brief, "creator_intent"):
+        values.append(brief.get("creator_intent"))
+    if _brief_field_is_creator_supplied(brief, "viewer_promise"):
+        values.append(brief.get("viewer_promise"))
+    values.append(script)
     visual_context = set(_tokens(brief.get("visual_requirements") or "")) | _VISUAL_TERMS
     return {token for value in values for token in _tokens(value) if token not in visual_context}
 
@@ -398,7 +438,8 @@ def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
     words = set(_tokens(text))
     if not words:
         return 0, "no source concept"
-    matched = words & source_terms
+    source_roots = {_term_root(word) for word in source_terms}
+    matched = {word for word in words if word in source_terms or _term_root(word) in source_roots}
     # A related search result cannot add an unrelated domain, use case, or
     # decision frame merely because it is popular in YouTube search.
     unsupported_context = {"gaming", "performance", "region", "choosing", "correct", "best"}
@@ -407,6 +448,17 @@ def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
     ratio = len(matched) / len(words)
     if ratio >= 1.0:
         return 100, "direct creator-source support"
+    # A few narrow semantic bridges preserve natural search wording for an
+    # explicitly supplied emotional idea. They are source-led, documented,
+    # and never introduce a new life context, diagnosis, or relationship fact.
+    source_roots = {_term_root(word) for word in source_terms}
+    word_roots = {_term_root(word) for word in words}
+    if word_roots <= {"feel", "forgotten"} and source_roots & {"erase", "abandon", "forgotten", "unseen"}:
+        return 70, "emotional-absence semantic bridge"
+    if word_roots <= {"unspoken", "feel"} and source_roots & {"heart", "imagine", "life", "knew"}:
+        return 70, "unspoken-feelings semantic bridge"
+    if word_roots <= {"being", "need", "but", "not", "chosen"} and source_roots & {"need", "choose", "chos"}:
+        return 70, "needed-not-chosen semantic bridge"
     # Narrow, documented semantic bridges preserve useful search language
     # without converting an adjacent use case into the video's subject.
     if {"tcp", "udp", "connection"} & source_terms and words <= {"tcp", "udp", "connection", "oriented", "connectionless"}:
@@ -485,15 +537,46 @@ def _fragmented(text: str) -> bool:
 
 
 def _semantic_support(text: str, content_terms: set[str]) -> bool:
-    return bool(set(_tokens(text)) & content_terms)
+    roots = {_term_root(term) for term in content_terms}
+    return bool(set(_tokens(text)) & content_terms) or any(_term_root(term) in roots for term in _tokens(text))
+
+
+def _term_root(value: str) -> str:
+    """Small deterministic inflection bridge; this is not synonym expansion."""
+
+    word = str(value or "").casefold()
+    if len(word) > 5 and word.endswith("ing"):
+        word = word[:-3]
+        if len(word) > 2 and word[-1:] == word[-2:-1]:
+            word = word[:-1]
+    elif len(word) > 4 and word.endswith("ied"):
+        word = word[:-3] + "y"
+    elif len(word) > 4 and word.endswith("ed"):
+        word = word[:-1] if word[-2:-1] == "e" else word[:-2]
+    elif len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    return word
+
+
+def _brief_field_is_creator_supplied(brief: dict[str, Any], field: str) -> bool:
+    row = ((brief.get("field_provenance") or {}).get(field) or {})
+    return bool(brief.get(field)) and (not row or row.get("source") == "creator_supplied")
 
 
 def _quote_like(text: str, quote: str) -> bool:
     normalized, normalized_quote = _normalize(text), _normalize(quote)
+    # A compact state/concept such as ``being misunderstood`` is a useful
+    # search phrase even when those exact two words occur in the quote.  This
+    # exception is deliberately narrow; long copied clauses remain blocked.
+    words = _tokens(text)
+    if len(words) == 2 and words[0] in {"being", "feeling"} and words[1] in {
+        "misunderstood", "genuine", "valued", "chosen",
+    }:
+        return False
     if len(normalized) >= 8 and normalized in normalized_quote:
         return True
-    words, quote_words = set(_tokens(text)), set(_tokens(quote))
-    return len(words) >= 2 and bool(words) and len(words & quote_words) / len(words) >= 0.8
+    word_set, quote_words = set(words), set(_tokens(quote))
+    return len(word_set) >= 2 and bool(word_set) and len(word_set & quote_words) / len(word_set) >= 0.8
 
 
 def _title_copy(text: str, title: str) -> bool:

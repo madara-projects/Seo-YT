@@ -149,6 +149,7 @@ def build_seo_package(
                 "events": events,
                 "fallback_used": True,
                 "fallback_reason": str(diagnostic.get("status") or "gemini_unavailable"),
+                "fallback_level": "deterministic",
             }
         tags, tag_evidence = select_final_tags(
             keyword_research,
@@ -172,13 +173,131 @@ def build_seo_package(
         pkg, script=script, creator_brief=creator_brief, language=selected_language,
         recent_titles=channel_learning.get("recent_titles") or [],
         published_titles=channel_learning.get("published_titles") or [],
+        competitor_titles=[str(item.get("title") or "") for item in competitors],
+        tag_evidence=keyword_research,
         tag_context=[
             *(str(item.get("keyword") or "") for item in keyword_signals if isinstance(item, dict)),
             *(str(item.get("entity") or "") for item in entity_signals if isinstance(item, dict)),
         ],
     )
+    # Gemini success is not package success.  A final RED package gets one
+    # deterministic, source-only fallback pass through the exact same tag and
+    # quality contracts.  This does not make another provider request.
+    if quality_gate.get("verdict") == "RED":
+        safe = _content_specific_fallback(primary_topic, keyword_signals, creator_brief)
+        safe_tags, safe_evidence = select_final_tags(
+            keyword_research,
+            generated_tags=safe.get("tags") or [],
+            title=str(safe.get("title") or ""),
+            script=script,
+            creator_brief=creator_brief,
+            is_short=is_short_content(script, creator_brief),
+        )
+        safe["tags"] = safe_tags
+        safe["keyword_research"] = safe_evidence
+        safe_trace = dict(generation_trace)
+        safe_events = list(safe_trace.get("events") or [])
+        safe_events.extend(["final_quality_red", "deterministic_quality_fallback"])
+        safe["generation_trace"] = {
+            **safe_trace,
+            "events": list(dict.fromkeys(safe_events)),
+            "fallback_used": True,
+            "fallback_reason": "final_quality_red",
+            "fallback_level": "deterministic",
+            "final_quality_repair_attempted": True,
+        }
+        safe_gate = evaluate_package_quality(
+            safe, script=script, creator_brief=creator_brief, language=selected_language,
+            recent_titles=channel_learning.get("recent_titles") or [],
+            published_titles=channel_learning.get("published_titles") or [],
+            competitor_titles=[str(item.get("title") or "") for item in competitors],
+            tag_evidence=safe_evidence,
+            tag_context=[
+                *(str(item.get("keyword") or "") for item in keyword_signals if isinstance(item, dict)),
+                *(str(item.get("entity") or "") for item in entity_signals if isinstance(item, dict)),
+            ],
+        )
+        if safe_gate.get("verdict") != "RED":
+            pkg = safe
+            keyword_research = dict(safe_evidence)
+            generation_trace = dict(safe["generation_trace"])
+            quality_gate = safe_gate
+            if selected_language not in fallback_languages:
+                fallback_languages.append(selected_language)
+        else:
+            minimal = _safe_minimal_package(primary_topic, creator_brief)
+            minimal_tags, minimal_evidence = select_final_tags(
+                keyword_research,
+                generated_tags=[],
+                title=str(minimal.get("title") or ""),
+                script=script,
+                creator_brief=creator_brief,
+                is_short=is_short_content(script, creator_brief),
+            )
+            minimal["tags"] = minimal_tags
+            minimal_gate = evaluate_package_quality(
+                minimal, script=script, creator_brief=creator_brief, language=selected_language,
+                recent_titles=channel_learning.get("recent_titles") or [],
+                published_titles=channel_learning.get("published_titles") or [],
+                competitor_titles=[str(item.get("title") or "") for item in competitors],
+                tag_evidence=minimal_evidence,
+                tag_context=[
+                    *(str(item.get("keyword") or "") for item in keyword_signals if isinstance(item, dict)),
+                    *(str(item.get("entity") or "") for item in entity_signals if isinstance(item, dict)),
+                ],
+            )
+            minimal_trace = dict(generation_trace)
+            minimal_trace["events"] = list(dict.fromkeys([
+                *(minimal_trace.get("events") or []), "minimal_safe_package",
+            ]))
+            minimal_trace["fallback_used"] = True
+            minimal_trace["fallback_reason"] = "final_quality_red_after_deterministic_fallback"
+            minimal_trace["fallback_level"] = "minimal_source_only"
+            minimal_trace["final_quality_repair_attempted"] = True
+            minimal_trace["final_quality_repair_succeeded"] = minimal_gate.get("verdict") != "RED"
+            minimal["generation_trace"] = minimal_trace
+            pkg = minimal
+            keyword_research = dict(minimal_evidence)
+            generation_trace = minimal_trace
+            quality_gate = minimal_gate
+            if selected_language not in fallback_languages:
+                fallback_languages.append(selected_language)
+    rejected_opportunities = [
+        {
+            "keyword": str(item.get("keyword") or item.get("candidate") or ""),
+            "reason": str(item.get("reason") or ", ".join(item.get("issues") or []) or "rejected"),
+        }
+        for item in (keyword_research.get("rejected_candidates") or [])
+        if isinstance(item, dict)
+    ][:20]
+    generation_trace.update({
+        "source_content_type": str((creator_brief or {}).get("video_format") or "unknown"),
+        "gemini_attempted": bool(generation_trace.get("gemini_attempted") or generation_trace.get("provider_requests")),
+        "gemini_call_count": int(generation_trace.get("gemini_call_count") or generation_trace.get("provider_requests") or 0),
+        "retry_count": int(generation_trace.get("retry_count") or generation_trace.get("provider_retries") or 0),
+        "retry_reasons": list(generation_trace.get("retry_reasons") or []),
+        "provider_failure_category": generation_trace.get("provider_failure_category") or generation_trace.get("failure_category"),
+        "fallback_level": generation_trace.get("fallback_level") or ("deterministic" if generation_trace.get("fallback_used") else None),
+        "research_query_count": len(research.get("research_queries") or []),
+        "youtube_result_count": len(research.get("youtube_results") or []),
+        "relevant_evidence_count": int((keyword_research.get("diagnostics") or {}).get("relevant_youtube_results") or 0),
+        "accepted_research_opportunities": len((keyword_research.get("research_contribution") or {}).get("selected_concepts") or []),
+        "rejected_research_opportunity_count": len(keyword_research.get("rejected_candidates") or []),
+        "rejected_research_opportunities": rejected_opportunities,
+        "final_tags": list(pkg.get("tags") or []),
+        "final_tag_provenance": keyword_research.get("tag_provenance") or [],
+        "final_tag_scores": [
+            {"keyword": item.get("keyword"), "source_support_score": item.get("source_support_score"),
+             "provenance": item.get("provenance")}
+            for item in (keyword_research.get("tag_provenance") or []) if isinstance(item, dict)
+        ],
+        "final_quality_verdict": quality_gate.get("verdict"),
+        "final_quality_reasons": [item.get("code") for item in quality_gate.get("issues") or []],
+    })
+    pkg["generation_trace"] = generation_trace
     pkg = apply_quality_gate(pkg, quality_gate)
     multilang[selected_language] = pkg
+    effective_generation_source = "fallback" if selected_language in fallback_languages else generation_source
 
     title = pkg["title"]
     description = pkg["description"]
@@ -317,7 +436,7 @@ def build_seo_package(
             "thumbnail_strategy": thumbnail_strategy, "chapters": chapters,
             "session_expansion": session_expansion, "binge_bridge": binge_bridge,
             "automation_workflow": automation_workflow, "feedback_package": feedback_package,
-            "multilang": multilang, "generation_source": generation_source,
+            "multilang": multilang, "generation_source": effective_generation_source,
             "creator_brief": creator_brief, "generation_quality": quality_gate,
             "personalization": personalization, "generation_trace": generation_trace,
             "keyword_research": keyword_research,
@@ -347,7 +466,7 @@ def build_seo_package(
         "feedback_package": feedback_package,
         "multilang": multilang,
         "fallback_languages": fallback_languages,
-        "generation_source": generation_source,
+        "generation_source": effective_generation_source,
         "generation_quality": quality_gate,
         "personalization": personalization,
         "generation_trace": generation_trace,
@@ -499,6 +618,120 @@ def _visual_hashtag(value: str) -> str:
     return _topic_hashtag(value)
 
 
+def _fallback_quote_variants(quote: str, topic: str, suffix: str) -> list[str]:
+    """Produce conservative, readable quote titles without template filler."""
+
+    lowered = quote.casefold()
+    if "misunderstood" in lowered and "genuine" in lowered:
+        bodies = ["Being Genuine Can Feel Misunderstood"]
+    elif "bare minimum" in lowered:
+        bodies = ["Did I Deserve the Bare Minimum?"]
+    elif "need" in lowered and "choose" in lowered:
+        bodies = ["Needed, But Never Chosen"]
+    elif "keep going" in lowered:
+        bodies = ["Keep Going"]
+    else:
+        # The creator's own wording is safer than adding an invented event or
+        # relationship frame when the source is sparse or deliberately vague.
+        bodies = [_quote_title_focus(quote) or topic]
+    return list(dict.fromkeys(_fit_title(body, suffix) for body in bodies if body))
+
+
+def _fallback_topic_variants(topic: str, suffix: str, instructional: bool) -> list[str]:
+    """Keep fallback titles source-led rather than filling five template slots."""
+
+    clean = re.sub(r"\s+", " ", topic).strip(" .:-") or "The Video Topic"
+    lower = clean.casefold()
+    if instructional:
+        if lower.startswith("how to "):
+            body = clean
+        elif lower.startswith("how "):
+            body = "How to " + clean[4:]
+        else:
+            body = f"How to {clean}"
+    else:
+        body = clean
+    return [_fit_title(body[:1].upper() + body[1:], suffix)]
+
+
+def _fallback_title_topic(topic: str, content: str, video_format: str) -> str:
+    """Extract a compact source phrase for outage-mode instructional titles.
+
+    Research signals can legitimately be full creator sentences. They remain
+    useful for tags and descriptions, but turning them into ``How to ...``
+    titles produces unreadable fallback output. This stays source-only and
+    never asks a provider to repair the wording.
+    """
+    clean_content = re.sub(r"\s+", " ", content or "").strip(" .")
+    format_name = (video_format or "").casefold()
+    if format_name == "tutorial":
+        lead = clean_content.split(":", 1)[0].strip(" .")
+        if lead.casefold().startswith("how to "):
+            return lead
+    if format_name == "comparison" or (" while " in f" {clean_content.casefold()} " and len(re.findall(r"\b[A-Z][A-Z0-9]{1,}\b", clean_content)) >= 2):
+        acronyms = re.findall(r"\b[A-Z][A-Z0-9]{1,}\b", clean_content)
+        if len(acronyms) >= 2:
+            return f"{acronyms[0]} vs {acronyms[1]}"
+        versus = re.search(r"\b([A-Za-z][\w-]{1,30})\b.*?\bwhile\b.*?\b([A-Za-z][\w-]{1,30})\b", clean_content, re.IGNORECASE)
+        if versus:
+            return f"{versus.group(1)} vs {versus.group(2)}"
+    if format_name in {"educational", "explanation"}:
+        acronym = re.search(r"\b[A-Z][A-Z0-9]{1,}\b", clean_content)
+        if acronym:
+            return f"{acronym.group(0)} Explained"
+        definition = re.match(r"(?:an?|the)\s+(.+?)\s+is\s+", clean_content, re.IGNORECASE)
+        if definition:
+            return definition.group(1).strip().title() + " Explained"
+    return topic
+
+
+def _quote_search_concepts(quote: str) -> list[str]:
+    """Return only small, defensible concepts—not chopped quote fragments."""
+
+    lowered = quote.casefold()
+    concepts: list[str] = []
+    if "misunderstood" in lowered:
+        concepts.append("being misunderstood")
+    if "genuine" in lowered:
+        concepts.append("being genuine")
+    if "value" in lowered:
+        concepts.append("feeling valued")
+    if "chosen" in lowered:
+        concepts.append("feeling chosen")
+    return concepts
+
+
+def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Last-resort source-only package used when a richer fallback is RED.
+
+    It intentionally leaves tags empty rather than smuggling in broad or
+    research-only phrases. This is a conservative package, not a claim that a
+    sparse source has strong search demand.
+    """
+
+    brief = creator_brief or {}
+    content = str(brief.get("content") or primary_topic or "").strip()
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip() or _quoted_text(content)
+    is_shorts = is_short_content(content or primary_topic, brief)
+    emoji = _semantic_emoji(" ".join([content, str(brief.get("visual_requirements") or "")]))
+    suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
+    if quote:
+        body = _quote_title_focus(quote) or "A Short Reflection"
+        description = f'“{quote}”\n\nA short reflection built only from the words supplied by the creator.'
+    else:
+        body = re.sub(r"\s+", " ", primary_topic or content).strip(" .") or "The Video Topic"
+        excerpt = re.sub(r"\s+", " ", content).strip(" .")
+        description = (excerpt or body).rstrip(".") + "."
+    title = _fit_title(body, suffix)
+    return {
+        "title": title,
+        "variants": [title],
+        "description": description,
+        "tags": [],
+        "hashtags": ["#shorts"] if is_shorts else [],
+    }
+
+
 def _content_specific_fallback(
     primary_topic: str,
     keyword_signals: list[dict[str, Any]],
@@ -519,111 +752,59 @@ def _content_specific_fallback(
     audience = str(brief.get("target_audience") or "").strip()
     unique_angle = str(brief.get("unique_angle") or "").strip()
     proof = str(brief.get("proof") or "").strip()
+    video_format = str(brief.get("video_format") or "").strip().casefold()
 
     emoji = _semantic_emoji(" ".join([topic, content, quote, str(brief.get("visual_requirements") or "")]))
     suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
     if quote:
-        title_quote = _quote_title_focus(quote)
-        variants = [
-            _fit_title(title_quote, suffix),
-            _fit_title(f"The Meaning Behind: {title_quote}", suffix),
-            _fit_title(f"Read This Twice: {title_quote}", suffix),
-            _fit_title(f"{pretty}: A Quiet Reminder", suffix),
-            _fit_title(f"A Quote About {pretty}", suffix),
-        ]
+        variants = _fallback_quote_variants(quote, topic, suffix)
         visual_match = re.search(
             r"(?i)\bbackground(?:\s+visuals?)?\s*(?:is|:)?\s*(.*?)(?=\s+and\s+.*(?:screen|quote)|[.;]|$)",
             content,
         )
-        visual = re.sub(r"\s+", " ", visual_match.group(1)).strip(" .,:;") if visual_match else "the accompanying visual"
-        if visual and not re.match(r"(?i)^(?:a|an|the)\s", visual):
-            visual = "a " + visual
+        visual = re.sub(r"\s+", " ", visual_match.group(1)).strip(" .,:;") if visual_match else ""
         visual_sentence = visual.split(",", 1)[0].rstrip(" .")
+        if visual_sentence and not re.match(r"(?i)^(?:a|an|the)\s", visual_sentence):
+            visual_sentence = "a " + visual_sentence
+        visual_line = f"{visual_sentence[:1].upper() + visual_sentence[1:]} is the supplied visual." if visual_sentence else ""
         description = (
             f'“{quote}”\n\n'
-            f"{visual_sentence[:1].upper() + visual_sentence[1:]} sets a reflective backdrop for these words. "
-            "A quiet Short for anyone who connects with the idea expressed in these words."
+            + visual_line
+            + ("\n\n" if visual_line else "")
+            + "A reflective Short built around the exact words shown on screen."
         )
     else:
-        # Keep the fallback useful when Gemini is unavailable: each option is
-        # a different discovery mechanism, but all are derived from the same
-        # creator-supplied subject rather than a niche-specific template.
         instructional = not source_requires_noninstructional_framing(content or topic, brief)
-        variants = (
-            [
-                _fit_title(f"How {pretty} Works in Practice", suffix),
-                _fit_title(f"The Practical Side of {pretty}", suffix),
-                _fit_title(f"A Closer Look at {pretty}", suffix),
-                _fit_title(f"{pretty}: A Clear Step-by-Step Look", suffix),
-                _fit_title(f"What to Know About {pretty}", suffix),
-            ] if instructional else [
-                _fit_title(f"A Quiet Look at {pretty}", suffix),
-                _fit_title(f"The Story Behind {pretty}", suffix),
-                _fit_title(f"A Moment About {pretty}", suffix),
-                _fit_title(f"What {pretty} Leaves Unsaid", suffix),
-                _fit_title(f"Reflecting on {pretty}", suffix),
-            ]
+        title_topic = _fallback_title_topic(topic, content, video_format)
+        comparison_mode = video_format == "comparison" or (
+            " while " in f" {content.casefold()} " and len(re.findall(r"\b[A-Z][A-Z0-9]{1,}\b", content)) >= 2
         )
-        if unique_angle:
-            variants[1] = _fit_title(f"{pretty} Through {unique_angle}", suffix)
-        if proof:
-            variants[2] = _fit_title(f"See {pretty} With {proof}", suffix)
-        if promise:
-            variants[3] = _fit_title(f"{pretty}: {promise}", suffix)
-        rotation = sum(ord(char) for char in topic.casefold()) % len(variants)
-        variants = variants[rotation:] + variants[:rotation]
+        if comparison_mode:
+            variants = [_fit_title(f"{title_topic}: What's the Difference?", suffix)]
+        else:
+            variants = _fallback_topic_variants(title_topic, suffix, instructional)
         source_excerpt = re.sub(r"\s+", " ", content or topic).strip(" .")
         if len(source_excerpt) > 220:
             source_excerpt = source_excerpt[:217].rsplit(" ", 1)[0] + "…"
-        description_parts = [
-            f"A focused look at {topic}, grounded in the creator's supplied material.",
-            promise or (
-                f"The video walks through the specific details of {topic} shown in the source."
-                if instructional else
-                f"The video stays with the specific moment about {topic} shown in the source."
-            ),
-        ]
-        if source_excerpt and source_excerpt.casefold() != topic.casefold():
-            description_parts.append(f"Source context: {source_excerpt}.")
-        if unique_angle:
-            description_parts.append(f"Its distinct angle is {unique_angle}.")
-        if proof:
-            description_parts.append(f"The video supports this with {proof}.")
-        if audience:
-            description_parts.append(f"It is intended for {audience}.")
-        description = "\n\n".join(description_parts)
+        description_parts = [source_excerpt or topic]
+        if promise:
+            description_parts.append(promise)
+        description = "\n\n".join(part.rstrip(".") + "." for part in description_parts if part)
 
     tags: list[str] = []
     seen: set[str] = set()
-    quote_words = [word.lower() for word in re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", quote)]
-    quote_tags: list[str] = []
-    if quote_words:
-        # Keep complete, meaningful clauses from a quote.  Splitting the
-        # quote into arbitrary first/last word bags made tags look broken and
-        # unhelpful even when the package otherwise passed validation.
-        quote_tags = [
-            " ".join(re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", sentence.lower())[:8])
-            for sentence in re.split(r"[.!?]+", quote)
-            if sentence.strip()
-        ]
-        quote_tags = [tag for tag in quote_tags if tag]
-    candidates = [topic, *quote_tags] if quote else [topic, *[str(item.get("keyword") or "") for item in keyword_signals or []]]
-    for field in ("viewer_promise", "unique_angle", "visual_requirements"):
+    candidates = [topic, *_quote_search_concepts(quote)] if quote else [topic, *[str(item.get("keyword") or "") for item in keyword_signals or []]]
+    for field in ("viewer_promise", "unique_angle"):
         value = " ".join(str(brief.get(field) or "").strip().lower().split()[:6])
         if value:
             candidates.append(value)
-    if "emotional" in content.casefold():
-        candidates.append("emotional quote")
     for candidate in candidates:
         cleaned = candidate.strip().lower()
         if cleaned and cleaned not in seen:
             seen.add(cleaned)
             tags.append(cleaned)
 
-    if is_shorts and "shorts" not in seen:
-        tags.append("shorts")
-
-    hashtags = [_topic_hashtag(topic)]
+    hashtags = [] if quote else [_topic_hashtag(topic)]
     if is_shorts:
         hashtags.append("#shorts")
     visual_hashtag = _visual_hashtag(str(brief.get("visual_requirements") or ""))
