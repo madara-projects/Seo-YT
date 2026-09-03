@@ -97,11 +97,11 @@ class Phase4QualityTests(unittest.TestCase):
         codes = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
         self.assertIn("relationship_event", codes)
 
-    def test_required_shorts_tags_are_checked(self):
+    def test_platform_format_tags_are_rejected_from_video_tags(self):
         package = valid_package()
-        package["tags"] = ["bare minimum quote"]
+        package["tags"] = ["bare minimum quote", "shorts"]
         gate = evaluate_package_quality(package, script="A quote Short")
-        self.assertIn("missing_required_shorts_tags", {item["code"] for item in gate["issues"]})
+        self.assertIn("platform_tag_filler", {item["code"] for item in gate["issues"]})
 
     def test_short_title_contract_requires_one_shorts_hashtag_and_contextual_emoji(self):
         missing = valid_package("Did I Deserve More Than the Bare Minimum?")
@@ -111,7 +111,7 @@ class Phase4QualityTests(unittest.TestCase):
         )
         rejected = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
         self.assertIn("missing_shorts_title_hashtag", rejected)
-        self.assertIn("missing_contextual_title_emoji", rejected)
+        self.assertIn("missing_contextual_title_emoji", {item["code"] for item in gate["warnings"]})
 
         duplicated = valid_package("Did I Deserve More? 💔 #shorts #Shorts")
         gate = evaluate_package_quality(duplicated, script="A rainy quote Short")

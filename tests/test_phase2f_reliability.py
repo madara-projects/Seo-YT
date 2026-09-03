@@ -11,6 +11,12 @@ from win_engine.llm import gemini_client
 
 
 class GeminiRateLimitTests(unittest.TestCase):
+    def setUp(self):
+        gemini_client.reset_provider_health()
+
+    def tearDown(self):
+        gemini_client.reset_provider_health()
+
     def _success(self):
         response = MagicMock(status_code=200)
         response.json.return_value = {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}

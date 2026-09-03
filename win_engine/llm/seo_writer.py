@@ -36,6 +36,25 @@ def last_generation_diagnostics() -> dict[str, dict[str, Any]]:
     """Return safe per-language diagnostics from the last writer invocation."""
     return {language: dict(trace) for language, trace in _LAST_LANGUAGE_DIAGNOSTICS.get().items()}
 
+
+def _provider_summary(*traces: dict[str, Any], logical_calls: int) -> dict[str, Any]:
+    """Aggregate bounded provider diagnostics without retaining prompts or secrets."""
+    valid = [trace for trace in traces if trace]
+    retry_reasons = list(dict.fromkeys(
+        str(reason) for trace in valid for reason in (trace.get("retry_reasons") or []) if reason
+    ))
+    categories = [str(trace.get("failure_category")) for trace in valid if trace.get("failure_category")]
+    return {
+        "gemini_attempted": bool(logical_calls),
+        "gemini_call_count": logical_calls,
+        "provider_requests": logical_calls,
+        "provider_attempts": sum(int(trace.get("attempts") or 0) for trace in valid),
+        "retry_count": sum(int(trace.get("retries") or 0) for trace in valid),
+        "provider_retries": sum(int(trace.get("retries") or 0) for trace in valid),
+        "retry_reasons": retry_reasons,
+        "provider_failure_category": categories[-1] if categories else None,
+    }
+
 _SYSTEM_PROMPT = (
     "You are an expert YouTube SEO strategist. You analyze the user's video script, quote, or idea "
     "to write high-CTR title variants, descriptions, tags, and hashtags. "
@@ -347,8 +366,10 @@ Constraints:
 - include chapters only when real timestamps or a sufficiently detailed script supports them
 - tags must be natural phrases that a person might type into search. Preserve contractions such as "didn't"; never make a tag by deleting grammar words from a quote, and never return a bag of unrelated quote words
 - research-backed SEO targets are candidates, not mandatory tags. Do not copy a title, exact quote, or competitor title into tags; use only targets that accurately describe the video
-- tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". Do not include #shorts, shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
+- tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". Do not include #shorts, shorts, yt, youtube shorts, viral shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Return only tags justified by this specific video; do not pad the list to a fixed count and do not add generic viral/trending filler
+- a researched YouTube title or result phrase is evidence only, never text to copy into a title, description, or tag. Research may improve wording for the same source-supported subject, but may not introduce a new situation, entity, relationship, product, lesson, or claim
+- a package that is merely valid is not enough: prefer a short, natural, source-faithful result over a generic, keyword-stuffed, or invented one
 - research may inform topic vocabulary, but it cannot invent what the video teaches, explains, demonstrates, or advises
 {silent_quote_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
 {non_instructional_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
@@ -393,7 +414,10 @@ def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
         hashtags = _unique_text([str(h).strip() for h in pkg["hashtags"] if str(h).strip()])
     except (KeyError, TypeError, AttributeError):
         return None
-    if not title or not description or not variants or not tags:
+    # A sparse source may honestly have no defensible search tag. The final
+    # deterministic selector decides whether any tag survives; do not force
+    # generic filler merely to satisfy a shape check.
+    if not title or not description or not variants:
         return None
     hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags]
     return {
@@ -569,12 +593,16 @@ def _generate_one(
     if parsed is None:
         logger.warning("Gemini response was rejected because it did not contain a usable JSON package.")
         provider_trace["status"] = "gemini_invalid_response"
+        provider_trace["failure_category"] = "malformed_provider_response"
+        gemini_client.set_last_generation_diagnostic(provider_trace)
         _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
         return None
     validated = _validate(parsed)
     if not validated:
         logger.warning("Gemini response was rejected because required package fields were missing or invalid.")
         provider_trace["status"] = "gemini_invalid_response"
+        provider_trace["failure_category"] = "malformed_provider_response"
+        gemini_client.set_last_generation_diagnostic(provider_trace)
         _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
         return None
     sanitized = _sanitize_generated_package(validated, script)
@@ -681,9 +709,19 @@ def write_multilang_packages_with_source(
             temperature=temperature,
             max_tokens=max_tokens,
         ) if gemini_ready else None
-        first_trace = dict((first or {}).pop("_provider_trace", {}) or gemini_client.last_generation_diagnostic())
+        first_trace = dict((first or {}).pop("_provider_trace", {}) or (
+            gemini_client.last_generation_diagnostic() if gemini_ready else {
+                "status": "gemini_unavailable", "failure_category": "authentication_or_configuration",
+                "attempts": 0, "retries": 0, "retry_reasons": [],
+            }
+        ))
         if first is None:
-            language_diagnostics[lang] = {**first_trace, "fallback_used": True}
+            language_diagnostics[lang] = {
+                **first_trace,
+                **_provider_summary(first_trace, logical_calls=1 if gemini_ready else 0),
+                "fallback_used": True,
+                "fallback_level": "deterministic",
+            }
             out[lang] = None
             continue
         gate = evaluate_package_quality(
@@ -694,10 +732,13 @@ def write_multilang_packages_with_source(
             recent_titles=(channel_learning or {}).get("recent_titles") or [],
             published_titles=(channel_learning or {}).get("published_titles") or [],
             require_shorts_tags=False,
+            competitor_titles=[str(item.get("title") or "") for item in (competitors or []) if isinstance(item, dict)],
+            enforce_final_tag_rules=False,
         )
         first = apply_quality_gate(first, gate)
         first["generation_trace"] = {
-            "provider_requests": 1, "repair_attempted": False, "repair_succeeded": False,
+            **_provider_summary(first_trace, logical_calls=1),
+            "repair_attempted": False, "repair_succeeded": False,
             "initial_quality_status": gate["status"], "events": [str(first_trace.get("status") or "gemini_success")],
             **first_trace,
         }
@@ -717,11 +758,12 @@ def write_multilang_packages_with_source(
         repaired_trace = dict((repaired or {}).pop("_provider_trace", {}) or gemini_client.last_generation_diagnostic())
         if repaired is None:
             language_diagnostics[lang] = {
-                **repaired_trace, "provider_requests": 2, "repair_attempted": True,
+                **repaired_trace, **_provider_summary(first_trace, repaired_trace, logical_calls=2), "repair_attempted": True,
                 "repair_succeeded": False, "initial_quality_status": gate["status"],
                 "events": [str(first_trace.get("status") or "gemini_success"), "gemini_quality_rejection",
                            str(repaired_trace.get("status") or "gemini_validator_rejection"), "fallback_used"],
                 "fallback_used": True,
+                "fallback_level": "deterministic",
             }
             out[lang] = None
             continue
@@ -730,17 +772,17 @@ def write_multilang_packages_with_source(
             recent_titles=(channel_learning or {}).get("recent_titles") or [],
             published_titles=(channel_learning or {}).get("published_titles") or [],
             require_shorts_tags=False,
+            competitor_titles=[str(item.get("title") or "") for item in (competitors or []) if isinstance(item, dict)],
+            enforce_final_tag_rules=False,
         )
         repaired = apply_quality_gate(repaired, repaired_gate)
         repaired["generation_trace"] = {
-            "provider_requests": 2, "repair_attempted": True,
+            **_provider_summary(first_trace, repaired_trace, logical_calls=2), "repair_attempted": True,
             "repair_succeeded": bool(repaired_gate["passed"]),
             "initial_quality_status": gate["status"], "final_quality_status": repaired_gate["status"],
             "events": [str(first_trace.get("status") or "gemini_success"), "gemini_quality_rejection",
                        str(repaired_trace.get("status") or "gemini_success"),
                        "gemini_repair_success" if repaired_gate["passed"] else "gemini_validator_rejection"],
-            "provider_attempts": int(first_trace.get("attempts") or 0) + int(repaired_trace.get("attempts") or 0),
-            "provider_retries": int(first_trace.get("retries") or 0) + int(repaired_trace.get("retries") or 0),
         }
         language_diagnostics[lang] = dict(repaired["generation_trace"])
         out[lang] = repaired if repaired_gate["passed"] else None

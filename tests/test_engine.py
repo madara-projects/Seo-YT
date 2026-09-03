@@ -249,7 +249,7 @@ class TestEngineStages(unittest.TestCase):
             "top_opportunities": [],
             "youtube_results": [],
             "category": "cooking",
-            "creator_brief": {"video_format": "youtube_shorts"},
+            "creator_brief": {"content": "A short about Chennai street food", "video_format": "youtube_shorts"},
             "language_context": {"language": "english", "region": "india"},
         }
         package = build_seo_package("generate seo", "A short about Chennai street food", research, self.store)
@@ -470,7 +470,7 @@ class TestEngineStages(unittest.TestCase):
         package = _content_specific_fallback(creator_topic(brief), [], brief)
         self.assertTrue(package["title"].startswith("I wasn't abandoned. I was erased"))
         self.assertIn("“In the end, I wasn't abandoned. I was erased.”", package["description"])
-        self.assertIn("reflective backdrop", package["description"])
+        self.assertIn("exact words shown on screen", package["description"])
 
     def test_malformed_contraction_tag_is_removed_but_real_contraction_survives(self):
         tags = force_topic_in_tags(
@@ -680,9 +680,9 @@ class TestEngineStages(unittest.TestCase):
     def test_selected_package_description_is_upload_ready(self, mocked_writer):
         mocked_writer.return_value = ({
             "english": {
-                "title": "Didn’t I Deserve the Bare Minimum? #Shorts",
-                "variants": ["Didn’t I Deserve the Bare Minimum? #Shorts"],
-                "description": "A faithful reflection about receiving less than you deserved.",
+                "title": "Didn’t I Deserve the Bare Minimum? 💔 #Shorts",
+                "variants": ["Didn’t I Deserve the Bare Minimum? 💔 #Shorts"],
+                "description": "“Didn't I deserve the bare minimum?”\n\nA faithful reflection about receiving less than you deserved.",
                 "tags": ["bare minimum quote"],
                 "hashtags": ["#Shorts", "#Quotes", "#Heartbreak"],
             }
@@ -768,9 +768,9 @@ class TestGeminiGeneration(unittest.TestCase):
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
     def test_selected_language_uses_one_generation_call(self, _mocked_available, mocked_generate):
         mocked_generate.return_value = {
-            "title": "A specific title",
-            "variants": ["A specific title"],
-            "description": "A specific description",
+            "title": "A Specific Script Title",
+            "variants": ["A Specific Script Title"],
+            "description": "A concise description of the specific script.",
             "tags": ["specific topic"],
             "hashtags": ["#SpecificTopic"],
         }
