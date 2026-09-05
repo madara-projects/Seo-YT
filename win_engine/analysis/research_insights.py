@@ -50,9 +50,13 @@ def build_research_decision(
 
     relevance_scores = [int(item.get("research_relevance_score") or 0) for item in youtube_results]
     average_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0
+    multi_term_evidence = sum(
+        1 for item in youtube_results
+        if len(item.get("research_relevance_terms") or []) >= 2
+    )
     confidence = (
-        "high" if len(youtube_results) >= 5 and average_relevance >= 60
-        else "medium" if len(youtube_results) >= 3 and average_relevance >= 35
+        "high" if len(youtube_results) >= 8 and average_relevance >= 75 and multi_term_evidence >= 5
+        else "medium" if len(youtube_results) >= 5 and average_relevance >= 55 and multi_term_evidence >= 2
         else "low"
     )
 
@@ -65,7 +69,11 @@ def build_research_decision(
         "avoid": avoid,
         "confidence": confidence,
         "evidence_count": len(youtube_results),
+        "multi_term_evidence_count": multi_term_evidence,
         "average_relevance_score": round(average_relevance, 1),
+        "evidence_scope": "sampled_youtube_results_not_search_volume",
+        "search_volume_available": False,
+        "confidence_note": "Confidence describes relevance within the sampled API results, not keyword demand or guaranteed reach.",
     }
 
 

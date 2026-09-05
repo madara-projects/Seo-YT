@@ -93,7 +93,7 @@ def build_upload_timing(
             )
         else:
             public_window = _publication_window(youtube_results, zone)
-            if public_window:
+            if public_window and public_window[3] >= 5:
                 best_day, start_hour, end_hour, sample_size = public_window
                 confidence = "MEDIUM" if sample_size >= 10 else "LOW"
                 basis = "public_research_pattern"
@@ -124,6 +124,11 @@ def build_upload_timing(
         )
 
     utc_window = _window_in_utc(local_now, best_day, start_hour, end_hour, zone)
+    if not personalized:
+        today_recommendation = (
+            f"Suggested starting window: {today_time} {zone_name}. "
+            "There is insufficient channel evidence to rank today against other days."
+        )
     result = {
         "recommended_day": best_day,
         "recommended_time": recommended_time,

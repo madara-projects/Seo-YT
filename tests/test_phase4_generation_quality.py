@@ -13,6 +13,8 @@ from win_engine.analysis.generation_quality import (
     apply_quality_gate,
     evaluate_package_quality,
     evidence_trace,
+    focused_short_hashtags,
+    has_unsupported_instructional_framing,
     normalize_unicode,
     title_copies_quote,
     title_similarity,
@@ -69,6 +71,59 @@ def valid_package(title: str = "Did I Deserve More Than the Bare Minimum? 💔 #
 
 
 class Phase4QualityTests(unittest.TestCase):
+    def test_quote_explainer_phrases_are_instructional_framing(self):
+        self.assertTrue(has_unsupported_instructional_framing("Understanding grief"))
+        self.assertTrue(has_unsupported_instructional_framing("Exploring the shape of absence"))
+        self.assertFalse(has_unsupported_instructional_framing("Why silence feels heavy during grief"))
+
+    def test_quote_package_rejects_an_invented_person_being_gone(self):
+        quote = "Grief teaches you the weight of silence and the shape of absence."
+        package = {
+            "title": "Silence in grief when someone is gone 🕯️ #shorts",
+            "variants": ["Silence in grief when someone is gone 🕯️ #shorts"],
+            "description": f'"{quote}" A reflection on grief, silence, and absence.',
+            "tags": ["grief quotes", "yt", "shorts"],
+            "hashtags": ["#shorts", "#Grief"],
+        }
+        gate = evaluate_package_quality(
+            package, script=quote,
+            creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"},
+        )
+        rejected_codes = {
+            issue["code"] for item in gate["rejected_candidates"] for issue in item["issues"]
+        }
+        self.assertIn("invented_loss_event", rejected_codes)
+
+    def test_short_hashtags_are_derived_from_validated_topic_tags(self):
+        self.assertEqual(focused_short_hashtags(["letting go of the wrong person", "yt", "shorts"]),
+                         ["#shorts", "#LettingGoOfTheWrongPerson"])
+        self.assertEqual(
+            focused_short_hashtags(["painful contradiction", "seeking comfort", "yt", "shorts"]),
+            ["#shorts", "#PainfulContradiction", "#SeekingComfort"],
+        )
+
+    def test_green_requires_average_subject_tag_score_of_72(self):
+        package = valid_package()
+        package["tags"] = ["bare minimum quote", "one sided effort", "emotional hurt"]
+        evidence = {
+            "selected_keywords": [
+                {
+                    "keyword": tag, "classification": "secondary_topic", "source_classification": "combined",
+                    "source_support_score": 85, "source_support": "creator-source support",
+                    "keyword_relevance_score": 70,
+                }
+                for tag in package["tags"]
+            ]
+        }
+        gate = evaluate_package_quality(
+            package,
+            script='Quote: "Didn\'t I at least deserve the bare minimum from them?" Shorts',
+            creator_brief={"creator_intent": "A reflection on one-sided effort and emotional hurt."},
+            tag_evidence=evidence,
+        )
+        self.assertEqual(gate["verdict"], "YELLOW")
+        self.assertIn("weak_tag_usefulness", {item["code"] for item in gate["final_seo_quality"]["warnings"]})
+
     def test_unquoted_quote_marker_is_separated_from_visual_direction(self):
         brief = build_creator_brief(
             script=(
@@ -287,11 +342,14 @@ class Phase4QualityTests(unittest.TestCase):
         codes = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
         self.assertIn("relationship_event", codes)
 
-    def test_platform_format_tags_are_rejected_from_video_tags(self):
+    def test_creator_preferred_short_tags_are_allowed_but_other_platform_filler_is_rejected(self):
         package = valid_package()
-        package["tags"] = ["bare minimum quote", "shorts"]
+        package["tags"] = ["bare minimum quote", "yt", "shorts", "youtube shorts"]
         gate = evaluate_package_quality(package, script="A quote Short")
         self.assertIn("platform_tag_filler", {item["code"] for item in gate["issues"]})
+        filler_messages = " ".join(item["message"] for item in gate["issues"] if item["code"] == "platform_tag_filler")
+        self.assertIn("youtube shorts", filler_messages)
+        self.assertNotIn("Platform-format filler is not a useful video tag: yt", filler_messages)
 
     def test_short_title_contract_requires_one_shorts_hashtag_and_contextual_emoji(self):
         missing = valid_package("Did I Deserve More Than the Bare Minimum?")

@@ -28,14 +28,18 @@ _GENERIC_TITLE_PATTERNS = (
 )
 _UNSUPPORTED_CLAIMS = (
     ("relationship_event", re.compile(r"\b(?:they|he|she) (?:left|cheated|lied|returned|came back|walked away)\b", re.IGNORECASE)),
+    ("invented_loss_event", re.compile(
+        r"\b(?:(?:someone|somebody|a person|they|he|she) (?:is |was |are |were )?(?:gone|dead|deceased|no longer here)"
+        r"|after (?:someone|somebody|a person) (?:leaves|left|is gone))\b",
+        re.IGNORECASE,
+    )),
     ("invented_outcome", re.compile(r"\b(?:guaranteed|proven to|will make you|will get you|100%|go viral)\b", re.IGNORECASE)),
     ("invented_evidence", re.compile(r"\b(?:studies show|research proves|scientists found|data proves)\b", re.IGNORECASE)),
     ("invented_relationship", re.compile(r"\b(?:breakup|toxic relationship|one-sided relationship|just an option)\b", re.IGNORECASE)),
 )
 _SHORT_FORMATS = {"short", "shorts", "youtube_shorts", "quote", "reel", "reels"}
-# Platform-format words are useful as a title hashtag/hashtag, but they are not
-# meaningful search tags.  The old phase contract required ``shorts`` in the
-# tag list; that produced filler rather than a source-grounded search concept.
+# Platform-format words are not subject evidence. ``yt`` and ``shorts`` may be
+# retained separately as an explicit creator strategy preference for Shorts.
 _PLATFORM_TAGS = {
     "short", "shorts", "yt", "youtube", "youtube shorts", "viral", "viral shorts",
     "trending", "trending shorts", "short video", "video", "fyp",
@@ -57,6 +61,7 @@ _UNSUPPORTED_CONTEXT_TERMS = {
     "anxiety", "trauma", "partner", "boyfriend", "girlfriend", "husband", "wife", "product",
     "review", "comparison", "customer", "office", "school", "family",
     "night", "nighttime", "midnight", "dark", "darkness", "empty", "deserted",
+    "room", "rooms", "hour", "hours",
     "peace", "peaceful", "comfort", "comforting", "healing",
 }
 _DESCRIPTION_BOILERPLATE = (
@@ -70,10 +75,11 @@ _INSTRUCTIONAL_SOURCE_RE = re.compile(
 )
 _UNSUPPORTED_INSTRUCTIONAL_RE = re.compile(
     r"\b(?:coping with|dealing with|overcome|practical (?:tips?|ways?)|advice|"
-    r"common questions?|q\s*&\s*a|tutorial|explain(?:s|ing)?|break(?:ing)? down|"
+    r"common questions?|signs (?:it is|you|of)|tips and tricks|q\s*&\s*a|tutorial|explain(?:s|ing)?|break(?:ing)? down|"
     r"step[- ]by[- ]step|beginner(?:-friendly)? guide|complete guide|guide to|lessons?|"
-    r"how to (?:cope|deal|fix|make|clean|improve|handle|recover)|how you can handle|"
-    r"walk(?:s|ing)? through)\b",
+    r"how to (?:cope|deal|fix|make|clean|improve|handle|recover|move on)|how you can handle|"
+    r"walk(?:s|ing)? through|explor(?:e|ing) (?:how|the)|"
+    r"understanding (?:grief|loss|absence|silence|emotions?|feelings?))\b",
     re.IGNORECASE,
 )
 _INSTRUCTIONAL_CONTEXT_RE = re.compile(
@@ -191,6 +197,9 @@ def source_supports_instructional_framing(script: str, creator_brief: dict[str, 
 
     brief = creator_brief or {}
     source = normalize_unicode(brief.get("content") or script)
+    quote = normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text"))
+    if quote and quote.casefold() == source.casefold():
+        return False
     context = " ".join(normalize_unicode(brief.get(field)) for field in (
         "video_format", "creator_intent", "content_constraints", "viewer_promise",
     ))
@@ -207,6 +216,11 @@ def source_requires_noninstructional_framing(script: str, creator_brief: dict[st
 
     brief = creator_brief or {}
     if is_silent_quote_only_short(script, brief):
+        return True
+    if (
+        normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text"))
+        and not source_supports_instructional_framing(script, brief)
+    ):
         return True
     context = " ".join(normalize_unicode(brief.get(field)) for field in (
         "creator_intent", "content_constraints", "visual_requirements",
@@ -247,6 +261,25 @@ def filter_source_hashtags(
     if not source_requires_noninstructional_framing(script, creator_brief):
         return values
     return [item for item in values if not has_unsupported_instructional_framing(item)]
+
+
+def focused_short_hashtags(tags: Iterable[str]) -> list[str]:
+    """Return #shorts plus two readable hashtags from validated subject tags."""
+
+    result = ["#shorts"]
+    generic = {"short", "shorts", "yt", "youtube", "video", "viral", "trending", "fyp", "quote", "quotes", "sad"}
+    for tag in tags:
+        words = [word for word in re.findall(r"[A-Za-z0-9]+", str(tag)) if word.casefold() not in generic]
+        if not words:
+            continue
+        hashtag = "#" + "".join(word[:1].upper() + word[1:] for word in words)
+        if len(hashtag) > 48:
+            continue
+        if hashtag.casefold() not in {item.casefold() for item in result}:
+            result.append(hashtag)
+        if len(result) >= 3:
+            break
+    return result
 
 
 def title_emojis(value: Any) -> list[str]:
@@ -397,7 +430,8 @@ def evaluate_package_quality(
             issues.append(_issue("tag_list_contamination", "tags", f"Tag is not one focused phrase: {tag}"))
         if non_instructional and has_unsupported_instructional_framing(tag):
             issues.append(_issue("unsupported_instructional_framing", "tags", f"Tag implies instruction not present in this source: {tag}"))
-        if enforce_final_tag_rules and tag in _PLATFORM_TAGS:
+        preferred_short_tag = is_short and tag in {"yt", "shorts"}
+        if enforce_final_tag_rules and tag in _PLATFORM_TAGS and not preferred_short_tag:
             issues.append(_issue("platform_tag_filler", "tags", f"Platform-format filler is not a useful video tag: {tag}"))
     context_text = " ".join(normalize_unicode(item) for item in tag_context) if isinstance(tag_context, (list, tuple, set)) else normalize_unicode(tag_context)
     source_tokens = set(unicode_words(" ".join([
@@ -428,8 +462,16 @@ def evaluate_package_quality(
         and _tag_has_grounding(tag)
     ]
     if tags and not contextual_tags:
-        issues.append(_issue("non_contextual_tags", "tags", "At least one tag must be derived from the actual video or creator brief."))
-    generic_count = sum(1 for tag in tags if tag in _GENERIC_FORMAT_TAGS)
+        issue = _issue(
+            "non_contextual_tags", "tags",
+            "No useful subject tag survived; creator-preferred platform tags do not substitute for topic evidence.",
+            severity="warning" if is_short and set(tags) <= {"yt", "shorts"} else "error",
+        )
+        (warnings if issue["severity"] == "warning" else issues).append(issue)
+    generic_count = sum(
+        1 for tag in tags
+        if tag in _GENERIC_FORMAT_TAGS and not (is_short and tag in {"yt", "shorts"})
+    )
     if generic_count and generic_count >= max(2, len(contextual_tags) + 1):
         issues.append(_issue(
             "generic_tag_filler", "tags",
@@ -610,7 +652,7 @@ def _tag_provenance_issues(tags: list[str], evidence: dict[str, Any] | None) -> 
         if isinstance(item, dict) and normalize_unicode(item.get("keyword"))
     }
     issues: list[dict[str, Any]] = []
-    allowed = {"script_derived", "combined", "research_discovered"}
+    allowed = {"script_derived", "combined", "research_discovered", "creator_strategy"}
     for tag in tags:
         row = selected.get(normalize_unicode(tag).casefold())
         if not row:
@@ -680,7 +722,8 @@ def _final_semantic_quality(
         item for item in (tag_evidence or {}).get("selected_keywords", [])
         if isinstance(item, dict) and normalize_unicode(item.get("keyword")).casefold() in tag_keys
     ]
-    tag_scores = [float(item.get("keyword_relevance_score") or 0) for item in selected_rows]
+    topic_rows = [item for item in selected_rows if item.get("classification") != "platform_format"]
+    tag_scores = [float(item.get("keyword_relevance_score") or 0) for item in topic_rows]
     tag_score = round(sum(tag_scores) / len(tag_scores), 1) if tag_scores else None
     title_description_agree = bool(
         {_quality_root(word) for word in title_words} & {_quality_root(word) for word in description_words}
@@ -695,8 +738,18 @@ def _final_semantic_quality(
         critical.append(_issue("low_description_usefulness", "description", "Description is too weakly anchored to the supplied source."))
     if not consistency:
         critical.append(_issue("package_consistency_failure", "package", "Title, description, and tags do not agree on the source-supported topic."))
-    if tags and tag_score is not None and tag_score < 40:
-        warnings.append(_issue("weak_tag_usefulness", "tags", "Final tags are source-safe but have limited search specificity.", severity="warning"))
+    if tags and not topic_rows:
+        warnings.append(_issue(
+            "weak_tag_usefulness", "tags",
+            "No useful subject tag survived; yt/shorts tags are retained only as the creator's format strategy.",
+            severity="warning",
+        ))
+    elif topic_rows and tag_score is not None and tag_score < 72:
+        warnings.append(_issue(
+            "weak_tag_usefulness", "tags",
+            "Average subject-tag quality is below the 72-point threshold required for a GREEN package.",
+            severity="warning",
+        ))
     if direct_quote_title:
         warnings.append(_issue(
             "title_duplicates_on_screen_quote", "title",
@@ -708,10 +761,10 @@ def _final_semantic_quality(
         and normalize_unicode(brief.get("visual_requirements"))
         and normalize_unicode(brief.get("creator_intent"))
     )
-    if is_short_content(source, brief) and rich_quote_context and len(tags) < 3:
+    if is_short_content(source, brief) and rich_quote_context and len(topic_rows) < 3:
         warnings.append(_issue(
             "sparse_tag_set", "tags",
-            f"Only {len(tags)} useful tag(s) survived; this package needs at least three distinct grounded concepts before it can be rated GREEN.",
+            f"Only {len(topic_rows)} useful subject tag(s) survived; yt/shorts format tags do not count toward the three-topic minimum for GREEN.",
             severity="warning",
         ))
     verdict = "RED" if critical else ("YELLOW" if warnings else "GREEN")
