@@ -164,7 +164,25 @@ def build_creator_brief(
     }
 
 
+def _quoted_spans(content: str) -> list[str]:
+    """Return quoted spans, longest first. A closing quote mark is the most reliable
+    end-of-quote signal available, so it is tried before any prose heuristic."""
+
+    matches = re.findall(r'["“]([^"“”\n]{6,})["”]', content or "")
+    if not matches:
+        matches = re.findall(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", content or "")
+    cleaned = [re.sub(r"\s+", " ", value).strip(" .,;:-") for value in matches]
+    return sorted((value for value in cleaned if len(value) >= 6), key=len, reverse=True)
+
+
 def _extract_quote(content: str) -> str:
+    # A quoted span wins outright. The marker branch below captures greedily to the
+    # end of the text under (?is), so on a brief that continues past the quote it
+    # swallows the production notes and publishes them in the description.
+    spans = _quoted_spans(content)
+    if spans:
+        return spans[0]
+
     marker = re.search(
         r"(?is)\b(?:the\s+)?quote(?:\s+(?:on|in)\s+(?:the\s+)?(?:screen|reel|video))?"
         r"\s*(?:is|reads?)?\s*[:\-\u2013\u2014]+\s*(.+)",
@@ -182,10 +200,7 @@ def _extract_quote(content: str) -> str:
             value = value.replace('"', "")
         if len(value) >= 6:
             return value
-    matches = re.findall(r'["“]([^"“”]{6,})["”]', content)
-    if not matches:
-        matches = re.findall(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", content)
-    return max((re.sub(r"\s+", " ", value).strip() for value in matches), key=len, default="")
+    return ""
 
 
 def _extract_duration(content: str) -> float | None:
