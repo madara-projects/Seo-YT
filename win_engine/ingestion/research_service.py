@@ -57,6 +57,8 @@ class ResearchService:
         cache_policy, ttl_seconds = self._select_cache_policy(query)
 
         youtube_results, query_diagnostics = self._search_research_queries(research_queries, cache_policy, ttl_seconds)
+        youtube_results = self._filter_relevant_results(youtube_results, creator_brief)
+        query_diagnostics["youtube_results_relevant"] = len(youtube_results)
 
         scored_results = score_outliers(youtube_results, region=region, primary_language=primary_language)
         scored_results = self._attach_velocity_signals(scored_results)
@@ -171,6 +173,62 @@ class ResearchService:
             "query_attempts": attempts,
             "quota_policy": "Queries are de-duplicated, bounded by YOUTUBE_MAX_RESEARCH_QUERIES, cached, and each query is bounded by YOUTUBE_MAX_RESULTS.",
         }
+
+    @staticmethod
+    def _filter_relevant_results(
+        results: list[dict[str, object]], creator_brief: dict[str, Any] | None = None,
+    ) -> list[dict[str, object]]:
+        """Keep only results with a meaningful lexical anchor from their query.
+
+        YouTube search can return broadly popular Shorts for sparse queries. Those
+        rows must not influence scoring, tags, or generation unless their public
+        title/description contains a non-generic query concept.
+        """
+
+        generic = {
+            "about", "after", "before", "could", "don't", "from", "have", "just",
+            "quote", "quotes", "reflective", "short", "shorts", "someone", "their", "there", "these", "this", "video",
+            "what", "when", "where", "which", "with", "would", "youtube",
+        }
+        requested_format = str((creator_brief or {}).get("video_format") or "").casefold()
+        short_requested = "short" in requested_format or requested_format in {"reel", "reels", "quote"}
+        relevant: list[dict[str, object]] = []
+        for result in results:
+            duration_seconds = ResearchService._duration_seconds(result.get("duration"))
+            if short_requested and duration_seconds is not None and duration_seconds > 180:
+                continue
+            query_tokens = {
+                token.casefold()
+                for token in re.findall(r"[A-Za-z][A-Za-z'-]+", str(result.get("research_query") or ""))
+                if len(token) >= 4 and token.casefold() not in generic
+            }
+            public_text = " ".join(str(result.get(field) or "") for field in ("title", "description", "channel_title")).casefold()
+            public_tokens = set(re.findall(r"[a-z][a-z'-]+", public_text))
+            overlap = query_tokens & public_tokens
+            if query_tokens and overlap:
+                relevance_score = round(100 * len(overlap) / max(1, min(3, len(query_tokens))))
+                if relevance_score < 25:
+                    continue
+                relevant.append({
+                    **result,
+                    "research_relevance_score": min(100, relevance_score),
+                    "research_relevance_terms": sorted(overlap),
+                    "format_match": "short" if short_requested else "unspecified",
+                })
+        return relevant
+
+    @staticmethod
+    def _duration_seconds(value: object) -> int | None:
+        """Parse the bounded ISO-8601 durations returned by YouTube."""
+
+        match = re.fullmatch(
+            r"P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?",
+            str(value or ""),
+        )
+        if not match:
+            return None
+        parts = {name: int(raw or 0) for name, raw in match.groupdict().items()}
+        return parts["days"] * 86400 + parts["hours"] * 3600 + parts["minutes"] * 60 + parts["seconds"]
 
     def diagnostics(self) -> dict[str, object]:
         """Return a quick health check for external integrations."""

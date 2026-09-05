@@ -82,6 +82,7 @@ def generate_seo_suggestions(
     if isinstance(creator_brief, dict):
         tag_context.extend(str(creator_brief.get(field) or "") for field in (
             "content", "target_audience", "viewer_promise", "unique_angle", "proof",
+            "visual_requirements", "creator_intent", "content_constraints",
         ))
     tag_context.extend(
         str(item.get(key) or "")
@@ -96,10 +97,6 @@ def generate_seo_suggestions(
         script=safe_script,
         creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
         is_short=category in {"quotes", "shorts", "youtube_shorts"},
-    )
-    tag_context.extend(
-        str(item.get("keyword") or "") for item in (keyword_research.get("selected_keywords") or [])
-        if isinstance(item, dict)
     )
     locked_hashtags = filter_source_hashtags(
         force_hashtags(seo_package.get("hashtags") or [], main_topic, category),
@@ -126,6 +123,7 @@ def generate_seo_suggestions(
         language=str(ctx.get("language") or "english"),
         require_shorts_tags=False,
         tag_context=tag_context,
+        tag_evidence=keyword_research,
     )
     gated = apply_quality_gate(
         {"title": locked_title, "variants": locked_variants, "description": locked_description,

@@ -165,6 +165,23 @@ def build_creator_brief(
 
 
 def _extract_quote(content: str) -> str:
+    marker = re.search(
+        r"(?is)\b(?:the\s+)?quote(?:\s+(?:on|in)\s+(?:the\s+)?(?:screen|reel|video))?"
+        r"\s*(?:is|reads?)?\s*[:\-\u2013\u2014]+\s*(.+)",
+        content,
+    )
+    if marker:
+        value = re.split(
+            r"(?is)\s+(?:and\s+)?(?:the\s+)?(?:background(?:\s+of\s+the\s+video)?|"
+            r"background\s+visuals?|visuals?|video\s+(?:is|shows?|has))\s*(?:is|are|:|\-)?\s*",
+            marker.group(1),
+            maxsplit=1,
+        )[0]
+        value = re.sub(r"\s+", " ", value).strip(" \t\r\n\"'.,;:-")
+        if value.count('"') % 2:
+            value = value.replace('"', "")
+        if len(value) >= 6:
+            return value
     matches = re.findall(r'["“]([^"“”]{6,})["”]', content)
     if not matches:
         matches = re.findall(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", content)
@@ -180,6 +197,14 @@ def _extract_duration(content: str) -> float | None:
 
 
 def _extract_visual_requirement(content: str) -> str:
+    broad_match = re.search(
+        r"(?is)\b(?:background(?:\s+of\s+the\s+video|\s+visuals?)?|visuals?|"
+        r"video\s+(?:is|shows?|has))\s*(?:is|are|of|:|\-)?\s*(.*?)"
+        r"(?=\s+(?:and|with)\s+.*(?:quote|text|screen)|[.;\n]|$)",
+        content,
+    )
+    if broad_match:
+        return re.sub(r"\s+", " ", broad_match.group(1)).strip(" .")
     match = re.search(
         r"(?i)\b(?:background(?:\s+visuals?)?|visuals?)\s*(?:is|are|:)?\s*(.*?)(?=\s+(?:and|with)\s+.*(?:quote|text|screen)|[.;\n]|$)",
         content,
@@ -188,6 +213,12 @@ def _extract_visual_requirement(content: str) -> str:
 
 
 def _infer_topic(content: str, quote: str) -> str:
+    if quote:
+        sentence = re.split(r"(?<=[.!?])\s+|\.{2,}|[;\u2013\u2014]", quote, maxsplit=1)[0]
+        words = re.findall(r"[^\W_]+(?:['\u2019][^\W_]+)?", sentence, re.UNICODE)
+        natural = " ".join(words[:12]).strip()
+        if natural:
+            return natural.casefold()
     source = quote or content
     words = [
         word.casefold() for word in re.findall(r"[^\W_]+(?:['’][^\W_]+)?", source, re.UNICODE)

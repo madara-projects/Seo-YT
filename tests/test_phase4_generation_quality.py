@@ -6,10 +6,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from win_engine.analysis.creator_brief import build_creator_brief
+from win_engine.analysis.package_builder import build_title_thumbnail_packages
+from win_engine.generation.expansion_engine import build_chapters
+from win_engine.generation.strategy_engine import _content_specific_fallback
 from win_engine.analysis.generation_quality import (
     apply_quality_gate,
     evaluate_package_quality,
     evidence_trace,
+    normalize_unicode,
+    title_copies_quote,
     title_similarity,
     unicode_words,
 )
@@ -64,6 +69,140 @@ def valid_package(title: str = "Did I Deserve More Than the Bare Minimum? 💔 #
 
 
 class Phase4QualityTests(unittest.TestCase):
+    def test_unquoted_quote_marker_is_separated_from_visual_direction(self):
+        brief = build_creator_brief(
+            script=(
+                "the quote is- You don't give up overnight on someone. You reach a point "
+                "where your heart quietly says, Enough and the background of the video is "
+                "rainy weather, someone holding a cup of tea by a window"
+            )
+        )
+        self.assertEqual(
+            brief["exact_quote"],
+            "You don't give up overnight on someone. You reach a point where your heart quietly says, Enough",
+        )
+        self.assertIn("rainy weather", brief["visual_requirements"])
+        self.assertNotIn("background", brief["exact_quote"].casefold())
+        self.assertTrue(brief["topic"].startswith("you don't give up overnight"))
+
+    def test_malformed_input_marker_title_is_rejected(self):
+        package = valid_package("How to is- you don't give overnight someone reach point #shorts")
+        gate = evaluate_package_quality(package, script="A quote Short about knowing when to let go")
+        codes = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
+        self.assertIn("malformed_title_fragment", codes)
+
+    def test_shorts_never_receive_synthetic_chapters(self):
+        chapters = build_chapters(
+            "A reflective quote Short",
+            [{"keyword": "Spell Shorts"}, {"keyword": "Love Spell"}],
+            {"video_format": "youtube_shorts", "duration_seconds": 20},
+        )
+        self.assertEqual(chapters, [])
+
+    def test_latest_broken_input_has_natural_fallback_package(self):
+        source = (
+            'the quote is- You don\'t give up overnight on someone. You reach a point where '
+            'your heart quietly says, "Enough and the background of the video is rainy weather, '
+            'someone holding a cup of tea by a window'
+        )
+        brief = build_creator_brief(script=source)
+        package = _content_specific_fallback(brief["topic"], [], brief)
+        combined = " ".join([package["title"], package["description"], *package["tags"]]).casefold()
+        self.assertNotIn("how to is-", combined)
+        self.assertNotIn("background of the video is", package["description"].casefold())
+        self.assertIn("you don't give up overnight on someone", package["title"].casefold())
+        self.assertIn("rainy weather", package["description"].casefold())
+        self.assertIn("knowing when to let go", package["tags"])
+
+    def test_silence_quote_fallback_is_a_complete_human_package(self):
+        quote = "at the end, it's only me and the silence that knows everything.."
+        brief = build_creator_brief(
+            script=quote,
+            video_format="youtube_shorts",
+            exact_quote=quote,
+            on_screen_text=quote,
+            visual_requirements="One person walking alone in quiet streets.",
+            creator_intent="A reflective Short about solitude, silence, and private thoughts.",
+        )
+        package = _content_specific_fallback(brief["topic"], [], brief)
+        self.assertGreaterEqual(len(package["variants"]), 4)
+        self.assertTrue(package["title"].startswith("Some Things Only Silence Knows "))
+        self.assertTrue(package["title"].endswith(" #shorts"))
+        self.assertIn("A lone person walks through quiet streets.", package["description"])
+        self.assertNotIn("A One person", package["description"])
+        self.assertIn("inner silence", package["tags"])
+        self.assertEqual(package["hashtags"], ["#shorts", "#DeepThoughts", "#Solitude"])
+
+        title_rows = [{"title": title, "package_intent": "Browse"} for title in package["variants"]]
+        choices = build_title_thumbnail_packages(title_rows, brief, validated=True)
+        self.assertGreaterEqual(len(choices), 4)
+        self.assertEqual(choices[0]["thumbnail_text"], "SILENCE KNOWS")
+        self.assertIn("walking alone", choices[0]["thumbnail_visual"].casefold())
+        self.assertNotEqual(choices[0]["viewer_promise"], "A clear, truthful reason to watch.")
+
+    def test_rarity_quote_fallback_complements_quote_and_thumbnail(self):
+        quote = "You deserve somebody who knows how hard it is to find somebody like you"
+        brief = build_creator_brief(
+            script=quote, video_format="youtube_shorts", exact_quote=quote,
+            visual_requirements="One person walking alone.",
+            creator_intent="A reflection about recognizing a person's rarity and worth.",
+        )
+        package = _content_specific_fallback(brief["topic"], [], brief)
+        self.assertTrue(package["title"].startswith("Know Your Worth—You're Hard to Replace"))
+        self.assertGreaterEqual(len(package["variants"]), 4)
+        self.assertIn("being valued", package["tags"])
+        choices = build_title_thumbnail_packages(
+            [{"title": title} for title in package["variants"]], brief, validated=True,
+        )
+        self.assertEqual(choices[0]["thumbnail_text"], "KNOW YOUR WORTH")
+
+    def test_full_quote_title_is_rejected_when_complementary_titles_exist(self):
+        quote = "You deserve somebody who knows how hard it is to find somebody like you"
+        copied = quote + " ✨ #shorts"
+        package = {
+            "title": copied,
+            "variants": [copied, "Know Your Worth—You're Hard to Replace ✨ #shorts", "You're Rarer Than You Realize 🤍 #shorts"],
+            "description": f'“{quote}”\n\nA reflection about recognizing your worth.',
+            "tags": ["know your worth", "being valued", "hard to replace"],
+            "hashtags": ["#shorts", "#KnowYourWorth"],
+        }
+        gate = evaluate_package_quality(
+            package, script=quote,
+            creator_brief={"exact_quote": quote, "video_format": "youtube_shorts", "creator_intent": "recognizing your worth"},
+            enforce_final_tag_rules=False,
+        )
+        rejected = {item["title"]: {reason["code"] for reason in item["issues"]} for item in gate["rejected_candidates"]}
+        self.assertIn("title_duplicates_on_screen_quote", rejected[copied])
+        self.assertNotEqual(gate["accepted_candidates"][0]["title"], copied)
+        self.assertTrue(title_copies_quote(
+            "You deserve somebody who knows how hard it is to find… 🌙 #shorts", quote,
+        ))
+
+    def test_semantically_proven_worth_tags_pass_final_grounding(self):
+        quote = "You deserve somebody who knows how hard it is to find somebody like you"
+        tags = ["being valued", "genuine appreciation", "rare personal qualities"]
+        evidence = {
+            "selected_keywords": [
+                {"keyword": tag, "source_support_score": 80, "source_classification": "combined", "source_support": "rarity-and-worth semantic bridge", "keyword_relevance_score": 75}
+                for tag in tags
+            ]
+        }
+        package = {
+            "title": "Know Your Worth—You're Hard to Replace ✨ #shorts",
+            "variants": ["Know Your Worth—You're Hard to Replace ✨ #shorts"],
+            "description": f'“{quote}”\n\nA reflection about recognizing your worth.',
+            "tags": tags,
+            "hashtags": ["#shorts", "#KnowYourWorth"],
+        }
+        gate = evaluate_package_quality(
+            package, script=quote,
+            creator_brief={"exact_quote": quote, "video_format": "youtube_shorts", "creator_intent": "recognizing personal rarity and worth"},
+            tag_evidence=evidence,
+        )
+        self.assertNotIn("unrelated_tag", {item["code"] for item in gate["issues"]})
+        self.assertTrue(gate["passed"])
+
+
     def test_structured_brief_has_truthful_provenance_and_completeness(self):
         brief = build_creator_brief(script='Rainy road. On-screen quote: "Keep going."')
         self.assertEqual(brief["field_provenance"]["target_audience"]["source"], "unknown")
@@ -83,6 +222,57 @@ class Phase4QualityTests(unittest.TestCase):
         cleaned = apply_quality_gate(package, gate)
         self.assertLess(len(cleaned["variants"]), 3)
         self.assertTrue(any(item["code"] == "fewer_legitimate_alternatives" for item in gate["warnings"]))
+
+    def test_exact_quote_title_and_one_tag_cannot_be_green(self):
+        quote = "At the end, it's only me and the silence that knows everything."
+        package = {
+            "title": quote + " #shorts",
+            "variants": [quote + " #shorts"],
+            "description": f'“{quote}” A reflective moment about silence.',
+            "tags": ["inner silence"],
+            "hashtags": ["#shorts"],
+        }
+        gate = evaluate_package_quality(
+            package,
+            script=quote,
+            creator_brief={
+                "exact_quote": quote,
+                "video_format": "youtube_shorts",
+                "visual_requirements": "One person walking alone in quiet streets.",
+                "creator_intent": "A reflective Short about solitude and private thoughts.",
+            },
+        )
+        self.assertEqual(gate["verdict"], "YELLOW")
+        warning_codes = {item["code"] for item in gate["warnings"] + gate["final_seo_quality"]["warnings"]}
+        self.assertIn("title_duplicates_on_screen_quote", warning_codes)
+        self.assertIn("sparse_tag_set", warning_codes)
+
+    def test_broken_article_description_is_rejected(self):
+        package = valid_package()
+        package["description"] = "A One person walking alone is the visual."
+        gate = evaluate_package_quality(package, script="A quote Short about walking alone")
+        self.assertIn("broken_description_grammar", {item["code"] for item in gate["issues"]})
+
+    def test_quote_package_cannot_invent_night_darkness_or_comfort(self):
+        quote = "At the end, it's only me and the silence that knows everything."
+        package = {
+            "title": "Finding Comfort on Empty Streets at Night 🌙 #shorts",
+            "variants": ["Thinking Out Loud While Walking in the Dark 🌌 #shorts"],
+            "description": f'“{quote}” A peaceful moment of healing and comfort.',
+            "tags": ["silence"],
+            "hashtags": ["#shorts"],
+        }
+        gate = evaluate_package_quality(
+            package, script=quote,
+            creator_brief={"exact_quote": quote, "video_format": "youtube_shorts", "visual_requirements": "A person walking alone in streets."},
+        )
+        rejected_codes = {reason["code"] for row in gate["rejected_candidates"] for reason in row["issues"]}
+        self.assertIn("unsupported_context", rejected_codes)
+        self.assertIn("unsupported_action", rejected_codes)
+        self.assertIn("unsupported_context", {item["code"] for item in gate["issues"]})
+
+    def test_unicode_normalization_preserves_emoji_joiners(self):
+        self.assertEqual(normalize_unicode("Walking 🚶‍♂️"), "Walking 🚶‍♂️")
 
     def test_quote_fidelity_failure_is_structured(self):
         package = valid_package()
@@ -186,6 +376,23 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertEqual(source, "gemini")
         self.assertEqual(packages["english"]["title"].lower().count("#shorts"), 1)
         self.assertTrue(packages["english"]["generation_trace"]["repair_succeeded"])
+
+    @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
+    @patch("win_engine.llm.seo_writer._generate_one")
+    def test_failed_repair_retains_bounded_quality_reasons(self, mocked_generate, _available):
+        broken = valid_package("They Left Because I Asked for More #shorts")
+        broken["variants"] = [broken["title"]]
+        mocked_generate.side_effect = [dict(broken), dict(broken)]
+        packages, source = seo_writer.write_multilang_packages_with_source(
+            'Quote: "Didn\'t I at least deserve the bare minimum from them?" Shorts', languages=["english"]
+        )
+        self.assertEqual(source, "fallback")
+        self.assertIsNone(packages["english"])
+        trace = seo_writer.last_generation_diagnostics()["english"]
+        self.assertEqual(trace["fallback_reason"], "quality_gate_rejection")
+        self.assertTrue(trace["initial_quality_rejection"]["rejected_titles"])
+        self.assertTrue(trace["repair_quality_rejection"]["rejected_titles"])
+        self.assertIn("gemini_quality_rejection_after_repair", trace["events"])
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
     @patch("win_engine.llm.seo_writer._generate_one", return_value=None)

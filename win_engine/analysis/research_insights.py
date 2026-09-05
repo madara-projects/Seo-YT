@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Any
 
 
@@ -29,18 +30,31 @@ def build_research_decision(
         if item.get("small_channel_outlier")
     ][:3]
 
-    audience = str(brief.get("target_audience") or "the intended viewer").strip()
-    promise = str(brief.get("viewer_promise") or "a specific, honest outcome").strip()
-    unique_angle = str(brief.get("unique_angle") or brief.get("content") or "your real experience").strip()
-    proof = str(brief.get("proof") or "the real footage or experience in the video").strip()
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip()
+    visual = str(brief.get("visual_requirements") or "").strip(" .")
+    audience = str(brief.get("target_audience") or "viewers who relate to the emotion").strip()
+    promise = str(brief.get("viewer_promise") or "a brief moment of emotional recognition").strip()
+    unique_angle = str(brief.get("unique_angle") or "").strip()
+    proof = str(brief.get("proof") or visual or "the creator-supplied video").strip()
 
-    recommended_angle = f"Lead with {unique_angle} for {audience}."
-    reason = (
-        f"Your differentiator is {proof}; make the viewer payoff ({promise}) explicit instead of copying the dominant {dominant} framing."
-    )
+    if quote:
+        core = "silence and private thoughts" if re.search(r"\bsilence\b", quote, re.IGNORECASE) else "the exact emotional idea in the quote"
+        recommended_angle = f"Center the package on {core} for {audience}."
+    else:
+        topic = str(brief.get("topic") or "the supplied topic").strip()
+        recommended_angle = f"Lead with {unique_angle or topic} for {audience}."
+    reason = f"Use {proof} to deliver {promise}, without copying competitor wording or adding an unsupported story."
     avoid = [f"Do not copy the dominant {dominant} title structure."] if titles else ["Research data is unavailable; keep the promise specific and evidence-based."]
     if repeated_patterns:
         avoid.append("Avoid repeated competitor patterns: " + ", ".join(item["pattern"] for item in repeated_patterns) + ".")
+
+    relevance_scores = [int(item.get("research_relevance_score") or 0) for item in youtube_results]
+    average_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0
+    confidence = (
+        "high" if len(youtube_results) >= 5 and average_relevance >= 60
+        else "medium" if len(youtube_results) >= 3 and average_relevance >= 35
+        else "low"
+    )
 
     return {
         "recommended_angle": recommended_angle,
@@ -49,7 +63,9 @@ def build_research_decision(
         "repeated_title_patterns": repeated_patterns,
         "small_channel_winners": small_channel_winners,
         "avoid": avoid,
-        "confidence": "high" if len(youtube_results) >= 8 else "medium" if youtube_results else "low",
+        "confidence": confidence,
+        "evidence_count": len(youtube_results),
+        "average_relevance_score": round(average_relevance, 1),
     }
 
 

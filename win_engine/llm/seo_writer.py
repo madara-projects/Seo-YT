@@ -55,6 +55,26 @@ def _provider_summary(*traces: dict[str, Any], logical_calls: int) -> dict[str, 
         "provider_failure_category": categories[-1] if categories else None,
     }
 
+
+def _quality_rejection_summary(gate: dict[str, Any]) -> dict[str, Any]:
+    """Retain safe, bounded rejection evidence so repair failures are diagnosable."""
+
+    issues = [
+        {"code": str(item.get("code") or "quality_failure"), "field": str(item.get("field") or "package"),
+         "message": str(item.get("message") or "")[:240]}
+        for item in (gate.get("issues") or [])[:12]
+        if isinstance(item, dict)
+    ]
+    rejected_titles = []
+    for candidate in (gate.get("rejected_candidates") or [])[:5]:
+        if not isinstance(candidate, dict):
+            continue
+        rejected_titles.append({
+            "title": str(candidate.get("title") or "")[:120],
+            "codes": [str(item.get("code") or "quality_failure") for item in (candidate.get("issues") or [])[:8] if isinstance(item, dict)],
+        })
+    return {"status": str(gate.get("status") or "fail"), "issues": issues, "rejected_titles": rejected_titles}
+
 _SYSTEM_PROMPT = (
     "You are an expert YouTube SEO strategist. You analyze the user's video script, quote, or idea "
     "to write high-CTR title variants, descriptions, tags, and hashtags. "
@@ -342,6 +362,7 @@ def _build_user_prompt(
             + json.dumps(previous_package or {}, ensure_ascii=False)[:5000]
             + "\n"
         )
+    title_length_rule = "45-65 characters" if not is_short_content(script, creator_brief) else "35-65 characters"
     return f"""Video script or idea:
 \"\"\"
 {script.strip()}
@@ -371,10 +392,8 @@ Constraints:
 - a researched YouTube title or result phrase is evidence only, never text to copy into a title, description, or tag. Research may improve wording for the same source-supported subject, but may not introduce a new situation, entity, relationship, product, lesson, or claim
 - a package that is merely valid is not enough: prefer a short, natural, source-faithful result over a generic, keyword-stuffed, or invented one
 - research may inform topic vocabulary, but it cannot invent what the video teaches, explains, demonstrates, or advises
-{silent_quote_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
-{non_instructional_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
-{undisclosed_message_rule}- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
-- title: 45-65 characters, engaging, matching content category (Shorts/Quotes, Vlogs, Gaming, Tutorials)
+- do not infer a time of day, darkness, empty streets, weather, spoken narration, peace, comfort, or healing unless the creator source explicitly supplies it
+{silent_quote_rule}{non_instructional_rule}{undisclosed_message_rule}- title: {title_length_rule}, engaging, and matched to the actual content category
 - return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are additional truthful alternatives
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
 - use idiomatic phrases such as "one-sided effort"; never write unnatural phrases such as "unrequited effort" or "fractions of effort"
@@ -496,15 +515,30 @@ def _safe_quote_title(quote: str) -> str:
     return " ".join(words).rstrip(".,;:!?") + "… #Shorts"
 
 
-def _sanitize_generated_package(pkg: dict[str, Any], script: str) -> dict[str, Any]:
+def _sanitize_generated_package(
+    pkg: dict[str, Any], script: str, creator_brief: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """Apply deterministic fidelity checks after generation, especially for quote Shorts."""
     cleaned = dict(pkg)
-    quote = _extract_on_screen_quote(script)
+    quote = str((creator_brief or {}).get("exact_quote") or (creator_brief or {}).get("on_screen_text") or "").strip()
+    quote = quote or _extract_on_screen_quote(script)
     description = _naturalize_generated_text(str(cleaned.get("description") or ""))
     if quote:
         description = _remove_unsupported_description_sentences(description, script)
         if not description:
             description = f'“{quote}”\n\nA quiet reflection for anyone who connects with these words.'
+        elif re.sub(r"\s+", " ", quote).strip() not in re.sub(r"\s+", " ", description).strip():
+            paragraphs = [item.strip() for item in re.split(r"\n\s*\n", description) if item.strip()]
+            quote_words = set(re.findall(r"[\w’']+", quote.casefold(), re.UNICODE))
+            if paragraphs:
+                first_words = set(re.findall(r"[\w’']+", paragraphs[0].casefold(), re.UNICODE))
+                if quote_words and len(quote_words & first_words) / len(quote_words) >= 0.8:
+                    paragraphs[0] = f'“{quote}”'
+                else:
+                    paragraphs.insert(0, f'“{quote}”')
+            else:
+                paragraphs = [f'“{quote}”']
+            description = "\n\n".join(paragraphs)
     cleaned["description"] = description
 
     titles = [str(cleaned.get("title") or ""), *(cleaned.get("variants") or [])]
@@ -605,7 +639,7 @@ def _generate_one(
         gemini_client.set_last_generation_diagnostic(provider_trace)
         _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
         return None
-    sanitized = _sanitize_generated_package(validated, script)
+    sanitized = _sanitize_generated_package(validated, script, creator_brief)
     cleaned = _prefer_fresh_titles(sanitized, channel_learning)
     cleaned["_provider_trace"] = provider_trace
     _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
@@ -747,6 +781,7 @@ def write_multilang_packages_with_source(
             out[lang] = first
             continue
         first["generation_trace"]["events"].append("gemini_quality_rejection")
+        first["generation_trace"]["initial_quality_rejection"] = _quality_rejection_summary(gate)
         repair_reasons = [*gate.get("issues", [])]
         repair_reasons.extend(reason for item in gate.get("rejected_candidates", []) for reason in item.get("issues", []))
         repaired = _generate_one(
@@ -760,9 +795,12 @@ def write_multilang_packages_with_source(
             language_diagnostics[lang] = {
                 **repaired_trace, **_provider_summary(first_trace, repaired_trace, logical_calls=2), "repair_attempted": True,
                 "repair_succeeded": False, "initial_quality_status": gate["status"],
+                "final_quality_status": "invalid_response",
+                "initial_quality_rejection": _quality_rejection_summary(gate),
                 "events": [str(first_trace.get("status") or "gemini_success"), "gemini_quality_rejection",
                            str(repaired_trace.get("status") or "gemini_validator_rejection"), "fallback_used"],
                 "fallback_used": True,
+                "fallback_reason": "gemini_invalid_repair_response",
                 "fallback_level": "deterministic",
             }
             out[lang] = None
@@ -777,12 +815,19 @@ def write_multilang_packages_with_source(
         )
         repaired = apply_quality_gate(repaired, repaired_gate)
         repaired["generation_trace"] = {
-            **_provider_summary(first_trace, repaired_trace, logical_calls=2), "repair_attempted": True,
+            **_provider_summary(first_trace, repaired_trace, logical_calls=2),
+            "status": str(repaired_trace.get("status") or "gemini_success"), "repair_attempted": True,
             "repair_succeeded": bool(repaired_gate["passed"]),
             "initial_quality_status": gate["status"], "final_quality_status": repaired_gate["status"],
+            "initial_quality_rejection": _quality_rejection_summary(gate),
+            "repair_quality_rejection": _quality_rejection_summary(repaired_gate) if not repaired_gate["passed"] else None,
             "events": [str(first_trace.get("status") or "gemini_success"), "gemini_quality_rejection",
                        str(repaired_trace.get("status") or "gemini_success"),
-                       "gemini_repair_success" if repaired_gate["passed"] else "gemini_validator_rejection"],
+                       "gemini_repair_success" if repaired_gate["passed"] else "gemini_quality_rejection_after_repair",
+                       *([] if repaired_gate["passed"] else ["fallback_used"])],
+            "fallback_used": not repaired_gate["passed"],
+            "fallback_reason": None if repaired_gate["passed"] else "quality_gate_rejection",
+            "fallback_level": None if repaired_gate["passed"] else "deterministic",
         }
         language_diagnostics[lang] = dict(repaired["generation_trace"])
         out[lang] = repaired if repaired_gate["passed"] else None

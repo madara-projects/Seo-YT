@@ -136,7 +136,7 @@ def build_seo_package(
 
     def _resolve(lang: str) -> dict[str, Any]:
         generated = multilang_raw.get(lang)
-        p = generated or _content_specific_fallback(primary_topic, keyword_signals, creator_brief)
+        p = generated or _content_specific_fallback(primary_topic, keyword_signals, generation_brief)
         if not generated:
             diagnostic = dict(writer_diagnostics.get(lang) or {})
             events = list(diagnostic.get("events") or [])
@@ -148,7 +148,11 @@ def build_seo_package(
                 **diagnostic,
                 "events": events,
                 "fallback_used": True,
-                "fallback_reason": str(diagnostic.get("status") or "gemini_unavailable"),
+                "fallback_reason": str(
+                    diagnostic.get("fallback_reason")
+                    or ("quality_gate_rejection" if diagnostic.get("initial_quality_rejection") else diagnostic.get("status"))
+                    or "gemini_unavailable"
+                ),
                 "fallback_level": "deterministic",
             }
         tags, tag_evidence = select_final_tags(
@@ -161,6 +165,11 @@ def build_seo_package(
         )
         p["tags"] = tags
         p["keyword_research"] = tag_evidence
+        if is_short_content(script, creator_brief):
+            focused_hashtags = [str(item).strip() for item in (p.get("hashtags") or []) if str(item).strip()]
+            if not any(item.casefold() == "#shorts" for item in focused_hashtags):
+                focused_hashtags = ["#shorts", *focused_hashtags]
+            p["hashtags"] = focused_hashtags[:3]
         return p
 
     multilang = {lang: _resolve(lang) for lang in _LANGS}
@@ -184,7 +193,8 @@ def build_seo_package(
     # deterministic, source-only fallback pass through the exact same tag and
     # quality contracts.  This does not make another provider request.
     if quality_gate.get("verdict") == "RED":
-        safe = _content_specific_fallback(primary_topic, keyword_signals, creator_brief)
+        generation_trace["final_package_rejection"] = _quality_trace_summary(quality_gate)
+        safe = _content_specific_fallback(primary_topic, keyword_signals, generation_brief)
         safe_tags, safe_evidence = select_final_tags(
             keyword_research,
             generated_tags=safe.get("tags") or [],
@@ -225,6 +235,7 @@ def build_seo_package(
             if selected_language not in fallback_languages:
                 fallback_languages.append(selected_language)
         else:
+            generation_trace["deterministic_fallback_rejection"] = _quality_trace_summary(safe_gate)
             minimal = _safe_minimal_package(primary_topic, creator_brief)
             minimal_tags, minimal_evidence = select_final_tags(
                 keyword_research,
@@ -287,7 +298,7 @@ def build_seo_package(
         "final_tags": list(pkg.get("tags") or []),
         "final_tag_provenance": keyword_research.get("tag_provenance") or [],
         "final_tag_scores": [
-            {"keyword": item.get("keyword"), "source_support_score": item.get("source_support_score"),
+            {"keyword": item.get("tag") or item.get("keyword"), "source_support_score": item.get("source_support_score"),
              "provenance": item.get("provenance")}
             for item in (keyword_research.get("tag_provenance") or []) if isinstance(item, dict)
         ],
@@ -389,7 +400,7 @@ def build_seo_package(
         angle=angle,
         keyword_signals=keyword_signals,
     )
-    chapters = build_chapters(script, keyword_signals)
+    chapters = build_chapters(script, keyword_signals, creator_brief)
     session_expansion = build_session_expansion(title, keyword_signals)
     binge_bridge = build_binge_bridge(title, angle)
     thumbnail_strategy = build_thumbnail_strategy(
@@ -588,6 +599,7 @@ def _semantic_emoji(text: str) -> str:
         (("heartbreak", "heart", "missing", "miss", "love"), ("💔", "🫶", "❤️‍🩹")),
         (("road", "traffic", "vehicle", "car", "bus"), ("🚦", "🚗", "🛣️")),
         (("moon", "night", "stars", "sky"), ("🌙", "✨", "🌌")),
+        (("silence", "solitude", "alone", "lonely", "quiet streets"), ("🌙", "🕯️", "🌃")),
         (("sunset", "beach", "ocean", "sea"), ("🌅", "🌊", "☀️")),
         (("mountain", "hill", "nature", "green"), ("⛰️", "🌿", "🌄")),
         (("funny", "comedy", "laugh"), ("😂", "😄", "🤣")),
@@ -618,7 +630,7 @@ def _visual_hashtag(value: str) -> str:
     return _topic_hashtag(value)
 
 
-def _fallback_quote_variants(quote: str, topic: str, suffix: str) -> list[str]:
+def _fallback_quote_variants(quote: str, topic: str, suffix: str, *, semantic_validated: bool = False) -> list[str]:
     """Produce conservative, readable quote titles without template filler."""
 
     lowered = quote.casefold()
@@ -630,10 +642,35 @@ def _fallback_quote_variants(quote: str, topic: str, suffix: str) -> list[str]:
         bodies = ["Needed, But Never Chosen"]
     elif "keep going" in lowered:
         bodies = ["Keep Going"]
+    elif (
+        "deserve" in lowered
+        and re.search(r"\bhard\s+(?:it\s+is\s+)?to\s+find\b", lowered)
+        and re.search(r"\b(?:somebody|someone)\s+like\s+you\b", lowered)
+    ):
+        bodies = [
+            "Know Your Worth—You're Hard to Replace",
+            "The Right Person Will Recognize Your Worth",
+            "You're Rarer Than You Realize",
+            "Someone Should See How Rare You Are",
+            "You Deserve to Be Truly Valued",
+        ]
+    elif "silence" in lowered and any(term in lowered for term in ("knows", "everything", "only me")):
+        bodies = [
+            "Some Things Only Silence Knows",
+            "When Silence Is the Only One Who Knows",
+            "At the End, It's Just Me and the Silence",
+            "The Thoughts I Only Share With Silence",
+            "What the Silence Knows About Me",
+        ]
     else:
-        # The creator's own wording is safer than adding an invented event or
-        # relationship frame when the source is sparse or deliberately vague.
-        bodies = [_quote_title_focus(quote) or topic]
+        # ``topic`` comes from the validated semantic layer. Prefer that
+        # natural interpretation over copying/truncating the on-screen quote.
+        semantic_topic = re.sub(r"\s+", " ", topic or "").strip(" .:-")
+        quote_focus = _quote_title_focus(quote)
+        if semantic_validated and semantic_topic and semantic_topic.casefold() not in {"video topic", quote_focus.casefold()}:
+            bodies = [semantic_topic[:1].upper() + semantic_topic[1:]]
+        else:
+            bodies = [quote_focus or "A Quiet Reflection"]
     return list(dict.fromkeys(_fit_title(body, suffix) for body in bodies if body))
 
 
@@ -698,7 +735,70 @@ def _quote_search_concepts(quote: str) -> list[str]:
         concepts.append("feeling valued")
     if "chosen" in lowered:
         concepts.append("feeling chosen")
+    if "give up" in lowered or "enough" in lowered:
+        concepts.extend(["knowing when to let go", "emotional exhaustion"])
+    if "walks away" in lowered or "how to stay" in lowered:
+        concepts.append("relationships fading without closure")
+    if "crueller" in lowered or "apology" in lowered:
+        concepts.extend(["self forgiveness", "self criticism"])
+    if "silence" in lowered:
+        concepts.extend(["inner silence", "silence quotes"])
+    if "only me" in lowered or "alone" in lowered:
+        concepts.append("solitude")
+    if "thought" in lowered or ("silence" in lowered and "knows" in lowered):
+        concepts.append("inner thoughts")
+    if (
+        "deserve" in lowered
+        and re.search(r"\bhard\s+(?:it\s+is\s+)?to\s+find\b", lowered)
+        and re.search(r"\b(?:somebody|someone)\s+like\s+you\b", lowered)
+    ):
+        concepts.extend([
+            "know your worth", "being valued", "hard to replace",
+            "rare person quotes", "genuine appreciation",
+        ])
     return concepts
+
+
+def _quality_trace_summary(gate: dict[str, Any]) -> dict[str, Any]:
+    """Keep bounded final-gate reasons without storing prompts or provider text."""
+
+    return {
+        "verdict": str(gate.get("verdict") or "RED"),
+        "issue_codes": [
+            str(item.get("code") or "quality_failure")
+            for item in (gate.get("issues") or [])[:12]
+            if isinstance(item, dict)
+        ],
+        "rejected_titles": [
+            {
+                "title": str(item.get("title") or "")[:120],
+                "codes": [
+                    str(reason.get("code") or "quality_failure")
+                    for reason in (item.get("issues") or [])[:8]
+                    if isinstance(reason, dict)
+                ],
+            }
+            for item in (gate.get("rejected_candidates") or [])[:5]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _fallback_visual_sentence(value: str) -> str:
+    """Turn creator visual notes into one natural audience-facing sentence."""
+
+    visual = re.sub(r"\s+", " ", value or "").strip(" .,:;")
+    if not visual:
+        return ""
+    lowered = visual.casefold()
+    if re.search(r"\b(?:one|a) person walking alone\b", lowered):
+        setting = "through quiet streets" if "quiet street" in lowered else "along the street" if "street" in lowered else ""
+        return f"A lone person walks {setting}.".replace("  ", " ").replace(" .", ".") if setting else "A lone person walks alone."
+    if lowered.startswith("person walking alone"):
+        return "A lone person walks through the scene."
+    if re.match(r"^[a-z-]+\s+scene\b", lowered):
+        return f"A {visual} provides the visual setting."
+    return f"The video follows {visual[:1].lower() + visual[1:]}."
 
 
 def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -747,6 +847,11 @@ def _content_specific_fallback(
     pretty = title_topic.title()
     content = str(brief.get("content") or "").strip()
     quote = str(brief.get("exact_quote") or "").strip() or _quoted_text(content)
+    seo_targets = [
+        re.sub(r"\s+", " ", str(item or "")).strip(" .:-")
+        for item in brief.get("seo_research_targets") or []
+        if str(item or "").strip()
+    ][:8]
     is_shorts = is_short_content(content or topic, brief)
     promise = str(brief.get("viewer_promise") or "").strip()
     audience = str(brief.get("target_audience") or "").strip()
@@ -757,21 +862,27 @@ def _content_specific_fallback(
     emoji = _semantic_emoji(" ".join([topic, content, quote, str(brief.get("visual_requirements") or "")]))
     suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
     if quote:
-        variants = _fallback_quote_variants(quote, topic, suffix)
-        visual_match = re.search(
-            r"(?i)\bbackground(?:\s+visuals?)?\s*(?:is|:)?\s*(.*?)(?=\s+and\s+.*(?:screen|quote)|[.;]|$)",
-            content,
-        )
-        visual = re.sub(r"\s+", " ", visual_match.group(1)).strip(" .,:;") if visual_match else ""
-        visual_sentence = visual.split(",", 1)[0].rstrip(" .")
-        if visual_sentence and not re.match(r"(?i)^(?:a|an|the)\s", visual_sentence):
-            visual_sentence = "a " + visual_sentence
-        visual_line = f"{visual_sentence[:1].upper() + visual_sentence[1:]} is the supplied visual." if visual_sentence else ""
+        fallback_title_topic = seo_targets[0] if seo_targets else topic
+        variants = _fallback_quote_variants(quote, fallback_title_topic, suffix, semantic_validated=bool(seo_targets))
+        visual_line = _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))
+        quote_lowered = quote.casefold()
+        if "silence" in quote_lowered:
+            reflective_line = "A reflective moment about solitude, silence, and the thoughts we keep private."
+        elif "deserve" in quote_lowered and "hard" in quote_lowered and "find" in quote_lowered:
+            reflective_line = "A reflective moment about knowing your worth and being genuinely valued for who you are."
+        else:
+            supported_themes = [item for item in seo_targets if item.casefold() != topic.casefold()][:3]
+            if supported_themes:
+                reflective_line = "A reflective moment about " + ", ".join(supported_themes) + "."
+            elif seo_targets and topic and topic.casefold() != "video topic":
+                reflective_line = f"A reflective moment about {topic}."
+            else:
+                reflective_line = "A reflective Short built around the exact words shown on screen."
         description = (
             f'“{quote}”\n\n'
             + visual_line
             + ("\n\n" if visual_line else "")
-            + "A reflective Short built around the exact words shown on screen."
+            + reflective_line
         )
     else:
         instructional = not source_requires_noninstructional_framing(content or topic, brief)
@@ -793,7 +904,10 @@ def _content_specific_fallback(
 
     tags: list[str] = []
     seen: set[str] = set()
-    candidates = [topic, *_quote_search_concepts(quote)] if quote else [topic, *[str(item.get("keyword") or "") for item in keyword_signals or []]]
+    candidates = (
+        [topic, *seo_targets, *_quote_search_concepts(quote), *[str(item.get("keyword") or "") for item in keyword_signals or []]]
+        if quote else [topic, *[str(item.get("keyword") or "") for item in keyword_signals or []]]
+    )
     for field in ("viewer_promise", "unique_angle"):
         value = " ".join(str(brief.get(field) or "").strip().lower().split()[:6])
         if value:
@@ -804,12 +918,19 @@ def _content_specific_fallback(
             seen.add(cleaned)
             tags.append(cleaned)
 
-    hashtags = [] if quote else [_topic_hashtag(topic)]
+    quote_lowered = quote.casefold()
+    if quote and "silence" in quote_lowered:
+        hashtags = ["#DeepThoughts", "#Solitude"]
+    elif quote and "deserve" in quote_lowered and "hard" in quote_lowered and "find" in quote_lowered:
+        hashtags = ["#KnowYourWorth", "#SelfWorth"]
+    else:
+        hashtags = [] if quote else [_topic_hashtag(topic)]
     if is_shorts:
-        hashtags.append("#shorts")
-    visual_hashtag = _visual_hashtag(str(brief.get("visual_requirements") or ""))
-    if visual_hashtag:
-        hashtags.append(visual_hashtag)
+        hashtags.insert(0, "#shorts")
+    if not quote:
+        visual_hashtag = _visual_hashtag(str(brief.get("visual_requirements") or ""))
+        if visual_hashtag:
+            hashtags.append(visual_hashtag)
     hashtags = list(dict.fromkeys(item for item in hashtags if item))[:3]
 
     return {

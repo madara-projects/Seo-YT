@@ -65,27 +65,27 @@ def build_keyword_research(
     visual_terms = set(_tokens(brief.get("visual_requirements") or ""))
     candidates: dict[str, dict[str, Any]] = {}
     opportunities = search_opportunities or {}
+    semantic_evidence = _semantic_evidence_map(sem)
 
-    _add(candidates, sem.get("primary_topic"), "semantic", "core_topic", content_terms, visual_terms)
+    _add(candidates, sem.get("primary_topic"), "semantic", "core_topic", content_terms, visual_terms, semantic_evidence=semantic_evidence)
     for value in sem.get("secondary_topics") or []:
-        _add(candidates, value, "semantic", "secondary_topic", content_terms, visual_terms)
+        _add(candidates, value, "semantic", "secondary_topic", content_terms, visual_terms, semantic_evidence=semantic_evidence)
     for value in sem.get("search_intents") or []:
-        _add(candidates, value, "semantic", "search_intent", content_terms, visual_terms)
+        _add(candidates, value, "semantic", "search_intent", content_terms, visual_terms, semantic_evidence=semantic_evidence)
     for cluster in sem.get("keyword_clusters") or []:
         if isinstance(cluster, dict):
             for value in cluster.get("candidates") or []:
-                _add(candidates, value, "semantic_cluster", "long_tail", content_terms, visual_terms)
+                _add(candidates, value, "semantic_cluster", "long_tail", content_terms, visual_terms, semantic_evidence=semantic_evidence)
     for entity in entity_signals:
         if isinstance(entity, dict):
             _add(candidates, entity.get("entity"), "entity", "entity", content_terms, visual_terms)
     for audience in sem.get("audience") or []:
-        _add(candidates, audience, "semantic", "audience", content_terms, visual_terms)
-    # Inferred creator-intent prose is an internal interpretation, not an SEO
-    # concept. Only explicit creator-supplied promises/intents can seed tags.
-    if _brief_field_is_creator_supplied(brief, "creator_intent"):
-        _add(candidates, brief.get("creator_intent"), "creator_brief", "secondary_topic", content_terms, visual_terms)
-    if _brief_field_is_creator_supplied(brief, "viewer_promise"):
-        _add(candidates, brief.get("viewer_promise"), "creator_brief", "search_intent", content_terms, visual_terms)
+        _add(candidates, audience, "semantic", "audience", content_terms, visual_terms, semantic_evidence=semantic_evidence)
+    # Creator intent and viewer promise can prove relevance, but they are prose
+    # instructions rather than atomic search terms. Semantic candidates may use
+    # their concepts; the full sentences must never become tags themselves.
+    for value in _creator_visual_concepts(brief.get("visual_requirements") or ""):
+        _add(candidates, value, "creator_visual", "contextual", content_terms, visual_terms)
     for opportunity in opportunities.get("opportunities") or []:
         if isinstance(opportunity, dict):
             _add(
@@ -238,6 +238,7 @@ def select_final_tags(
 def _add(
     target: dict[str, dict[str, Any]], value: Any, source: str, hint: str,
     content_terms: set[str], visual_terms: set[str], opportunity: dict[str, Any] | None = None,
+    semantic_evidence: dict[str, dict[str, str]] | None = None,
 ) -> None:
     for raw in _atomic_concepts(value):
         text = _normalize(raw)
@@ -248,6 +249,9 @@ def _add(
             continue
         entry = target.setdefault(text, {"keyword": text, "sources": set(), "classification": classification})
         entry["sources"].add(source)
+        proof = (semantic_evidence or {}).get(text)
+        if proof:
+            entry["semantic_evidence"] = dict(proof)
         if opportunity:
             entry["opportunity"] = dict(opportunity)
         if _class_rank(classification) < _class_rank(str(entry.get("classification") or "generic")):
@@ -258,14 +262,22 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     text = str(candidate["keyword"])
     classification = str(candidate.get("classification") or "generic")
     opportunity = candidate.get("opportunity") if isinstance(candidate.get("opportunity"), dict) else {}
+    semantic_evidence = candidate.get("semantic_evidence") if isinstance(candidate.get("semantic_evidence"), dict) else {}
     semantic_confirmation = bool(opportunity.get("semantic_confirmed")) and int(opportunity.get("script_relevance_score") or 0) >= 70
     # Gemini confirmation may score and describe an opportunity, but it cannot
     # replace an actual anchor in the creator source/semantic core. This stops
     # a related-result theme from inventing a new situation, diagnosis, or
     # relationship event around the video.
-    if not _semantic_support(text, content_terms):
+    creator_visual = "creator_visual" in (candidate.get("sources") or [])
+    if not _semantic_support(text, content_terms) and not (creator_visual and _visual_score(text, visual_terms)):
         return None
     source_support_score, source_support = _source_support(text, source_terms)
+    if semantic_evidence:
+        source_support_score = max(source_support_score, 85)
+        source_support = (
+            f"validated {semantic_evidence.get('relationship', 'semantic')} interpretation of creator phrase: "
+            f"{semantic_evidence.get('source_phrase', '')}"
+        )[:300]
     if "research_discovery" in (candidate.get("sources") or []) and source_support_score < 70:
         return None
     content_relevance = max(
@@ -273,13 +285,15 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
         min(42, int(opportunity.get("script_relevance_score") or 0) // 2) if semantic_confirmation else 0,
     )
     visual_relevance = _visual_score(text, visual_terms)
+    evidence_count = _evidence_count(text, results)
     if classification == "entity" and content_relevance < 28:
         return None
     if classification == "audience" and (content_relevance < 42 or _evidence_count(text, results) == 0):
         return None
-    if classification == "contextual" and content_relevance <= visual_relevance:
+    if classification == "contextual" and (
+        source_support_score < 70 or evidence_count < 1
+    ):
         return None
-    evidence_count = _evidence_count(text, results)
     query_support = _query_support(text, queries)
     opportunity_evidence = int(opportunity.get("research_relevance_score") or 0)
     evidence_score = max(min(24, evidence_count * 8 + query_support * 4), min(24, opportunity_evidence // 4))
@@ -298,11 +312,29 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
         "research_evidence_score": evidence_score, "intent_score": intent_score, "specificity_score": specificity,
         "diversity_score": None, "keyword_relevance_score": total, "evidence_count": evidence_count,
         "semantic_confirmed": semantic_confirmation,
+        "semantic_evidence": semantic_evidence or None,
         "cluster": str(opportunity.get("cluster") or _family(text)),
         "intent": str(opportunity.get("intent") or _intent_label(classification)),
         "selection_reason": _reason(classification, evidence_count, query_support, source_classification),
         "reason": _reason(classification, evidence_count, query_support, source_classification),
     }
+
+
+def _semantic_evidence_map(semantic: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Expose only evidence that passed semantic_research's creator-source checks."""
+
+    if semantic.get("concept_evidence_validated") is not True:
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for item in semantic.get("concept_evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        concept = _normalize(item.get("concept"))
+        phrase = str(item.get("source_phrase") or "").strip()
+        relationship = str(item.get("relationship") or "").strip().casefold()
+        if concept and phrase and relationship in {"direct", "paraphrase", "metaphor"}:
+            result[concept] = {"concept": concept, "source_phrase": phrase, "relationship": relationship}
+    return result
 
 
 def _model_entry(text: str, classification: str, content_terms: set[str], visual_terms: set[str]) -> dict[str, Any]:
@@ -364,7 +396,7 @@ def _classify(text: str, hint: str, content_terms: set[str], visual_terms: set[s
         return "irrelevant", "creator_instruction_leakage"
     if _fragmented(text):
         return "malformed", "fragmented_phrase"
-    if hint == "search_intent" and _tokens(text) and _tokens(text)[0] in {"explore", "find", "watch", "lovers"}:
+    if hint == "search_intent" and _tokens(text) and _tokens(text)[0] in {"discover", "explore", "find", "watch", "lovers"}:
         return "malformed", "non_search_instruction"
     if _visual_score(text, visual_terms) > _content_score(text, content_terms):
         return "contextual", None
@@ -376,9 +408,15 @@ def _reject_reason(entry: dict[str, Any], title: str, quote: str, content_terms:
     classification = str(entry.get("classification") or "generic")
     if classification in {"generic", "malformed", "irrelevant"} or _is_generic(text) or _malformed(text) or _noisy(text):
         return classification
-    if classification == "contextual" and int(entry.get("content_relevance_score") or 0) <= int(entry.get("visual_relevance_score") or 0):
+    words = _tokens(text)
+    if words and words[0] in {"discover", "embracing", "finding", "explore", "watch"} and words[0] not in content_terms:
+        return "unsupported_action_framing"
+    if classification == "contextual" and (
+        int(entry.get("source_support_score") or 0) < 70
+        or int(entry.get("research_evidence_score") or 0) < 8
+    ):
         return "visual_only"
-    if not _semantic_support(text, content_terms):
+    if classification != "contextual" and not _semantic_support(text, content_terms):
         return "irrelevant"
     evidence = int(entry.get("research_evidence_score") or 0)
     # Search evidence can validate a source-grounded concept, but it cannot
@@ -429,9 +467,23 @@ def _source_terms(script: str, brief: dict[str, Any]) -> set[str]:
     values = [script]
     values.extend(brief.get(field) for field in (
         "content", "exact_quote", "on_screen_text", "topic", "viewer_promise", "unique_angle",
-        "factual_claims", "visual_requirements",
+        "factual_claims", "visual_requirements", "creator_intent", "content_constraints",
     ))
     return {token for value in values for token in _tokens(value)}
+
+
+def _creator_visual_concepts(value: Any) -> list[str]:
+    """Extract only explicit, searchable visual actions/settings from creator notes."""
+
+    text = _normalize(value)
+    concepts: list[str] = []
+    if re.search(r"\b(?:person|man|woman|boy|girl)\s+(?:is\s+)?walking\s+alone\b", text):
+        concepts.append("walking alone")
+    if re.search(r"\bquiet\s+streets?\b", text):
+        concepts.append("quiet streets")
+    if "rain" in _tokens(text) or "rainy" in _tokens(text):
+        concepts.append("walking in rain" if "walking" in _tokens(text) else "rainy scene")
+    return concepts
 
 
 def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
@@ -459,6 +511,12 @@ def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
         return 70, "unspoken-feelings semantic bridge"
     if word_roots <= {"being", "need", "but", "not", "chosen"} and source_roots & {"need", "choose", "chos"}:
         return 70, "needed-not-chosen semantic bridge"
+    worth_source = bool(source_roots & {"deserve", "worth", "rare", "find"})
+    if worth_source and word_roots <= {
+        "know", "worth", "being", "value", "hard", "replace", "rare", "person",
+        "genuine", "appreciation", "appreciate",
+    }:
+        return 80, "rarity-and-worth semantic bridge"
     # Narrow, documented semantic bridges preserve useful search language
     # without converting an adjacent use case into the video's subject.
     if {"tcp", "udp", "connection"} & source_terms and words <= {"tcp", "udp", "connection", "oriented", "connectionless"}:
@@ -545,6 +603,12 @@ def _term_root(value: str) -> str:
     """Small deterministic inflection bridge; this is not synonym expansion."""
 
     word = str(value or "").casefold()
+    if word in {"rarity", "rarities"}:
+        return "rare"
+    if word in {"valued", "values", "valuing"}:
+        return "value"
+    if word in {"appreciated", "appreciates", "appreciating"}:
+        return "appreciate"
     if len(word) > 5 and word.endswith("ing"):
         word = word[:-3]
         if len(word) > 2 and word[-1:] == word[-2:-1]:
