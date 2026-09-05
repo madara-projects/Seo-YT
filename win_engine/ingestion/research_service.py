@@ -8,7 +8,7 @@ from typing import Any
 from win_engine.analysis.entity_extractor import extract_entity_signals
 from win_engine.analysis.keyword_extractor import extract_keyword_signals
 from win_engine.analysis.research_insights import build_research_decision
-from win_engine.analysis.semantic_research import analyze_script_semantics
+from win_engine.analysis.semantic_research import analyze_script_semantics, refine_research_semantics
 from win_engine.analysis.keyword_research import build_keyword_research
 from win_engine.analysis.search_opportunities import discover_search_opportunities
 from win_engine.analysis.research_planner import brief_research_text, plan_research_queries
@@ -83,6 +83,49 @@ class ResearchService:
             search_opportunities=search_opportunities,
             query_diagnostics=query_diagnostics,
         )
+        # Research gets one extra bounded pass; writer retries cannot invent
+        # stronger evidence for weak tags. Extra queries are explicitly capped.
+        strong = [row for row in keyword_research.get("candidates", [])
+                  if row.get("keyword_relevance_score", 0) >= 90 and row.get("evidence_count", 0) > 0]
+        if len(strong) < 3 and research_queries:
+            refinement = refine_research_semantics(script, creator_brief or {}, research_queries)
+            proposed = plan_research_queries(script=script, creator_brief=creator_brief,
+                semantic_analysis=refinement, region=region, primary_language=primary_language,
+                max_queries=5) if refinement else []
+            previous = {item["query"].casefold() for item in research_queries}
+            def query_terms(value: str) -> set[str]:
+                return set(re.findall(r"\w+", value.casefold())) - {
+                    "a", "an", "the", "of", "to", "for", "in", "about", "quote", "quotes"}
+            previous_terms = [query_terms(item["query"]) for item in research_queries]
+            extra_queries = []
+            for item in proposed:
+                terms = query_terms(item["query"])
+                if (item["query"].casefold() not in previous and 0 < len(terms) <= 3
+                    and terms not in previous_terms):
+                    extra_queries.append(item)
+                    previous_terms.append(terms)
+                if len(extra_queries) == 2:
+                    break
+            if extra_queries:
+                extra_results, extra_diagnostics = self._search_research_queries(extra_queries, cache_policy, ttl_seconds)
+                merged = {}
+                for row in [*scored_results, *self._filter_relevant_results(extra_results, creator_brief)]:
+                    key = row.get("video_id") or row.get("id") or (row.get("title"), row.get("channel_title"))
+                    merged[key] = row
+                scored_results = self._attach_velocity_signals(score_outliers(list(merged.values()),
+                    region=region, primary_language=primary_language))
+                research_queries.extend(extra_queries)
+                for field in ("secondary_topics", "search_intents", "concept_evidence", "keyword_clusters"):
+                    semantic_analysis[field] = [*(semantic_analysis.get(field) or []), *(refinement.get(field) or [])]
+                if refinement.get("primary_topic"):
+                    semantic_analysis["secondary_topics"].append(refinement["primary_topic"])
+                query_diagnostics["refinement"] = {"queries": extra_queries, "diagnostics": extra_diagnostics,
+                    "maximum_extra_queries": 2}
+                top_opportunities = scored_results[:3]
+                keyword_research = build_keyword_research(script=script, semantic=semantic_analysis,
+                    youtube_results=scored_results, research_queries=research_queries, entity_signals=entity_signals,
+                    creator_brief=creator_brief, search_opportunities=search_opportunities,
+                    query_diagnostics=query_diagnostics)
         owned_performance = self._history.owned_performance_summary()
         upload_timing = build_upload_timing(
             scored_results,

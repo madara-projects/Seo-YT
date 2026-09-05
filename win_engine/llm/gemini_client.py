@@ -177,7 +177,7 @@ def generate_with_diagnostics(
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
-            "maxOutputTokens": min(max(max_tokens, 256), 1200),
+            "maxOutputTokens": min(max(max_tokens, 256), 4096),
             "responseMimeType": "application/json",
         },
     }

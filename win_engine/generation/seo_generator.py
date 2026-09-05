@@ -26,6 +26,7 @@ from win_engine.analysis.topic_lock import (
 from win_engine.core.schemas import AnalyzeResponse
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.strategy_engine import build_seo_package
+from win_engine.generation.quality_refinement import refine_package, enforce_quality_target
 
 
 def generate_seo_suggestions(
@@ -115,6 +116,18 @@ def generate_seo_suggestions(
         force_topic_in_title(v["title"], main_topic, category, variant_index=i)
         for i, v in enumerate(seo_package["title_variants"])
     ]
+    refined, refinement_trace = refine_package(
+        {"title": locked_title, "variants": locked_variants, "description": locked_description,
+         "tags": locked_tags, "hashtags": locked_hashtags},
+        script=safe_script, brief=creator_brief if isinstance(creator_brief, dict) else {},
+        language=str(ctx.get("language") or "english"), region=str(ctx.get("region") or "global"),
+        evidence=keyword_research, competitors=yt_results,
+    )
+    locked_title, locked_variants = refined["title"], refined["variants"]
+    locked_description = format_upload_ready_description(refined["description"], locked_hashtags,
+        category=category, topic=main_topic)
+    seo_package["generation_trace"] = {**(seo_package.get("generation_trace") or {}),
+                                        "quality_refinement": refinement_trace}
     final_gate = evaluate_package_quality(
         {
             "title": locked_title, "variants": locked_variants,
@@ -134,6 +147,7 @@ def generate_seo_suggestions(
     )
     locked_title = gated["title"]
     locked_variants = gated["variants"]
+    final_gate = enforce_quality_target(final_gate)
 
     # Patch title_optimization so best_title + scored_variants are also topic-locked.
     title_opt = dict(seo_package.get("title_optimization") or {})
@@ -146,6 +160,7 @@ def generate_seo_suggestions(
             item["title"] = force_topic_in_title(
                 item["title"], main_topic, category, variant_index=i)
     title_opt["scored_variants"] = sv
+    title_opt["best_title"] = locked_title
 
     # Strip junk from any keyword_signals that came back from research.
     locked_signals = [
@@ -193,6 +208,11 @@ def generate_seo_suggestions(
         lang: _lock_pkg(p, lang)
         for lang, p in (seo_package.get("multilang") or {}).items()
     }
+
+    selected_language = str(ctx.get("language") or "english").lower()
+    if selected_language in multilang_packages:
+        multilang_packages[selected_language].update(title=locked_title, variants=locked_variants,
+            description=locked_description, tags=locked_tags, hashtags=locked_hashtags)
 
     # Honest warning when a non-English language falls back to the English template.
     research_warnings = list(research_payload.get("research_warnings", []) or [])
