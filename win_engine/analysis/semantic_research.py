@@ -178,11 +178,35 @@ def usable_research_topic(value: Any) -> bool:
     words = text.split()
     if not words or len(words) > 8:
         return False
+    if text.casefold() in {"emotional_relatable", "informational", "problem_solving", "how_to",
+        "explanation", "comparison", "curiosity", "story_experience", "current_event", "entertainment"}:
+        return False
     if re.match(r"(?i)^(?:sometimes\b|i\b|we\b|you\s+(?:will|never|can|could|should)|this\s+is\b)", text):
         return False
     if re.search(r"(?i)\b(?:if|but|because|and|of|to|with|the|a|an)$", text):
         return False
     return text.casefold() not in {"video topic", "youtube video", "unknown", "unspecified"}
+
+
+def refine_research_semantics(script: str, brief: dict[str, Any], previous_queries: list[dict[str, str]]) -> dict[str, Any]:
+    """One bounded proposal of shorter concepts when initial searches have weak support."""
+    if not gemini_client.is_available():
+        return {}
+    source = _source_text(script, brief)
+    raw = gemini_client.generate(
+        prompt=("The initial YouTube searches had weak matching evidence. Propose 2-3 shorter natural search "
+            "concepts grounded in the creator's meaning. Each proposed phrase MUST contain 1-3 words "
+            "(excluding grammar words). Use topic labels a viewer might search, not another paraphrase "
+            "of the entire sentence. Avoid copied clauses, vague emotions, invented context, "
+            "and instruction for reflective quotes. Do not merely reorder the previous queries. "
+            "Use compact JSON: primary_topic, secondary_topics, search_intents, keyword_clusters "
+            "(array of {cluster,candidates}), concept_evidence (array of {concept,source_phrase,relationship}). "
+            "Every concept needs a verbatim source_phrase and direct/paraphrase/metaphor relationship. "
+            "These are proposals, not claims of search volume.\n"
+            f"Previous searches: {json.dumps(previous_queries)}\nCreator source:\n{source[:8000]}"),
+        system="Return valid semantic JSON only.", max_tokens=1600, temperature=0.1)
+    parsed = _parse(raw)
+    return _ground_semantics(parsed, source, script=script, brief=brief) if parsed else {}
 
 
 def _apply_quote_meaning_profile(value: dict[str, Any], source: str) -> dict[str, Any]:
