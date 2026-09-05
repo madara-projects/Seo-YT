@@ -9,6 +9,7 @@ services:
     environment:
       - WIN_ENGINE_REDIS_URL=redis://redis:6379/0
       - WIN_ENGINE_BIND_HOST=0.0.0.0
+      - WIN_ENGINE_DATABASE_PATH=win_engine.db
     depends_on:
       - redis
     volumes:

@@ -8,6 +8,8 @@ from win_engine.analysis.keyword_research import build_keyword_research, select_
 from win_engine.analysis.research_planner import plan_research_queries
 from win_engine.analysis.semantic_research import analyze_script_semantics
 from win_engine.analysis.search_opportunities import discover_search_opportunities
+from win_engine.analysis.research_insights import build_research_decision
+from win_engine.ingestion.research_service import ResearchService
 
 
 class Phase2DKeywordResearchTests(unittest.TestCase):
@@ -41,6 +43,149 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         text = " ".join(item["query"] for item in queries).casefold()
         self.assertIn("emotional distance", text)
         self.assertNotIn("wasn't abandoned", text)
+
+    def test_quote_marker_brief_uses_natural_concept_queries(self):
+        queries = plan_research_queries(
+            script="You don't give up overnight on someone.",
+            creator_brief={
+                "content": "You don't give up overnight on someone.",
+                "exact_quote": "You don't give up overnight on someone. Your heart quietly says enough.",
+                "topic": "you don't give up overnight on someone",
+                "video_format": "youtube_shorts",
+            },
+            semantic_analysis={"primary_topic": "don't give overnight someone reach"},
+        )
+        text = " | ".join(item["query"] for item in queries).casefold()
+        self.assertIn("knowing when to let go", text)
+        self.assertIn("emotional exhaustion", text)
+        self.assertNotIn("don't give overnight someone reach", text)
+
+    @patch("win_engine.analysis.semantic_research.gemini_client.is_available", return_value=False)
+    def test_rarity_quote_gets_natural_semantic_profile_and_queries(self, _available):
+        quote = "You deserve somebody who knows how hard it is to find somebody like you"
+        brief = {
+            "content": quote,
+            "exact_quote": quote,
+            "video_format": "youtube_shorts",
+            "creator_intent": "A reflection about recognizing a person's rarity and worth.",
+        }
+        semantic = analyze_script_semantics(quote, brief)
+        self.assertEqual(semantic["primary_topic"], "recognizing your worth")
+        self.assertIn("being valued for who you are", semantic["secondary_topics"])
+        self.assertIn("know your worth", semantic["keyword_clusters"][0]["candidates"])
+        queries = plan_research_queries(script=quote, creator_brief=brief, semantic_analysis=semantic)
+        query_text = " | ".join(item["query"] for item in queries)
+        self.assertIn("knowing your worth quotes", query_text)
+        self.assertIn("being valued for who you are", query_text)
+        self.assertNotIn("deserve somebody knows hard find", query_text)
+
+    def test_rarity_quote_semantic_tags_survive_without_copying_quote(self):
+        quote = "You deserve somebody who knows how hard it is to find somebody like you"
+        brief = {
+            "exact_quote": quote,
+            "creator_intent": "A reflection about recognizing a person's rarity and worth.",
+            "field_provenance": {"creator_intent": {"source": "creator_supplied"}},
+        }
+        research = build_keyword_research(
+            script=quote,
+            semantic={
+                "primary_topic": "recognizing your worth",
+                "secondary_topics": ["being valued for who you are", "genuine appreciation"],
+                "search_intents": ["knowing your worth quotes"],
+                "keyword_clusters": [{"cluster": "personal worth", "candidates": ["know your worth", "being valued", "hard to replace"]}],
+                "source": "local_profile",
+            },
+            youtube_results=[
+                {"title": "Know your worth", "description": "Being valued for who you are"},
+                {"title": "Hard to replace quotes", "description": "Genuine appreciation"},
+            ],
+            research_queries=[{"type": "primary", "query": "knowing your worth quotes"}],
+            entity_signals=[], creator_brief=brief,
+        )
+        tags, _ = select_final_tags(
+            research, generated_tags=["know your worth", "being valued", "hard to replace", quote],
+            title="You're Rarer Than You Realize ✨ #shorts", script=quote, creator_brief=brief,
+        )
+        self.assertGreaterEqual(len(tags), 3)
+        self.assertIn("know your worth", tags)
+        self.assertTrue(any(tag.startswith("being valued") for tag in tags))
+        self.assertNotIn(quote.casefold(), tags)
+
+    def test_irrelevant_youtube_results_are_removed_before_scoring(self):
+        rows = [
+            {"title": "It's Just A Prank", "description": "Comedy", "research_query": "emotional exhaustion"},
+            {"title": "Obsession Spell", "description": "Manifestation", "research_query": "knowing when to let go"},
+            {"title": "How Emotional Exhaustion Feels", "description": "Knowing when to let go", "research_query": "emotional exhaustion"},
+        ]
+        filtered = ResearchService._filter_relevant_results(rows)
+        self.assertEqual([row["title"] for row in filtered], ["How Emotional Exhaustion Feels"])
+
+    def test_short_research_rejects_long_form_and_generic_quote_matches(self):
+        rows = [
+            {"title": "Quiet Solitude Ambient Mix", "description": "silence", "duration": "PT1H6S", "research_query": "solitude silence inner thoughts"},
+            {"title": "Sad anime quote edit", "description": "quotes shorts", "duration": "PT25S", "research_query": "reflective shorts solitude quotes lonely walking"},
+            {"title": "Walking Alone on an Empty Road", "description": "quiet thoughts and solitude", "duration": "PT12S", "research_query": "quiet streets walking solitude inner thoughts"},
+        ]
+        filtered = ResearchService._filter_relevant_results(rows, {"video_format": "youtube_shorts"})
+        self.assertEqual([row["title"] for row in filtered], ["Walking Alone on an Empty Road"])
+        self.assertGreaterEqual(filtered[0]["research_relevance_score"], 60)
+
+    def test_research_confidence_uses_relevance_not_only_result_count(self):
+        weak = [{"title": f"Result {index}", "research_relevance_score": 20} for index in range(10)]
+        decision = build_research_decision({"exact_quote": "Silence knows everything."}, weak)
+        self.assertEqual(decision["confidence"], "low")
+        self.assertEqual(decision["average_relevance_score"], 20.0)
+
+    def test_explicit_visual_concept_can_survive_with_research_support(self):
+        brief = {
+            "exact_quote": "Silence knows everything.",
+            "visual_requirements": "One person walking alone in quiet streets.",
+            "creator_intent": "A reflective Short about solitude and private thoughts.",
+            "field_provenance": {"creator_intent": {"source": "creator_supplied"}},
+        }
+        research = build_keyword_research(
+            script="Silence knows everything.",
+            semantic={"primary_topic": "inner silence", "secondary_topics": ["inner thoughts", "solitude"], "search_intents": [], "keyword_clusters": [], "source": "gemini"},
+            youtube_results=[{"title": "Walking alone on quiet streets", "description": "solitude and inner thoughts"}],
+            research_queries=[{"type": "visual", "query": "walking alone quiet streets"}],
+            entity_signals=[],
+            creator_brief=brief,
+        )
+        tags, _ = select_final_tags(
+            research, generated_tags=["inner silence", "inner thoughts", "solitude", "walking alone"],
+            title="Some Things Only Silence Knows 🌙 #shorts", script="Silence knows everything.",
+            creator_brief=brief, is_short=True,
+        )
+        self.assertIn("walking alone", tags)
+        self.assertGreaterEqual(len(tags), 3)
+
+    def test_search_instruction_and_invented_action_tags_are_rejected(self):
+        brief = {
+            "exact_quote": "Silence knows everything.",
+            "creator_intent": "A reflective Short about solitude and private thoughts.",
+            "field_provenance": {"creator_intent": {"source": "creator_supplied"}},
+        }
+        research = build_keyword_research(
+            script="Silence knows everything.",
+            semantic={
+                "primary_topic": "solitude", "secondary_topics": ["private thoughts"],
+                "search_intents": ["discover content about solitude"],
+                "keyword_clusters": [{"cluster": "solitude", "candidates": ["embracing solitude"]}],
+                "source": "gemini",
+            },
+            youtube_results=[{"title": "Solitude and private thoughts", "description": "silence"}],
+            research_queries=[{"type": "topic", "query": "solitude silence private thoughts"}],
+            entity_signals=[], creator_brief=brief,
+        )
+        tags, evidence = select_final_tags(
+            research, generated_tags=["discover content about solitude", "embracing solitude", "private thoughts"],
+            title="When It's Only Me and the Silence #shorts", script="Silence knows everything.", creator_brief=brief,
+        )
+        self.assertNotIn("discover content about solitude", tags)
+        self.assertNotIn("embracing solitude", tags)
+        self.assertIn("private thoughts", tags)
+        reasons = {item["reason"] for item in evidence["rejected_candidates"]}
+        self.assertIn("unsupported_action_framing", reasons)
 
     def test_final_tags_reject_title_and_quote_copies_and_keep_youtube_evidence(self):
         research = build_keyword_research(
@@ -258,6 +403,74 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         result = analyze_script_semantics("A tutorial on repairing a bicycle chain.")
         self.assertEqual(result["source"], "local_fallback")
         self.assertTrue(result["primary_topic"])
+
+    @patch("win_engine.analysis.semantic_research.gemini_client.generate")
+    @patch("win_engine.analysis.semantic_research.gemini_client.is_available", return_value=True)
+    def test_unseen_metaphors_keep_only_source_anchored_meanings_and_generate_tags(self, _available, generate):
+        cases = [
+            (
+                "Be grateful that you slipped through the hands of people who had no idea how to hold you",
+                ["knowing your worth", "being valued", "moving on with gratitude"],
+                "slipped through the hands",
+            ),
+            (
+                "Some doors closing are protection you cannot see yet",
+                ["hidden protection", "new beginnings", "accepting closed paths"],
+                "doors closing are protection",
+            ),
+            (
+                "You cannot pour from an empty cup",
+                ["rest and self care", "protecting your energy", "personal boundaries"],
+                "pour from an empty cup",
+            ),
+        ]
+        for quote, concepts, anchor in cases:
+            with self.subTest(quote=quote):
+                generate.return_value = json.dumps({
+                    "primary_topic": concepts[0],
+                    "secondary_topics": concepts[1:],
+                    "entities": [],
+                    "audience": [],
+                    "search_intents": concepts,
+                    "keyword_clusters": [{"cluster": "meaning", "candidates": concepts}],
+                    "viewer_intent": "emotional_relatable",
+                    "concept_evidence": [
+                        {"concept": concept, "source_phrase": anchor, "relationship": "metaphor"}
+                        for concept in concepts
+                    ],
+                })
+                semantic = analyze_script_semantics(quote, {"exact_quote": quote})
+                self.assertTrue(semantic["concept_evidence_validated"])
+                self.assertEqual(semantic["primary_topic"], concepts[0])
+                research = build_keyword_research(
+                    script=quote, semantic=semantic, youtube_results=[], research_queries=[],
+                    entity_signals=[], creator_brief={"exact_quote": quote},
+                )
+                tags, evidence = select_final_tags(
+                    research, generated_tags=concepts, title=concepts[0].title(),
+                    script=quote, creator_brief={"exact_quote": quote},
+                )
+                self.assertGreaterEqual(len(tags), 3)
+                self.assertTrue(all(row["source_support_score"] >= 70 for row in evidence["selected_keywords"]))
+
+    @patch("win_engine.analysis.semantic_research.gemini_client.generate")
+    @patch("win_engine.analysis.semantic_research.gemini_client.is_available", return_value=True)
+    def test_semantic_evidence_cannot_smuggle_in_an_unsupported_relationship_event(self, _available, generate):
+        quote = "Some doors closing are protection you cannot see yet"
+        generate.return_value = json.dumps({
+            "primary_topic": "hidden protection",
+            "secondary_topics": ["healing after a toxic breakup"],
+            "entities": [], "audience": [], "search_intents": ["hidden protection"],
+            "keyword_clusters": [], "viewer_intent": "emotional_relatable",
+            "concept_evidence": [
+                {"concept": "hidden protection", "source_phrase": "doors closing are protection", "relationship": "metaphor"},
+                {"concept": "healing after a toxic breakup", "source_phrase": "doors closing", "relationship": "metaphor"},
+            ],
+        })
+        semantic = analyze_script_semantics(quote, {"exact_quote": quote})
+        self.assertEqual(semantic["primary_topic"], "hidden protection")
+        self.assertNotIn("healing after a toxic breakup", semantic["secondary_topics"])
+        self.assertNotIn("toxic breakup", json.dumps(semantic).casefold())
 
 
 class Phase2EResearchDiscoveryTests(unittest.TestCase):

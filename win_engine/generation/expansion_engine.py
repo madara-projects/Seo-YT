@@ -2,10 +2,26 @@ from __future__ import annotations
 
 from typing import Any
 
+from win_engine.analysis.generation_quality import is_short_content
 
-def build_chapters(script: str, keyword_signals: list[dict[str, Any]]) -> list[dict[str, str]]:
+
+def build_chapters(
+    script: str,
+    keyword_signals: list[dict[str, Any]],
+    creator_brief: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    brief = creator_brief or {}
+    if is_short_content(script, brief):
+        return []
+    duration = brief.get("duration_seconds")
+    if duration is not None and float(duration) < 300:
+        return []
+    if len(script.split()) < 180:
+        return []
     keywords = [str(item.get("keyword", "")).strip().title() for item in keyword_signals[:4] if item.get("keyword")]
-    defaults = keywords or ["Hook", "Strategy", "Breakdown", "Next Steps"]
+    if len(keywords) < 2:
+        return []
+    defaults = keywords
     timestamps = ["00:00", "00:30", "02:00", "04:00"]
     return [
         {"timestamp": timestamp, "title": title}

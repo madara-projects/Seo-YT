@@ -45,6 +45,7 @@ temp/
 .cache/
 *.tmp
 *.temp
+/tmp_quote_package_*.json
 
 # Database files
 win_engine.db

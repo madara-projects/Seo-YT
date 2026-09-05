@@ -56,6 +56,8 @@ _UNSUPPORTED_CONTEXT_TERMS = {
     "childhood", "workplace", "therapy", "therapist", "clinical", "diagnosis", "depression",
     "anxiety", "trauma", "partner", "boyfriend", "girlfriend", "husband", "wife", "product",
     "review", "comparison", "customer", "office", "school", "family",
+    "night", "nighttime", "midnight", "dark", "darkness", "empty", "deserted",
+    "peace", "peaceful", "comfort", "comforting", "healing",
 }
 _DESCRIPTION_BOILERPLATE = (
     re.compile(r"\b(?:this video focuses on|this video explores|experience a brief moment of)\b", re.IGNORECASE),
@@ -90,7 +92,7 @@ def normalize_unicode(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
     return "".join(
         char for char in text
-        if char in "\n\t" or not unicodedata.category(char).startswith("C")
+        if char in "\n\t\u200d" or not unicodedata.category(char).startswith("C")
     ).strip()
 
 
@@ -118,6 +120,19 @@ def title_similarity(left: Any, right: Any) -> float:
     left_tokens, right_tokens = set(left_text.split()), set(right_text.split())
     overlap = len(left_tokens & right_tokens) / max(len(left_tokens | right_tokens), 1)
     return round(max(sequence, overlap), 4)
+
+
+def title_copies_quote(value: Any, exact_quote: Any) -> bool:
+    """Catch full and truncated quote copies after hashtags/emoji are removed."""
+
+    title_words = [word for word in unicode_words(value) if word != "shorts"]
+    quote_words = unicode_words(exact_quote)
+    if not title_words or not quote_words:
+        return False
+    if title_similarity(" ".join(title_words), " ".join(quote_words)) >= 0.86:
+        return True
+    title_set, quote_set = set(title_words), set(quote_words)
+    return len(title_words) >= 5 and len(title_set & quote_set) / len(title_set) >= 0.9
 
 
 def candidate_mechanism(title: str) -> str:
@@ -303,6 +318,12 @@ def evaluate_package_quality(
                 "A relevant emoji may improve visual fit, but it is not required for a source-faithful title.",
                 severity="warning", index=index,
             ))
+        if exact_quote and len(titles) > 1 and title_copies_quote(title, exact_quote):
+            reasons.append(_issue(
+                "title_duplicates_on_screen_quote", "title",
+                "When alternatives exist, the title must complement rather than repeat the complete on-screen quote.",
+                index=index,
+            ))
         signature = "".join(emojis)
         recent_signatures = ["".join(title_emojis(old)) for old in recent[-3:]]
         if signature and len(recent_signatures) == 3 and all(item == signature for item in recent_signatures):
@@ -345,7 +366,11 @@ def evaluate_package_quality(
         issues.append(_issue("missing_description", "description", "Description is empty."))
     else:
         description_folded = " ".join(unicode_words(description))
-        if exact_quote and " ".join(unicode_words(exact_quote)) not in description_folded:
+        if re.search(r"(?i)\ba\s+(?:one|a|an|the)\s+(?:person|man|woman|boy|girl)\b", description):
+            issues.append(_issue("broken_description_grammar", "description", "Description contains a duplicated article or production-note fragment."))
+        exact_quote_text = re.sub(r"\s+", " ", exact_quote).strip()
+        normalized_description = re.sub(r"\s+", " ", description).strip()
+        if exact_quote and exact_quote_text not in normalized_description:
             issues.append(_issue("quote_fidelity", "description", "Description does not preserve the exact on-screen quote."))
         for code in _unsupported_claims(description, source):
             issues.append(_issue(code, "description", "Description introduces a claim not supported by the creator source."))
@@ -379,13 +404,28 @@ def evaluate_package_quality(
         source,
         *(normalize_unicode(brief.get(field)) for field in (
             "content", "exact_quote", "on_screen_text", "visual_requirements",
-            "viewer_promise", "unique_angle", "topic",
+            "viewer_promise", "unique_angle", "topic", "creator_intent", "content_constraints",
         )),
     ]))) | set(unicode_words(context_text))
+    source_tokens |= set(unicode_words(" ".join(
+        str(item) for item in (brief.get("seo_research_targets") or []) if str(item).strip()
+    )))
+    selected_tag_evidence = {
+        normalize_unicode(item.get("keyword")).casefold(): item
+        for item in (tag_evidence or {}).get("selected_keywords", [])
+        if isinstance(item, dict) and normalize_unicode(item.get("keyword"))
+    }
+
+    def _tag_has_grounding(tag: str) -> bool:
+        if set(unicode_words(tag)) & source_tokens:
+            return True
+        row = selected_tag_evidence.get(normalize_unicode(tag).casefold())
+        return bool(row and int(row.get("source_support_score") or 0) >= 70)
+
     contextual_tags = [
         tag for tag in tags
         if tag not in _GENERIC_FORMAT_TAGS
-        and set(unicode_words(tag)) & source_tokens
+        and _tag_has_grounding(tag)
     ]
     if tags and not contextual_tags:
         issues.append(_issue("non_contextual_tags", "tags", "At least one tag must be derived from the actual video or creator brief."))
@@ -396,7 +436,7 @@ def evaluate_package_quality(
             "Generic platform tags outnumber subject-specific tags; remove filler rather than pad the package.",
         ))
     for tag in tags:
-        if tag not in _GENERIC_FORMAT_TAGS and not (set(unicode_words(tag)) & source_tokens):
+        if tag not in _GENERIC_FORMAT_TAGS and not _tag_has_grounding(tag):
             issues.append(_issue("unrelated_tag", "tags", f"Tag is not grounded in the supplied topic: {tag}"))
     if enforce_final_tag_rules:
         issues.extend(_tag_provenance_issues(tags, tag_evidence))
@@ -439,8 +479,10 @@ def evaluate_package_quality(
 
     all_errors = [*issues, *(reason for item in rejected for reason in item["issues"])]
     passed = not issues and bool(accepted)
-    verdict = "GREEN" if passed and semantic_quality["verdict"] == "GREEN" else (
-        "YELLOW" if passed and semantic_quality["verdict"] == "YELLOW" else "RED"
+    verdict = (
+        "RED" if not passed or semantic_quality["verdict"] == "RED"
+        else "YELLOW" if semantic_quality["verdict"] == "YELLOW"
+        else "GREEN"
     )
     return {
         "status": "pass" if passed else "fail",
@@ -492,6 +534,10 @@ def _title_usefulness_issues(
     words = _meaningful_words(clean)
     source_words = _source_words(source, brief)
     sparse_source = len(_meaningful_words(source)) <= 2
+    if re.search(r"(?i)^\s*(?:how\s+to\s+)?(?:the\s+)?(?:quote\s+)?is\s*[-:]", clean):
+        issues.append(_issue("malformed_title_fragment", "title", "Title starts with a creator-input marker instead of natural viewer-facing language.", index=index))
+    if re.search(r"(?i)\b(?:used\s+talk\s+every\s+then|quote\s+on\s+(?:the\s+)?(?:reel|screen)|background\s+(?:of\s+the\s+video\s+)?is)\b", clean):
+        issues.append(_issue("creator_instruction_leakage", "title", "Title contains parsed input instructions or an unnatural keyword fragment.", index=index))
     if len(words) < 3 and not (sparse_source and words):
         issues.append(_issue("title_too_vague", "title", "Title is too short to identify a useful topic.", index=index))
     if words and words[0] in {"and", "but", "or", "with", "from", "about", "the"}:
@@ -502,6 +548,10 @@ def _title_usefulness_issues(
         issues.append(_issue("unsupported_context", "title", "Title adds a context or entity absent from the creator source.", index=index))
     if re.search(r"\b(?:prompt|creator instruction|video concept|without inventing|do not invent)\b", clean, re.IGNORECASE):
         issues.append(_issue("creator_instruction_leakage", "title", "Title exposes internal creator instructions.", index=index))
+    if re.search(r"\bthinking out loud\b", clean, re.IGNORECASE) and not re.search(r"\bthinking out loud\b", source, re.IGNORECASE):
+        issues.append(_issue("unsupported_action", "title", "Title invents spoken thoughts that are not supplied by the creator.", index=index))
+    if re.search(r"\bheavy comfort\b", clean, re.IGNORECASE):
+        issues.append(_issue("unnatural_title_phrase", "title", "Title uses an unnatural emotional phrase.", index=index))
     if source_overlap_supported and words and source_words and not ({_quality_root(word) for word in words} & {_quality_root(word) for word in source_words}):
         issues.append(_issue("title_not_source_specific", "title", "Title has no meaningful anchor in the creator source.", index=index))
     for competitor in competitors:
@@ -527,6 +577,11 @@ def _description_usefulness_issues(
     words = _meaningful_words(description)
     source_words = _source_words(source, brief)
     overlap = set(words) & source_words
+    if re.search(
+        r"(?i)\b(?:the\s+)?(?:quote|background|visuals?)\s+(?:on\s+(?:the\s+)?(?:reel|screen)\s+)?is\s*[-:]",
+        description,
+    ):
+        issues.append(_issue("creator_instruction_leakage", "description", "Description exposes creator-facing input labels instead of audience-facing copy."))
     if len(words) < 3:
         issues.append(_issue("description_too_thin", "description", "Description does not identify the actual video."))
     if source_overlap_supported and words and source_words and not overlap:
@@ -603,6 +658,12 @@ def _final_semantic_quality(
         35 + title_overlap * 45 + (10 if 3 <= len(title_words) <= 12 else 0)
         + (10 if not any(title_similarity(title, item) >= 0.94 for item in competitors) else 0)
     )
+    quote = normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text"))
+    direct_quote_title = bool(quote and title_copies_quote(title, quote))
+    if direct_quote_title:
+        # Faithful is not the same as optimized: repeating the complete on-screen
+        # quote gives the viewer no complementary packaging idea.
+        title_score = min(title_score, 68.0)
     description_score = _bounded_score(
         35 + min(description_overlap * 55, 45) + (10 if 4 <= len(description_words) <= 120 else 0)
     )
@@ -614,9 +675,10 @@ def _final_semantic_quality(
         description_score = max(description_score, 70.0 if description_words else 0.0)
     if len(source_words) <= 1 and description_words:
         description_score = max(description_score, 60.0)
+    tag_keys = {normalize_unicode(tag).casefold() for tag in tags}
     selected_rows = [
         item for item in (tag_evidence or {}).get("selected_keywords", [])
-        if isinstance(item, dict) and normalize_unicode(item.get("keyword")).casefold() in set(tags)
+        if isinstance(item, dict) and normalize_unicode(item.get("keyword")).casefold() in tag_keys
     ]
     tag_scores = [float(item.get("keyword_relevance_score") or 0) for item in selected_rows]
     tag_score = round(sum(tag_scores) / len(tag_scores), 1) if tag_scores else None
@@ -635,6 +697,23 @@ def _final_semantic_quality(
         critical.append(_issue("package_consistency_failure", "package", "Title, description, and tags do not agree on the source-supported topic."))
     if tags and tag_score is not None and tag_score < 40:
         warnings.append(_issue("weak_tag_usefulness", "tags", "Final tags are source-safe but have limited search specificity.", severity="warning"))
+    if direct_quote_title:
+        warnings.append(_issue(
+            "title_duplicates_on_screen_quote", "title",
+            "Title largely duplicates the on-screen quote instead of adding a complementary hook.",
+            severity="warning",
+        ))
+    rich_quote_context = bool(
+        quote
+        and normalize_unicode(brief.get("visual_requirements"))
+        and normalize_unicode(brief.get("creator_intent"))
+    )
+    if is_short_content(source, brief) and rich_quote_context and len(tags) < 3:
+        warnings.append(_issue(
+            "sparse_tag_set", "tags",
+            f"Only {len(tags)} useful tag(s) survived; this package needs at least three distinct grounded concepts before it can be rated GREEN.",
+            severity="warning",
+        ))
     verdict = "RED" if critical else ("YELLOW" if warnings else "GREEN")
     return {
         "title_score": round(title_score, 1),
@@ -653,6 +732,7 @@ def _source_words(source: str, brief: dict[str, Any]) -> set[str]:
     values = [source]
     values.extend(brief.get(field) for field in (
         "content", "topic", "exact_quote", "on_screen_text", "viewer_promise", "unique_angle", "factual_claims",
+        "visual_requirements", "creator_intent", "content_constraints",
     ))
     return {word for value in values for word in _meaningful_words(value)}
 

@@ -29,11 +29,13 @@ def plan_research_queries(
     brief = creator_brief or {}
     content = _short(brief.get("content") or script)
     semantic = semantic_analysis or {}
+    quote_concepts = _quote_concepts(str(brief.get("exact_quote") or brief.get("on_screen_text") or ""))
     topic_source = " ".join(
         str(value or "")
         for value in (semantic.get("primary_topic"), *(semantic.get("secondary_topics") or []))
     )
-    topic = _keyword_phrase(topic_source, 6) or _keyword_phrase(content, 6) or "YouTube video"
+    structured_topic = _keyword_phrase(str(brief.get("topic") or ""), 8)
+    topic = (quote_concepts[0] if quote_concepts else "") or _keyword_phrase(topic_source, 6) or structured_topic or _keyword_phrase(content, 6) or "YouTube video"
     audience_problem = _keyword_phrase(
         " ".join(str(value or "") for value in (brief.get("target_audience"), brief.get("viewer_promise"))),
         6,
@@ -49,6 +51,7 @@ def plan_research_queries(
     # The plan is deliberately conditional: a video only spends an API search
     # on an angle that the semantic source/brief actually supplies.
     candidates = [("primary", topic)]
+    candidates.extend(("quote_concept", concept) for concept in quote_concepts[1:])
     if intent:
         candidates.append((f"intent:{semantic.get('viewer_intent') or 'viewer'}", intent))
     elif audience_problem:
@@ -108,6 +111,35 @@ def _extract_quote(text: str) -> str:
     if not matches:
         return ""
     return max(matches, key=len).strip()
+
+
+def _quote_concepts(quote: str) -> list[str]:
+    """Return natural search concepts for common quote meanings, never chopped prose."""
+
+    lowered = quote.casefold()
+    concepts: list[str] = []
+    if "give up" in lowered or "enough" in lowered:
+        concepts.extend(["knowing when to let go", "emotional exhaustion"])
+    if "walks away" in lowered or "how to stay" in lowered:
+        concepts.append("relationships fading without closure")
+    if "misunderstood" in lowered or "genuine" in lowered:
+        concepts.extend(["being misunderstood", "being genuine"])
+    if "apology" in lowered or "crueller" in lowered:
+        concepts.extend(["self forgiveness", "self criticism"])
+    if "keep going" in lowered:
+        concepts.append("keep going motivation")
+    if (
+        "deserve" in lowered
+        and re.search(r"\bhard\s+(?:it\s+is\s+)?to\s+find\b", lowered)
+        and re.search(r"\b(?:somebody|someone)\s+like\s+you\b", lowered)
+    ):
+        concepts.extend([
+            "knowing your worth quotes",
+            "being valued for who you are",
+            "hard to replace quotes",
+            "genuine appreciation quotes",
+        ])
+    return list(dict.fromkeys(concepts))
 
 
 def _keyword_phrase(text: str, words: int = 6) -> str:

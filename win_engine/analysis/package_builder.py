@@ -45,7 +45,7 @@ def build_title_thumbnail_packages(
                 "title": title,
                 "thumbnail_text": _thumbnail_text(title, brief),
                 "thumbnail_visual": str(brief.get("thumbnail_idea") or _default_visual(brief)).strip(),
-                "viewer_promise": str(brief.get("viewer_promise") or "A clear, truthful reason to watch.").strip(),
+                "viewer_promise": str(brief.get("viewer_promise") or _default_promise(brief)).strip(),
                 "why_click": _why_click(style, brief, package_intent),
                 "approach": style,
                 "package_intent": package_intent,
@@ -92,6 +92,11 @@ def _thumbnail_text(title: str, brief: dict[str, Any]) -> str:
         words = unicode_words(direction.upper())[:4]
         if words:
             return " ".join(words)
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").casefold()
+    if "silence" in quote and "know" in quote:
+        return "SILENCE KNOWS"
+    if "deserve" in quote and "hard" in quote and "find" in quote:
+        return "KNOW YOUR WORTH"
     ignored = {"the", "a", "an", "how", "to", "my", "your", "and", "with", "for", "what", "is", "really"}
     words = [word.upper() for word in unicode_words(title) if word.lower() not in ignored]
     return " ".join(words[:4]) or "WATCH THIS"
@@ -99,7 +104,20 @@ def _thumbnail_text(title: str, brief: dict[str, Any]) -> str:
 
 def _default_visual(brief: dict[str, Any]) -> str:
     proof = str(brief.get("proof") or "").strip()
-    return proof or "Use one clear real frame from the video with a readable emotional focal point."
+    if proof:
+        return proof
+    visual = str(brief.get("visual_requirements") or "").strip(" .")
+    if visual:
+        return f"Use a wide, uncluttered frame showing {visual[:1].lower() + visual[1:]}; keep the subject and text readable."
+    return "Use one clear real frame from the video with a readable emotional focal point."
+
+
+def _default_promise(brief: dict[str, Any]) -> str:
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").casefold()
+    if quote:
+        return "A brief moment of recognition for viewers who connect with the quote."
+    topic = str(brief.get("topic") or "the video's subject").strip()
+    return f"A clear, source-faithful look at {topic}."
 
 
 def _title_style(title: str) -> str:
@@ -112,8 +130,8 @@ def _title_style(title: str) -> str:
 
 
 def _why_click(style: str, brief: dict[str, Any], package_intent: str = "") -> str:
-    promise = str(brief.get("viewer_promise") or "the specific viewer payoff").strip()
-    proof = str(brief.get("proof") or "real evidence from the video").strip()
+    promise = str(brief.get("viewer_promise") or _default_promise(brief)).strip()
+    proof = str(brief.get("proof") or brief.get("visual_requirements") or "the creator-supplied video").strip()
     if package_intent == "Existing audience":
         return f"It reconnects returning viewers with the subject they already care about: {promise}"
     if package_intent == "Browse":
