@@ -255,9 +255,10 @@ class TestEngineStages(unittest.TestCase):
         package = build_seo_package("generate seo", "A short about Chennai street food", research, self.store)
         tags = package["tags"]
         self.assertIn("chennai street food", tags)
-        self.assertNotIn("shorts", tags)
+        self.assertIn("shorts", tags)
+        self.assertIn("yt", tags)
         self.assertIn("#shorts", package["hashtags"])
-        self.assertTrue({"yt", "youtube shorts", "viral shorts"}.isdisjoint(tags))
+        self.assertTrue({"youtube shorts", "viral shorts"}.isdisjoint(tags))
 
     def test_only_useful_shorts_format_tag_survives_a_full_tag_list(self):
         incoming = [f"topic tag {index}" for index in range(12)] + [
@@ -472,6 +473,20 @@ class TestEngineStages(unittest.TestCase):
         self.assertIn("“In the end, I wasn't abandoned. I was erased.”", package["description"])
         self.assertIn("exact words shown on screen", package["description"])
 
+    def test_grief_quote_fallback_complements_quote_and_drops_coping_target(self):
+        quote = "Grief teaches you the weight of silence and the shape of absence."
+        brief = build_creator_brief(
+            script=quote, exact_quote=quote, on_screen_text=quote,
+            video_format="youtube_shorts",
+            visual_requirements="An empty chair beside a rain-streaked window.",
+        )
+        brief["seo_research_targets"] = ["coping with grief", "silence in grief", "absence in grief"]
+        package = _content_specific_fallback("coping with grief", [], brief)
+        self.assertTrue(package["title"].startswith("When Grief Makes Silence Feel Heavy "))
+        self.assertTrue(package["title"].endswith("#shorts"))
+        self.assertNotIn("coping", " ".join(package["tags"]).casefold())
+        self.assertIn("grief can make silence feel heavy", package["description"].casefold())
+
     def test_malformed_contraction_tag_is_removed_but_real_contraction_survives(self):
         tags = force_topic_in_tags(
             [
@@ -501,7 +516,7 @@ class TestEngineStages(unittest.TestCase):
             },
         )
         query_text = " ".join(item["query"] for item in queries).lower()
-        self.assertIn("worst heartbreak", queries[0]["query"].lower())
+        self.assertNotIn("worst heartbreak is realizing", query_text)
         self.assertIn("unrequited love", query_text)
         self.assertNotIn("typewriter animation over a calming sunset", query_text)
 
@@ -594,6 +609,16 @@ class TestEngineStages(unittest.TestCase):
         self.assertTrue(description.endswith("#heartbreak #quotes #sad"))
         self.assertEqual(len([line for line in description.splitlines() if line.startswith("#")]), 1)
 
+    def test_upload_ready_description_removes_plain_platform_tag_lines(self):
+        description = format_upload_ready_description(
+            "A reflection on grief and silence.\n\nyt\nshorts\n\n#shorts",
+            ["#shorts", "#Grief", "#SilenceInGrief"],
+            category="quotes",
+        )
+        self.assertNotIn("\nyt\n", description.casefold())
+        self.assertNotIn("\nshorts\n", description.casefold())
+        self.assertTrue(description.endswith("#shorts #Grief #SilenceInGrief"))
+
     def test_general_description_does_not_force_an_emoji(self):
         description = format_upload_ready_description(
             "A concise professional summary of the video.",
@@ -606,6 +631,11 @@ class TestEngineStages(unittest.TestCase):
         self.assertIn('meter(ctr.title_quality_score, 10, "ok")', DASHBOARD_HTML)
         self.assertNotIn("meter(ctr.predicted_ctr_percent", DASHBOARD_HTML)
 
+    def test_dashboard_distinguishes_result_backed_tags_from_search_volume(self):
+        self.assertIn("resultBackedTagCount", DASHBOARD_HTML)
+        self.assertIn("Search volume: unavailable.", DASHBOARD_HTML)
+        self.assertIn("no matching sampled result", DASHBOARD_HTML)
+
     def test_upload_timing_reports_evidence_instead_of_claiming_a_best_time(self):
         timing = build_upload_timing(
             [
@@ -614,16 +644,18 @@ class TestEngineStages(unittest.TestCase):
             ],
             region="global",
         )
-        self.assertEqual(timing["sample_size"], 2)
+        self.assertEqual(timing["sample_size"], 0)
         self.assertEqual(timing["confidence"], "LOW")
-        self.assertEqual(timing["basis"], "public_research_pattern")
-        self.assertIn("does not show that publishing then caused", timing["reasoning"])
+        self.assertEqual(timing["basis"], "general_recommendation")
+        self.assertIn("not yet established", timing["reasoning"])
         self.assertNotIn("best upload window", timing["reasoning"])
         self.assertEqual(timing["timezone"], "UTC")
 
     def test_upload_timing_day_matches_the_displayed_ist_timezone(self):
         timing = build_upload_timing(
-            [{"published_at": "2026-08-05T23:30:00Z"}],
+            [{"published_at": value} for value in (
+                "2026-08-05T23:30:00Z", "2026-08-12T23:30:00Z", "2026-08-19T23:30:00Z",
+                "2026-08-26T23:30:00Z", "2026-09-02T23:30:00Z")],
             region="india",
             timezone_name="Asia/Kolkata",
         )
@@ -674,7 +706,7 @@ class TestEngineStages(unittest.TestCase):
         self.assertFalse(timing["personalized"])
         self.assertIn("Personalized upload timing is not yet established", timing["explanation"])
         self.assertEqual(timing["today_timezone"], "Asia/Kolkata")
-        self.assertIn("weaker-evidence day", timing["today_recommendation"])
+        self.assertIn("insufficient channel evidence", timing["today_recommendation"])
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
     def test_selected_package_description_is_upload_ready(self, mocked_writer):
@@ -710,8 +742,11 @@ class TestEngineStages(unittest.TestCase):
             },
         )
         description = result["multilang"]["english"]["description"]
-        self.assertTrue(description.endswith("#Shorts #Quotes #Heartbreak"))
-        self.assertIn("\n\n#Shorts", description)
+        hashtag_line = description.splitlines()[-1]
+        self.assertIn("#shorts", hashtag_line)
+        self.assertNotIn("#Quotes", hashtag_line)
+        self.assertNotIn("#Heartbreak", hashtag_line)
+        self.assertIn("\n\n#shorts", description)
 
     def test_opportunity_score_has_no_artificial_high_floor(self):
         result = _opportunity_score([], {"score": 85, "label": "SATURATED"}, [])

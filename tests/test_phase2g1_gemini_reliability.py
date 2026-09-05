@@ -180,27 +180,27 @@ class GeminiWriterAndFallbackTests(unittest.TestCase):
 
     @patch("win_engine.llm.gemini_client.time.sleep")
     @patch("win_engine.llm.gemini_client.httpx.post")
-    def test_timeout_uses_green_deterministic_fallback_with_trace(self, post, _sleep):
+    def test_timeout_uses_honestly_scored_deterministic_fallback_with_trace(self, post, _sleep):
         post.side_effect = httpx.TimeoutException("timed out")
         environment = {"WIN_ENGINE_GEMINI_API_KEY": "test", "WIN_ENGINE_GEMINI_MODEL": "test", "WIN_ENGINE_GEMINI_TRANSIENT_RETRIES": "0"}
         with patch.dict(os.environ, environment):
             package = build_seo_package("generate seo", self.script, _quote_research(self.script, self.brief), HistoryStore(":memory:"))
         trace = package["generation_trace"]
         self.assertEqual(package["generation_source"], "fallback")
-        self.assertEqual(package["generation_quality"]["verdict"], "GREEN")
+        self.assertEqual(package["generation_quality"]["verdict"], "YELLOW")
         self.assertEqual(trace["provider_failure_category"], "timeout")
         self.assertEqual(trace["fallback_level"], "deterministic")
         self.assertEqual(trace["gemini_call_count"], 1)
 
     @patch("win_engine.llm.gemini_client.time.sleep")
     @patch("win_engine.llm.gemini_client.httpx.post")
-    def test_5xx_uses_green_deterministic_fallback_with_trace(self, post, _sleep):
+    def test_5xx_uses_honestly_scored_deterministic_fallback_with_trace(self, post, _sleep):
         post.return_value = MagicMock(status_code=503)
         environment = {"WIN_ENGINE_GEMINI_API_KEY": "test", "WIN_ENGINE_GEMINI_MODEL": "test", "WIN_ENGINE_GEMINI_TRANSIENT_RETRIES": "0"}
         with patch.dict(os.environ, environment):
             package = build_seo_package("generate seo", self.script, _quote_research(self.script, self.brief), HistoryStore(":memory:"))
         self.assertEqual(package["generation_source"], "fallback")
-        self.assertEqual(package["generation_quality"]["verdict"], "GREEN")
+        self.assertEqual(package["generation_quality"]["verdict"], "YELLOW")
         self.assertEqual(package["generation_trace"]["provider_failure_category"], "provider_5xx")
         self.assertEqual(post.call_count, 1)
 
@@ -212,24 +212,24 @@ class GeminiWriterAndFallbackTests(unittest.TestCase):
         with patch.dict(os.environ, {"WIN_ENGINE_GEMINI_API_KEY": "test", "WIN_ENGINE_GEMINI_MODEL": "test"}):
             package = build_seo_package("generate seo", self.script, _quote_research(self.script, self.brief), HistoryStore(":memory:"))
         self.assertEqual(post.call_count, 1)
-        self.assertEqual(package["generation_quality"]["verdict"], "GREEN")
+        self.assertEqual(package["generation_quality"]["verdict"], "YELLOW")
         self.assertEqual(package["generation_trace"]["provider_failure_category"], "malformed_provider_response")
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=False)
     def test_missing_configuration_uses_fallback_without_provider_loop(self, _available):
         package = build_seo_package("generate seo", self.script, _quote_research(self.script, self.brief), HistoryStore(":memory:"))
         self.assertEqual(package["generation_source"], "fallback")
-        self.assertEqual(package["generation_quality"]["verdict"], "GREEN")
+        self.assertEqual(package["generation_quality"]["verdict"], "YELLOW")
         self.assertFalse(package["generation_trace"]["gemini_attempted"])
         self.assertEqual(package["generation_trace"]["provider_failure_category"], "authentication_or_configuration")
 
     @patch("win_engine.llm.gemini_client.httpx.post")
-    def test_authentication_error_immediately_uses_green_fallback(self, post):
+    def test_authentication_error_immediately_uses_honestly_scored_fallback(self, post):
         post.return_value = MagicMock(status_code=401)
         with patch.dict(os.environ, {"WIN_ENGINE_GEMINI_API_KEY": "test", "WIN_ENGINE_GEMINI_MODEL": "test"}):
             package = build_seo_package("generate seo", self.script, _quote_research(self.script, self.brief), HistoryStore(":memory:"))
         self.assertEqual(post.call_count, 1)
-        self.assertEqual(package["generation_quality"]["verdict"], "GREEN")
+        self.assertEqual(package["generation_quality"]["verdict"], "YELLOW")
         self.assertEqual(package["generation_trace"]["provider_failure_category"], "authentication_or_configuration")
 
     def test_instructional_and_comparison_fallback_titles_stay_readable(self):

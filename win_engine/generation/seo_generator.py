@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from win_engine.analysis.intent_classifier import classify_intent
 from win_engine.analysis.creator_brief import creator_topic
-from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality, filter_source_hashtags
+from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality, filter_source_hashtags, focused_short_hashtags
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.keyword_research import select_final_tags
@@ -103,6 +103,8 @@ def generate_seo_suggestions(
         safe_script,
         creator_brief if isinstance(creator_brief, dict) else None,
     )
+    if category in {"quotes", "shorts", "youtube_shorts"}:
+        locked_hashtags = focused_short_hashtags(locked_tags)
     locked_description = format_upload_ready_description(
         locked_description,
         locked_hashtags,
@@ -166,6 +168,8 @@ def generate_seo_suggestions(
             safe_script,
             creator_brief if isinstance(creator_brief, dict) else None,
         )
+        if category in {"quotes", "shorts", "youtube_shorts"}:
+            hashtags = focused_short_hashtags(tags)
         description = p.get("description", "") or ""
         # Only English gets the topic-presence fallback; Tamil / Tanglish
         # descriptions stay in their own language, untouched.
@@ -321,6 +325,7 @@ def format_upload_ready_description(
     prose_lines = [
         line for line in text.splitlines()
         if not re.fullmatch(r"\s*(?:#[A-Za-z0-9_]+\s*)+", line)
+        and not re.fullmatch(r"\s*(?:yt|shorts?|youtube(?:\s+shorts?)?)\s*", line, re.IGNORECASE)
     ]
     text = "\n".join(prose_lines).strip()
 

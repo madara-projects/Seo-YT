@@ -1744,7 +1744,11 @@ DASHBOARD_HTML = """<!doctype html>
       const ml = d.multilang || {};
       const genSrc = d.generation_source || "gemini";
       const keywordResearch = d.keyword_research || {};
-      const selectedKeywords = arr(keywordResearch.selected_keywords).map((item) => item?.keyword).filter(Boolean);
+      const selectedKeywordRows = arr(keywordResearch.selected_keywords).filter((item) => item?.keyword);
+      const selectedKeywords = selectedKeywordRows.map((item) => item.keyword);
+      const topicKeywordRows = selectedKeywordRows.filter((item) => item.classification !== "platform_format");
+      const resultBackedTagCount = topicKeywordRows.filter((item) => Number(item.evidence_count || 0) > 0).length;
+      const sourceOnlyTagCount = topicKeywordRows.length - resultBackedTagCount;
       const warnings = Array.isArray(d.research_warnings) ? d.research_warnings : [];
       if (alertBox) {
         const fallbackMessage = genSrc === "fallback" && !warnings.some((item) => String(item).toLowerCase().includes("gemini"))
@@ -1807,7 +1811,8 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="bento-card" style="margin-top:18px">
           <div class="card-title">Research-backed tag selection ${chip(String(keywordResearch.status || "limited").replaceAll("_", " "), keywordResearch.status === "youtube_evidence" ? "ok" : "warn")}</div>
           <div class="metric-sub">${esc(keywordResearch.confidence === "observed_youtube_relevance" ? "Selected from semantic analysis and observed YouTube research terminology; this is not search-volume data." : "Selected from semantic analysis because YouTube research was limited; this is not search-volume data.")}</div>
-          <div class="tag-list" style="margin-top:10px">${selectedKeywords.slice(0, 10).map((term) => `<span class="tag-item">${esc(term)}</span>`).join("") || "<span class='metric-sub'>No strong keyword candidates were available.</span>"}</div>
+          <div class="metric-sub" style="margin-top:6px">${resultBackedTagCount} subject tag(s) match sampled public result metadata; ${sourceOnlyTagCount} are source-only. Search volume: unavailable.</div>
+          <div class="tag-list" style="margin-top:10px">${selectedKeywordRows.slice(0, 10).map((item) => `<span class="tag-item" title="${item.classification === "platform_format" ? "Creator format strategy" : Number(item.evidence_count || 0) > 0 ? "Matched " + Number(item.evidence_count || 0) + " sampled result(s); not search volume" : "Source-grounded; no matching sampled result"}">${esc(item.keyword)}</span>`).join("") || "<span class='metric-sub'>No strong keyword candidates were available.</span>"}</div>
         </div>
 
         <!-- Strategy & Timing -->

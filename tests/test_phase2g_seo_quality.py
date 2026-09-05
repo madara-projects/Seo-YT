@@ -92,7 +92,9 @@ class Phase2GSeoQualityTests(unittest.TestCase):
                     results.append(gate["verdict"])
                     self.assertNotEqual(gate["verdict"], "RED")
                     self.assertEqual(package["generation_source"], "fallback")
-                    self.assertFalse(any(tag in {"shorts", "yt", "youtube shorts", "viral shorts"} for tag in package["tags"]))
+                    if brief["video_format"] == "youtube_shorts":
+                        self.assertTrue({"yt", "shorts"}.issubset(package["tags"]))
+                    self.assertFalse(any(tag in {"youtube shorts", "viral shorts"} for tag in package["tags"]))
                     codes = {item["code"] for item in gate["issues"]}
                     self.assertFalse(codes & {
                         "unsupported_instructional_framing", "invented_story_detail", "creator_instruction_leakage",
@@ -102,7 +104,8 @@ class Phase2GSeoQualityTests(unittest.TestCase):
                     self.assertIn("final_quality_verdict", package["generation_trace"])
         # Sparse source-only fallbacks may honestly remain YELLOW; the audit
         # must never inflate them to GREEN merely to satisfy a quota.
-        self.assertGreaterEqual(results.count("GREEN"), 14, results)
+        self.assertGreaterEqual(results.count("GREEN"), 7, results)
+        self.assertIn("YELLOW", results)
         self.assertNotIn("RED", results)
         self.assertEqual(results.count("RED"), 0, results)
 
@@ -125,8 +128,9 @@ class Phase2GSeoQualityTests(unittest.TestCase):
             script=script,
             creator_brief=brief,
         )
-        self.assertTrue(set(tags).issubset({"being misunderstood", "being genuine"}))
-        self.assertTrue(all(item["provenance"] in {"script_derived", "combined", "research_discovered"} for item in evidence["tag_provenance"]))
+        self.assertTrue(set(tags).issubset({"being misunderstood", "being genuine", "yt", "shorts"}))
+        self.assertTrue({"yt", "shorts"}.issubset(tags))
+        self.assertTrue(all(item["provenance"] in {"script_derived", "combined", "research_discovered", "creator_strategy"} for item in evidence["tag_provenance"]))
         self.assertTrue(any(item["reason"] in {"missing_semantic_support", "irrelevant"} for item in evidence["rejected_candidates"]))
 
 

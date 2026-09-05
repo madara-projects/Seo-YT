@@ -11,14 +11,20 @@ from typing import Any, Iterable
 
 from win_engine.analysis.generation_quality import (
     has_unsupported_instructional_framing,
+    is_short_content,
     is_silent_quote_only_short,
     source_requires_noninstructional_framing,
 )
 
 
-_FORMAT_GENERIC = {"short", "shorts", "video", "videos", "youtube", "content", "viral", "trending", "fyp"}
+_FORMAT_GENERIC = {"short", "shorts", "yt", "video", "videos", "youtube", "content", "viral", "trending", "fyp"}
+_PREFERRED_SHORT_TAGS = ("yt", "shorts")
+_BROAD_EMOTIONAL_TERMS = {
+    "emotion", "emotional", "feelings", "healing", "hurt", "loneliness", "lonely",
+    "motivation", "pain", "sad", "sadness", "selfcare", "self-care",
+}
 _TOPIC_GENERIC = {"quote", "quotes", "emotional", "reflection", "reflections", "melancholy", "melancholic", "mood", "moods", "relatable", "deep", "motivation", "sad", "cinematic", "aesthetics", "finding", "watching", "moody", "atmospheric", "personal", "meaningful"}
-_STOP = _FORMAT_GENERIC | _TOPIC_GENERIC | {"the", "and", "with", "from", "that", "this", "your", "about", "into", "when", "what", "how", "was", "were", "have", "has", "for", "are", "but", "not", "just"}
+_STOP = _FORMAT_GENERIC | _TOPIC_GENERIC | {"the", "and", "with", "from", "that", "this", "your", "about", "in", "of", "on", "at", "into", "when", "what", "how", "was", "were", "have", "has", "for", "are", "but", "not", "just"}
 _VISUAL_TERMS = {"road", "traffic", "sunset", "sunrise", "sky", "rain", "rainy", "night", "moon", "beach", "mountain", "footage", "visual", "scene", "cloud", "clouds", "tree", "trees", "background", "backgrounds", "moving", "dark", "evening"}
 _NOISY_TERMS = {"instagram", "whatsapp", "status", "sadstatus", "aesthetic", "aha9a"}
 _CREATOR_META_TERMS = {
@@ -81,6 +87,23 @@ def build_keyword_research(
             _add(candidates, entity.get("entity"), "entity", "entity", content_terms, visual_terms)
     for audience in sem.get("audience") or []:
         _add(candidates, audience, "semantic", "audience", content_terms, visual_terms, semantic_evidence=semantic_evidence)
+    # Focused planner queries are deterministic combinations of creator-backed
+    # concepts (for example ``silence in grief``).  They are often better
+    # search phrases than isolated quote words, so admit them as candidates
+    # only when the complete meaningful phrase is strongly source-supported.
+    # Raw YouTube result wording is still never promoted into the pool.
+    non_instructional = source_requires_noninstructional_framing(script, brief)
+    for query in query_rows:
+        query_text = _normalize(query.get("query"))
+        support_score, _ = _source_support(query_text, source_terms)
+        if (
+            query_text
+            and len(_tokens(query_text)) <= 3
+            and support_score >= 70
+            and not (non_instructional and has_unsupported_instructional_framing(query_text))
+            and _visual_score(query_text, visual_terms) <= _content_score(query_text, content_terms)
+        ):
+            _add(candidates, query_text, "research_query", "long_tail", content_terms, visual_terms)
     # Creator intent and viewer promise can prove relevance, but they are prose
     # instructions rather than atomic search terms. Semantic candidates may use
     # their concepts; the full sentences must never become tags themselves.
@@ -97,12 +120,16 @@ def build_keyword_research(
     rejected_before_selection = 0
     for candidate in candidates.values():
         entry = _score(candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms)
-        if entry:
+        if entry and not (non_instructional and has_unsupported_instructional_framing(entry.get("keyword"))):
             scored.append(entry)
         else:
             rejected_before_selection += 1
     scored.sort(key=lambda item: (-item["keyword_relevance_score"], item["keyword"]))
-    research_targets = _diverse(scored, limit=8)
+    core_targets = [item for item in scored if item.get("classification") != "contextual"]
+    visual_targets = [item for item in scored if item.get("classification") == "contextual"]
+    research_targets = _diverse(core_targets, limit=7)
+    if len(research_targets) < 8 and visual_targets:
+        research_targets.extend(_diverse(visual_targets, limit=1))
     relevant_results = sum(1 for row in result_rows if _result_relevant(row, content_terms))
     diagnostics = {
         **(query_diagnostics or {}),
@@ -117,12 +144,18 @@ def build_keyword_research(
     return {
         "status": "youtube_evidence" if result_rows else "semantic_only",
         "confidence": "observed_youtube_relevance" if result_rows else "limited_without_youtube_research",
+        "evidence_scope": "sampled_youtube_results_not_search_volume" if result_rows else "semantic_source_only",
+        "search_volume_available": False,
+        "limitations": [
+            "The YouTube Data API exposes sampled matching results, not keyword search volume.",
+            "A returned result supports phrase relevance only when the required meaningful terms appear in its public metadata.",
+        ],
         "semantic_source": sem.get("source", "unknown"),
         "candidate_count": len(scored), "candidates": scored[:40], "selected_keywords": [], "selected_tags": [],
         "research_targets": research_targets,
         "search_opportunities": opportunities,
         "diagnostics": diagnostics,
-        "research_policy": "YouTube queries and result text validate candidate concepts; raw result phrases are never copied into tags.",
+        "research_policy": "Source-grounded focused queries may become tag candidates; YouTube results only validate them and raw result phrases are never copied into tags.",
         "content_terms": sorted(content_terms), "visual_terms": sorted(visual_terms),
     }
 
@@ -132,8 +165,8 @@ def select_final_tags(
     creator_brief: dict[str, Any] | None = None, is_short: bool = False,
 ) -> tuple[list[str], dict[str, Any]]:
     """Select only strong, diverse, atomic concepts; never pad a tag count."""
-    del is_short  # Format belongs in hashtags/metadata, never consumes a tag slot.
     brief = creator_brief or {}
+    short_requested = bool(is_short or is_short_content(script, brief))
     quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "")
     non_instructional = source_requires_noninstructional_framing(script, brief)
     content_terms = set(research.get("content_terms") or _tokens(script))
@@ -152,10 +185,10 @@ def select_final_tags(
             if not key or key in indexed:
                 continue
             classification, rejected = _classify(key, "model", content_terms, visual_terms)
-            if rejected or not _semantic_support(key, content_terms):
+            if rejected or _is_broad_emotional(key) or not _semantic_support(key, content_terms):
                 rejected_candidates.append({
                     "keyword": key or str(text),
-                    "reason": rejected or "missing_semantic_support",
+                    "reason": rejected or ("broad_term_without_research_evidence" if _is_broad_emotional(key) else "missing_semantic_support"),
                     "source": "model_suggestion",
                 })
                 continue
@@ -178,9 +211,15 @@ def select_final_tags(
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "weak_source_support", "source": entry.get("source")})
             continue
+        if int(entry.get("keyword_relevance_score") or 0) < 50:
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "below_minimum_tag_quality", "source": entry.get("source")})
+            continue
         eligible.append(entry)
     eligible.sort(key=lambda item: (-item["keyword_relevance_score"], item["keyword"]))
-    chosen = _diverse(eligible, limit=10)
+    chosen = _diverse_tag_selection(eligible, limit=8 if short_requested else 10)
+    if short_requested:
+        chosen.extend(_platform_tag_entry(tag) for tag in _PREFERRED_SHORT_TAGS)
     tags = [item["keyword"] for item in chosen]
     chosen_keys = set(tags)
     for item in eligible:
@@ -208,10 +247,24 @@ def select_final_tags(
                 "topic_cluster": item.get("cluster"),
                 "specificity": item.get("specificity_score"),
                 "evidence_strength": item.get("research_evidence_score"),
+                "matching_result_count": item.get("evidence_count"),
+                "query_alignment_score": item.get("query_alignment_score"),
                 "score": item.get("keyword_relevance_score"),
             }
             for item in chosen
         ],
+        "selected_result_evidence": {
+            "tags_with_matching_results": [
+                item["keyword"] for item in chosen
+                if item.get("classification") != "platform_format" and int(item.get("evidence_count") or 0) > 0
+            ],
+            "tags_without_matching_results": [
+                item["keyword"] for item in chosen
+                if item.get("classification") != "platform_format" and int(item.get("evidence_count") or 0) == 0
+            ],
+            "scope": "sampled_youtube_results_not_search_volume",
+            "search_volume_available": False,
+        },
         "research_contribution": {
             "research_selected_count": len(contribution),
             "combined_selected_count": sum(1 for item in contribution if item.get("source_classification") == "combined"),
@@ -230,7 +283,7 @@ def select_final_tags(
             "candidates_rejected_at_selection": rejected_count,
             "candidates_selected": len(chosen),
         },
-        "selection_policy": "Tags are atomic source-grounded search concepts. Weak generic, platform-format, visual-only, title-copy, quote-copy, malformed, duplicate, competitor-derived, and unsupported candidates are excluded; no slots are padded.",
+        "selection_policy": "Tags are atomic source-grounded search concepts. Multi-word result evidence requires strict phrase-term coverage; planned-query alignment is scored separately and is never represented as search volume. A second tag from the same topic family is retained only when it independently clears 72 or has matching-result evidence and keeps the selected subject-tag average at or above 72. Weak generic, visual-only, title-copy, quote-copy, malformed, duplicate, competitor-derived, and unsupported candidates are excluded; visual context is capped at one tag. The creator-preferred yt and shorts platform tags are appended only for Shorts.",
     }
     return tags, evidence
 
@@ -247,9 +300,12 @@ def _add(
         classification, rejected = _classify(text, hint, content_terms, visual_terms)
         if rejected:
             continue
-        entry = target.setdefault(text, {"keyword": text, "sources": set(), "classification": classification})
-        entry["sources"].add(source)
         proof = (semantic_evidence or {}).get(text)
+        actual_source = "semantic_visual" if proof and proof.get("source_scope") == "visual" else source
+        if actual_source == "semantic_visual":
+            classification = "contextual"
+        entry = target.setdefault(text, {"keyword": text, "sources": set(), "classification": classification})
+        entry["sources"].add(actual_source)
         if proof:
             entry["semantic_evidence"] = dict(proof)
         if opportunity:
@@ -286,6 +342,8 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     )
     visual_relevance = _visual_score(text, visual_terms)
     evidence_count = _evidence_count(text, results)
+    if _is_broad_emotional(text) and evidence_count < 2:
+        return None
     if classification == "entity" and content_relevance < 28:
         return None
     if classification == "audience" and (content_relevance < 42 or _evidence_count(text, results) == 0):
@@ -296,10 +354,21 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
         return None
     query_support = _query_support(text, queries)
     opportunity_evidence = int(opportunity.get("research_relevance_score") or 0)
-    evidence_score = max(min(24, evidence_count * 8 + query_support * 4), min(24, opportunity_evidence // 4))
+    evidence_score = min(24, evidence_count * 8)
+    if semantic_confirmation and evidence_count:
+        evidence_score = max(evidence_score, min(24, opportunity_evidence // 4))
+    query_alignment_score = min(4, query_support * 2)
     intent_score = _intent_score(classification)
     specificity = _specificity_score(text)
-    total = max(0, min(100, content_relevance + evidence_score + intent_score + specificity + source_support_score // 8 - (18 if _quote_like(text, quote) else 0)))
+    focused_evidence_phrase = bool(
+        "research_query" in (candidate.get("sources") or [])
+        and evidence_count >= 1
+        and 1 < len(_tokens(text)) <= 4
+    )
+    grounded_paraphrase = bool(semantic_evidence and semantic_evidence.get("source_scope") != "visual"
+        and 1 < len(_tokens(text)) <= 4 and _normalize(text) not in _normalize(quote))
+    quote_copy_penalty = 18 if _quote_like(text, quote) and not (focused_evidence_phrase or grounded_paraphrase) else 0
+    total = max(0, min(100, content_relevance + evidence_score + query_alignment_score + intent_score + specificity + source_support_score // 8 - quote_copy_penalty))
     if total < 28:
         return None
     sources = sorted(candidate.get("sources") or [])
@@ -309,7 +378,8 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
         "classification": classification,
         "content_relevance_score": content_relevance, "visual_relevance_score": visual_relevance,
         "source_support_score": source_support_score, "source_support": source_support,
-        "research_evidence_score": evidence_score, "intent_score": intent_score, "specificity_score": specificity,
+        "research_evidence_score": evidence_score, "query_alignment_score": query_alignment_score,
+        "intent_score": intent_score, "specificity_score": specificity,
         "diversity_score": None, "keyword_relevance_score": total, "evidence_count": evidence_count,
         "semantic_confirmed": semantic_confirmation,
         "semantic_evidence": semantic_evidence or None,
@@ -332,9 +402,27 @@ def _semantic_evidence_map(semantic: dict[str, Any]) -> dict[str, dict[str, str]
         concept = _normalize(item.get("concept"))
         phrase = str(item.get("source_phrase") or "").strip()
         relationship = str(item.get("relationship") or "").strip().casefold()
+        source_scope = str(item.get("source_scope") or "content").strip().casefold()
         if concept and phrase and relationship in {"direct", "paraphrase", "metaphor"}:
-            result[concept] = {"concept": concept, "source_phrase": phrase, "relationship": relationship}
+            result[concept] = {
+                "concept": concept, "source_phrase": phrase, "relationship": relationship,
+                "source_scope": "visual" if source_scope == "visual" else "content",
+            }
     return result
+
+
+def _platform_tag_entry(text: str) -> dict[str, Any]:
+    return {
+        "keyword": text, "sources": ["creator_strategy"], "source": "creator_strategy",
+        "source_classification": "creator_strategy", "classification": "platform_format",
+        "content_relevance_score": 0, "visual_relevance_score": 0,
+        "source_support_score": 100, "source_support": "creator-preferred Shorts discovery tag",
+        "research_evidence_score": 0, "intent_score": 0, "specificity_score": 0,
+        "diversity_score": 100.0, "keyword_relevance_score": 0, "evidence_count": 0,
+        "cluster": "platform", "intent": "format_discovery",
+        "selection_reason": "Explicit creator strategy preference for Shorts uploads.",
+        "reason": "Explicit creator strategy preference for Shorts uploads.",
+    }
 
 
 def _model_entry(text: str, classification: str, content_terms: set[str], visual_terms: set[str]) -> dict[str, Any]:
@@ -423,7 +511,15 @@ def _reject_reason(entry: dict[str, Any], title: str, quote: str, content_terms:
     # turn a chopped portion of the on-screen quote into a useful tag.  Exact
     # quote fragments are both weak search language and a common source of
     # malformed endings such as "some people only value when".
-    if _quote_like(text, quote):
+    focused_query_phrase = bool(
+        "research_query" in (entry.get("sources") or [])
+        and int(entry.get("evidence_count") or 0) >= 1
+        and 1 < len(words) <= 3
+        and _normalize(text) not in _normalize(quote)
+    )
+    grounded_paraphrase = bool(entry.get("semantic_evidence")
+        and 1 < len(words) <= 4 and _normalize(text) not in _normalize(quote))
+    if _quote_like(text, quote) and not (focused_query_phrase or grounded_paraphrase):
         return "quote_copy"
     independently_supported = classification in {"core_topic", "secondary_topic", "search_intent", "long_tail"} and int(entry.get("content_relevance_score") or 0) >= 28
     if _title_copy(text, title) and evidence < 12 and not independently_supported:
@@ -446,6 +542,65 @@ def _diverse(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]
         if len(selected) >= limit:
             break
     return selected
+
+
+def _diverse_tag_selection(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    """Select diverse subject tags while allowing at most one visual-context tag."""
+
+    selected: list[dict[str, Any]] = []
+    family_counts: dict[str, int] = {}
+    visual_count = 0
+    for item in items:
+        contextual = item.get("classification") == "contextual"
+        if contextual and visual_count >= 1:
+            continue
+        backed_count = sum(
+            1 for chosen in selected
+            if chosen.get("classification") != "contextual" and int(chosen.get("evidence_count") or 0) > 0
+        )
+        # Once two subject phrases have genuine matching-result support, do
+        # not lower the whole package by padding it with a sub-threshold,
+        # source-only phrase. Fewer strong tags are preferable to more weak
+        # ones, while source-only fallback remains available when research is
+        # sparse for a niche script.
+        if (
+            not contextual
+            and backed_count >= 2
+            and int(item.get("evidence_count") or 0) == 0
+            and int(item.get("keyword_relevance_score") or 0) < 72
+        ):
+            continue
+        family = _family(item["keyword"])
+        overlap = max((_evidence_similarity(item["keyword"], chosen["keyword"]) for chosen in selected), default=0.0)
+        family_count = family_counts.get(family, 0)
+        subject_scores = [
+            int(chosen.get("keyword_relevance_score") or 0) for chosen in selected
+            if chosen.get("classification") != "contextual"
+        ]
+        item_score = int(item.get("keyword_relevance_score") or 0)
+        projected_average = (sum(subject_scores) + item_score) / max(len(subject_scores) + 1, 1)
+        evidence_backed_extension = bool(
+            int(item.get("evidence_count") or 0) > 0 and projected_average >= 72
+        )
+        if (
+            overlap >= 0.67
+            or family_count >= 2
+            or (family_count == 1 and item_score < 72 and not evidence_backed_extension)
+        ):
+            continue
+        chosen = dict(item)
+        chosen["diversity_score"] = round(max(0.0, 100.0 - overlap * 100.0), 1)
+        selected.append(chosen)
+        family_counts[family] = family_counts.get(family, 0) + 1
+        visual_count += int(contextual)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _is_broad_emotional(text: str) -> bool:
+    words = set(_tokens(text))
+    return bool(words & _BROAD_EMOTIONAL_TERMS) and len(words) <= 3
 
 
 def _content_terms(semantic: dict[str, Any], script: str, brief: dict[str, Any]) -> set[str]:
@@ -540,14 +695,33 @@ def _visual_score(text: str, visual_terms: set[str]) -> int:
 
 
 def _evidence_count(text: str, results: list[dict[str, Any]]) -> int:
-    words = set(_tokens(text))
-    required = max(1, (len(words) + 1) // 2)
-    return sum(1 for row in results if len(words & set(_tokens(f"{row.get('title') or ''} {row.get('description') or ''}"))) >= required)
+    """Count strict public-result matches without pretending they are search volume.
+
+    Two-word phrases require both meaningful words. Longer phrases require at
+    least 75% of their meaningful words (and never fewer than two). This stops
+    a broad anchor such as ``grief`` from validating ``absence in grief`` by
+    itself.
+    """
+
+    words = set(_evidence_tokens(text))
+    if not words:
+        return 0
+    required = 1 if len(words) == 1 else max(2, (len(words) * 3 + 3) // 4)
+    return sum(
+        1
+        for row in results
+        if len(words & set(_evidence_tokens(f"{row.get('title') or ''} {row.get('description') or ''}"))) >= required
+    )
 
 
 def _query_support(text: str, queries: list[dict[str, Any]]) -> int:
-    words = set(_tokens(text))
-    return sum(1 for item in queries if words & set(_tokens(item.get("query") or "")))
+    words = set(_evidence_tokens(text))
+    if not words:
+        return 0
+    return sum(
+        1 for item in queries
+        if words <= set(_evidence_tokens(item.get("query") or ""))
+    )
 
 
 def _intent_score(classification: str) -> int:
@@ -652,6 +826,8 @@ def _family(text: str) -> str:
     words = set(_tokens(text))
     if words & {"forgotten", "unseen", "erased", "abandoned", "abandonment", "rejection", "absence", "distance", "invisible"}:
         return "emotional_absence"
+    if "silence" in words:
+        return "silence"
     if words & {"heartbreak", "betrayal", "grief", "loss"}:
         return "emotional_loss"
     if words & {"loneliness", "alone", "isolated"}:
@@ -663,6 +839,13 @@ def _family(text: str) -> str:
 
 def _similar(left: str, right: str) -> float:
     a, b = set(_tokens(left)), set(_tokens(right))
+    return len(a & b) / max(len(a | b), 1)
+
+
+def _evidence_similarity(left: str, right: str) -> float:
+    """Compare final tags while retaining intent words such as quote/quotes."""
+
+    a, b = set(_evidence_tokens(left)), set(_evidence_tokens(right))
     return len(a & b) / max(len(a | b), 1)
 
 
@@ -689,11 +872,11 @@ def _intent_label(classification: str) -> str:
 def _reason(classification: str, evidence_count: int, query_support: int, source_classification: str) -> str:
     label = classification.replace("_", " ").title()
     if source_classification == "research_discovered":
-        return f"{label} was Gemini-confirmed against the creator source and supported by aggregate YouTube research observations."
+        return f"{label} was Gemini-confirmed against the creator source and supported by matching sampled YouTube result metadata; this is not search-volume evidence."
     if evidence_count:
-        return f"{label} supported by semantic analysis and matching YouTube research observations."
+        return f"{label} supported by semantic analysis and matching sampled YouTube result metadata; this is not search-volume evidence."
     if query_support:
-        return f"{label} derived from semantic analysis and aligned with the planned research intent."
+        return f"{label} derived from semantic analysis and aligned with a planned query; no matching-result or search-volume claim is made."
     return f"{label} derived from semantic analysis; no search-volume claim is made."
 
 
@@ -703,3 +886,18 @@ def _normalize(value: Any) -> str:
 
 def _tokens(value: Any) -> list[str]:
     return [word for word in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", _normalize(value)) if word not in _STOP and len(word) > 1]
+
+
+_EVIDENCE_STOP = {
+    "a", "an", "and", "as", "at", "by", "for", "from", "how", "in", "into",
+    "is", "of", "on", "or", "the", "this", "to", "with", "you", "your",
+}
+
+
+def _evidence_tokens(value: Any) -> list[str]:
+    """Keep topic and search-intent words while removing only grammar words."""
+
+    return [
+        word for word in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", _normalize(value))
+        if word not in _EVIDENCE_STOP and len(word) > 1
+    ]

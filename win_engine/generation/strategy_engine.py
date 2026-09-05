@@ -13,6 +13,8 @@ from win_engine.analysis.generation_quality import (
     candidate_mechanism,
     evaluate_package_quality,
     evidence_trace,
+    focused_short_hashtags,
+    has_unsupported_instructional_framing,
     is_short_content,
     source_requires_noninstructional_framing,
 )
@@ -166,10 +168,7 @@ def build_seo_package(
         p["tags"] = tags
         p["keyword_research"] = tag_evidence
         if is_short_content(script, creator_brief):
-            focused_hashtags = [str(item).strip() for item in (p.get("hashtags") or []) if str(item).strip()]
-            if not any(item.casefold() == "#shorts" for item in focused_hashtags):
-                focused_hashtags = ["#shorts", *focused_hashtags]
-            p["hashtags"] = focused_hashtags[:3]
+            p["hashtags"] = focused_short_hashtags(tags)
         return p
 
     multilang = {lang: _resolve(lang) for lang in _LANGS}
@@ -204,6 +203,8 @@ def build_seo_package(
             is_short=is_short_content(script, creator_brief),
         )
         safe["tags"] = safe_tags
+        if is_short_content(script, creator_brief):
+            safe["hashtags"] = focused_short_hashtags(safe_tags)
         safe["keyword_research"] = safe_evidence
         safe_trace = dict(generation_trace)
         safe_events = list(safe_trace.get("events") or [])
@@ -246,6 +247,8 @@ def build_seo_package(
                 is_short=is_short_content(script, creator_brief),
             )
             minimal["tags"] = minimal_tags
+            if is_short_content(script, creator_brief):
+                minimal["hashtags"] = focused_short_hashtags(minimal_tags)
             minimal_gate = evaluate_package_quality(
                 minimal, script=script, creator_brief=creator_brief, language=selected_language,
                 recent_titles=channel_learning.get("recent_titles") or [],
@@ -662,6 +665,14 @@ def _fallback_quote_variants(quote: str, topic: str, suffix: str, *, semantic_va
             "The Thoughts I Only Share With Silence",
             "What the Silence Knows About Me",
         ]
+    elif all(term in lowered for term in ("grief", "silence", "absence")):
+        bodies = [
+            "When Grief Makes Silence Feel Heavy",
+            "The Shape Absence Leaves in Silence",
+            "Why Absence Can Feel So Heavy",
+            "Grief Has a Silence of Its Own",
+            "When Absence Becomes Almost Visible",
+        ]
     else:
         # ``topic`` comes from the validated semantic layer. Prefer that
         # natural interpretation over copying/truncating the on-screen quote.
@@ -816,7 +827,9 @@ def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | No
     emoji = _semantic_emoji(" ".join([content, str(brief.get("visual_requirements") or "")]))
     suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
     if quote:
-        body = _quote_title_focus(quote) or "A Short Reflection"
+        safe_topic = "" if has_unsupported_instructional_framing(primary_topic) else primary_topic
+        variants = _fallback_quote_variants(quote, safe_topic, suffix, semantic_validated=bool(safe_topic))
+        body = variants[0][:-len(suffix)] if suffix and variants[0].endswith(suffix) else variants[0]
         description = f'“{quote}”\n\nA short reflection built only from the words supplied by the creator.'
     else:
         body = re.sub(r"\s+", " ", primary_topic or content).strip(" .") or "The Video Topic"
@@ -850,7 +863,7 @@ def _content_specific_fallback(
     seo_targets = [
         re.sub(r"\s+", " ", str(item or "")).strip(" .:-")
         for item in brief.get("seo_research_targets") or []
-        if str(item or "").strip()
+        if str(item or "").strip() and not has_unsupported_instructional_framing(item)
     ][:8]
     is_shorts = is_short_content(content or topic, brief)
     promise = str(brief.get("viewer_promise") or "").strip()
@@ -866,8 +879,10 @@ def _content_specific_fallback(
         variants = _fallback_quote_variants(quote, fallback_title_topic, suffix, semantic_validated=bool(seo_targets))
         visual_line = _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))
         quote_lowered = quote.casefold()
-        if "silence" in quote_lowered:
-            reflective_line = "A reflective moment about solitude, silence, and the thoughts we keep private."
+        if all(term in quote_lowered for term in ("grief", "silence", "absence")):
+            reflective_line = "A reflection on how grief can make silence feel heavy and absence feel almost visible."
+        elif "silence" in quote_lowered:
+            reflective_line = "A reflective moment centered on the silence described by the words on screen."
         elif "deserve" in quote_lowered and "hard" in quote_lowered and "find" in quote_lowered:
             reflective_line = "A reflective moment about knowing your worth and being genuinely valued for who you are."
         else:
@@ -914,6 +929,8 @@ def _content_specific_fallback(
             candidates.append(value)
     for candidate in candidates:
         cleaned = candidate.strip().lower()
+        if quote and has_unsupported_instructional_framing(cleaned):
+            continue
         if cleaned and cleaned not in seen:
             seen.add(cleaned)
             tags.append(cleaned)

@@ -96,6 +96,8 @@ class ResearchService:
         thumbnail_intelligence = analyze_thumbnails(scored_results)
         runtime_state = self._youtube.runtime_state()
         research_warnings = [runtime_state["warning"]] if runtime_state.get("warning") else []
+        if not research_queries:
+            research_warnings.append("No usable research topic survived semantic validation. Review the supplied topic before relying on this package's SEO research.")
 
         logger.info(
             "Research gathered: youtube=%s",
@@ -155,14 +157,24 @@ class ResearchService:
                 existing = merged.get(video_id)
                 if existing:
                     matched = list(existing.get("matched_queries") or [])
-                    if query_type not in matched:
-                        matched.append(query_type)
+                    if query not in matched:
+                        matched.append(query)
                         existing["matched_queries"] = matched
+                    matched_types = list(existing.get("matched_query_types") or [])
+                    if query_type not in matched_types:
+                        matched_types.append(query_type)
+                        existing["matched_query_types"] = matched_types
+                    details = list(existing.get("matched_query_details") or [])
+                    if not any(item.get("query") == query for item in details if isinstance(item, dict)):
+                        details.append({"query": query, "type": query_type})
+                        existing["matched_query_details"] = details
                     continue
                 merged[video_id] = {
                     **result,
                     "research_query": query,
-                    "matched_queries": [query_type],
+                    "matched_queries": [query],
+                    "matched_query_types": [query_type],
+                    "matched_query_details": [{"query": query, "type": query_type}],
                 }
         return list(merged.values()), {
             "queries_generated": len(research_queries),
@@ -186,7 +198,7 @@ class ResearchService:
         """
 
         generic = {
-            "about", "after", "before", "could", "don't", "from", "have", "just",
+            "a", "about", "after", "an", "and", "as", "at", "before", "by", "could", "don't", "from", "have", "how", "in", "is", "just", "of", "on", "or", "the", "to",
             "quote", "quotes", "reflective", "short", "shorts", "someone", "their", "there", "these", "this", "video",
             "what", "when", "where", "which", "with", "would", "youtube",
         }
@@ -197,22 +209,48 @@ class ResearchService:
             duration_seconds = ResearchService._duration_seconds(result.get("duration"))
             if short_requested and duration_seconds is not None and duration_seconds > 180:
                 continue
-            query_tokens = {
-                token.casefold()
-                for token in re.findall(r"[A-Za-z][A-Za-z'-]+", str(result.get("research_query") or ""))
-                if len(token) >= 4 and token.casefold() not in generic
-            }
             public_text = " ".join(str(result.get(field) or "") for field in ("title", "description", "channel_title")).casefold()
             public_tokens = set(re.findall(r"[a-z][a-z'-]+", public_text))
-            overlap = query_tokens & public_tokens
-            if query_tokens and overlap:
+            query_values = [
+                str(item.get("query") or "")
+                for item in (result.get("matched_query_details") or [])
+                if isinstance(item, dict) and item.get("query")
+            ] or [str(item) for item in (result.get("matched_queries") or []) if str(item).strip()]
+            if not query_values:
+                query_values = [str(result.get("research_query") or "")]
+            matches: list[tuple[float, str, set[str], set[str]]] = []
+            for query in query_values:
+                query_tokens = {
+                    token.casefold()
+                    for token in re.findall(r"[A-Za-z][A-Za-z'-]+", query)
+                    if len(token) >= 4 and token.casefold() not in generic
+                }
+                overlap = query_tokens & public_tokens
+                required_matches = (
+                    1 if len(query_tokens) == 1
+                    else len(query_tokens) if len(query_tokens) == 2
+                    else max(2, (len(query_tokens) * 2 + 2) // 3)
+                )
+                if query_tokens and len(overlap) >= required_matches:
+                    matches.append((len(overlap) / len(query_tokens), query, query_tokens, overlap))
+            if matches:
+                _, matched_query, query_tokens, overlap = max(matches, key=lambda item: (item[0], len(item[3])))
                 relevance_score = round(100 * len(overlap) / max(1, min(3, len(query_tokens))))
+                if len(query_tokens) == 1:
+                    # One broad word is useful discovery evidence, but an exact
+                    # match is not enough to claim high-confidence relevance.
+                    relevance_score = min(relevance_score, 60)
                 if relevance_score < 25:
                     continue
                 relevant.append({
                     **result,
+                    "research_query": matched_query,
                     "research_relevance_score": min(100, relevance_score),
                     "research_relevance_terms": sorted(overlap),
+                    "research_query_term_count": len(query_tokens),
+                    "research_query_matched_term_count": len(overlap),
+                    "research_query_match_ratio": round(len(overlap) / len(query_tokens), 3),
+                    "research_evidence_scope": "sampled_results_not_search_volume",
                     "format_match": "short" if short_requested else "unspecified",
                 })
         return relevant

@@ -81,6 +81,9 @@ _SYSTEM_PROMPT = (
     "Output ONLY valid JSON with keys: \"title\", \"variants\" (array of 5 strings), "
     "\"description\", \"tags\" (array of up to 10 contextual strings), and \"hashtags\" (array of up to 3 strings). "
     "Every title must be an exact, upload-ready value rather than a stem or template."
+    "For reflective quotes, use concise natural titles and one short complementary description paragraph. "
+    "Avoid inflated claims such as 'changes everything', generic analysis language such as 'this video explores', "
+    "and repeating the same meaning in multiple paragraphs. Preserve the quote and its conditional meaning. "
 )
 
 
@@ -339,6 +342,13 @@ def _build_user_prompt(
             "- This is a silent quote-only Short. Research may expand semantic vocabulary, but it must never claim "
             "the video teaches, explains, demonstrates, answers questions, gives advice, practical tips, coping steps, "
             "or a guide unless that content is explicitly in the creator source. Keep the description reflective and faithful.\n"
+            "- Every quote-Short title must complement the on-screen quote instead of copying, truncating, or lightly "
+            "rephrasing it. Keep at least one unmistakable source concept in each title, but add a distinct curiosity or "
+            "resonance angle. For example, a quote connecting grief, silence, and absence needs a title about that same "
+            "relationship; it must not become coping advice or a story about someone leaving. Do not package a reflective "
+            "quote as an explainer with openings such as 'Understanding...' or 'Exploring the...'.\n"
+            "- In the description, reproduce the exact quote once, then describe only its supported reflection. Never call "
+            "the quote a lesson and never say the Short teaches, explains, helps viewers cope, or provides healing.\n"
         )
     non_instructional_rule = ""
     if source_requires_noninstructional_framing(script, creator_brief):
@@ -387,7 +397,8 @@ Constraints:
 - include chapters only when real timestamps or a sufficiently detailed script supports them
 - tags must be natural phrases that a person might type into search. Preserve contractions such as "didn't"; never make a tag by deleting grammar words from a quote, and never return a bag of unrelated quote words
 - research-backed SEO targets are candidates, not mandatory tags. Do not copy a title, exact quote, or competitor title into tags; use only targets that accurately describe the video
-- tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". Do not include #shorts, shorts, yt, youtube shorts, viral shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
+- tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". For a Short, include the creator-preferred platform tags "yt" and "shorts" as two separate tags; do not include youtube shorts, viral shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
+- hashtags must be topic-specific. Include #shorts for a Short, then use up to two hashtags derived from the strongest validated subject tags; avoid generic #quotes, #sad, #viral, #trending, and #fyp
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Return only tags justified by this specific video; do not pad the list to a fixed count and do not add generic viral/trending filler
 - a researched YouTube title or result phrase is evidence only, never text to copy into a title, description, or tag. Research may improve wording for the same source-supported subject, but may not introduce a new situation, entity, relationship, product, lesson, or claim
 - a package that is merely valid is not enough: prefer a short, natural, source-faithful result over a generic, keyword-stuffed, or invented one
