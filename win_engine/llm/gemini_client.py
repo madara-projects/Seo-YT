@@ -15,6 +15,9 @@ import httpx
 from win_engine.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+# Reasoning tokens on thinking models are billed against maxOutputTokens, so the
+# ceiling has to leave room above whatever the caller sized for the JSON alone.
+_OUTPUT_TOKEN_CEILING = max(1024, min(32768, int(os.environ.get("WIN_ENGINE_GEMINI_OUTPUT_TOKEN_CEILING", "8192"))))
 _LAST_DIAGNOSTIC: ContextVar[dict[str, object]] = ContextVar(
     "gemini_last_diagnostic", default={"status": "not_attempted", "attempts": 0, "retries": 0}
 )
@@ -177,7 +180,7 @@ def generate_with_diagnostics(
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
-            "maxOutputTokens": min(max(max_tokens, 256), 4096),
+            "maxOutputTokens": min(max(max_tokens, 256), _OUTPUT_TOKEN_CEILING),
             "responseMimeType": "application/json",
         },
     }
@@ -270,6 +273,28 @@ def generate_with_diagnostics(
             candidates = body.get("candidates") or [] if isinstance(body, dict) else []
             parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
             out_text = "".join(str(part.get("text") or "") for part in parts).strip()
+            finish_reason = str(candidates[0].get("finishReason") or "").upper() if candidates else ""
+            # A truncated candidate still carries text, so without this check the caller
+            # receives half a JSON object labelled "success", fails to parse it, and the
+            # run is misreported as "Gemini unavailable".
+            if finish_reason == "MAX_TOKENS":
+                current_cap = int(payload["generationConfig"].get("maxOutputTokens") or 0)
+                widened = min(current_cap * 2, _OUTPUT_TOKEN_CEILING)
+                if widened > current_cap and retries < transient_retries:
+                    retries += 1
+                    retry_reasons.append("output_token_limit")
+                    payload["generationConfig"]["maxOutputTokens"] = widened
+                    logger.warning(
+                        "Gemini truncated at %d output tokens; retrying %d/%d with %d.",
+                        current_cap, retries, transient_retries, widened,
+                    )
+                    continue
+                health_update = _record_transient_failure("output_token_limit")
+                diagnostic = {"status": "gemini_truncated", "failure_category": "output_token_limit",
+                              "attempts": attempts, "retries": retries, "retry_reasons": retry_reasons,
+                              "max_output_tokens": current_cap, **health_update}
+                _LAST_DIAGNOSTIC.set(diagnostic)
+                return "", diagnostic
             if out_text:
                 _record_provider_success()
                 diagnostic = {"status": "gemini_success", "attempts": attempts, "retries": retries,

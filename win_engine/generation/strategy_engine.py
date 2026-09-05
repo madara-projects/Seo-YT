@@ -526,6 +526,54 @@ def _select_content_angle(intent: str, script: str, top_opportunities: list[dict
     return "Story"
 
 
+_SCORE_STOPWORDS = {
+    "a", "an", "and", "are", "for", "from", "how", "in", "is", "of", "on",
+    "the", "this", "to", "with", "you", "your",
+}
+# Curiosity hooks. Scored by how many appear as whole words, because one hook
+# sharpens a title and several are keyword stuffing.
+_SCORE_HOOK_TERMS = {
+    "why", "when", "truth", "mistake", "secret", "hardest", "never", "realize", "what",
+}
+
+
+def _score_tokens(text: str) -> list[str]:
+    """Unicode-aware tokens. An ASCII-only pattern returns nothing for Tamil or Hindi."""
+
+    return re.findall(r"\w+", (text or "").casefold(), flags=re.UNICODE)
+
+
+def _score_terms(text: str) -> set[str]:
+    return {word for word in _score_tokens(text) if len(word) >= 3 and word not in _SCORE_STOPWORDS}
+
+
+def _reproduces_source(title_terms: set[str], source_terms: set[str]) -> bool:
+    """True when the title restates most of the source instead of sharpening a hook from it.
+
+    Measured on term coverage rather than substring containment, because a trailing
+    hashtag is enough to defeat a substring test while changing nothing a viewer reads.
+    A short excerpt of a quote is a legitimate title; the whole quote is not.
+    """
+
+    if len(source_terms) < 5:
+        return False
+    return len(title_terms & source_terms) / len(source_terms) >= 0.6
+
+
+def _scripts_differ(title_terms: set[str], source_terms: set[str]) -> bool:
+    """True when title and source are written in different scripts.
+
+    Term overlap cannot measure relevance across scripts, so a Tamil title for an
+    English brief would otherwise score zero coverage no matter how good it is.
+    """
+
+    if not title_terms or not source_terms:
+        return False
+    title_ascii = sum(1 for term in title_terms if term.isascii()) / len(title_terms)
+    source_ascii = sum(1 for term in source_terms if term.isascii()) / len(source_terms)
+    return abs(title_ascii - source_ascii) >= 0.5
+
+
 def _deterministic_score(
     title: str,
     topic: str,
@@ -535,34 +583,49 @@ def _deterministic_score(
 ) -> float:
     """Pre-publication title quality score; never presented as measured CTR."""
     clean = re.sub(r"\s+", " ", title or "").strip()
-    lowered = clean.lower()
+    if not clean:
+        return 0.0
+    lowered = clean.casefold()
     score = 0.0
-    length = len(clean)
-    score += 2.0 if 45 <= length <= 65 else 1.2 if 35 <= length <= 70 else 0.5
 
-    words = re.findall(r"[a-z0-9]+", lowered)
-    score += 1.5 if 5 <= len(words) <= 12 else 0.8 if 3 <= len(words) <= 15 else 0.3
+    # Length is judged on what a viewer reads, so trailing hashtags cannot pad a
+    # short title into the rewarded band.
+    visible = re.sub(r"#\w+", "", clean, flags=re.UNICODE).strip()
+    length = len(visible)
+    score += 2.0 if 30 <= length <= 62 else 1.2 if 20 <= length <= 70 else 0.5
 
-    stopwords = {"a", "an", "and", "are", "for", "from", "how", "in", "is", "of", "on", "the", "this", "to", "with", "you", "your"}
-    title_terms = {word for word in words if len(word) >= 3 and word not in stopwords}
-    source_terms = {
-        word for word in re.findall(r"[a-z0-9]+", f"{topic} {context_text}".lower())
-        if len(word) >= 3 and word not in stopwords
-    }
-    relevance = len(title_terms & source_terms) / len(title_terms) if title_terms else 0.0
-    score += relevance * 3.0
+    words = _score_tokens(lowered)
+    score += 1.5 if 4 <= len(words) <= 12 else 0.8 if 3 <= len(words) <= 15 else 0.3
 
-    if any(term in lowered for term in ("why", "when", "truth", "mistake", "secret", "hardest", "never", "realize", "what")):
-        score += 1.0
+    title_terms = _score_terms(clean)
+    topic_terms = _score_terms(topic)
+    source_terms = topic_terms | _score_terms(context_text)
 
-    competitors = [set(re.findall(r"[a-z0-9]+", item.lower())) for item in competitor_titles or [] if item]
+    # Coverage of the topic, not purity of the title. The old ratio divided by the
+    # title's own terms, so a verbatim copy scored perfectly and any original word
+    # was a penalty.
+    if _scripts_differ(title_terms, source_terms):
+        # Unmeasurable rather than irrelevant: award neutral credit so a non-English
+        # title is not ranked last purely for being non-English.
+        score += 2.0
+    else:
+        coverage = len(title_terms & source_terms) / len(topic_terms) if topic_terms else 0.0
+        score += min(coverage, 1.0) * 3.0
+
+    if _reproduces_source(title_terms, source_terms):
+        score -= 1.5
+
+    hooks = len(_SCORE_HOOK_TERMS & set(words))
+    score += 0.8 if hooks == 1 else 0.4 if hooks == 2 else 0.0 if hooks == 0 else -0.8
+
+    competitors = [_score_terms(item) for item in competitor_titles or [] if item]
     similarities = [len(title_terms & item) / max(len(title_terms | item), 1) for item in competitors]
     max_similarity = max(similarities, default=0.0)
     score += 1.0 if max_similarity <= 0.35 else 0.5 if max_similarity <= 0.60 else 0.0
 
     production_junk = ("vertical", "creator", "background footage", "cinematic dark")
     score += 1.0 if not any(term in lowered for term in production_junk) else 0.2
-    score += 0.5 if clean and clean.count("!") <= 1 and "???" not in clean else 0.0
+    score += 0.5 if clean.count("!") <= 1 and "???" not in clean else 0.0
     return round(min(max(score, 0.0), 10.0), 1)
 
 
