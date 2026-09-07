@@ -43,10 +43,79 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
         scores = gate.get("final_seo_quality", {})
         title = float(scores.get("title_score") or 0)
         description = float(scores.get("description_score") or 0)
-        return bool(gate.get("passed")), min(title, description), title + description
+        tag = float(scores.get("tag_score") or 0) if scores.get("tag_score") is not None else 100.0
+        return bool(gate.get("passed")), min(title, description, tag), title + description + tag
+
+    def refine_tags_locally(pkg: dict[str, Any]) -> dict[str, Any]:
+        pkg_tags = list(pkg.get("tags") or [])
+        if not pkg_tags or not evidence:
+            return pkg
+        selected_keywords = {
+            str(item.get("keyword") or "").casefold(): item
+            for item in evidence.get("selected_keywords", [])
+            if isinstance(item, dict) and item.get("keyword")
+        }
+        platform_tags = [t for t in pkg_tags if t.lower() in {"yt", "shorts"}]
+        topic_tags = [t for t in pkg_tags if t.lower() not in {"yt", "shorts"}]
+        scored_topics = []
+        for t in topic_tags:
+            row = selected_keywords.get(t.lower(), {})
+            score = float(row.get("keyword_relevance_score") or 0)
+            scored_topics.append((t, score))
+        avg = sum(s for _, s in scored_topics) / max(len(scored_topics), 1)
+        if avg >= TARGET:
+            return pkg
+        # Sort ascending to prune the lowest scoring tags pulling down the average
+        scored_topics.sort(key=lambda x: x[1])
+        pruned = False
+        while len(scored_topics) > 3 and (sum(s for _, s in scored_topics) / len(scored_topics)) < TARGET:
+            if scored_topics[0][1] < TARGET:
+                scored_topics.pop(0)
+                pruned = True
+            else:
+                break
+        # If still below TARGET and candidates exist with score >= TARGET, swap out weak tags
+        current_avg = sum(s for _, s in scored_topics) / max(len(scored_topics), 1)
+        if current_avg < TARGET:
+            candidate_map = {
+                str(item.get("keyword") or "").casefold(): item
+                for item in (evidence.get("candidates") or [])
+                if isinstance(item, dict) and item.get("keyword")
+            }
+            high_candidates = [
+                item for item in candidate_map.values()
+                if float(item.get("keyword_relevance_score") or 0) >= TARGET
+                and str(item.get("keyword") or "").casefold() not in {t.lower() for t, _ in scored_topics}
+                and str(item.get("keyword") or "").casefold() not in {"yt", "shorts"}
+            ]
+            high_candidates.sort(key=lambda x: -float(x.get("keyword_relevance_score") or 0))
+            for cand in high_candidates:
+                cand_word = str(cand.get("keyword") or "")
+                cand_score = float(cand.get("keyword_relevance_score") or 0)
+                if scored_topics and scored_topics[0][1] < TARGET and cand_score > scored_topics[0][1]:
+                    scored_topics.pop(0)
+                    scored_topics.append((cand_word, cand_score))
+                    scored_topics.sort(key=lambda x: x[1])
+                    if "selected_keywords" in evidence:
+                        evidence["selected_keywords"].append(cand)
+                    pruned = True
+                    if (sum(s for _, s in scored_topics) / len(scored_topics)) >= TARGET:
+                        break
+
+        if not pruned:
+            return pkg
+        remaining_set = {t for t, _ in scored_topics}
+        new_topic_tags = [t for t, _ in scored_topics]
+        return {**pkg, "tags": [*new_topic_tags, *platform_tags]}
 
     best = deepcopy(package)
     gate = evaluate(best)
+    # Check local tag refinement first
+    candidate_tag_pkg = refine_tags_locally(best)
+    if candidate_tag_pkg != best:
+        candidate_tag_gate = evaluate(candidate_tag_pkg)
+        if rank(candidate_tag_gate) > rank(gate):
+            best, gate = candidate_tag_pkg, candidate_tag_gate
     for title in dict.fromkeys([best.get("title", ""), *(best.get("variants") or [])]):
         candidate = {**best, "title": title, "variants": [title, *(best.get("variants") or [])]}
         candidate_gate = evaluate(candidate)
@@ -56,7 +125,7 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
                              "before": deepcopy(gate.get("final_seo_quality", {}))}
     scores = gate.get("final_seo_quality", {})
     if gemini_client.is_available() and any(float(scores.get(field) or 0) < TARGET
-                                           for field in ("title_score", "description_score")):
+                                           for field in SCORE_FIELDS):
         trace["attempted"] = True
         repaired = _generate_one(script, competitors, language=language, region=region,
             audience_type="general", category="quotes" if brief.get("exact_quote") else None,
@@ -65,14 +134,17 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
                 "Improve the title and description for source fidelity, natural wording and complementary meaning. "
                 "Keep exact on-screen text in the description, followed by one useful non-repetitive sentence. "
                 "Avoid vague hooks, invented claims, quote-copy titles and keyword stuffing. "
-                f"Measured scores: {scores.get('title_score')}, {scores.get('description_score')}; target 90 each."}],
+                f"Measured scores: title={scores.get('title_score')}, description={scores.get('description_score')}, tags={scores.get('tag_score')}; target 90 each."}],
             previous_package=best)
         if repaired:
             # Writer suggestions cannot bypass the research tag selector.
             repaired["tags"], repaired["hashtags"] = best["tags"], best["hashtags"]
-            repaired_gate = evaluate(repaired)
-            if rank(repaired_gate) > rank(gate):
-                best, gate = repaired, repaired_gate
-                trace["accepted"] = True
+            repaired_tag_pkg = refine_tags_locally(repaired)
+            for title in dict.fromkeys([repaired_tag_pkg.get("title", ""), *(repaired_tag_pkg.get("variants") or [])]):
+                candidate = {**repaired_tag_pkg, "title": title, "variants": [title, *(repaired_tag_pkg.get("variants") or [])]}
+                cand_gate = evaluate(candidate)
+                if rank(cand_gate) > rank(gate):
+                    best, gate = candidate, cand_gate
+                    trace["accepted"] = True
     trace["after"] = deepcopy(gate.get("final_seo_quality", {}))
     return best, trace

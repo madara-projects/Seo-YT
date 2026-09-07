@@ -171,7 +171,7 @@ def _analyze_hook(
     curiosity = "?" in opening or bool(re.search(r"\b(?:why|how|but|until|what|never|instead)\b", lowered))
     generic = next((phrase for phrase in _GENERIC_OPENINGS if phrase in lowered), "")
     quote_position = source.find(exact_quote) if exact_quote else -1
-    quote_prefix_words = len(unicode_words(source[:quote_position])) if quote_position > 0 else 0
+    quote_prefix_words = _content_words_before(source, exact_quote)
     delayed_quote = bool(exact_quote and quote_position > 0 and quote_prefix_words > 12)
     promise_supported = not _UNSUPPORTED_PROMISES.search(" ".join(
         [promise, *[str(item.get("title") or "") for item in packages]]
@@ -277,21 +277,62 @@ def _analyze_pacing(
     }, "risks": risks}
 
 
+def _is_voice_over_negated(text: str) -> bool:
+    patterns = [
+        r"\b(?:no|without)\s+(?:dialogue|voice[- ]?over|narration|spoken)\b",
+        r"\b(?:voice[- ]?over|narration|dialogue|audio)\s*:\s*(?:none|no|absent|false|off|silent|n/a)\b",
+        r"\b(?:silent|text[- ]only|instrumental only|music only)\b",
+    ]
+    return any(bool(re.search(p, text, re.IGNORECASE)) for p in patterns)
+
+
+def _content_words_before(source: str, exact_quote: str) -> int:
+    if not exact_quote:
+        return 0
+    pos = source.find(exact_quote)
+    if pos <= 0:
+        return 0
+    prefix = source[:pos]
+    lines = prefix.splitlines()
+    content_lines = []
+    meta_header_re = re.compile(
+        r"^\s*(?:format|visuals?|mood|voice[- ]?over|narration|audio|on[- ]screen(?: text)?|screen text|scene|setting|note|music|sfx|quote|title|tags?)\s*:\s*",
+        re.IGNORECASE,
+    )
+    for line in lines:
+        if meta_header_re.match(line):
+            continue
+        content_lines.append(line)
+    cleaned_prefix = " ".join(content_lines).strip()
+    return len(unicode_words(cleaned_prefix))
+
+
 def _analyze_quote(
     *, source: str, exact_quote: str, on_screen_text: str, voice_over: str,
     provenance: dict[str, Any],
 ) -> dict[str, Any]:
     risks: list[dict[str, Any]] = []
-    positive_voice_marker = _VOICE_MARKERS.search(source)
-    explicit_no_voice = bool(re.search(r"\b(?:no|without)\s+(?:dialogue|voice[- ]?over|narration)\b", source, re.IGNORECASE))
+    explicit_no_voice = _is_voice_over_negated(source) or voice_over == "none"
+    cleaned_for_voice = re.sub(
+        r"\b(?:voice[- ]?over|narration|dialogue|audio)\s*:\s*(?:none|no|absent|false|off|silent|n/a)\b",
+        "", source, flags=re.IGNORECASE,
+    )
+    cleaned_for_voice = re.sub(
+        r"\b(?:no|without)\s+(?:dialogue|voice[- ]?over|narration|spoken)\b",
+        "", cleaned_for_voice, flags=re.IGNORECASE,
+    )
+    cleaned_for_voice = re.sub(
+        r"\b(?:silent|text[- ]only|instrumental only|music only)\b",
+        "", cleaned_for_voice, flags=re.IGNORECASE,
+    )
+    positive_voice_marker = _VOICE_MARKERS.search(cleaned_for_voice)
     if voice_over == "none" and positive_voice_marker and not explicit_no_voice:
         risks.append(_risk("voice_over_visual_contradiction", "high", "opening", "The brief says no voice-over, but the supplied content describes narration or listening.", positive_voice_marker.group(0), "Confirm the finished audio plan and remove the contradictory instruction."))
     if not exact_quote:
         return {"summary": {"status": "not_applicable", "reason": "No exact quote was supplied or detected.", "provenance": "unavailable"}, "risks": risks}
     word_count = len(unicode_words(exact_quote))
     reading_seconds = _reading_seconds(word_count)
-    position = source.find(exact_quote)
-    prefix_words = len(unicode_words(source[:position])) if position > 0 else 0
+    prefix_words = _content_words_before(source, exact_quote)
     if word_count > 24:
         risks.append(_risk("quote_reading_burden", "high", "opening", f"The exact quote contains {word_count} words and needs about {reading_seconds:.1f} seconds for one read.", exact_quote, "Preserve the quote exactly, but split its visual reveal or use voice-over to reduce simultaneous reading burden."))
     elif word_count > 14:
@@ -449,7 +490,17 @@ def _alternative(code: str, structure: str, preserves: str) -> dict[str, Any]:
 
 
 def _opening_text(source: str) -> str:
-    clean = re.sub(r"\s+", " ", source).strip()
+    meta_header_re = re.compile(
+        r"^\s*(?:format|visuals?|mood|voice[- ]?over|narration|audio|scene|setting|note|music|sfx)\s*:\s*.*$",
+        re.IGNORECASE,
+    )
+    lines = [
+        re.sub(r"^\s*(?:on[- ]screen(?: text)?|screen text|quote)\s*:\s*", "", line, flags=re.IGNORECASE).strip()
+        for line in source.splitlines()
+        if not meta_header_re.match(line)
+    ]
+    meaningful_source = " ".join(line for line in lines if line) or source
+    clean = re.sub(r"\s+", " ", meaningful_source).strip()
     sentence = re.split(r"(?<=[.!?])\s+|\n+", clean, maxsplit=1)[0]
     words = sentence.split()
     return " ".join(words[:60])

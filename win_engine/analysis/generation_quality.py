@@ -785,7 +785,7 @@ def _source_words(source: str, brief: dict[str, Any]) -> set[str]:
     values = [source]
     values.extend(brief.get(field) for field in (
         "content", "topic", "exact_quote", "on_screen_text", "viewer_promise", "unique_angle", "factual_claims",
-        "visual_requirements", "creator_intent", "content_constraints",
+        "visual_requirements", "creator_intent", "content_constraints", "target_audience", "proof",
     ))
     return {word for value in values for word in _meaningful_words(value)}
 
