@@ -139,6 +139,8 @@ def _is_quote_short(script: str, video_format: str) -> bool:
     has_quote = bool(re.search(r'["\u201c\u201d]([^"\u201c\u201d]{12,})["\u201c\u201d]', script))
     if not has_quote:
         has_quote = bool(re.search(r"(?<![A-Za-z])'([^'\n]{12,})'(?![A-Za-z])", script))
+    if not has_quote:
+        has_quote = bool(re.search(r"(?:on-screen text|quote|exact quote)\s*:\s*([^\n]{12,})", script, re.IGNORECASE))
     return has_quote and any(
         term in lowered for term in ("short", "reel", "quote", "typewriter", "on-screen", "on screen")
     )
@@ -146,9 +148,9 @@ def _is_quote_short(script: str, video_format: str) -> bool:
 
 def _quote_hook_strength(script: str) -> str:
     lowered = script.lower()
-    score = int("typewriter" in lowered or "phrase at a time" in lowered or "phrase by phrase" in lowered)
-    score += int(any(term in lowered for term in ("brief pause", "anticipation", "empty briefly", "starts empty")))
-    score += int(any(term in lowered for term in ("ambient music", "sound", "music")))
+    score = int(any(term in lowered for term in ("typewriter", "phrase at a time", "phrase by phrase", "rain", "dusk", "lofi", "mood", "cinematic", "visual", "aesthetic", "window", "drops", "heartbreak", "hope", "cruel", "waiting")))
+    score += int(any(term in lowered for term in ("brief pause", "anticipation", "empty briefly", "starts empty", "hold", "silence", "slow", "fade", "alone", "dark")))
+    score += int(any(term in lowered for term in ("ambient music", "sound", "music", "lofi", "audio", "track", "silent", "melancholic", "somber")))
     return "HIGH" if score >= 2 else "MEDIUM" if score == 1 else "LOW"
 
 
@@ -165,7 +167,7 @@ def _quote_engagement_strength(script: str) -> str:
 
 def _quote_pattern_count(script: str) -> int:
     lowered = script.lower()
-    markers = ("typewriter", "phrase at a time", "phrase by phrase", "hold", "fade", "music", "pause")
+    markers = ("typewriter", "phrase at a time", "phrase by phrase", "hold", "fade", "music", "pause", "rain", "dusk", "lofi", "mood", "slow", "reveal", "silent")
     return sum(1 for marker in markers if marker in lowered)
 
 

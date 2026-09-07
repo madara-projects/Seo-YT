@@ -68,7 +68,11 @@ def build_creator_brief(
     inferred_visual = visual_requirements.strip() or _extract_visual_requirement(script_text)
     inferred_voice = voice_over.strip().lower()
     if not inferred_voice:
-        if re.search(r"\b(?:no|without) (?:dialogue|voice[- ]?over|narration)\b", script_lower):
+        if (
+            re.search(r"\b(?:voice[- ]?over|narration|dialogue|audio)\s*:\s*(?:none|no|absent|false|off|silent|n/a)\b", script_lower)
+            or re.search(r"\b(?:no|without)\s+(?:dialogue|voice[- ]?over|narration|spoken)\b", script_lower)
+            or re.search(r"\b(?:silent|text[- ]only|instrumental only|music only)\b", script_lower)
+        ):
             inferred_voice = "none"
         elif re.search(r"\b(?:voice[- ]?over|narrat(?:e|ed|ion)|spoken dialogue)\b", script_lower):
             inferred_voice = "present"
@@ -184,14 +188,14 @@ def _extract_quote(content: str) -> str:
         return spans[0]
 
     marker = re.search(
-        r"(?is)\b(?:the\s+)?quote(?:\s+(?:on|in)\s+(?:the\s+)?(?:screen|reel|video))?"
+        r"(?is)\b(?:the\s+)?(?:quote|on[- ]screen\s+text|screen\s+text)(?:\s+(?:on|in)\s+(?:the\s+)?(?:screen|reel|video))?"
         r"\s*(?:is|reads?)?\s*[:\-\u2013\u2014]+\s*(.+)",
         content,
     )
     if marker:
         value = re.split(
             r"(?is)\s+(?:and\s+)?(?:the\s+)?(?:background(?:\s+of\s+the\s+video)?|"
-            r"background\s+visuals?|visuals?|video\s+(?:is|shows?|has))\s*(?:is|are|:|\-)?\s*",
+            r"background\s+visuals?|visuals?|format|voice[- ]?over|video\s+(?:is|shows?|has))\s*(?:is|are|:|\-)?\s*",
             marker.group(1),
             maxsplit=1,
         )[0]

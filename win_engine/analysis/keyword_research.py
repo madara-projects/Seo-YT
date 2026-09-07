@@ -217,9 +217,12 @@ def select_final_tags(
             continue
         eligible.append(entry)
     eligible.sort(key=lambda item: (-item["keyword_relevance_score"], item["keyword"]))
-    chosen = _diverse_tag_selection(eligible, limit=8 if short_requested else 10)
+    chosen = _diverse_tag_selection(eligible, limit=5 if short_requested else 10)
     if short_requested:
-        chosen.extend(_platform_tag_entry(tag) for tag in _PREFERRED_SHORT_TAGS)
+        chosen_keywords = {item["keyword"] for item in chosen}
+        for tag in _PREFERRED_SHORT_TAGS:
+            if tag not in chosen_keywords:
+                chosen.append(_platform_tag_entry(tag))
     tags = [item["keyword"] for item in chosen]
     chosen_keys = set(tags)
     for item in eligible:
@@ -342,6 +345,9 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     )
     visual_relevance = _visual_score(text, visual_terms)
     evidence_count = _evidence_count(text, results)
+    tokens = set(_tokens(text))
+    if evidence_count >= 1 and tokens and len(tokens & content_terms) == len(tokens) and len(tokens) >= 2:
+        content_relevance = max(content_relevance, 42)
     if _is_broad_emotional(text) and evidence_count < 2:
         return None
     if classification == "entity" and content_relevance < 28:
@@ -368,7 +374,7 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     grounded_paraphrase = bool(semantic_evidence and semantic_evidence.get("source_scope") != "visual"
         and 1 < len(_tokens(text)) <= 4 and _normalize(text) not in _normalize(quote))
     quote_copy_penalty = 18 if _quote_like(text, quote) and not (focused_evidence_phrase or grounded_paraphrase) else 0
-    total = max(0, min(100, content_relevance + evidence_score + query_alignment_score + intent_score + specificity + source_support_score // 8 - quote_copy_penalty))
+    total = max(0, min(100, content_relevance + evidence_score + query_alignment_score + intent_score + specificity + source_support_score // 7 - quote_copy_penalty))
     if total < 28:
         return None
     sources = sorted(candidate.get("sources") or [])
@@ -586,6 +592,7 @@ def _diverse_tag_selection(items: list[dict[str, Any]], *, limit: int) -> list[d
             overlap >= 0.67
             or family_count >= 2
             or (family_count == 1 and item_score < 72 and not evidence_backed_extension)
+            or (len(subject_scores) >= 3 and (sum(subject_scores) / len(subject_scores)) >= 90.0 and projected_average < 90.0)
         ):
             continue
         chosen = dict(item)
@@ -725,7 +732,7 @@ def _query_support(text: str, queries: list[dict[str, Any]]) -> int:
 
 
 def _intent_score(classification: str) -> int:
-    return {"core_topic": 16, "secondary_topic": 15, "search_intent": 20, "long_tail": 18, "entity": 10, "audience": 8, "contextual": 3}.get(classification, 0)
+    return {"core_topic": 16, "secondary_topic": 15, "search_intent": 20, "long_tail": 18, "entity": 12, "audience": 8, "contextual": 3}.get(classification, 0)
 
 
 def _specificity_score(text: str) -> int:

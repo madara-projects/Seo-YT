@@ -124,6 +124,8 @@ def generate_seo_suggestions(
         evidence=keyword_research, competitors=yt_results,
     )
     locked_title, locked_variants = refined["title"], refined["variants"]
+    locked_tags = refined.get("tags") or locked_tags
+    locked_hashtags = refined.get("hashtags") or locked_hashtags
     locked_description = format_upload_ready_description(refined["description"], locked_hashtags,
         category=category, topic=main_topic)
     seo_package["generation_trace"] = {**(seo_package.get("generation_trace") or {}),
