@@ -8,7 +8,7 @@ from win_engine.analysis.creator_brief import creator_topic
 from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality, filter_source_hashtags, focused_short_hashtags
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
-from win_engine.analysis.keyword_research import select_final_tags
+from win_engine.analysis.keyword_research import select_final_tags, synchronize_tag_evidence
 from win_engine.analysis.research_planner import brief_research_text
 from win_engine.analysis.topic_lock import (
     _is_junk_tag,
@@ -125,7 +125,10 @@ def generate_seo_suggestions(
     )
     locked_title, locked_variants = refined["title"], refined["variants"]
     locked_tags = refined.get("tags") or locked_tags
-    locked_hashtags = refined.get("hashtags") or locked_hashtags
+    keyword_research = synchronize_tag_evidence(keyword_research, locked_tags)
+    locked_hashtags = (focused_short_hashtags(locked_tags)
+        if category in {"quotes", "shorts", "youtube_shorts"}
+        else (refined.get("hashtags") or locked_hashtags))
     locked_description = format_upload_ready_description(refined["description"], locked_hashtags,
         category=category, topic=main_topic)
     seo_package["generation_trace"] = {**(seo_package.get("generation_trace") or {}),

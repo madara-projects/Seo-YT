@@ -708,6 +708,14 @@ def _fallback_quote_variants(quote: str, topic: str, suffix: str, *, semantic_va
         bodies = ["Needed, But Never Chosen"]
     elif "keep going" in lowered:
         bodies = ["Keep Going"]
+    elif "friendship" in lowered and "heart and soul" in lowered and "boundar" in lowered:
+        bodies = [
+            "When Heart and Soul Meet Friendship Boundaries",
+            "Setting Boundaries After Giving Heart and Soul",
+            "Heart and Soul, Now With Friendship Boundaries",
+            "From Giving Heart and Soul to Setting Boundaries",
+            "The Friend Setting Boundaries After Giving So Much",
+        ]
     elif (
         "deserve" in lowered
         and re.search(r"\bhard\s+(?:it\s+is\s+)?to\s+find\b", lowered)
@@ -944,6 +952,8 @@ def _content_specific_fallback(
         quote_lowered = quote.casefold()
         if all(term in quote_lowered for term in ("grief", "silence", "absence")):
             reflective_line = "A reflection on how grief can make silence feel heavy and absence feel almost visible."
+        elif "friendship" in quote_lowered and "heart and soul" in quote_lowered and "boundar" in quote_lowered:
+            reflective_line = "The surprise is not the boundary—it is who finally decided to set it."
         elif "silence" in quote_lowered:
             reflective_line = "A reflective moment centered on the silence described by the words on screen."
         elif "deserve" in quote_lowered and "hard" in quote_lowered and "find" in quote_lowered:

@@ -108,6 +108,18 @@ class AnalyzeResponse(BaseModel):
     retention_assistant: Dict[str, Any] = Field(default_factory=dict)
 
 
+class DeleteHistoryRunsRequest(BaseModel):
+    run_ids: List[int] = Field(..., min_length=1, max_length=100)
+
+    @field_validator("run_ids")
+    @classmethod
+    def validate_run_ids(cls, values: List[int]) -> List[int]:
+        unique = list(dict.fromkeys(values))
+        if any(value <= 0 for value in unique):
+            raise ValueError("Every history run ID must be a positive integer.")
+        return unique
+
+
 class LinkVideoRequest(BaseModel):
     youtube_video_id: str = Field(..., min_length=11, max_length=200)
     published_at: str | None = None

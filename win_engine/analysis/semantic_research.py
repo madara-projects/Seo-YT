@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 _FIELDS = ("primary_topic", "secondary_topics", "entities", "audience", "search_intents", "keyword_clusters")
 _EVIDENCE_RELATIONSHIPS = {"direct", "paraphrase", "metaphor"}
 _UNSUPPORTED_CONTEXT_TERMS = {
-    "breakup", "breakups", "unhealthy",
+    "breakup", "breakups", "unhealthy", "love", "lover", "romance", "romantic", "unrequited", "right", "wrong",
     "abuse", "abusive", "affair", "anxiety", "betrayal", "boyfriend", "cheating",
     "depression", "diagnosis", "divorce", "ex", "girlfriend", "grief", "husband",
     "comfort", "healing", "narcissist", "recovery", "relationship", "relationships", "suicide", "therapy", "trauma",
+    "burnout", "exhausted", "exhaustion", "imbalance", "peace", "respect", "sided", "tired",
     "toxic", "wife",
 }
 _STOPWORDS = {"video", "short", "shorts", "quote", "screen", "background", "youtube", "content"}

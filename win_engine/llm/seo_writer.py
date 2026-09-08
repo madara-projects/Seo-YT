@@ -391,6 +391,8 @@ Constraints:
 - the title, description, and tags must accurately match the creator brief and real video
 - treat the video script/idea as the only source of factual events. Audience notes describe who may relate; they are not events that happened in the video
 - for an on-screen quote video, preserve the exact quote and its actual meaning. Do not invent a breakup, departure, betrayal, relationship status, motive, action, or claim (such as "they left", "you stayed", or "just an option") that the source does not state
+- when a quote contains a turn such as "but", "yet", or "now", make the title preserve the idea after that turn; do not title only the setup
+- preserve an obviously sarcastic, incredulous, playful, or rhetorical register without copying slang mechanically or turning it into a calm generic statement
 - write a video-specific description, normally 100-220 words for long-form or 45-100 words for a single-quote Short. Put the exact topic and truthful viewer payoff in the first two lines
 - make the description easy to scan with short natural paragraphs and 1-3 restrained, topic-relevant emojis. Do not produce one dense wall of text
 - choose a description structure that fits this video. Do not reuse a universal hook, bullet list, chapter template, CTA, or "watch until the end" wording
@@ -407,7 +409,7 @@ Constraints:
 {silent_quote_rule}{non_instructional_rule}{undisclosed_message_rule}- title: {title_length_rule}, engaging, and matched to the actual content category
 - return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are additional truthful alternatives
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
-- use idiomatic phrases such as "one-sided effort"; never write unnatural phrases such as "unrequited effort" or "fractions of effort"
+- use idiomatic language, but never infer "one-sided effort", exhaustion, abandonment, or another relationship dynamic unless the creator source states it
 - thumbnail text must add a short new idea; it must not merely repeat the title. Never use false guarantees, unrelated trends, or misleading claims.
 {repair_block}
 """
@@ -471,6 +473,10 @@ _UNSUPPORTED_QUOTE_CLAIMS = (
     (r"\byou (?:stayed|accepted)\b", r"\b(?:stayed|accepted)\b"),
     (r"\bstaying in\b", r"\bstay(?:ed|ing)?\b"),
     (r"\b(?:breakup|toxic relationship|just an option)\b", r"\b(?:breakup|toxic|option)\b"),
+    (r"\b(?:(?:the|that|other|another|a)\s+)?(?:person|someone|somebody|they)\s+(?:who\s+)?(?:has\s+|have\s+)?moved\s+on(?:\s+from\s+your\s+life)?\b", r"\b(?:move|moves|moved|moving) on\b"),
+    (r"\b(?:forgotten|lost|unrequited) love\b", r"\blove\b"),
+    (r"\bone[- ]sided (?:effort|friendship|relationship|connection)\b", r"\b(?:one[- ]sided|bare minimum)\b"),
+    (r"\b(?:someone|somebody|a person|they|he|she) (?:is |was |are |were |has |have )?(?:gone|dead|deceased|no longer here)\b", r"\b(?:gone|dead|deceased|no longer here)\b"),
 )
 
 

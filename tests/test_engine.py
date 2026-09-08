@@ -651,7 +651,7 @@ class TestEngineStages(unittest.TestCase):
         self.assertNotIn("best upload window", timing["reasoning"])
         self.assertEqual(timing["timezone"], "UTC")
 
-    def test_upload_timing_day_matches_the_displayed_ist_timezone(self):
+    def test_publication_observation_uses_the_displayed_ist_timezone_without_driving_recommendation(self):
         timing = build_upload_timing(
             [{"published_at": value} for value in (
                 "2026-08-05T23:30:00Z", "2026-08-12T23:30:00Z", "2026-08-19T23:30:00Z",
@@ -659,7 +659,10 @@ class TestEngineStages(unittest.TestCase):
             region="india",
             timezone_name="Asia/Kolkata",
         )
-        self.assertEqual(timing["recommended_day"], "Thursday")
+        self.assertEqual(timing["recommended_day"], "Wednesday")
+        self.assertEqual(timing["basis"], "general_recommendation")
+        self.assertEqual(timing["public_publication_observation"]["day"], "Thursday")
+        self.assertFalse(timing["public_publication_observation"]["recommendation_evidence"])
 
     def test_upload_timing_prefers_reliable_personal_audience_activity(self):
         timing = build_upload_timing(

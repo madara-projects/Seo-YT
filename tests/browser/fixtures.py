@@ -421,6 +421,10 @@ class FixtureRouter:
         if path == "/api/history/runs" and method == "GET":
             _json_response(route, history_runs())
             return
+        if path == "/api/history/runs" and method == "DELETE":
+            _json_response(route, {"status": "deleted", "deleted_run_ids": [1], "deleted_count": 1,
+                                   "cloud_sync": {"state": "healthy/idle", "counts": {"pushed": 1}}})
+            return
         if path == "/api/history/runs/1" and method == "GET":
             _json_response(route, history_run_detail(include_link=self.include_link))
             return

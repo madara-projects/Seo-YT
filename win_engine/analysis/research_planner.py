@@ -95,6 +95,10 @@ def plan_research_queries(
         cleaned = _short(query, 8)
         if not usable_research_topic(cleaned):
             continue
+        if _low_value_query(cleaned):
+            continue
+        if _visual_only_query(cleaned, script, brief):
+            continue
         if source_requires_noninstructional_framing(script, brief) and has_unsupported_instructional_framing(cleaned):
             continue
         if brief.get("exact_quote") and re.match(r"(?i)^(?:coping with|how to|healing from|tips? for)\b", cleaned):
@@ -120,6 +124,34 @@ def plan_research_queries(
         if len(queries) >= max(1, max_queries):
             break
     return queries
+
+
+def _visual_only_query(value: str, script: str, brief: dict[str, Any]) -> bool:
+    """Reject scenery/camera subjects unless the actual content also discusses them."""
+
+    visual_words = set(_keyword_phrase(str(brief.get("visual_requirements") or ""), 20).split())
+    query_words = set(_keyword_phrase(value, 20).split())
+    if not visual_words or not query_words:
+        return False
+    content = " ".join(str(brief.get(field) or "") for field in ("exact_quote", "on_screen_text", "content", "topic"))
+    content = content or script
+    content_words = set(_keyword_phrase(content, 40).split())
+    visual_overlap = len(query_words & visual_words) / len(query_words)
+    content_overlap = len(query_words & content_words) / len(query_words)
+    return visual_overlap >= 0.5 and content_overlap < 0.5
+
+
+def _low_value_query(value: str) -> bool:
+    """Protect limited search quota from analyst labels and vague prompts."""
+
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+    if re.match(r"^(?:exploring|understanding|discovering|relatable)\b", normalized):
+        return True
+    words = set(normalized.split())
+    return bool(words) and words <= {
+        "content", "emotional", "emotion", "feelings", "feeling", "relatable",
+        "reflection", "reflective", "validation", "video", "videos",
+    }
 
 
 def _is_visual_semantic(value: str, semantic: dict[str, Any]) -> bool:

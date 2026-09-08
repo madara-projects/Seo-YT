@@ -835,6 +835,11 @@
                 <input id="historySearch" type="search" placeholder="Search title or topic" autocomplete="off" oninput="filterHistoryRuns(this.value)">
               </label>
             </div>
+            <div class="history-selection-toolbar" id="historySelectionToolbar">
+              <label class="history-select-all"><input id="historySelectAll" type="checkbox" onchange="toggleAllVisibleHistory(this.checked)"> <span>Select visible</span></label>
+              <span class="metric-sub" id="historySelectedCount">0 selected</span>
+              <button class="btn history-action-danger" id="historyBulkDeleteBtn" onclick="deleteSelectedHistoryRuns()" disabled>Delete selected</button>
+            </div>
             <div class="history-list" id="historyPageBody" aria-live="polite">
               <div class="history-empty">Loading saved packages...</div>
             </div>

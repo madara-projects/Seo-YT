@@ -16,7 +16,7 @@ from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.analysis.idea_workspace import build_idea_evidence, evidence_to_research, idea_script
 from win_engine.analysis.demand_explorer import analyze_demand, idea_fingerprint
 from win_engine.core.config import get_settings
-from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest
+from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.intelligence_store import IntelligenceStore
 from win_engine.feedback.audit_experiment_store import AuditExperimentStore
@@ -607,18 +607,15 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
         raise HTTPException(status_code=422, detail="Enter a valid 11-character YouTube video ID or video URL.")
     service = YouTubeChannelService(settings)
     try:
-        owned_video = service.verify_owned_video(clean_vid)
+        channel_connected = bool(service.status().get("connected"))
+        owned_video = service.verify_owned_video(clean_vid) if channel_connected else service.verify_public_video(clean_vid)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     pub_at = payload.published_at or owned_video.get("published_at")
-    if not owned_video.get("ownership_verified") or not owned_video.get("channel_id"):
-        raise HTTPException(
-            status_code=400,
-            detail="YouTube ownership could not be verified, so the video was not linked.",
-        )
+    ownership_verified = bool(owned_video.get("ownership_verified") and owned_video.get("channel_id"))
     if not pub_at:
-        raise HTTPException(status_code=400, detail="YouTube did not return a publication time for this video.")
+        raise HTTPException(status_code=400, detail="YouTube did not return a publication time. Enter it manually or connect the owning channel.")
     saved_package = run.get("package") if isinstance(run.get("package"), dict) else {}
     saved_selection = run.get("selected_package") if isinstance(run.get("selected_package"), dict) else {}
     selected_package = saved_selection.get("package") if isinstance(saved_selection.get("package"), dict) else {}
@@ -643,16 +640,16 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
         language=str(language_value) if language_value else None,
         region=str(region_value) if region_value else None,
         notes=payload.notes,
-        ownership_state="verified",
-        ownership_verified=True,
-        verified_channel_id=str(owned_video.get("channel_id") or ""),
-        ownership_verified_at=datetime.now(timezone.utc).isoformat(),
+        ownership_state="verified" if ownership_verified else "unverified",
+        ownership_verified=ownership_verified,
+        verified_channel_id=str(owned_video.get("channel_id") or "") if ownership_verified else None,
+        ownership_verified_at=datetime.now(timezone.utc).isoformat() if ownership_verified else None,
     )
     store.update_linked_video_metadata(link_id, owned_video)
     refresh_warning = None
     try:
         link = store.published_video_link(link_id)
-        if link and owned_video.get("ownership_verified"):
+        if link and ownership_verified:
             service.refresh_linked_video_performance(link)
     except Exception as exc:
         refresh_warning = (
@@ -666,17 +663,39 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
         "analysis_run_id": run_id,
         "youtube_video_id": clean_vid,
         "published_at": pub_at,
+        "ownership_verified": ownership_verified,
+        "ownership_state": "verified" if ownership_verified else "unverified",
+        "ownership_message": (
+            "Ownership verified against the connected YouTube channel."
+            if ownership_verified else
+            "Video linked as unverified. Connect the owning YouTube channel before analytics or learning uses this video."
+        ),
         "refresh_warning": refresh_warning,
         "report": store.linked_package_report(run_id),
     }
 
 
+def _delete_sync_result(request: Request) -> dict:
+    cloud = getattr(request.app.state, "cloud_sync", None)
+    return cloud.run_once() if cloud else {"state": "disabled", "counts": {}}
+
+
 @router.delete("/api/history/runs/{run_id}")
-def delete_history_run(run_id: int):
+def delete_history_run(run_id: int, request: Request):
     store = HistoryStore(get_settings().database_path)
     if not store.delete_analysis_run(run_id):
         raise HTTPException(status_code=404, detail="Analysis run not found.")
-    return {"status": "deleted", "run_id": run_id}
+    return {"status": "deleted", "run_id": run_id, "cloud_sync": _delete_sync_result(request)}
+
+
+@router.delete("/api/history/runs")
+def delete_history_runs(payload: DeleteHistoryRunsRequest, request: Request):
+    store = HistoryStore(get_settings().database_path)
+    deleted = store.delete_analysis_runs(payload.run_ids)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="One or more saved packages were not found; nothing was deleted.")
+    return {"status": "deleted", "deleted_run_ids": deleted, "deleted_count": len(deleted),
+            "cloud_sync": _delete_sync_result(request)}
 
 
 @router.get("/api/published-videos")
@@ -702,8 +721,19 @@ def refresh_published_video(link_id: int):
     link = store.published_video_link(link_id)
     if not link:
         raise HTTPException(status_code=404, detail="Published video link not found.")
+    service = YouTubeChannelService(settings)
     try:
-        refreshed = YouTubeChannelService(settings).refresh_linked_video_performance(link)
+        if service.status().get("connected"):
+            try:
+                refreshed = service.refresh_linked_video_performance(link)
+            except ValueError:
+                raise
+            except Exception:
+                refreshed = service.refresh_linked_video_public(link)
+                refreshed["oauth_fallback"] = True
+        else:
+            refreshed = service.refresh_linked_video_public(link)
+            refreshed["oauth_fallback"] = True
         refreshed["report"] = store.linked_package_report(int(link["analysis_run_id"]))
         return refreshed
     except ValueError as exc:

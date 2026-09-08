@@ -146,6 +146,28 @@ class CloudSyncTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(tombstone, (2, 1))
 
+    def test_bulk_delete_is_atomic_and_queues_every_synced_tombstone(self):
+        run_ids = [
+            self.store.record_analysis_run(
+                f"bulk {index}", "browse", "emotion", f"Package {index}", 7.0,
+                "LOW", "WORKABLE", 50, {"description": f"Package {index}"},
+            ) for index in range(2)
+        ]
+        service = CloudSyncService(self.settings())
+        self.assertEqual(service._stage_local_packages(), 2)
+
+        self.assertEqual(self.store.delete_analysis_runs(run_ids), run_ids)
+        with self.store._connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM cloud_sync_tombstones WHERE pending=1").fetchone()[0], 2)
+
+    def test_bulk_delete_with_unknown_id_deletes_nothing(self):
+        run_id = self.store.record_analysis_run(
+            "keep", "browse", "emotion", "Keep", 7.0, "LOW", "WORKABLE", 50, {"description": "Keep"},
+        )
+        self.assertEqual(self.store.delete_analysis_runs([run_id, 999999]), [])
+        self.assertIsNotNone(self.store.history_run(run_id))
+
     def test_remote_tombstone_deletes_an_offline_devices_copy(self):
         run_id = self.store.record_analysis_run(
             "temporary test", "browse", "emotion", "Delete everywhere", 7.0,
