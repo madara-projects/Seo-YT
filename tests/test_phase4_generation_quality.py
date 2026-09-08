@@ -71,6 +71,32 @@ def valid_package(title: str = "Did I Deserve More Than the Bare Minimum? 💔 #
 
 
 class Phase4QualityTests(unittest.TestCase):
+    def test_friendship_boundary_quote_requires_title_to_include_the_turn(self):
+        quote = "Wdym?? The one who poured heart and Soul into friendship is now setting boundaries???"
+        package = valid_package("When you put your heart and soul into friendship 🌿 #shorts")
+        package["description"] = quote + " A reflection on setting boundaries in friendship."
+        gate = evaluate_package_quality(package, script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"})
+        rejected = {item["code"] for row in gate["rejected_candidates"] for item in row["issues"]}
+        self.assertIn("missing_central_quote_concept", rejected)
+
+    def test_friendship_quote_rejects_awkward_idiom_and_invented_causality(self):
+        quote = "The one who poured heart and soul into friendship is now setting boundaries."
+        package = valid_package("When heart and soul friendship leads to setting boundaries #shorts")
+        package["description"] = quote + " A reflection on friendship boundaries."
+        gate = evaluate_package_quality(package, script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"})
+        rejected = {item["code"] for row in gate["rejected_candidates"] for item in row["issues"]}
+        self.assertIn("unnatural_title_phrase", rejected)
+        self.assertIn("invented_causality", rejected)
+
+    def test_quote_description_rejects_generic_exploration_and_invented_one_sided_dynamic(self):
+        quote = "The one who poured heart and soul into friendship is now setting boundaries."
+        package = valid_package("Setting Boundaries After Giving Your All 🌿 #shorts")
+        package["description"] = quote + " This short explores friendship dynamics and one-sided effort."
+        gate = evaluate_package_quality(package, script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"})
+        codes = {item["code"] for item in gate["issues"]}
+        self.assertIn("generic_description_filler", codes)
+        self.assertIn("invented_relationship_dynamic", codes)
+
     def test_quote_explainer_phrases_are_instructional_framing(self):
         self.assertTrue(has_unsupported_instructional_framing("Understanding grief"))
         self.assertTrue(has_unsupported_instructional_framing("Exploring the shape of absence"))
@@ -93,6 +119,12 @@ class Phase4QualityTests(unittest.TestCase):
             issue["code"] for item in gate["rejected_candidates"] for issue in item["issues"]
         }
         self.assertIn("invented_loss_event", rejected_codes)
+
+        package["title"] = "Being forgotten by someone you remember 💭 #shorts"
+        package["variants"] = [package["title"]]
+        package["description"] = "A memory that stays in your mind after they have gone."
+        gate = evaluate_package_quality(package, script="Being forgotten by someone you remember.", creator_brief={"video_format": "youtube_shorts"})
+        self.assertIn("invented_loss_event", {item["code"] for item in gate["issues"]})
 
     def test_short_hashtags_are_derived_from_validated_topic_tags(self):
         self.assertEqual(focused_short_hashtags(["letting go of the wrong person", "yt", "shorts"]),
@@ -302,6 +334,26 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertIn("title_duplicates_on_screen_quote", warning_codes)
         self.assertIn("sparse_tag_set", warning_codes)
 
+    def test_two_strong_subject_tags_do_not_trigger_padding_warning(self):
+        quote = "The worst feeling is being forgotten by someone you cannot forget."
+        package = {
+            "title": "Why Being Forgotten Hurts So Much #shorts",
+            "variants": ["Why Being Forgotten Hurts So Much #shorts"],
+            "description": f'“{quote}” A reflection on remembering someone who has forgotten you.',
+            "tags": ["being forgotten", "painful memories", "yt", "shorts"],
+            "hashtags": ["#BeingForgotten", "#PainfulMemories", "#Shorts"],
+        }
+        gate = evaluate_package_quality(
+            package, script=quote,
+            creator_brief={"exact_quote": quote, "video_format": "youtube_shorts", "visual_requirements": "walking", "creator_intent": "reflection"},
+            tag_evidence={"selected_keywords": [
+                {"keyword": "being forgotten", "score": 96, "source_support_score": 90},
+                {"keyword": "painful memories", "score": 94, "source_support_score": 85},
+            ]},
+        )
+        warning_codes = {item["code"] for item in gate["final_seo_quality"]["warnings"]}
+        self.assertNotIn("sparse_tag_set", warning_codes)
+
     def test_broken_article_description_is_rejected(self):
         package = valid_package()
         package["description"] = "A One person walking alone is the visual."
@@ -325,6 +377,33 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertIn("unsupported_context", rejected_codes)
         self.assertIn("unsupported_action", rejected_codes)
         self.assertIn("unsupported_context", {item["code"] for item in gate["issues"]})
+
+    def test_quote_package_cannot_invent_romance_or_that_someone_moved_on(self):
+        quote = "The worst feeling is being forgotten by someone you cannot forget."
+        package = valid_package()
+        package["description"] = (
+            f'"{quote}" The person has moved on from your life, leaving forgotten love behind.'
+        )
+        gate = evaluate_package_quality(
+            package, script=quote,
+            creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"},
+        )
+        codes = {item["code"] for item in gate["issues"]}
+        self.assertIn("unsupported_context", codes)
+        self.assertIn("invented_story_detail", codes)
+
+    def test_live_moved_on_wording_is_rejected_in_title_and_description(self):
+        quote = "The worst feeling is not being lonely; it's being forgotten by someone you can't forget."
+        package = valid_package("When you can't forget a person who moved on 💭 #shorts")
+        package["description"] = "A heavy memory while the other person has moved on. A reflection on unrequited memory."
+        gate = evaluate_package_quality(
+            package, script=quote,
+            creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"},
+        )
+        codes = {item["code"] for item in gate["issues"]}
+        rejected_codes = {item["code"] for row in gate["rejected_candidates"] for item in row["issues"]}
+        self.assertIn("invented_story_detail", codes | rejected_codes)
+        self.assertIn("unsupported_context", codes)
 
     def test_unicode_normalization_preserves_emoji_joiners(self):
         self.assertEqual(normalize_unicode("Walking 🚶‍♂️"), "Walking 🚶‍♂️")

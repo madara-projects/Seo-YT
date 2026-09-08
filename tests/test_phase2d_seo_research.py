@@ -13,6 +13,59 @@ from win_engine.ingestion.research_service import ResearchService
 
 
 class Phase2DKeywordResearchTests(unittest.TestCase):
+    def test_ambiguous_idiom_is_not_a_standalone_quote_tag(self):
+        quote = "The one who poured heart and soul into friendship is now setting boundaries."
+        research = build_keyword_research(
+            script=quote,
+            semantic={"primary_topic": "setting boundaries in friendship", "secondary_topics": ["heart and soul"], "search_intents": [], "keyword_clusters": []},
+            youtube_results=[{"title": "Heart and Soul", "description": "music"}],
+            research_queries=[{"query": "heart and soul"}], entity_signals=[], creator_brief={"exact_quote": quote},
+        )
+        tags, evidence = select_final_tags(research, generated_tags=[], title="Setting boundaries in friendship #shorts", script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"})
+        self.assertNotIn("heart and soul", tags)
+        self.assertIn("ambiguous_quote_fragment", {item["reason"] for item in evidence["rejected_candidates"]})
+
+    def test_quote_tag_does_not_shift_to_unsupported_first_person(self):
+        quote = "The friend who gave deeply is now setting boundaries."
+        research = build_keyword_research(
+            script=quote,
+            semantic={"primary_topic": "setting boundaries", "secondary_topics": [], "search_intents": ["why am I setting boundaries"], "keyword_clusters": []},
+            youtube_results=[{"title": "Why am I setting boundaries?", "description": "friendship"}],
+            research_queries=[{"query": "why am I setting boundaries"}], entity_signals=[], creator_brief={"exact_quote": quote},
+        )
+        tags, evidence = select_final_tags(research, generated_tags=[], title="A Friend Sets Boundaries #shorts", script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"})
+        self.assertNotIn("why am i setting boundaries", tags)
+        self.assertIn("unsupported_perspective_shift", {item["reason"] for item in evidence["rejected_candidates"]})
+
+    def test_query_plan_does_not_spend_quota_on_analyst_labels(self):
+        queries = plan_research_queries(
+            script="Being forgotten by someone you cannot forget.",
+            semantic_analysis={
+                "primary_topic": "being forgotten", "secondary_topics": [],
+                "search_intents": ["relatable emotional content", "exploring deep emotional pain"],
+                "keyword_clusters": [{"cluster": "memory", "candidates": ["forgotten by someone"]}],
+            }, max_queries=5,
+        )
+        text = " | ".join(item["query"] for item in queries)
+        self.assertIn("forgotten by someone", text)
+        self.assertNotIn("relatable emotional content", text)
+        self.assertNotIn("exploring deep emotional pain", text)
+
+    def test_short_exact_quote_phrase_is_allowed_when_results_support_it(self):
+        quote = "The worst feeling is not being lonely; it's being forgotten by someone you can't forget."
+        research = build_keyword_research(
+            script=quote,
+            semantic={"primary_topic": "being forgotten", "secondary_topics": [],
+                      "search_intents": ["being forgotten"], "keyword_clusters": []},
+            youtube_results=[{"title": "Being forgotten hurts", "description": "The pain of being forgotten"}],
+            research_queries=[{"type": "primary", "query": "being forgotten"}],
+            entity_signals=[], creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"},
+        )
+        tags, evidence = select_final_tags(research, generated_tags=[], title="The pain of being forgotten",
+            script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"}, is_short=True)
+        self.assertIn("being forgotten", tags)
+        self.assertIn("being forgotten", evidence["selected_result_evidence"]["tags_with_matching_results"])
+
     @patch("win_engine.analysis.semantic_research.gemini_client.is_available", return_value=True)
     @patch("win_engine.analysis.semantic_research.gemini_client.generate")
     def test_rejected_primary_preserves_valid_grounded_alternative(self, generate, _available):
@@ -674,6 +727,19 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         self.assertEqual(research["status"], "semantic_only")
         self.assertNotIn("viral shorts", tags)
         self.assertTrue(all(item["research_evidence_score"] == 0 for item in evidence["selected_keywords"]))
+
+    def test_visual_entity_does_not_become_a_research_query(self):
+        quote = "Be grateful that you slipped through the hands of people who had no idea how to hold you"
+        queries = plan_research_queries(
+            script=quote,
+            creator_brief={"exact_quote": quote, "visual_requirements": "A person walking along a quiet path at dusk"},
+            semantic_analysis={
+                "primary_topic": "self worth",
+                "entities": ["person walking along a quiet path"],
+                "secondary_topics": [], "search_intents": [], "keyword_clusters": [],
+            },
+        )
+        self.assertFalse(any("walking" in item["query"] for item in queries))
 
     def test_semantic_cluster_is_not_its_own_relevance_proof(self):
         research = build_keyword_research(

@@ -312,7 +312,7 @@ def _analyze_quote(
     provenance: dict[str, Any],
 ) -> dict[str, Any]:
     risks: list[dict[str, Any]] = []
-    explicit_no_voice = _is_voice_over_negated(source) or voice_over == "none"
+    source_explicitly_silent = _is_voice_over_negated(source)
     cleaned_for_voice = re.sub(
         r"\b(?:voice[- ]?over|narration|dialogue|audio)\s*:\s*(?:none|no|absent|false|off|silent|n/a)\b",
         "", source, flags=re.IGNORECASE,
@@ -326,7 +326,7 @@ def _analyze_quote(
         "", cleaned_for_voice, flags=re.IGNORECASE,
     )
     positive_voice_marker = _VOICE_MARKERS.search(cleaned_for_voice)
-    if voice_over == "none" and positive_voice_marker and not explicit_no_voice:
+    if voice_over == "none" and positive_voice_marker and not source_explicitly_silent:
         risks.append(_risk("voice_over_visual_contradiction", "high", "opening", "The brief says no voice-over, but the supplied content describes narration or listening.", positive_voice_marker.group(0), "Confirm the finished audio plan and remove the contradictory instruction."))
     if not exact_quote:
         return {"summary": {"status": "not_applicable", "reason": "No exact quote was supplied or detected.", "provenance": "unavailable"}, "risks": risks}

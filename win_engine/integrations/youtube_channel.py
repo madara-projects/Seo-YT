@@ -216,7 +216,7 @@ class YouTubeChannelService:
                         "title": str(data.get("title") or "YouTube Video"),
                         "description": "",
                         "tags": [],
-                        "published_at": datetime.now(timezone.utc).isoformat(),
+                        "published_at": None,
                         "ownership_verified": False,
                         "metadata_source": "oembed",
                     }
@@ -230,7 +230,7 @@ class YouTubeChannelService:
                 "title": "YouTube Video",
                 "description": "",
                 "tags": [],
-                "published_at": datetime.now(timezone.utc).isoformat(),
+                "published_at": None,
                 "ownership_verified": False,
                 "metadata_source": "unverified_id",
             }
@@ -383,6 +383,37 @@ class YouTubeChannelService:
             "current": current_snapshot,
             "youtube": metadata,
             "message": "Current YouTube metadata and available analytics were refreshed.",
+        }
+
+    def refresh_linked_video_public(self, link: dict[str, Any]) -> dict[str, Any]:
+        """Refresh public metadata/counts without treating them as owner analytics."""
+
+        video_id = str(link.get("youtube_video_id") or "")
+        if not video_id:
+            raise ValueError("Published-video link is missing its YouTube video ID.")
+        metadata = self.verify_public_video(video_id)
+        if metadata.get("metadata_source") == "unverified_id":
+            raise ValueError("Public YouTube metadata is temporarily unavailable. The saved link is unchanged.")
+        store = self._history_store()
+        store.update_linked_video_metadata(int(link.get("id") or 0), metadata)
+        published_at = _parse_timestamp(str(link.get("published_at") or metadata.get("published_at") or ""))
+        age_hours = max(0.0, (datetime.now(timezone.utc) - published_at).total_seconds() / 3600) if published_at else 0.0
+        if any(metadata.get(field) is not None for field in ("view_count", "like_count", "comment_count")):
+            store.record_performance_snapshot(
+                youtube_video_id=video_id, age_hours=age_hours,
+                views=_optional_int(metadata.get("view_count")), likes=_optional_int(metadata.get("like_count")),
+                comments=_optional_int(metadata.get("comment_count")), snapshot_window="current",
+                snapshot_status="display_only", replace_window=True,
+            )
+        return {
+            "video_id": video_id, "age_hours": round(age_hours, 1), "captured": [],
+            "current": store.latest_performance_snapshot(video_id) or None, "youtube": metadata,
+            "data_scope": "public_metadata", "ownership_verified": bool(link.get("ownership_verified")),
+            "private_analytics_available": False,
+            "message": (
+                "Public metadata and cumulative views, likes, and comments were refreshed. "
+                "Reconnect the owning channel for impressions, CTR, watch time, retention, shares, and subscriber impact."
+            ),
         }
 
     def _query(self, analytics, start: date, end: date, metrics: str, **kwargs: Any) -> dict[str, Any]:

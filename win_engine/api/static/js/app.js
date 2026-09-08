@@ -328,15 +328,31 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
 
     async function deleteHistoryRun(runId) {
       if (!confirm("Delete this saved package? It will be removed from this device and marked deleted for your synced devices.")) return;
+      return deleteHistoryRuns([Number(runId)], false);
+    }
+
+    async function deleteSelectedHistoryRuns() {
+      const ids = [...selectedHistoryRunIds];
+      if (!ids.length) return;
+      if (!confirm("Delete " + ids.length + " selected packages? They will be removed locally and marked deleted in cloud sync for every synced device.")) return;
+      return deleteHistoryRuns(ids, true);
+    }
+
+    async function deleteHistoryRuns(runIds, bulk) {
       try {
-        await apiRequest(`/api/history/runs/${runId}`, { method: "DELETE" });
-        showToast("Saved package deleted successfully.");
+        const result = bulk
+          ? await apiRequest("/api/history/runs", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run_ids: runIds }) })
+          : await apiRequest(`/api/history/runs/${runIds[0]}`, { method: "DELETE" });
+        runIds.forEach((id) => selectedHistoryRunIds.delete(Number(id)));
+        const cloudState = (result.cloud_sync || {}).state || "disabled";
+        const cloudNote = cloudState === "healthy/idle" ? " Deletion synced to cloud." : " Cloud deletion is queued and will retry automatically.";
+        showToast((runIds.length === 1 ? "Saved package deleted." : runIds.length + " packages deleted.") + cloudNote);
         if ($("historyDetail")) $("historyDetail").classList.add("hidden");
         invalidateDashboardCache();
         loadHistoryFeed(true);
-        loadSavedHistory();
+        await loadSavedHistory();
       } catch (err) {
-        showToast(formatApiError(err, "Could not delete package."));
+        showToast(formatApiError(err, "Could not delete selected package(s)."));
       }
     }
 
@@ -348,12 +364,12 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
       const videoId = prompt("Enter your published YouTube Video ID or URL for this package:");
       if (!videoId) return;
       try {
-        await apiRequest(`/api/history/runs/${runId}/link-video`, {
+        const result = await apiRequest(`/api/history/runs/${runId}/link-video`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ youtube_video_id: videoId })
         });
-        showToast("Package linked to YouTube Video ID.");
+        showToast(result.ownership_message || "Package linked to YouTube Video ID.");
         invalidateDashboardCache();
         loadHistoryFeed(true);
         loadSavedHistory();
@@ -499,6 +515,7 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
     }
 
     let savedHistoryRuns = [];
+    const selectedHistoryRunIds = new Set();
 
     function historyRowHtml(run) {
       const title = run.title || run.query || "Untitled package";
@@ -509,7 +526,9 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
       const linkAction = isLinked
         ? "<button class='btn history-action-btn' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Change link</button>"
         : "<button class='btn history-action-btn' onclick='linkVideoPrompt(" + Number(run.id) + ")'>Link video</button>";
-      return "<article class='history-row' data-history-run='" + Number(run.id) + "'>" +
+      const selected = selectedHistoryRunIds.has(Number(run.id));
+      return "<article class='history-row" + (selected ? " is-selected" : "") + "' data-history-run='" + Number(run.id) + "'>" +
+        "<label class='history-row-select' title='Select package'><span class='sr-only'>Select " + esc(title) + "</span><input type='checkbox' " + (selected ? "checked" : "") + " onchange='toggleHistoryRunSelection(" + Number(run.id) + ",this.checked)'></label>" +
         "<div class='history-row-main'><div class='history-row-title' title='" + esc(title) + "'><button onclick='openHistoryRun(" + Number(run.id) + ")'>" + esc(title) + "</button></div>" +
           "<div class='history-row-meta'><span>" + historyDate(run.created_at) + "</span><span aria-hidden='true'>·</span><span>" + esc(run.content_angle || run.intent || "General") + "</span>" + selection + (isLinked ? "<span class='chip chip-ok'>YouTube linked</span>" : "") + "</div></div>" +
         "<div class='history-score-group' aria-label='Package scores'><div class='history-score'><span class='history-score-label'>Opportunity</span><span class='history-score-value'>" + num(run.opportunity_score) + "/100</span></div><div class='history-score'><span class='history-score-label'>Title quality</span><span class='history-score-value'>" + num(run.title_score) + "/10</span></div></div>" +
@@ -532,9 +551,39 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
         : savedHistoryRuns.length + " package" + (savedHistoryRuns.length === 1 ? "" : "s") + " available";
       if (!visibleRuns.length) {
         body.innerHTML = "<div class='history-empty'>" + (savedHistoryRuns.length ? "No saved packages match your search." : "No saved packages yet. Generate an SEO package and it will appear here.") + "</div>";
+        updateHistorySelectionControls(visibleRuns);
         return;
       }
       body.innerHTML = visibleRuns.map(historyRowHtml).join("");
+      updateHistorySelectionControls(visibleRuns);
+    }
+
+    function updateHistorySelectionControls(visibleRuns = null) {
+      const existing = new Set(savedHistoryRuns.map((run) => Number(run.id)));
+      [...selectedHistoryRunIds].forEach((id) => { if (!existing.has(id)) selectedHistoryRunIds.delete(id); });
+      const visible = visibleRuns || savedHistoryRuns;
+      const selectedVisible = visible.filter((run) => selectedHistoryRunIds.has(Number(run.id))).length;
+      if ($("historySelectedCount")) $("historySelectedCount").textContent = selectedHistoryRunIds.size + " selected";
+      if ($("historyBulkDeleteBtn")) $("historyBulkDeleteBtn").disabled = selectedHistoryRunIds.size === 0;
+      if ($("historySelectAll")) {
+        $("historySelectAll").checked = visible.length > 0 && selectedVisible === visible.length;
+        $("historySelectAll").indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
+      }
+    }
+
+    function toggleHistoryRunSelection(runId, checked) {
+      const id = Number(runId);
+      if (checked) selectedHistoryRunIds.add(id); else selectedHistoryRunIds.delete(id);
+      renderSavedHistory($("historySearch") ? $("historySearch").value : "");
+    }
+
+    function toggleAllVisibleHistory(checked) {
+      const needle = $("historySearch") ? $("historySearch").value.trim().toLowerCase() : "";
+      const visible = needle ? savedHistoryRuns.filter((run) =>
+        [run.title, run.query, run.content_angle, run.intent].some((value) => String(value || "").toLowerCase().includes(needle))
+      ) : savedHistoryRuns;
+      visible.forEach((run) => checked ? selectedHistoryRunIds.add(Number(run.id)) : selectedHistoryRunIds.delete(Number(run.id)));
+      renderSavedHistory($("historySearch") ? $("historySearch").value : "");
     }
 
     function filterHistoryRuns(query = "") {
@@ -614,6 +663,7 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
       const usage = report.package_usage || {};
       const perf = report.performance || {};
       const diagnosis = report.diagnosis || {};
+      const ownershipVerified = report.ownership_verified === true;
       const baseline = report.baseline || {};
       const metric = (value, suffix = "") => value === null || value === undefined ? "Not available yet" : num(value) + suffix;
       const list = (items, empty) => arr(items).length
@@ -644,7 +694,7 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
         return "<div class='history-snapshot-row'><div><strong>" + esc(windowLabel) + "</strong><span class='chip " + (complete ? "chip-ok" : "") + "'>" + state + "</span></div><div><span>Views</span><strong>" + metric(snapshot.views) + "</strong></div><div><span>Likes</span><strong>" + metric(snapshot.likes) + "</strong></div><div><span>Average viewed</span><strong>" + metric(snapshot.avg_view_percentage, "%") + "</strong></div><div><span>Captured</span><strong>" + historyDate(snapshot.captured_at) + "</strong></div></div>";
       }).join("") || "<div class='history-empty'>No performance snapshot has been captured yet.</div>";
       return "<section class='history-linked-report'>" +
-       "<header class='history-linked-header'><div><div class='eyebrow'>LINKED YOUTUBE VIDEO</div><h3>" + esc(diagnosis.verdict || "Collecting evidence") + "</h3><p>Published " + historyDate(report.published_at) + " · Last refreshed " + historyDate(report.metadata_synced_at || perf.captured_at) + "</p></div><div class='history-detail-actions'><span class='chip chip-ok'>" + esc(diagnosis.confidence || "LOW") + " confidence</span><a class='btn' target='_blank' rel='noopener' href='" + esc(report.video_url) + "'>Watch video</a><button class='btn' onclick='refreshHistoryPerformance(" + Number(report.link_id) + "," + Number(runId) + ",this)'>Refresh data</button></div></header>" +
+       "<header class='history-linked-header'><div><div class='eyebrow'>LINKED YOUTUBE VIDEO</div><h3>" + esc(diagnosis.verdict || "Collecting evidence") + "</h3><p>Published " + historyDate(report.published_at) + " · Last refreshed " + historyDate(report.metadata_synced_at || perf.captured_at) + "</p></div><div class='history-detail-actions'><span class='chip " + (ownershipVerified ? "chip-ok" : "") + "'>" + (ownershipVerified ? "Owner analytics verified" : "Public data only") + "</span><a class='btn' target='_blank' rel='noopener' href='" + esc(report.video_url) + "'>Watch video</a><button class='btn' onclick='refreshHistoryPerformance(" + Number(report.link_id) + "," + Number(runId) + ",this)'>Refresh data</button></div></header>" +
         "<div class='history-linked-grid'><section class='history-section'><div class='history-section-heading'>Actual YouTube upload</div>" +
           (yt.thumbnail_url ? "<img class='history-youtube-thumb' src='" + esc(yt.thumbnail_url) + "' alt=''>" : "") +
           "<div class='history-upload-title'>" + esc(yt.title || usage.uploaded_title || "Metadata not refreshed yet") + "</div><div class='history-detail-meta'><span>" + esc(attribution) + "</span><span>·</span><span>" + esc(titleStatus) + "</span><span>·</span><span>Description match " + metric(usage.description_match_percent, "%") + "</span></div>" +
@@ -678,8 +728,8 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
       const original = button ? button.textContent : "";
       if (button) { button.disabled = true; button.textContent = "Refreshing..."; }
       try {
-        await apiRequest("/api/published-videos/" + Number(linkId) + "/refresh", { method: "POST" });
-        if (!silent) showToast("YouTube metadata and available analytics refreshed.");
+        const result = await apiRequest("/api/published-videos/" + Number(linkId) + "/refresh", { method: "POST" });
+        if (!silent) showToast(result.message || "YouTube metadata and available analytics refreshed.");
         invalidateDashboardCache();
         await openHistoryRun(Number(runId));
         loadHistoryFeed(true);
@@ -896,7 +946,8 @@ import { loadExperiments, mountExperimentsPage } from "./pages/experiments.js";
     // History and shell markup still use these narrow compatibility handlers.
     // Creator actions are delegated inside pages/creator.js and expose no globals.
     Object.assign(window, {
-      applyTemplate, switchPage, deleteHistoryRun,
+      applyTemplate, switchPage, deleteHistoryRun, deleteSelectedHistoryRuns,
+      toggleHistoryRunSelection, toggleAllVisibleHistory,
       linkVideoPrompt, refreshLinkedVideo, openHistoryRun, closeHistoryDetail,
       filterHistoryRuns,
       saveComparableMetadata, refreshHistoryPerformance,

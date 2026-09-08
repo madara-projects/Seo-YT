@@ -29,13 +29,14 @@ _GENERIC_TITLE_PATTERNS = (
 _UNSUPPORTED_CLAIMS = (
     ("relationship_event", re.compile(r"\b(?:they|he|she) (?:left|cheated|lied|returned|came back|walked away)\b", re.IGNORECASE)),
     ("invented_loss_event", re.compile(
-        r"\b(?:(?:someone|somebody|a person|they|he|she) (?:is |was |are |were )?(?:gone|dead|deceased|no longer here)"
+        r"\b(?:(?:someone|somebody|a person|they|he|she) (?:is |was |are |were |has |have )?(?:gone|dead|deceased|no longer here)"
         r"|after (?:someone|somebody|a person) (?:leaves|left|is gone))\b",
         re.IGNORECASE,
     )),
     ("invented_outcome", re.compile(r"\b(?:guaranteed|proven to|will make you|will get you|100%|go viral)\b", re.IGNORECASE)),
     ("invented_evidence", re.compile(r"\b(?:studies show|research proves|scientists found|data proves)\b", re.IGNORECASE)),
     ("invented_relationship", re.compile(r"\b(?:breakup|toxic relationship|one-sided relationship|just an option)\b", re.IGNORECASE)),
+    ("invented_causality", re.compile(r"\b(?:leads? to|causes?|results? in)\b", re.IGNORECASE)),
 )
 _SHORT_FORMATS = {"short", "shorts", "youtube_shorts", "quote", "reel", "reels"}
 # Platform-format words are not subject evidence. ``yt`` and ``shorts`` may be
@@ -63,11 +64,17 @@ _UNSUPPORTED_CONTEXT_TERMS = {
     "night", "nighttime", "midnight", "dark", "darkness", "empty", "deserted",
     "room", "rooms", "hour", "hours",
     "peace", "peaceful", "comfort", "comforting", "healing",
+    "love", "lover", "romance", "romantic", "unrequited", "right", "wrong",
 }
+_MOVED_ON_PERSON_RE = re.compile(
+    r"\b(?:(?:the|that|other|another|a)\s+)?(?:person|someone|somebody|they)\s+(?:who\s+)?(?:has\s+|have\s+)?moved\s+on(?:\s+from\s+your\s+life)?\b",
+    re.IGNORECASE,
+)
 _DESCRIPTION_BOILERPLATE = (
-    re.compile(r"\b(?:this video focuses on|this video explores|experience a brief moment of)\b", re.IGNORECASE),
+    re.compile(r"\b(?:this (?:video|short) focuses on|this (?:video|short) explores|experience a brief moment of)\b", re.IGNORECASE),
     re.compile(r"\b(?:perfect for anyone who|take a moment to breathe and process)\b", re.IGNORECASE),
 )
+_QUOTE_PIVOT_RE = re.compile(r"\b(?:but|yet|however|instead|is now|are now|now)\b", re.IGNORECASE)
 _INSTRUCTIONAL_SOURCE_RE = re.compile(
     r"\b(?:tutorial|walkthrough|step[- ]by[- ]step|practical tips?|guide|"
     r"we (?:explain|cover|break down|show)|here are|demonstrat(?:e|ion)|instructions?)\b",
@@ -588,12 +595,23 @@ def _title_usefulness_issues(
         issues.append(_issue("title_fragment", "title", "Title ends like a sentence fragment.", index=index))
     if any(term in words and term not in source_words for term in _UNSUPPORTED_CONTEXT_TERMS):
         issues.append(_issue("unsupported_context", "title", "Title adds a context or entity absent from the creator source.", index=index))
+    central_terms = _central_quote_terms(normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text")))
+    title_roots = {_quality_root(word) for word in words}
+    if central_terms and len(title_roots & central_terms) / len(central_terms) < 0.5:
+        issues.append(_issue(
+            "missing_central_quote_concept", "title",
+            "Title omits the quote's central turn or concluding idea.", index=index,
+        ))
+    if _MOVED_ON_PERSON_RE.search(clean) and not re.search(r"\b(?:move|moves|moved|moving) on\b", source, re.IGNORECASE):
+        issues.append(_issue("invented_story_detail", "title", "Title invents that another person moved on.", index=index))
     if re.search(r"\b(?:prompt|creator instruction|video concept|without inventing|do not invent)\b", clean, re.IGNORECASE):
         issues.append(_issue("creator_instruction_leakage", "title", "Title exposes internal creator instructions.", index=index))
     if re.search(r"\bthinking out loud\b", clean, re.IGNORECASE) and not re.search(r"\bthinking out loud\b", source, re.IGNORECASE):
         issues.append(_issue("unsupported_action", "title", "Title invents spoken thoughts that are not supplied by the creator.", index=index))
     if re.search(r"\bheavy comfort\b", clean, re.IGNORECASE):
         issues.append(_issue("unnatural_title_phrase", "title", "Title uses an unnatural emotional phrase.", index=index))
+    if re.search(r"\bheart and soul friendship\b", clean, re.IGNORECASE):
+        issues.append(_issue("unnatural_title_phrase", "title", "Title combines an idiom and topic into an unnatural phrase.", index=index))
     if source_overlap_supported and words and source_words and not ({_quality_root(word) for word in words} & {_quality_root(word) for word in source_words}):
         issues.append(_issue("title_not_source_specific", "title", "Title has no meaningful anchor in the creator source.", index=index))
     for competitor in competitors:
@@ -630,12 +648,16 @@ def _description_usefulness_issues(
         issues.append(_issue("description_not_source_specific", "description", "Description has no meaningful anchor in the creator source."))
     if any(term in words and term not in source_words for term in _UNSUPPORTED_CONTEXT_TERMS):
         issues.append(_issue("unsupported_context", "description", "Description adds a context or entity absent from the creator source."))
+    if _MOVED_ON_PERSON_RE.search(description) and not re.search(r"\b(?:move|moves|moved|moving) on\b", source, re.IGNORECASE):
+        issues.append(_issue("invented_story_detail", "description", "Description invents that another person moved on."))
     if re.search(r"\b(?:the (?:creator|speaker) shares|my personal experience|our relationship story)\b", description, re.IGNORECASE):
         source_folded = normalize_unicode(source).casefold()
         if not any(phrase in source_folded for phrase in ("my personal experience", "our relationship", "the speaker", "the creator shares")):
             issues.append(_issue("invented_story_detail", "description", "Description invents a personal story or relationship detail."))
-    if any(pattern.search(description) for pattern in _DESCRIPTION_BOILERPLATE) and len(overlap) < 3:
-        issues.append(_issue("generic_description_filler", "description", "Description uses generic framing instead of video-specific context."))
+    if any(pattern.search(description) for pattern in _DESCRIPTION_BOILERPLATE):
+        issues.append(_issue("generic_description_filler", "description", "Description uses generic AI-style framing instead of direct audience-facing copy."))
+    if re.search(r"\bone[- ]sided\b", description, re.IGNORECASE) and not re.search(r"\b(?:one[- ]sided|bare minimum)\b", source, re.IGNORECASE):
+        issues.append(_issue("invented_relationship_dynamic", "description", "Description invents a one-sided dynamic not stated by the creator."))
     if non_instructional and re.search(r"\b(?:this (?:video|short) (?:teaches|explains|breaks down)|learn how|here are \d+|tips? for)\b", description, re.IGNORECASE):
         issues.append(_issue("unsupported_instructional_framing", "description", "Description claims instruction the source does not provide."))
     return issues
@@ -694,7 +716,26 @@ def _final_semantic_quality(
     title_words = set(_meaningful_words(title))
     description_words = set(_meaningful_words(description))
     source_roots = {_quality_root(word) for word in source_words}
-    title_overlap = len({word for word in title_words if _quality_root(word) in source_roots}) / max(len(title_words), 1)
+    # Validated final tags are semantic bridges produced from the creator
+    # source. Their terms let a natural paraphrase such as "emotional pain"
+    # score as grounded even when the quote says "worst feeling" verbatim.
+    # Platform tags and weakly supported rows never contribute.
+    selected_tag_rows = [
+        item for item in (tag_evidence or {}).get("selected_keywords", [])
+        if isinstance(item, dict)
+        and item.get("classification") != "platform_format"
+        and int(item.get("source_support_score") or 0) >= 70
+    ]
+    source_roots |= {
+        _quality_root(word) for item in selected_tag_rows
+        for word in _meaningful_words(item.get("keyword"))
+    }
+    supported_title_words = {word for word in title_words if _quality_root(word) in source_roots}
+    # A concise title needs room for one natural hook/modifier (for example
+    # "weight" in "the emotional weight of being forgotten"). Unsupported
+    # contexts are rejected above; treating one editorial word as missing
+    # subject evidence made otherwise strong titles fail by 1-2 points.
+    title_overlap = min(1.0, len(supported_title_words) / max(len(title_words) - 1, 1))
     description_overlap = len({word for word in description_words if _quality_root(word) in source_roots}) / max(min(len(description_words), 12), 1)
     title_score = _bounded_score(
         35 + title_overlap * 45 + (10 if 3 <= len(title_words) <= 12 else 0)
@@ -761,10 +802,16 @@ def _final_semantic_quality(
         and normalize_unicode(brief.get("visual_requirements"))
         and normalize_unicode(brief.get("creator_intent"))
     )
-    if is_short_content(source, brief) and rich_quote_context and len(topic_rows) < 3:
+    # Do not reward padding. Two strong, independently supported subject tags
+    # are better than three tags where the third is generic or speculative.
+    strong_topic_rows = [
+        row for row in topic_rows
+        if float(row.get("score") or 0) >= 90 and float(row.get("source_support_score") or 0) >= 70
+    ]
+    if is_short_content(source, brief) and rich_quote_context and len(topic_rows) < 2 and not strong_topic_rows:
         warnings.append(_issue(
             "sparse_tag_set", "tags",
-            f"Only {len(topic_rows)} useful subject tag(s) survived; yt/shorts format tags do not count toward the three-topic minimum for GREEN.",
+            f"Only {len(topic_rows)} useful subject tag(s) survived without strong support; yt/shorts format tags do not count as subject tags.",
             severity="warning",
         ))
     verdict = "RED" if critical else ("YELLOW" if warnings else "GREEN")
@@ -790,8 +837,21 @@ def _source_words(source: str, brief: dict[str, Any]) -> set[str]:
     return {word for value in values for word in _meaningful_words(value)}
 
 
+def _central_quote_terms(quote: str) -> set[str]:
+    """Return the meaningful concluding side of an explicit rhetorical pivot."""
+
+    clean = normalize_unicode(quote)
+    matches = list(_QUOTE_PIVOT_RE.finditer(clean))
+    if not matches:
+        return set()
+    tail = clean[matches[-1].end():]
+    terms = {_quality_root(word) for word in _meaningful_words(tail)}
+    # One remaining word is too weak to impose a central-topic contract.
+    return terms if len(terms) >= 2 else set()
+
+
 def _meaningful_words(value: Any) -> list[str]:
-    stop = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "how", "i", "in", "is", "it", "my", "of", "on", "or", "our", "that", "the", "this", "to", "was", "we", "with", "you", "your", "shorts"}
+    stop = {"a", "an", "and", "are", "as", "at", "after", "before", "be", "but", "by", "for", "from", "how", "i", "in", "into", "is", "it", "my", "of", "on", "or", "our", "that", "the", "this", "to", "was", "we", "what", "when", "where", "which", "who", "whom", "why", "with", "you", "your", "shorts"}
     return [word for word in unicode_words(value) if len(word) > 2 and word not in stop]
 
 
@@ -801,6 +861,9 @@ def _bounded_score(value: float) -> float:
 
 def _quality_root(value: str) -> str:
     word = str(value or "").casefold()
+    irregular = {"chosen": "choose", "gave": "give", "given": "give"}
+    if word in irregular:
+        return irregular[word]
     if len(word) > 5 and word.endswith("ing"):
         word = word[:-3]
         if len(word) > 2 and word[-1:] == word[-2:-1]:

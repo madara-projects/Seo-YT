@@ -152,12 +152,14 @@ class Phase1IntegrityRegressionTests(unittest.TestCase):
 
         self.assertFalse(metadata["ownership_verified"])
         self.assertEqual(metadata["metadata_source"], "unverified_id")
+        self.assertIsNone(metadata["published_at"])
 
     def test_link_route_does_not_write_when_ownership_verification_fails(self):
         run_id = self._analysis_run()
         settings = Settings(database_path=self.db_path)
         with (
             patch.object(routes, "get_settings", return_value=settings),
+            patch.object(routes.YouTubeChannelService, "status", return_value={"connected": True}),
             patch.object(
                 routes.YouTubeChannelService,
                 "verify_owned_video",
@@ -168,6 +170,72 @@ class Phase1IntegrityRegressionTests(unittest.TestCase):
                 routes.link_published_video(run_id, LinkVideoRequest(youtube_video_id="foreignvid1"))
 
         self.assertEqual(self.store.published_video_links_list(), [])
+
+    def test_manual_link_without_oauth_is_saved_as_unverified(self):
+        run_id = self._analysis_run()
+        settings = Settings(database_path=self.db_path)
+        metadata = {
+            "video_id": "publicvid01", "title": "Public video", "description": "",
+            "tags": [], "published_at": "2026-08-01T00:00:00Z",
+            "channel_id": "public-channel", "ownership_verified": False,
+            "metadata_source": "youtube_data_api",
+        }
+        with (
+            patch.object(routes, "get_settings", return_value=settings),
+            patch.object(routes.YouTubeChannelService, "status", return_value={"connected": False}),
+            patch.object(routes.YouTubeChannelService, "verify_public_video", return_value=metadata) as public_verify,
+            patch.object(routes.YouTubeChannelService, "verify_owned_video") as owned_verify,
+            patch.object(routes.YouTubeChannelService, "refresh_linked_video_performance") as refresh,
+        ):
+            result = routes.link_published_video(run_id, LinkVideoRequest(youtube_video_id="publicvid01"))
+
+        public_verify.assert_called_once_with("publicvid01")
+        owned_verify.assert_not_called()
+        refresh.assert_not_called()
+        self.assertEqual(result["ownership_state"], "unverified")
+        link = self.store.published_video_links_list()[0]
+        self.assertFalse(link["ownership_verified"])
+        self.assertEqual(link["ownership_state"], "unverified")
+
+    def test_refresh_route_uses_public_data_when_oauth_is_disconnected(self):
+        run_id = self._analysis_run()
+        link_id = self.store.link_published_video(run_id, "publicvid01", "2026-08-01T00:00:00Z")
+        settings = Settings(database_path=self.db_path)
+        public_result = {"data_scope": "public_metadata", "message": "Public metadata refreshed."}
+        with (
+            patch.object(routes, "get_settings", return_value=settings),
+            patch.object(routes.YouTubeChannelService, "status", return_value={"connected": False}),
+            patch.object(routes.YouTubeChannelService, "refresh_linked_video_public", return_value=public_result) as public_refresh,
+            patch.object(routes.YouTubeChannelService, "refresh_linked_video_performance") as owner_refresh,
+        ):
+            result = routes.refresh_published_video(link_id)
+
+        public_refresh.assert_called_once()
+        owner_refresh.assert_not_called()
+        self.assertTrue(result["oauth_fallback"])
+
+    def test_refresh_route_falls_back_public_for_expired_oauth_but_not_owner_mismatch(self):
+        run_id = self._analysis_run()
+        link_id = self.store.link_published_video(run_id, "publicvid01", "2026-08-01T00:00:00Z")
+        settings = Settings(database_path=self.db_path)
+        with (
+            patch.object(routes, "get_settings", return_value=settings),
+            patch.object(routes.YouTubeChannelService, "status", return_value={"connected": True}),
+            patch.object(routes.YouTubeChannelService, "refresh_linked_video_performance", side_effect=RuntimeError("expired token")),
+            patch.object(routes.YouTubeChannelService, "refresh_linked_video_public", return_value={"message": "Public metadata refreshed."}) as fallback,
+        ):
+            self.assertTrue(routes.refresh_published_video(link_id)["oauth_fallback"])
+            fallback.assert_called_once()
+
+        with (
+            patch.object(routes, "get_settings", return_value=settings),
+            patch.object(routes.YouTubeChannelService, "status", return_value={"connected": True}),
+            patch.object(routes.YouTubeChannelService, "refresh_linked_video_performance", side_effect=ValueError("This video does not belong to the connected YouTube channel.")),
+            patch.object(routes.YouTubeChannelService, "refresh_linked_video_public") as unsafe_fallback,
+        ):
+            with self.assertRaises(HTTPException):
+                routes.refresh_published_video(link_id)
+            unsafe_fallback.assert_not_called()
 
     def test_verified_link_persists_explicit_ownership_provenance(self):
         run_id = self._analysis_run()

@@ -91,16 +91,9 @@ def build_upload_timing(
                 f"Based on publication times and current performance for {sample_size} owned channel videos. "
                 "This is an observed association, not evidence that timing caused performance."
             )
-        else:
-            public_window = _publication_window(youtube_results, zone)
-            if public_window and public_window[3] >= 5:
-                best_day, start_hour, end_hour, sample_size = public_window
-                confidence = "MEDIUM" if sample_size >= 10 else "LOW"
-                basis = "public_research_pattern"
-                explanation = (
-                    f"Observed {sample_size} relevant public-video publication timestamps. This is a "
-                    "non-personal competitor pattern and does not show that publishing then caused performance."
-                )
+        # Competitor publication timestamps are descriptive metadata, not
+        # evidence of when this channel's viewers are active. Never turn them
+        # into a personalized or allegedly stronger upload recommendation.
 
     if timezone_source == "fallback_utc":
         explanation += " Channel or application timezone could not be resolved, so this result uses an explicit UTC fallback."
@@ -149,6 +142,17 @@ def build_upload_timing(
         "target_region": region.upper() if region else "GLOBAL",
         "reasoning": explanation,
     }
+    public_window = _publication_window(youtube_results, zone)
+    result["public_publication_observation"] = (
+        {
+            "day": public_window[0],
+            "time": _format_hour_window(public_window[1], public_window[2]),
+            "sample_size": public_window[3],
+            "recommendation_evidence": False,
+            "note": "Descriptive competitor publication pattern only; it is not used to recommend upload timing.",
+        }
+        if public_window and public_window[3] >= 5 else None
+    )
     return result
 
 

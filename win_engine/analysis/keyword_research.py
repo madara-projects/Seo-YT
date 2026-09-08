@@ -291,6 +291,56 @@ def select_final_tags(
     return tags, evidence
 
 
+def synchronize_tag_evidence(evidence: dict[str, Any], tags: Iterable[str]) -> dict[str, Any]:
+    """Rebuild every selected-tag view from one authoritative final tag list."""
+
+    result = dict(evidence or {})
+    final_tags = list(dict.fromkeys(_normalize(tag) for tag in tags if _normalize(tag)))
+    indexed = {
+        _normalize(item.get("keyword")): dict(item)
+        for item in [*(result.get("selected_keywords") or []), *(result.get("candidates") or [])]
+        if isinstance(item, dict) and _normalize(item.get("keyword"))
+    }
+    selected: list[dict[str, Any]] = []
+    for tag in final_tags:
+        row = indexed.get(tag)
+        if row is None and tag in _PREFERRED_SHORT_TAGS:
+            row = _platform_tag_entry(tag)
+        if row is not None:
+            selected.append(row)
+    subject = [item for item in selected if item.get("classification") != "platform_format"]
+    contribution = [item for item in subject if item.get("source_classification") in {"combined", "research_discovered"}]
+    result.update({
+        "selected_keywords": selected,
+        "selected_tags": [item["keyword"] for item in selected],
+        "tag_provenance": [{
+            "tag": item["keyword"], "provenance": item.get("source_classification"),
+            "source_support": item.get("source_support"),
+            "source_support_score": item.get("source_support_score"), "intent": item.get("intent"),
+            "topic_cluster": item.get("cluster"), "specificity": item.get("specificity_score"),
+            "evidence_strength": item.get("research_evidence_score"),
+            "matching_result_count": item.get("evidence_count"),
+            "query_alignment_score": item.get("query_alignment_score"),
+            "score": item.get("keyword_relevance_score"),
+        } for item in selected],
+        "selected_result_evidence": {
+            "tags_with_matching_results": [item["keyword"] for item in subject if int(item.get("evidence_count") or 0) > 0],
+            "tags_without_matching_results": [item["keyword"] for item in subject if int(item.get("evidence_count") or 0) == 0],
+            "scope": "sampled_youtube_results_not_search_volume", "search_volume_available": False,
+        },
+    })
+    previous = dict(result.get("research_contribution") or {})
+    previous.update({
+        "research_selected_count": len(contribution),
+        "combined_selected_count": sum(item.get("source_classification") == "combined" for item in contribution),
+        "research_discovered_selected_count": sum(item.get("source_classification") == "research_discovered" for item in contribution),
+        "selected_concepts": [item["keyword"] for item in contribution],
+        "research_enhanced_tags": [item["keyword"] for item in selected],
+    })
+    result["research_contribution"] = previous
+    return result
+
+
 def _add(
     target: dict[str, dict[str, Any]], value: Any, source: str, hint: str,
     content_terms: set[str], visual_terms: set[str], opportunity: dict[str, Any] | None = None,
@@ -503,6 +553,10 @@ def _reject_reason(entry: dict[str, Any], title: str, quote: str, content_terms:
     if classification in {"generic", "malformed", "irrelevant"} or _is_generic(text) or _malformed(text) or _noisy(text):
         return classification
     words = _tokens(text)
+    if quote and _normalize(text) in {"heart and soul"}:
+        return "ambiguous_quote_fragment"
+    if quote and re.match(r"^(?:why|how) am i\b", _normalize(text)) and not re.search(r"\b(?:i|i'm|i am)\b", quote, re.IGNORECASE):
+        return "unsupported_perspective_shift"
     if words and words[0] in {"discover", "embracing", "finding", "explore", "watch"} and words[0] not in content_terms:
         return "unsupported_action_framing"
     if classification == "contextual" and (
@@ -520,8 +574,7 @@ def _reject_reason(entry: dict[str, Any], title: str, quote: str, content_terms:
     focused_query_phrase = bool(
         "research_query" in (entry.get("sources") or [])
         and int(entry.get("evidence_count") or 0) >= 1
-        and 1 < len(words) <= 3
-        and _normalize(text) not in _normalize(quote)
+        and 1 < len(words) <= 4
     )
     grounded_paraphrase = bool(entry.get("semantic_evidence")
         and 1 < len(words) <= 4 and _normalize(text) not in _normalize(quote))

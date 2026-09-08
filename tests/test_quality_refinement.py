@@ -2,9 +2,24 @@ import unittest
 from unittest.mock import patch
 
 from win_engine.generation.quality_refinement import enforce_quality_target, refine_package
+from win_engine.analysis.keyword_research import synchronize_tag_evidence
 
 
 class QualityTargetTests(unittest.TestCase):
+    def test_evidence_is_rebuilt_from_final_tags(self):
+        evidence = {
+            "candidates": [
+                {"keyword": "being forgotten", "classification": "core_topic", "source_classification": "combined", "source_support_score": 100, "evidence_count": 4},
+                {"keyword": "loneliness", "classification": "secondary_topic", "source_classification": "combined", "source_support_score": 100, "evidence_count": 2},
+            ],
+            "selected_keywords": [{"keyword": "loneliness", "classification": "secondary_topic", "source_classification": "combined", "source_support_score": 100, "evidence_count": 2}],
+            "selected_result_evidence": {"tags_with_matching_results": ["loneliness"]},
+        }
+        synced = synchronize_tag_evidence(evidence, ["being forgotten", "yt", "shorts"])
+        self.assertEqual(synced["selected_tags"], ["being forgotten", "yt", "shorts"])
+        self.assertEqual(synced["selected_result_evidence"]["tags_with_matching_results"], ["being forgotten"])
+        self.assertNotIn("loneliness", synced["selected_result_evidence"]["tags_with_matching_results"])
+
     def test_green_requires_all_three_scores_and_preserves_original_scores(self):
         for scores, met in [((90, 90, 90), True), ((89, 99, 99), False),
                             ((99, 89, 99), False), ((99, 99, 89), False),

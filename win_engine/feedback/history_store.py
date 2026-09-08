@@ -629,43 +629,54 @@ class HistoryStore:
 
     def delete_analysis_run(self, run_id: int) -> bool:
         """Atomically delete a package and queue its cloud tombstone, or roll back all."""
+        return bool(self.delete_analysis_runs([run_id]))
+
+    def delete_analysis_runs(self, run_ids: list[int]) -> list[int]:
+        """Atomically delete several packages and queue one durable tombstone per synced package."""
+
+        ids = list(dict.fromkeys(int(run_id) for run_id in run_ids if int(run_id) > 0))
+        if not ids:
+            return []
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             now = datetime.now(timezone.utc).isoformat()
-            mapping = connection.execute(
-                """SELECT sync_uuid, origin_device_id, revision
-                   FROM cloud_sync_packages WHERE analysis_run_id = ?""",
-                (run_id,),
-            ).fetchone()
-            if mapping:
+            placeholders = ",".join("?" for _ in ids)
+            existing = {
+                int(row[0]) for row in connection.execute(
+                    f"SELECT id FROM analysis_runs WHERE id IN ({placeholders})", ids
+                ).fetchall()
+            }
+            if existing != set(ids):
+                return []
+            for run_id in ids:
+                mapping = connection.execute(
+                    """SELECT sync_uuid, origin_device_id, revision
+                       FROM cloud_sync_packages WHERE analysis_run_id = ?""", (run_id,),
+                ).fetchone()
+                if mapping:
+                    connection.execute(
+                        """INSERT INTO cloud_sync_tombstones
+                               (sync_uuid, origin_device_id, revision, deleted_at, pending,
+                                attempt_count, last_attempted_at, last_error)
+                           VALUES (?, ?, ?, ?, 1, 0, NULL, NULL)
+                           ON CONFLICT(sync_uuid) DO UPDATE SET
+                               revision = MAX(cloud_sync_tombstones.revision, excluded.revision),
+                               deleted_at = excluded.deleted_at, pending = 1, attempt_count = 0,
+                               last_attempted_at = NULL, last_error = NULL""",
+                        (str(mapping[0]), str(mapping[1]), int(mapping[2]) + 1, now),
+                    )
                 connection.execute(
-                    """INSERT INTO cloud_sync_tombstones
-                           (sync_uuid, origin_device_id, revision, deleted_at, pending,
-                            attempt_count, last_attempted_at, last_error)
-                       VALUES (?, ?, ?, ?, 1, 0, NULL, NULL)
-                       ON CONFLICT(sync_uuid) DO UPDATE SET
-                           revision = MAX(cloud_sync_tombstones.revision, excluded.revision),
-                           deleted_at = excluded.deleted_at,
-                           pending = 1,
-                           attempt_count = 0,
-                           last_attempted_at = NULL,
-                           last_error = NULL""",
-                    (str(mapping[0]), str(mapping[1]), int(mapping[2]) + 1, now),
+                    """UPDATE content_ideas SET analysis_run_id = NULL, published_video_link_id = NULL,
+                              status = CASE WHEN status IN ('package_generated', 'published') THEN 'scripted' ELSE status END,
+                              updated_at = ? WHERE analysis_run_id = ?""", (now, run_id),
                 )
-            connection.execute(
-                """UPDATE content_ideas SET analysis_run_id = NULL, published_video_link_id = NULL,
-                          status = CASE WHEN status IN ('package_generated', 'published') THEN 'scripted' ELSE status END,
-                          updated_at = ?
-                   WHERE analysis_run_id = ?""",
-                (now, run_id),
-            )
-            cursor = connection.execute("DELETE FROM analysis_runs WHERE id = ?", (run_id,))
+            connection.execute(f"DELETE FROM analysis_runs WHERE id IN ({placeholders})", ids)
             violations = connection.execute("PRAGMA foreign_key_check").fetchall()
             if violations:
                 raise sqlite3.IntegrityError(
                     f"Deletion would leave {len(violations)} foreign-key violation(s)."
                 )
-            return cursor.rowcount > 0
+            return ids
 
     def record_owned_snapshot(self, title: str, views: int, likes: int) -> None:
         """Record performance snapshot of creator's video for self-learning."""
@@ -1686,6 +1697,9 @@ class HistoryStore:
             "link_id": link.get("id"),
             "video_id": link.get("youtube_video_id"),
             "video_url": f"https://www.youtube.com/watch?v={link.get('youtube_video_id')}",
+            "ownership_state": link.get("ownership_state") or "unverified",
+            "ownership_verified": bool(link.get("ownership_verified")),
+            "verified_channel_id": link.get("verified_channel_id"),
             "published_at": link.get("published_at"),
             "age_hours": round(age_hours, 1),
             "metadata_synced_at": link.get("metadata_synced_at"),

@@ -135,6 +135,23 @@ class Phase1YouTubeSnapshotTests(unittest.TestCase):
         self.assertEqual(state["attempt_count"], 5)
         self.assertFalse(state["retry_allowed"])
 
+    def test_public_refresh_records_only_display_counts_without_private_analytics(self):
+        metadata = {
+            "video_id": self.video_id, "channel_id": "owner-channel", "title": "Public title",
+            "description": "Public description", "tags": ["public"], "duration": "PT10S",
+            "published_at": "2026-08-01T00:00:00Z", "view_count": 321,
+            "like_count": 12, "comment_count": 3, "ownership_verified": False,
+            "metadata_source": "youtube_data_api",
+        }
+        with patch.object(self.service, "verify_public_video", return_value=metadata):
+            result = self.service.refresh_linked_video_public(self.store.published_video_link(self.link_id) or {})
+
+        self.assertEqual(result["data_scope"], "public_metadata")
+        self.assertFalse(result["private_analytics_available"])
+        self.assertEqual(result["current"]["views"], 321)
+        self.assertEqual(result["current"]["snapshot_status"], "display_only")
+        self.assertIsNone(result["current"]["avg_view_percentage"])
+
 
 if __name__ == "__main__":
     unittest.main()

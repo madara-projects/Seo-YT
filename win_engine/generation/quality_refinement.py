@@ -43,7 +43,7 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
         scores = gate.get("final_seo_quality", {})
         title = float(scores.get("title_score") or 0)
         description = float(scores.get("description_score") or 0)
-        tag = float(scores.get("tag_score") or 0) if scores.get("tag_score") is not None else 100.0
+        tag = float(scores.get("tag_score") or 0)
         return bool(gate.get("passed")), min(title, description, tag), title + description + tag
 
     def refine_tags_locally(pkg: dict[str, Any]) -> dict[str, Any]:
@@ -68,7 +68,7 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
         # Sort ascending to prune the lowest scoring tags pulling down the average
         scored_topics.sort(key=lambda x: x[1])
         pruned = False
-        while len(scored_topics) > 3 and (sum(s for _, s in scored_topics) / len(scored_topics)) < TARGET:
+        while len(scored_topics) > 2 and (sum(s for _, s in scored_topics) / len(scored_topics)) < TARGET:
             if scored_topics[0][1] < TARGET:
                 scored_topics.pop(0)
                 pruned = True
@@ -77,34 +77,13 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
         # If still below TARGET and candidates exist with score >= TARGET, swap out weak tags
         current_avg = sum(s for _, s in scored_topics) / max(len(scored_topics), 1)
         if current_avg < TARGET:
-            candidate_map = {
-                str(item.get("keyword") or "").casefold(): item
-                for item in (evidence.get("candidates") or [])
-                if isinstance(item, dict) and item.get("keyword")
-            }
-            high_candidates = [
-                item for item in candidate_map.values()
-                if float(item.get("keyword_relevance_score") or 0) >= TARGET
-                and str(item.get("keyword") or "").casefold() not in {t.lower() for t, _ in scored_topics}
-                and str(item.get("keyword") or "").casefold() not in {"yt", "shorts"}
-            ]
-            high_candidates.sort(key=lambda x: -float(x.get("keyword_relevance_score") or 0))
-            for cand in high_candidates:
-                cand_word = str(cand.get("keyword") or "")
-                cand_score = float(cand.get("keyword_relevance_score") or 0)
-                if scored_topics and scored_topics[0][1] < TARGET and cand_score > scored_topics[0][1]:
-                    scored_topics.pop(0)
-                    scored_topics.append((cand_word, cand_score))
-                    scored_topics.sort(key=lambda x: x[1])
-                    if "selected_keywords" in evidence:
-                        evidence["selected_keywords"].append(cand)
-                    pruned = True
-                    if (sum(s for _, s in scored_topics) / len(scored_topics)) >= TARGET:
-                        break
+            # Raw candidates include phrases rejected by the final selector.
+            # Refinement may prune selected tags, but must never promote a raw
+            # candidate and bypass relevance, quote-copy, or diversity checks.
+            pass
 
         if not pruned:
             return pkg
-        remaining_set = {t for t, _ in scored_topics}
         new_topic_tags = [t for t, _ in scored_topics]
         return {**pkg, "tags": [*new_topic_tags, *platform_tags]}
 
