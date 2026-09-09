@@ -252,11 +252,24 @@ def source_withholds_message_content(script: str, creator_brief: dict[str, Any] 
     return mentions_short_message and not quoted_content
 
 
-def has_unsupported_instructional_framing(value: Any) -> bool:
-    """Return whether text promises instruction a silent quote does not contain."""
+def has_unsupported_instructional_framing(value: Any, source: Any = "") -> bool:
+    """Return whether text promises instruction a silent quote does not contain.
+
+    Wording carried over from the creator source is reproduction, not an added claim.
+    The guard matches bare verbs such as "explain", so a quote like "easier than
+    explaining why I'm sad" would otherwise be rejected for containing its own words
+    while the silent-quote rules simultaneously require reproducing it verbatim.
+    Mirrors the source check already used by _unsupported_claims.
+    """
 
     text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", normalize_unicode(value).replace("#", " "))
-    return bool(_UNSUPPORTED_INSTRUCTIONAL_RE.search(text))
+    matches = _UNSUPPORTED_INSTRUCTIONAL_RE.findall(text)
+    if not matches:
+        return False
+    source_text = normalize_unicode(source).casefold()
+    if not source_text:
+        return True
+    return any(match.casefold() not in source_text for match in matches)
 
 
 def filter_source_hashtags(
@@ -267,7 +280,7 @@ def filter_source_hashtags(
     values = [normalize_unicode(item) for item in hashtags if normalize_unicode(item)]
     if not source_requires_noninstructional_framing(script, creator_brief):
         return values
-    return [item for item in values if not has_unsupported_instructional_framing(item)]
+    return [item for item in values if not has_unsupported_instructional_framing(item, script)]
 
 
 def focused_short_hashtags(tags: Iterable[str]) -> list[str]:
@@ -376,7 +389,7 @@ def evaluate_package_quality(
         ))
         unsupported = _unsupported_claims(title, source)
         reasons.extend(_issue(code, "title", "Title introduces a claim not supported by the creator source.", index=index) for code in unsupported)
-        if non_instructional and has_unsupported_instructional_framing(title):
+        if non_instructional and has_unsupported_instructional_framing(title, source):
             reasons.append(_issue("unsupported_instructional_framing", "title", "A non-instructional source must not be framed as advice, a guide, or instruction.", index=index))
         duplicate_index = next(
             (other for other, item in enumerate(accepted) if title_similarity(title, item["title"]) >= 0.82),
@@ -414,7 +427,7 @@ def evaluate_package_quality(
             issues.append(_issue("quote_fidelity", "description", "Description does not preserve the exact on-screen quote."))
         for code in _unsupported_claims(description, source):
             issues.append(_issue(code, "description", "Description introduces a claim not supported by the creator source."))
-        if non_instructional and has_unsupported_instructional_framing(description):
+        if non_instructional and has_unsupported_instructional_framing(description, source):
             issues.append(_issue("unsupported_instructional_framing", "description", "A non-instructional source must not claim tips, advice, explanations, or instructional content absent from the source."))
         if _looks_like_tag_list(description):
             issues.append(_issue("tag_list_contamination", "description", "Description reads like a repeated SEO tag list."))
@@ -435,7 +448,7 @@ def evaluate_package_quality(
     for tag in tags:
         if len(unicode_words(tag)) > 8 or "," in tag:
             issues.append(_issue("tag_list_contamination", "tags", f"Tag is not one focused phrase: {tag}"))
-        if non_instructional and has_unsupported_instructional_framing(tag):
+        if non_instructional and has_unsupported_instructional_framing(tag, source):
             issues.append(_issue("unsupported_instructional_framing", "tags", f"Tag implies instruction not present in this source: {tag}"))
         preferred_short_tag = is_short and tag in {"yt", "shorts"}
         if enforce_final_tag_rules and tag in _PLATFORM_TAGS and not preferred_short_tag:
@@ -498,7 +511,7 @@ def evaluate_package_quality(
         issues.append(_issue("excessive_hashtags", "hashtags", "Use no more than three focused hashtags."))
     if non_instructional:
         for hashtag in hashtags:
-            if has_unsupported_instructional_framing(hashtag):
+            if has_unsupported_instructional_framing(hashtag, source):
                 issues.append(_issue("unsupported_instructional_framing", "hashtags", f"Hashtag implies instruction not present in this source: {hashtag}"))
         if any(len(unicode_words(item.lstrip("#"))) > 4 for item in hashtags):
             issues.append(_issue("hashtag_too_long", "hashtags", "A hashtag must be a short readable topic label, not a sentence."))
