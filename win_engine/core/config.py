@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     redis_key_prefix: str = "win_engine"
     request_timeout_seconds: int = 10
-    database_path: str = "win_engine.db"
+    database_path: str = "runtime/data/win_engine.db"
     creator_timezone: str = "Asia/Kolkata"
 
     youtube_oauth_client_id: str | None = None

@@ -62,7 +62,7 @@ Planned but not yet complete:
 - Remaining page-level frontend modularization, installable PWA, and an approved Android architecture.
 - Encrypted backup/restore and quota dashboard.
 
-See [ROADMAP.md](ROADMAP.md) for the exact implementation sequence, data rules, and acceptance checks.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the exact implementation sequence, data rules, and acceptance checks.
 
 For page-by-page instructions, required inputs, the complete creator workflow, YouTube linking steps, and current limitations, see the [User Guide](docs/USER_GUIDE.md).
 
@@ -229,7 +229,7 @@ Important variables:
 | `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_SECRET` | Google OAuth web-client secret. | For channel connection |
 | `WIN_ENGINE_YOUTUBE_OAUTH_REDIRECT_URI` | Exact OAuth callback registered in Google Cloud. | Default `http://127.0.0.1:8000/oauth/youtube/callback` |
 | `WIN_ENGINE_OAUTH_TOKEN_ENCRYPTION_KEY` | Fernet key used to encrypt the stored OAuth refresh token. | For channel connection |
-| `WIN_ENGINE_DATABASE_PATH` | SQLite database path. | Default `win_engine.db` |
+| `WIN_ENGINE_DATABASE_PATH` | SQLite database path. | Default `runtime/data/win_engine.db` |
 | `WIN_ENGINE_REDIS_URL` | Redis cache URL. Docker Compose sets this internally. | Optional outside Docker |
 | `WIN_ENGINE_CACHE_TTL_TRENDING_SECONDS` | Trending research cache lifetime. | Default `21600` |
 | `WIN_ENGINE_CACHE_TTL_EVERGREEN_SECONDS` | Evergreen research cache lifetime. | Default `604800` |
@@ -271,7 +271,8 @@ Create the SQLite file once if it does not already exist. This ensures Docker bi
 PowerShell:
 
 ```powershell
-if (-not (Test-Path win_engine.db)) { New-Item -ItemType File win_engine.db }
+New-Item -ItemType Directory -Force runtime/data | Out-Null
+if (-not (Test-Path runtime/data/win_engine.db)) { New-Item -ItemType File runtime/data/win_engine.db }
 docker compose up -d --build
 docker compose ps
 ```
@@ -279,7 +280,8 @@ docker compose ps
 Bash:
 
 ```bash
-touch win_engine.db
+mkdir -p runtime/data
+touch runtime/data/win_engine.db
 docker compose up -d --build
 docker compose ps
 ```
@@ -292,7 +294,7 @@ Open:
 
 Docker publishes the application only on `127.0.0.1:8000`. Redis is available only to the Compose network and has no host port.
 
-Before a versioned schema migration, the application creates and independently verifies a SQLite online backup. Docker stores migration backups in the host `backups/` directory; database and backup files are ignored by Git.
+Before a versioned schema migration, the application creates and independently verifies a SQLite online backup under `runtime/data/backups/`; database and backup files are ignored by Git.
 
 Stop the application while preserving the database:
 
@@ -410,30 +412,32 @@ Or inside the running Docker service:
 docker compose exec -T win-engine python -m unittest discover -s tests
 ```
 
-The backend suite contains 134 tests covering versioned backup-first migrations through schema v4, foreign keys, ownership, retryable snapshots, transactional deletion, History and package-selection persistence, comparable metadata, collector dry-run/disablement, linked-video attribution, cohort thresholds, generation quality/diversity, 30 deterministic brief fixtures, Tamil/Tanglish Unicode behavior, one-repair/quota behavior, deterministic hook/first-frame/pacing/quote analysis, evidence-gated retention learning, Idea validation, 100+ item pagination, immutable/stale research evidence, generation linkage, and verified publication linkage. The optional browser suite contains 31 deterministic Playwright/Chromium tests covering navigation, loading/errors, advanced-brief retention, Research/provenance, persisted package selection, Phase 5 traceability, the Stage G1 create/research/generate/filter workflow, decision/checklist behavior, safe copy/export, encoding integrity, OAuth/collector states, History detail, linked refresh, request counts, console/page errors, and external-request isolation. The full local discovery run passes 165 tests. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
+The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full discovery run contains 393 tests, with 40 browser tests skipped when optional Playwright/Chromium tooling is unavailable. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
 
 ## Repository structure
 
 ```text
 Seo-YT/
 ├── app.py                       # Application entry point
-├── compose.yaml                 # Localhost-only FastAPI and internal Redis services
-├── Dockerfile                   # Python 3.11 application image and health check
-├── requirements.txt             # Pinned Python dependencies
-├── README.md                    # Current product and operating documentation
-├── ROADMAP.md                   # Remaining implementation program and rules
+├── compose.yaml                 # Local Docker services
+├── Dockerfile                   # Production image and health check
+├── docs/                        # User, release, quality, and phase documentation
+├── runtime/                     # Local data, backups, secrets, and generated artifacts
+├── scripts/                     # Supported utility and quality-probe scripts
+│   └── dev/                     # Manual development and diagnostic scripts
 ├── tests/
-│   ├── browser/                 # Deterministic Chromium fixtures and workflow tests
-│   └── test_engine.py           # Core engine regression tests
-└── win_engine/
-    ├── analysis/                # Brief, quality, research-insight, score, and pacing logic
-    ├── api/                     # FastAPI routes and same-origin static dashboard application
-    ├── core/                    # Configuration, schemas, middleware, logging, and rate limits
-    ├── feedback/                # SQLite History, links, snapshots, cohorts, and learning
-    ├── generation/              # SEO package assembly and strategy layers
-    ├── ingestion/               # YouTube public research and caching
-    ├── integrations/            # Read-only YouTube OAuth and Analytics integration
-    └── llm/                     # Gemini client, prompts, validation, and fallback handling
+│   └── browser/                 # Optional Chromium workflow tests
+├── win_engine/                  # Application package
+│   ├── analysis/                # Content understanding and SEO research
+│   ├── api/                     # FastAPI routes and static dashboard
+│   ├── core/                    # Configuration, schemas, and middleware
+│   ├── feedback/                # History, sync, analytics, and learning
+│   ├── generation/              # Package generation and quality refinement
+│   ├── ingestion/               # YouTube research and caching
+│   ├── integrations/            # YouTube OAuth and Analytics integration
+│   ├── llm/                     # Gemini client and prompts
+│   └── scoring/                 # Opportunity and outlier scoring
+└── requirements.txt             # Production Python dependencies
 ```
 
 ## Product direction

@@ -234,7 +234,7 @@ Variable: Hook Structure | Metric: Average View Percentage (AVP)
 > 1. **Zero Auto-Publishing**: This tool will **never** automatically upload, modify, or delete videos on your YouTube channel. All publishing is done manually by you in YouTube Studio.
 > 2. **Read-Only YouTube OAuth**: Permissions are strictly limited to reading channel metadata and analytics.
 > 3. **No Fake Numbers**: We never show invented search volumes or promise guaranteed virality. All metrics reflect observed public YouTube data.
-> 4. **100% Private & Local**: Your scripts, ideas, and database (`win_engine.db`) stay on your local machine.
+> 4. **100% Private & Local**: Your scripts, ideas, and database (`runtime/data/win_engine.db`) stay on your local machine.
 
 ---
 
@@ -257,5 +257,5 @@ Use the <strong>Theme dropdown</strong> in the top-right header bar. Select <str
 
 <details>
 <summary><strong>Q: How do I backup my data?</strong></summary>
-All your ideas, packages, audits, and settings are stored locally in <code>win_engine.db</code>. You can copy this file anytime or use the automated backup snapshots in the <code>/backups</code> directory.
+All your ideas, packages, audits, and settings are stored locally in <code>runtime/data/win_engine.db</code>. You can copy this file anytime or use the automated backup snapshots in <code>runtime/data/backups/</code>.
 </details>

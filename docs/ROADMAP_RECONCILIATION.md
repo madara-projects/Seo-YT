@@ -23,7 +23,7 @@ The code has strong evidence and safety rules (read-only YouTube OAuth, no autom
 
 ### Configuration and integrations
 
-- `win_engine/core/config.py` loads `WIN_ENGINE_*` settings from `.env`; defaults include bind host `127.0.0.1`, Gemini model `gemini-3.5-flash-lite`, SQLite `win_engine.db`, disabled snapshot collector, and disabled cloud sync.
+- `win_engine/core/config.py` loads `WIN_ENGINE_*` settings from `.env`; defaults include bind host `127.0.0.1`, Gemini model `gemini-3.5-flash-lite`, SQLite `runtime/data/win_engine.db`, disabled snapshot collector, and disabled cloud sync.
 - Gemini is the only configured AI path in the product contract. The generator has a deterministic, explicitly labelled local fallback.
 - `YouTubeChannelService` uses encrypted refresh-token storage and scopes `youtube.readonly` and `yt-analytics.readonly`. Publishing and metadata writes are not requested.
 - `YouTubeClient` uses the Data API v3 key pool with key rotation and cache-aware public research. OAuth is used for owned-channel metadata and Analytics.
@@ -70,7 +70,7 @@ The code has strong evidence and safety rules (read-only YouTube OAuth, no autom
 | Dashboard | Complete compatibility surface | IMPLEMENTED BUT NEEDS HARDENING | `api/static/index.html`, `app.js`, `pages/dashboard.js` | Browser navigation/smoke workflows | Large shared renderer and legacy route increase regression risk. |
 | Settings | Complete compatibility surface | IMPLEMENTED BUT NEEDS HARDENING | `index.html`, `app.js`, `pages/settings.js`, diagnostics routes | Browser Settings/collector states | Shows configuration and diagnostics without secret values; cloud and collector states are operationally dependent. |
 | Diagnostics | Complete | IMPLEMENTED BUT NEEDS HARDENING | `/diagnostics`, `/api/settings/status`, `/ready`, `pages/settings.js` | Browser fixture states; no full live integration run here | Generic internal errors preserve request IDs but do not expose root causes to the UI. |
-| Backup/restore | Backup-first migration | PARTIALLY COMPLETE | `migrations.py` online backup and `backups/` | `test_phase1_migrations.py` | Verified backup-before-migration exists; user-facing encrypted backup restore is not implemented. |
+| Backup/restore | Backup-first migration | PARTIALLY COMPLETE | `migrations.py` online backup and `runtime/data/backups/` | `test_phase1_migrations.py` | Verified backup-before-migration exists; user-facing encrypted backup restore is not implemented. |
 | Authentication/security | Local access controls | IMPLEMENTED BUT NEEDS HARDENING | `api/app.py`, `middleware.py`, `routes.py`, config | Integrity/browser error/security assertions | Localhost boundary, request IDs, headers, CSP, rate limits, and admin token for reset/readiness; most local API routes rely on localhost trust. |
 | PWA/mobile preparation | Planned K3/K4 | NOT STARTED | No service worker, manifest, or mobile client | None | Keep API contracts stable before choosing a mobile architecture. |
 | UI architecture/modularization | K1 in progress | PARTIALLY COMPLETE | `app.js`, native `pages/*.js`, `navigation.js`, `state.js` | Browser route/workflow tests | Creator and newer pages are modular; Dashboard/History/Analytics/Settings remain compatibility-owned. |
@@ -378,7 +378,7 @@ There is currently no manifest, service worker, mobile client, or mobile-specifi
 
 | Phase/workstream | Primary files/modules |
 |---|---|
-| Verification/deployment | `README.md`, `ROADMAP.md`, `CHANGELOG.md`, `requirements.txt`, `requirements-browser.txt`, `Dockerfile`, `compose.yaml`, `app.py`, `win_engine/api/app.py` |
+| Verification/deployment | `README.md`, `docs/ROADMAP.md`, `CHANGELOG.md`, `requirements.txt`, `requirements-browser.txt`, `Dockerfile`, `compose.yaml`, `app.py`, `win_engine/api/app.py` |
 | Creator/brief/generation | `win_engine/analysis/creator_brief.py`, `generation/seo_generator.py`, `generation/strategy_engine.py`, `llm/seo_writer.py`, `llm/gemini_client.py`, `api/routes.py`, `api/static/js/pages/creator.js` |
 | Quality/retention/evidence | `analysis/generation_quality.py`, `analysis/retention_assistant.py`, `analysis/pacing_engine.py`, `feedback/evidence_policy.py`, `feedback/learning_engine.py`, `feedback/channel_learning.py` |
 | History/durability | `feedback/history_store.py`, `feedback/migrations.py`, `api/static/js/pages/history.js`, `api/static/js/app.js`, `tests/test_phase1_integrity.py`, `tests/test_phase1_migrations.py` |

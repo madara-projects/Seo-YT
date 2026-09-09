@@ -46,7 +46,9 @@ print("Sending request to http://127.0.0.1:8000/analyze...")
 try:
     with urllib.request.urlopen(req, timeout=120) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-        Path("scratch/generated_quote_response.json").write_text(
+        output_path = Path("runtime/artifacts/manual/generated_quote_response.json")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
             json.dumps(data, indent=2, ensure_ascii=False),
             encoding="utf-8"
         )
