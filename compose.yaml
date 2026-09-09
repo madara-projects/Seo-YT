@@ -9,13 +9,12 @@ services:
     environment:
       - WIN_ENGINE_REDIS_URL=redis://redis:6379/0
       - WIN_ENGINE_BIND_HOST=0.0.0.0
-      - WIN_ENGINE_DATABASE_PATH=win_engine.db
+      - WIN_ENGINE_DATABASE_PATH=runtime/data/win_engine.db
     depends_on:
       - redis
     volumes:
-      - ./win_engine.db:/app/win_engine.db
-      - ./backups:/app/backups
-      - ./secrets/aiven-ca.pem:/run/secrets/aiven-ca.pem:ro
+      - ./runtime/data:/app/runtime/data
+      - ./runtime/secrets/aiven-ca.pem:/run/secrets/aiven-ca.pem:ro
     restart: unless-stopped
   redis:
     image: redis:7-alpine

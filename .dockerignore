@@ -8,6 +8,10 @@ __pycache__
 *.pyd
 *.db
 *.db-*
+runtime/data/*.db
+runtime/data/*.db-*
+runtime/artifacts/
+runtime/secrets/
 *.sqlite
 *.sqlite3
 *.sqlite-shm

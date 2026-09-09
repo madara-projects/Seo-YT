@@ -74,6 +74,8 @@ blob-report/
 browser-artifacts/
 screenshots/
 artifacts/
+runtime/artifacts/
+runtime/secrets/
 ms-playwright/
 
 # Node tooling (not part of the production image)
