@@ -18,6 +18,7 @@ from win_engine.analysis.demand_explorer import analyze_demand, idea_fingerprint
 from win_engine.core.config import get_settings
 from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest
 from win_engine.feedback.history_store import HistoryStore
+from win_engine.ingestion.cache import probe_cache_backend
 from win_engine.feedback.intelligence_store import IntelligenceStore
 from win_engine.feedback.audit_experiment_store import AuditExperimentStore
 from win_engine.generation.seo_generator import generate_seo_suggestions
@@ -55,13 +56,20 @@ def legacy_dashboard():
 def health_check():
     settings = get_settings()
     history = HistoryStore(settings.database_path).system_status()
+    # None means no Redis is configured, which is a supported setup rather than a fault.
+    cache_ok = probe_cache_backend(settings.redis_url)
+    # Research still runs without Redis, just uncached, so a cache outage is reported
+    # as degraded and stays HTTP 200 -- the container health check must not restart a
+    # process that is serving requests correctly.
+    degraded = not history["database_ok"] or cache_ok is False
     return {
-        "status": "ok",
+        "status": "degraded" if degraded else "ok",
         "app_name": settings.app_name,
         "version": settings.app_version,
         "environment": settings.app_environment,
         "uptime_seconds": int(time.time() - _APP_START),
         "database_ok": history["database_ok"],
+        "cache_ok": cache_ok,
     }
 
 
