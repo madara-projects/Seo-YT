@@ -22,3 +22,7 @@ backups/
 .env
 .tmp
 *.md
+
+# Node frontend source. Only the built output under
+# win_engine/api/static/app/ is needed in the image.
+frontend/

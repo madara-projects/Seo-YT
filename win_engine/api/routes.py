@@ -52,6 +52,30 @@ def legacy_dashboard():
     return HTMLResponse(content=DASHBOARD_HTML, headers=_NO_CACHE_HEADERS)
 
 
+@router.get("/next", response_class=HTMLResponse)
+@router.get("/next/{spa_path:path}", response_class=HTMLResponse)
+def react_app(spa_path: str = ""):
+    """Serve the React frontend build.
+
+    Mounted beside the existing dashboard rather than over it: `/`, `/app`, and
+    `/dashboard_view` keep serving the current interface until the React app
+    reaches feature parity. Every path under `/next` returns the same document
+    so client-side routing survives a reload or a deep link.
+
+    Built with `npm run build` in `frontend/`. The production bundle is kept in
+    the repository because the Python-only Docker image does not run Node; a
+    missing bundle is still reported as a clear 404 rather than a 500.
+    """
+    del spa_path  # Routing is resolved in the browser.
+    index = _STATIC_DIR / "app" / "index.html"
+    if not index.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="The React frontend has not been built. Run 'npm run build' in frontend/.",
+        )
+    return FileResponse(index, media_type="text/html", headers=_NO_CACHE_HEADERS)
+
+
 @router.get("/health")
 def health_check():
     settings = get_settings()

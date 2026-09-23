@@ -80,6 +80,7 @@ ms-playwright/
 
 # Node tooling (not part of the production image)
 node_modules/
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*

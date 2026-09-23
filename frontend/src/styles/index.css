@@ -1,0 +1,220 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+/* Dark mode is class-driven so the theme can be toggled and persisted rather
+   than following the OS only. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* --------------------------------------------------------------------------
+   Design tokens
+   The evidence tones (ok / warn / accent / bad) are load-bearing: the product
+   labels every value by provenance, so these are part of the data model, not
+   decoration. They keep the same meaning in both themes.
+   -------------------------------------------------------------------------- */
+:root {
+  --background: oklch(0.99 0.002 275);
+  --foreground: oklch(0.21 0.02 268);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.02 268);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.02 268);
+
+  --primary: oklch(0.57 0.221 27.3);
+  --primary-foreground: oklch(0.99 0.01 20);
+
+  --secondary: oklch(0.96 0.006 275);
+  --secondary-foreground: oklch(0.28 0.02 268);
+
+  --muted: oklch(0.96 0.006 275);
+  --muted-foreground: oklch(0.52 0.018 268);
+
+  --accent: oklch(0.96 0.006 275);
+  --accent-foreground: oklch(0.28 0.02 268);
+
+  --destructive: oklch(0.58 0.216 27.4);
+  --destructive-foreground: oklch(0.99 0.01 20);
+
+  --border: oklch(0.91 0.008 275);
+  --input: oklch(0.91 0.008 275);
+  --ring: oklch(0.57 0.221 27.3);
+
+  /* Provenance / evidence tones */
+  --tone-ok: oklch(0.6 0.13 162);
+  --tone-ok-bg: oklch(0.95 0.04 162);
+  --tone-ok-border: oklch(0.83 0.08 162);
+  --tone-warn: oklch(0.63 0.14 70);
+  --tone-warn-bg: oklch(0.96 0.05 80);
+  --tone-warn-border: oklch(0.85 0.09 75);
+  --tone-info: oklch(0.6 0.12 233);
+  --tone-info-bg: oklch(0.95 0.035 233);
+  --tone-info-border: oklch(0.84 0.07 233);
+  --tone-bad: oklch(0.58 0.216 27.4);
+  --tone-bad-bg: oklch(0.95 0.04 20);
+  --tone-bad-border: oklch(0.85 0.08 20);
+
+  --sidebar: oklch(0.985 0.003 275);
+  --sidebar-foreground: oklch(0.21 0.02 268);
+  --sidebar-border: oklch(0.91 0.008 275);
+
+  /* Chart data colour. Deliberately blue, not the brand red: red is reserved
+     here for destructive/critical status and must never double as a series
+     colour. Validated against the card surface for lightness band, chroma
+     floor and >=3:1 contrast in both modes. */
+  --chart-1: #2a78d6;
+  --chart-grid: oklch(0.91 0.008 275);
+  --chart-axis: oklch(0.52 0.018 268);
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: oklch(0.16 0.012 267);
+  --foreground: oklch(0.97 0.004 268);
+
+  --card: oklch(0.2 0.014 267);
+  --card-foreground: oklch(0.97 0.004 268);
+  --popover: oklch(0.2 0.014 267);
+  --popover-foreground: oklch(0.97 0.004 268);
+
+  --primary: oklch(0.62 0.223 27.5);
+  --primary-foreground: oklch(0.99 0.01 20);
+
+  --secondary: oklch(0.26 0.016 267);
+  --secondary-foreground: oklch(0.97 0.004 268);
+
+  --muted: oklch(0.26 0.016 267);
+  --muted-foreground: oklch(0.7 0.02 268);
+
+  --accent: oklch(0.29 0.018 267);
+  --accent-foreground: oklch(0.97 0.004 268);
+
+  --destructive: oklch(0.62 0.223 27.5);
+  --destructive-foreground: oklch(0.99 0.01 20);
+
+  --border: oklch(0.3 0.016 267);
+  --input: oklch(0.32 0.016 267);
+  --ring: oklch(0.62 0.223 27.5);
+
+  --tone-ok: oklch(0.76 0.14 163);
+  --tone-ok-bg: oklch(0.28 0.06 165);
+  --tone-ok-border: oklch(0.42 0.09 164);
+  --tone-warn: oklch(0.81 0.15 78);
+  --tone-warn-bg: oklch(0.3 0.06 74);
+  --tone-warn-border: oklch(0.45 0.09 76);
+  --tone-info: oklch(0.76 0.13 226);
+  --tone-info-bg: oklch(0.28 0.06 230);
+  --tone-info-border: oklch(0.43 0.09 228);
+  --tone-bad: oklch(0.71 0.18 22);
+  --tone-bad-bg: oklch(0.29 0.08 20);
+  --tone-bad-border: oklch(0.45 0.12 21);
+
+  --sidebar: oklch(0.18 0.013 267);
+  --sidebar-foreground: oklch(0.97 0.004 268);
+  --sidebar-border: oklch(0.28 0.016 267);
+
+  --chart-1: #3987e5;
+  --chart-grid: oklch(0.3 0.016 267);
+  --chart-axis: oklch(0.7 0.02 268);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-tone-ok: var(--tone-ok);
+  --color-tone-ok-bg: var(--tone-ok-bg);
+  --color-tone-ok-border: var(--tone-ok-border);
+  --color-tone-warn: var(--tone-warn);
+  --color-tone-warn-bg: var(--tone-warn-bg);
+  --color-tone-warn-border: var(--tone-warn-border);
+  --color-tone-info: var(--tone-info);
+  --color-tone-info-bg: var(--tone-info-bg);
+  --color-tone-info-border: var(--tone-info-border);
+  --color-tone-bad: var(--tone-bad);
+  --color-tone-bad-bg: var(--tone-bad-bg);
+  --color-tone-bad-border: var(--tone-bad-border);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-axis: var(--chart-axis);
+
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Visible focus for keyboard users only; pointer focus stays quiet. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--primary) 28%, transparent);
+  }
+}
+
+@layer utilities {
+  .numeric {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

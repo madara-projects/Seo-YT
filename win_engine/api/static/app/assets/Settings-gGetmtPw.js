@@ -1,0 +1,1 @@
+import{j as t}from"./query-B9DEEuwb.js";import{N as s}from"./NotMigrated-BzmWAIHR.js";import"./react-DrhP_K9g.js";import"./index-hWuAA6qr.js";import"./forms-BuCz4DTw.js";function a(){return t.jsx(s,{title:"Settings",description:"Channel connection, tokens, and system status.",legacyHash:"#settings"})}export{a as default};

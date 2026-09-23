@@ -54,6 +54,15 @@ def create_app() -> FastAPI:
     # local and Docker deployments.
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    # Hashed assets for the React build served at /next. Mounted only when the
+    # bundle exists so a checkout without a frontend build still boots; the
+    # /next route reports the missing build itself.
+    react_dir = STATIC_DIR / "app"
+    if react_dir.is_dir():
+        app.mount("/app-assets", StaticFiles(directory=react_dir), name="react-assets")
+    else:
+        logger.info("React frontend build not found at %s; /next will report it.", react_dir)
+
     app_start = time.time()
     rate_limiter = InMemoryRateLimiter(
         max_requests=settings.rate_limit_max_requests,

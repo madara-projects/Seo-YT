@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Win-Engine · Creator Intelligence</title>
+    <script>
+      // Apply the stored theme before first paint so a dark-mode reload never
+      // flashes a white screen.
+      try {
+        var stored = localStorage.getItem("win-engine-theme");
+        var dark =
+          stored === "dark" ||
+          ((!stored || stored === "system") &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+      } catch (e) {}
+    </script>
+    <script type="module" crossorigin src="/app-assets/assets/index-hWuAA6qr.js"></script>
+    <link rel="modulepreload" crossorigin href="/app-assets/assets/react-DrhP_K9g.js">
+    <link rel="modulepreload" crossorigin href="/app-assets/assets/query-B9DEEuwb.js">
+    <link rel="modulepreload" crossorigin href="/app-assets/assets/forms-BuCz4DTw.js">
+    <link rel="stylesheet" crossorigin href="/app-assets/assets/index-DFbJ0tGI.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
