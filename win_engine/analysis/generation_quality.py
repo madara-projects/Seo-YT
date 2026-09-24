@@ -13,6 +13,8 @@ import unicodedata
 from difflib import SequenceMatcher
 from typing import Any, Iterable
 
+from win_engine.analysis.transliteration import phonetic_key, phonetic_keys, phonetic_match
+
 
 _TAMIL_RANGE = re.compile(r"[\u0B80-\u0BFF]")
 _GENERIC_TITLE_PATTERNS = (
@@ -57,15 +59,83 @@ _GENERIC_FORMAT_TAGS = {
     "shorts", "yt", "youtube", "youtube shorts", "viral", "viral shorts",
     "trending", "trending shorts", "short video", "video", "fyp",
 }
-_UNSUPPORTED_CONTEXT_TERMS = {
-    "childhood", "workplace", "therapy", "therapist", "clinical", "diagnosis", "depression",
-    "anxiety", "trauma", "partner", "boyfriend", "girlfriend", "husband", "wife", "product",
+# Context a description must never invent. The list was applied to every video,
+# but most of it only makes sense for reflective quote/story content: there,
+# "night", "healing", "boyfriend" or "love" invents a scene or relationship the
+# creator never described. For a recipe, review, or tutorial the same words are
+# ordinary copy ("you'll love this", "get the ratio right", "great for the
+# family", "steep for 12 hours"), and rejecting them sent good AI output to the
+# broken fallback. Clinical claims stay banned everywhere.
+_CLINICAL_CONTEXT_TERMS = {
+    "therapy", "therapist", "clinical", "diagnosis", "depression", "anxiety", "trauma",
+}
+_REFLECTIVE_CONTEXT_TERMS = {
+    "childhood", "workplace", "partner", "boyfriend", "girlfriend", "husband", "wife", "product",
     "review", "comparison", "customer", "office", "school", "family",
     "night", "nighttime", "midnight", "dark", "darkness", "empty", "deserted",
     "room", "rooms", "hour", "hours",
     "peace", "peaceful", "comfort", "comforting", "healing",
     "love", "lover", "romance", "romantic", "unrequited", "right", "wrong",
 }
+_UNSUPPORTED_CONTEXT_TERMS = _CLINICAL_CONTEXT_TERMS | _REFLECTIVE_CONTEXT_TERMS
+# Formats that cannot be inferred from what the video contains; only the
+# creator can say a video is one ("In this vlog" on a talking-head script).
+_SUPPLIED_ONLY_FORMATS = {"vlog", "podcast", "interview", "livestream"}
+# Production terms describe the shoot, not what a viewer gets from the video.
+_PRODUCTION_JARGON_RE = re.compile(r"\btalking[\s_-]*heads?\b|\bb[\s-]?roll\b", re.IGNORECASE)
+# The writer's fidelity rules, narrated back to the viewer: "...honoring the
+# exact emotional weight ... without adding external stories or invented
+# outcomes". Legitimate copy never describes what it chose not to invent.
+_PROCESS_NARRATION_RE = re.compile(
+    # Not "without any context": "no context" clips are a genre of their own.
+    r"\bwithout\s+(?:adding|inventing|making\s+up)\b[^.!?\n]{0,40}?"
+    r"\b(?:stor(?:y|ies)|assumptions?|details?|outcomes?|events?|facts?|context|claims?|embellishments?|narratives?)\b"
+    r"|\binvented\s+(?:outcomes?|stor(?:y|ies)|details?|events?|facts?|context|claims?)\b"
+    r"|\b(?:external|outside)\s+(?:stor(?:y|ies)|assumptions?|narratives?|context)\b"
+    r"|\b(?:exact|original)\s+emotional\s+(?:idea|weight|meaning)\b"
+    # Not "source material" or "true to the original": adaptations and covers
+    # use those legitimately.
+    r"|\bcreator(?:['’]s)?\s+(?:source|intent|words)\b|\bsource\s+fidelity\b"
+    r"|\b(?:stays?|staying|remains?|remaining)\s+(?:true|faithful)\s+to\s+the\s+(?:quote|source|creator)\b"
+    r"|\bno\s+(?:invented|added|made[\s-]up)\s+(?:details?|stor(?:y|ies)|facts?|events?)\b",
+    re.IGNORECASE,
+)
+
+
+def narrates_process(text: Any) -> bool:
+    """True when copy describes the writing rules instead of the video."""
+
+    return bool(_PROCESS_NARRATION_RE.search(normalize_unicode(text)))
+
+
+def strip_process_narration(text: str) -> str:
+    """Cut rule-narrating clauses out of copy, keeping the rest of each sentence.
+
+    "...set against a rainy road, honoring the exact emotional weight ...
+    without adding external stories." keeps "...set against a rainy road."
+    A sentence with nothing viewer-facing left is dropped.
+    """
+
+    kept_paragraphs: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", str(text or "")):
+        sentences = re.split(r"(?<=[.!?])\s+", paragraph.strip())
+        kept: list[str] = []
+        for sentence in sentences:
+            match = _PROCESS_NARRATION_RE.search(sentence)
+            if not match:
+                kept.append(sentence)
+                continue
+            head = sentence[:match.start()]
+            comma = head.rfind(",")
+            if comma != -1:
+                head = head[:comma]
+            head = re.sub(r"\s+(?:and|while|by|through|with|as|all)\s*$", "", head.rstrip(" ,;:-–—"), flags=re.IGNORECASE)
+            trailing = re.findall(r"\s*[\U0001F300-\U0001FAFF☀-➿]+\s*$", sentence)
+            if len(re.findall(r"[^\W\d_]+", head)) >= 4:
+                kept.append(head.rstrip() + "." + (" " + trailing[0].strip() if trailing else ""))
+        if kept:
+            kept_paragraphs.append(" ".join(kept))
+    return "\n\n".join(kept_paragraphs).strip()
 _MOVED_ON_PERSON_RE = re.compile(
     r"\b(?:(?:the|that|other|another|a)\s+)?(?:person|someone|somebody|they)\s+(?:who\s+)?(?:has\s+|have\s+)?moved\s+on(?:\s+from\s+your\s+life)?\b",
     re.IGNORECASE,
@@ -283,23 +353,44 @@ def filter_source_hashtags(
     return [item for item in values if not has_unsupported_instructional_framing(item, script)]
 
 
-def focused_short_hashtags(tags: Iterable[str]) -> list[str]:
+_SHORT_HASHTAG_GENERIC = {"short", "shorts", "yt", "youtube", "video", "viral", "trending", "fyp", "quote", "quotes", "sad"}
+# Search intent reads badly at the front of a hashtag, and a trailing context
+# phrase adds nothing: "#HowToMakeMangoIceCream" says less than "#MangoIceCream".
+_HASHTAG_LEADING_INTENT = {"how", "to", "make", "making", "easy", "instant", "best", "simple", "quick"}
+_HASHTAG_CONNECTIVES = {"of", "the", "a", "an", "and", "in", "for", "with", "at", "to", "on", "my", "your"}
+
+
+def focused_short_hashtags(tags: Iterable[str], casing: dict[str, str] | None = None) -> list[str]:
     """Return #shorts plus two readable hashtags from validated subject tags."""
 
     result = ["#shorts"]
-    generic = {"short", "shorts", "yt", "youtube", "video", "viral", "trending", "fyp", "quote", "quotes", "sad"}
     for tag in tags:
-        words = [word for word in re.findall(r"[A-Za-z0-9]+", str(tag)) if word.casefold() not in generic]
-        if not words:
+        words = [word for word in re.findall(r"[A-Za-z0-9]+", str(tag)) if word.casefold() not in _SHORT_HASHTAG_GENERIC]
+        while words and words[0].casefold() in _HASHTAG_LEADING_INTENT:
+            words = words[1:]
+        if len(words) >= 3 and words[-2].casefold() in {"at", "in", "for", "with"}:
+            words = words[:-2]  # "... at home", "... in tamil"
+        # Interior connectives stay ("#LettingGoOfTheWrongPerson"). Skip rather
+        # than truncate: cutting "2 ingredient ice cream" would give #2IngredientIce.
+        content_words = [word for word in words if word.casefold() not in _HASHTAG_CONNECTIVES]
+        if not content_words or len(content_words) > 4:
             continue
-        hashtag = "#" + "".join(word[:1].upper() + word[1:] for word in words)
-        if len(hashtag) > 48:
+        words = [(casing or {}).get(word.casefold(), word) for word in words]
+        hashtag = "#" + "".join(word if word[:1].isupper() or word[:1].isdigit() else word[:1].upper() + word[1:] for word in words)
+        if len(hashtag) > 30:
             continue
-        if hashtag.casefold() not in {item.casefold() for item in result}:
+        # "#2IngredientIceCream" and "#2IngredientIceCreamRecipe" are the same
+        # hashtag twice; the second slot should carry a different subject.
+        if not any(_hashtag_overlaps(hashtag, item) for item in result):
             result.append(hashtag)
         if len(result) >= 3:
             break
     return result
+
+
+def _hashtag_overlaps(left: str, right: str) -> bool:
+    a, b = left.casefold().lstrip("#"), right.casefold().lstrip("#")
+    return a == b or a.startswith(b) or b.startswith(a)
 
 
 def title_emojis(value: Any) -> list[str]:
@@ -387,6 +478,8 @@ def evaluate_package_quality(
             title, source, brief, non_instructional, competitors, index=index,
             source_overlap_supported=requested_language not in {"tamil", "tanglish", "hindi"},
         ))
+        reasons.extend(title_fluency_issues(title, index=index))
+        reasons.extend(title_duration_issues(title, source, index=index))
         unsupported = _unsupported_claims(title, source)
         reasons.extend(_issue(code, "title", "Title introduces a claim not supported by the creator source.", index=index) for code in unsupported)
         if non_instructional and has_unsupported_instructional_framing(title, source):
@@ -470,8 +563,20 @@ def evaluate_package_quality(
         if isinstance(item, dict) and normalize_unicode(item.get("keyword"))
     }
 
+    # A Latin search tag ("chettinad chicken biryani") is grounded in a Tamil
+    # script (செட்டிநாடு சிக்கன் பிரியாணி) when it sounds the same. Literal
+    # comparison made every English tag "unrelated" for Tamil sources, while the
+    # prompt told the model to write English tags: Tamil videos could never pass.
+    source_phonetic_keys = phonetic_keys([
+        source, context_text,
+        *(normalize_unicode(brief.get(field)) for field in ("content", "exact_quote", "on_screen_text", "topic")),
+    ])
+
     def _tag_has_grounding(tag: str) -> bool:
-        if set(unicode_words(tag)) & source_tokens:
+        tag_words = set(unicode_words(tag))
+        if tag_words & source_tokens:
+            return True
+        if any(phonetic_match(word, source_phonetic_keys) for word in tag_words):
             return True
         row = selected_tag_evidence.get(normalize_unicode(tag).casefold())
         return bool(row and int(row.get("source_support_score") or 0) >= 70)
@@ -606,8 +711,13 @@ def _title_usefulness_issues(
         issues.append(_issue("title_fragment", "title", "Title starts like a sentence fragment.", index=index))
     if words and words[-1] in {"and", "but", "or", "with", "from", "about", "to", "for"}:
         issues.append(_issue("title_fragment", "title", "Title ends like a sentence fragment.", index=index))
-    if any(term in words and term not in source_words for term in _UNSUPPORTED_CONTEXT_TERMS):
-        issues.append(_issue("unsupported_context", "title", "Title adds a context or entity absent from the creator source.", index=index))
+    invented = _invented_context_terms(words, source_words, reflective=_is_reflective_source(brief, non_instructional))
+    if invented:
+        issues.append(_issue(
+            "unsupported_context", "title",
+            f"Title adds context the creator source never mentions: {', '.join(invented)}.",
+            index=index,
+        ))
     central_terms = _central_quote_terms(normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text")))
     title_roots = {_quality_root(word) for word in words}
     if central_terms and len(title_roots & central_terms) / len(central_terms) < 0.5:
@@ -617,7 +727,7 @@ def _title_usefulness_issues(
         ))
     if _MOVED_ON_PERSON_RE.search(clean) and not re.search(r"\b(?:move|moves|moved|moving) on\b", source, re.IGNORECASE):
         issues.append(_issue("invented_story_detail", "title", "Title invents that another person moved on.", index=index))
-    if re.search(r"\b(?:prompt|creator instruction|video concept|without inventing|do not invent)\b", clean, re.IGNORECASE):
+    if re.search(r"\b(?:prompt|creator instruction|video concept|without inventing|do not invent)\b", clean, re.IGNORECASE) or narrates_process(clean):
         issues.append(_issue("creator_instruction_leakage", "title", "Title exposes internal creator instructions.", index=index))
     if re.search(r"\bthinking out loud\b", clean, re.IGNORECASE) and not re.search(r"\bthinking out loud\b", source, re.IGNORECASE):
         issues.append(_issue("unsupported_action", "title", "Title invents spoken thoughts that are not supplied by the creator.", index=index))
@@ -655,12 +765,36 @@ def _description_usefulness_issues(
         description,
     ):
         issues.append(_issue("creator_instruction_leakage", "description", "Description exposes creator-facing input labels instead of audience-facing copy."))
+    if narrates_process(description):
+        issues.append(_issue(
+            "creator_instruction_leakage", "description",
+            "Description narrates the writing rules ('without adding stories', 'the exact emotional idea'); describe the video instead.",
+        ))
     if len(words) < 3:
         issues.append(_issue("description_too_thin", "description", "Description does not identify the actual video."))
     if source_overlap_supported and words and source_words and not overlap:
         issues.append(_issue("description_not_source_specific", "description", "Description has no meaningful anchor in the creator source."))
-    if any(term in words and term not in source_words for term in _UNSUPPORTED_CONTEXT_TERMS):
-        issues.append(_issue("unsupported_context", "description", "Description adds a context or entity absent from the creator source."))
+    invented = _invented_context_terms(words, source_words, reflective=_is_reflective_source(brief, non_instructional))
+    if invented:
+        issues.append(_issue(
+            "unsupported_context", "description",
+            f"Description adds context the creator source never mentions: {', '.join(invented)}. Remove or rephrase those words.",
+        ))
+    # A format the tool guessed is not one the creator declared.
+    format_source = ((brief.get("field_provenance") or {}).get("video_format") or {}).get("source")
+    declared_format = brief.get("video_format") if format_source in (None, "creator_supplied") else ""
+    declared = source_words | set(_meaningful_words(declared_format))
+    invented_formats = sorted(term for term in _SUPPLIED_ONLY_FORMATS if term in words and term not in declared)
+    if invented_formats:
+        issues.append(_issue(
+            "invented_format", "description",
+            f"Description calls the video a {', '.join(invented_formats)}, which the creator never said. Describe the content instead.",
+        ))
+    if _PRODUCTION_JARGON_RE.search(description):
+        issues.append(_issue(
+            "production_jargon", "description",
+            "Description describes how the video was shot ('talking head', 'b-roll'); say what the viewer gets instead.",
+        ))
     if _MOVED_ON_PERSON_RE.search(description) and not re.search(r"\b(?:move|moves|moved|moving) on\b", source, re.IGNORECASE):
         issues.append(_issue("invented_story_detail", "description", "Description invents that another person moved on."))
     if re.search(r"\b(?:the (?:creator|speaker) shares|my personal experience|our relationship story)\b", description, re.IGNORECASE):
@@ -771,13 +905,42 @@ def _final_semantic_quality(
         description_score = max(description_score, 70.0 if description_words else 0.0)
     if len(source_words) <= 1 and description_words:
         description_score = max(description_score, 60.0)
+    # Overlap alone cannot tell a sentence from word salad built out of the
+    # same words, so a title with broken word order is capped regardless.
+    fluency_issues = title_fluency_issues(title) if title else []
+    duration_issues = title_duration_issues(title, source) if title else []
+    if fluency_issues or duration_issues:
+        title_score = min(title_score, 35.0)
+    # Search usefulness: the strongest validated search phrase should appear in
+    # the title, ideally in its first few words where it is never truncated.
+    primary_phrase = primary_search_phrase(tag_evidence)
+    placement = keyword_placement(title, primary_phrase)
+    if placement in {"missing", "late"}:
+        # "SIP vs lump sum: ..." leads with a real search that names the
+        # subject; it is not missing its keyword because the single chosen
+        # phrase was "nifty 50 index fund returns".
+        if any(keyword_placement(title, phrase) == "front" for phrase in strong_search_phrases(tag_evidence)):
+            placement = "front"
+    if placement == "missing":
+        title_score -= 12
+    elif placement == "late":
+        title_score -= 4
+    title_score = _bounded_score(title_score)
     tag_keys = {normalize_unicode(tag).casefold() for tag in tags}
     selected_rows = [
         item for item in (tag_evidence or {}).get("selected_keywords", [])
         if isinstance(item, dict) and normalize_unicode(item.get("keyword")).casefold() in tag_keys
     ]
     topic_rows = [item for item in selected_rows if item.get("classification") != "platform_format"]
-    tag_scores = [float(item.get("keyword_relevance_score") or 0) for item in topic_rows]
+    # A selected tag viewers demonstrably search (a YouTube suggestion, already
+    # checked against the source and subject) meets the bar even when its
+    # specificity score is modest: "love quotes" is broad and still exactly
+    # what a love-quote Short should carry.
+    tag_scores = [
+        max(float(item.get("keyword_relevance_score") or 0), 90.0) if item.get("demand_validated")
+        else float(item.get("keyword_relevance_score") or 0)
+        for item in topic_rows
+    ]
     tag_score = round(sum(tag_scores) / len(tag_scores), 1) if tag_scores else None
     title_description_agree = bool(
         {_quality_root(word) for word in title_words} & {_quality_root(word) for word in description_words}
@@ -786,8 +949,39 @@ def _final_semantic_quality(
     consistency = title_description_agree and supported_tags
     critical: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
+    if fluency_issues:
+        critical.append(_issue(
+            "broken_title_grammar", "title",
+            f"The title is not a readable sentence: {fluency_issues[0]['message']}",
+        ))
+    if duration_issues:
+        critical.append(_issue(duration_issues[0]["code"], "title", duration_issues[0]["message"]))
     if accepted and title_score < 55:
         critical.append(_issue("low_title_usefulness", "title", "Title is too weakly anchored to the supplied source."))
+    if placement == "missing":
+        warnings.append(_issue(
+            "primary_keyword_missing_from_title", "title",
+            f"The title does not contain the main search phrase “{primary_phrase}”.",
+            severity="warning",
+        ))
+    if _source_is_topicless(source, brief):
+        warnings.append(_issue(
+            "topic_not_identified", "package",
+            "The script never names its subject, so no title or tag can target a real search. "
+            "Add what the video is about (the product, dish, skill, or idea) and generate again.",
+            severity="warning",
+        ))
+    if description and not is_short_content(source, brief):
+        source_count = len(unicode_words(source))
+        description_count = len(unicode_words(re.sub(r"#[^\s#]+", " ", description)))
+        floor = min(120, max(50, int(source_count * 0.8)))
+        if source_count >= 40 and description_count < floor:
+            warnings.append(_issue(
+                "description_too_short", "description",
+                f"The description has {description_count} words; with this much source detail it should reach "
+                f"about {floor} words that cover what the video actually delivers.",
+                severity="warning",
+            ))
     if description and description_score < 55:
         critical.append(_issue("low_description_usefulness", "description", "Description is too weakly anchored to the supplied source."))
     if not consistency:
@@ -841,6 +1035,96 @@ def _final_semantic_quality(
     }
 
 
+# Talk that carries no subject: "the thing everyone gets wrong ... why it matters".
+_GENERIC_TALK_WORDS = {
+    "today", "want", "talk", "thing", "things", "something", "everything", "everyone",
+    "everybody", "people", "gets", "get", "got", "wrong", "right", "honestly", "matters",
+    "matter", "way", "more", "less", "think", "stay", "till", "until", "end", "really",
+    "actually", "about", "just", "guys", "video", "watch", "let", "going", "gonna",
+    "important", "thought", "thoughts", "stuff", "much", "many", "very", "know", "tell",
+    "you", "your", "they", "them", "this", "that", "these", "those", "here", "there",
+}
+
+
+def _source_is_topicless(source: str, brief: dict[str, Any]) -> bool:
+    """True when neither the script nor the brief names a concrete subject."""
+
+    values = [source, *(normalize_unicode(brief.get(field)) for field in (
+        "topic", "exact_quote", "on_screen_text", "viewer_promise", "unique_angle", "target_audience",
+    ))]
+    specific = {
+        word for value in values for word in _meaningful_words(value)
+        if word not in _GENERIC_TALK_WORDS
+    }
+    return len(specific) < 2
+
+
+def primary_search_phrase(tag_evidence: dict[str, Any] | None) -> str:
+    """The strongest selected subject tag, preferring one real searchers type."""
+
+    rows = [
+        row for row in (tag_evidence or {}).get("selected_keywords", [])
+        if isinstance(row, dict) and row.get("keyword") and row.get("classification") != "platform_format"
+    ]
+    if not rows:
+        return ""
+    demand_backed = [row for row in rows if row.get("demand_validated")] or rows
+    # Among real searches, the one naming the most of the video's subject is
+    # the main phrase: "chatgpt for excel", not the generic "if function".
+    subjects = {str(term).casefold() for term in (tag_evidence or {}).get("subject_terms") or []}
+    if subjects:
+        def subject_weight(row: dict[str, Any]) -> int:
+            return len({word.casefold() for word in unicode_words(row.get("keyword"))} & subjects)
+        best = max(subject_weight(row) for row in demand_backed)
+        if best:
+            demand_backed = [row for row in demand_backed if subject_weight(row) == best]
+    return str(demand_backed[0]["keyword"])
+
+
+def strong_search_phrases(tag_evidence: dict[str, Any] | None) -> list[str]:
+    """Selected phrases viewers really type that name at least two subject words."""
+
+    subjects = {str(term).casefold() for term in (tag_evidence or {}).get("subject_terms") or []}
+    return [
+        str(row["keyword"]) for row in (tag_evidence or {}).get("selected_keywords", [])
+        if isinstance(row, dict) and row.get("keyword") and row.get("demand_validated")
+        and len({word.casefold() for word in unicode_words(row["keyword"])} & subjects) >= 2
+    ]
+
+
+_PLACEMENT_FORMAT_WORDS = {"quote", "quotes", "status", "video", "videos"}
+
+
+def keyword_placement(title: str, phrase: str) -> str:
+    """"front", "late", "missing", or "unknown" for a search phrase in a title.
+
+    Matching is by word root and, for Tamil or bilingual titles, by sound, so
+    "செட்டிநாடு சிக்கன் பிரியாணி" satisfies "chettinad chicken biryani".
+    """
+
+    # "betrayal quotes" is searched, but a quote Short's title carries the
+    # theme, not the word "quotes"; format words are not part of the match.
+    phrase_words = [word for word in _meaningful_words(phrase) if word not in _PLACEMENT_FORMAT_WORDS]
+    title_tokens = unicode_words(_SHORTS_TITLE_RE.sub(" ", normalize_unicode(title)))
+    if not phrase_words or not title_tokens:
+        return "unknown"
+    title_roots = [_quality_root(token) for token in title_tokens]
+    title_keys = [phonetic_key(token) for token in title_tokens]
+    positions: list[int] = []
+    for word in phrase_words:
+        root = _quality_root(word)
+        position = next((i for i, value in enumerate(title_roots) if value == root), None)
+        if position is None:
+            key = phonetic_key(word)
+            if len(key) >= 3:
+                position = next((i for i, value in enumerate(title_keys) if value == key), None)
+        if position is not None:
+            positions.append(position)
+    if len(positions) / len(phrase_words) < 0.6:
+        return "missing"
+    return "front" if min(positions) <= 5 else "late"
+
+
 def _source_words(source: str, brief: dict[str, Any]) -> set[str]:
     values = [source]
     values.extend(brief.get(field) for field in (
@@ -876,7 +1160,10 @@ def _quality_root(value: str) -> str:
     word = str(value or "").casefold()
     irregular = {"chosen": "choose", "gave": "give", "given": "give"}
     if word in irregular:
-        return irregular[word]
+        # Same trailing-"e" rule as below, or "chosen" -> "choose" stops
+        # matching "choose" -> "choos".
+        word = irregular[word]
+        return word[:-1] if len(word) > 3 and word.endswith("e") and not word.endswith("ee") else word
     if len(word) > 5 and word.endswith("ing"):
         word = word[:-3]
         if len(word) > 2 and word[-1:] == word[-2:-1]:
@@ -886,6 +1173,10 @@ def _quality_root(value: str) -> str:
     elif len(word) > 4 and word.endswith("ed"):
         word = word[:-1] if word[-2:-1] == "e" else word[:-2]
     elif len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    # "loving" loses "ing" but "love" keeps its "e"; without this the two never
+    # matched and a title opening "Loving..." missed the keyword "love quotes".
+    if len(word) > 3 and word.endswith("e") and not word.endswith("ee"):
         word = word[:-1]
     return word
 
@@ -936,9 +1227,20 @@ def _unique(values: Iterable[str]) -> list[str]:
     return result
 
 
+_EXPLANATORY_SOURCE_RE = re.compile(
+    r"\b(?:why|because|explain\w*|reasons?|compar\w*|difference|versus|vs)\b", re.IGNORECASE,
+)
+
+
 def _unsupported_claims(text: str, source_text: str) -> list[str]:
     source = normalize_unicode(source_text).casefold()
     codes = [code for code, pattern in _UNSUPPORTED_CLAIMS if pattern.search(text) and not pattern.search(source)]
+    # "results in / leads to" is invented causality only when the source makes
+    # no explanatory promise. A script that says it will "explain why cold brew
+    # tastes smoother" legitimately produces "the long steep results in a
+    # smoother cup".
+    if "invented_causality" in codes and _EXPLANATORY_SOURCE_RE.search(source):
+        codes.remove("invented_causality")
     if source_withholds_message_content(source_text) and re.search(
         r"\b(?:exact (?:text|message)|what those words reveal|find out what)\b",
         text,
@@ -948,12 +1250,191 @@ def _unsupported_claims(text: str, source_text: str) -> list[str]:
     return codes
 
 
+def _is_reflective_source(brief: dict[str, Any], non_instructional: bool) -> bool:
+    """Quote, story, and reflection content, where invented context is the main risk."""
+
+    return non_instructional or bool(normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text")))
+
+
+def _invented_context_terms(words: Iterable[str], source_words: set[str], *, reflective: bool) -> list[str]:
+    """Context words the output adds that the creator never used, per content type."""
+
+    banned = _UNSUPPORTED_CONTEXT_TERMS if reflective else _CLINICAL_CONTEXT_TERMS
+    present = set(words)
+    return sorted(term for term in banned if term in present and term not in source_words)
+
+
+# Units repeat in every ingredient or spec list ("1 cup rice, 1 cup dal, ...");
+# they are not the repeated keyword that marks a tag dump.
+_MEASURE_WORDS = {
+    "cup", "cups", "tsp", "tbsp", "teaspoon", "teaspoons", "tablespoon", "tablespoons",
+    "gram", "grams", "gms", "kg", "kgs", "litre", "liter", "litres", "liters", "pinch",
+    "spoon", "spoons", "piece", "pieces", "inch", "inches", "mins", "minutes", "hours",
+    "grams", "ounce", "ounces", "pound", "pounds", "gb", "tb", "mah", "hz", "watt", "watts",
+}
+
+
 def _looks_like_tag_list(description: str) -> bool:
+    """Detect keyword stuffing, not ordinary lists.
+
+    The old rule flagged any line with five or more commas. Every recipe that
+    lists its ingredients and every review that lists specs tripped it, and an
+    Indian price such as "Rs 1,29,999" alone supplied two of the five commas.
+    A real tag dump is different: many short fragments that keep repeating the
+    same keyword ("cold brew, cold brew coffee, cold brew recipe, ..."). An
+    ingredient list is many short fragments that do *not* repeat.
+    """
+
     lines = [line.strip() for line in description.splitlines() if line.strip()]
-    comma_heavy = sum(1 for line in lines if line.count(",") >= 5)
+    for line in lines:
+        cleaned = re.sub(r"(?<=\d),(?=\d)", "", line)  # digit grouping is not a separator
+        segments = [seg.strip() for seg in re.split(r"[,|]", cleaned) if seg.strip()]
+        if len(segments) < 5:
+            continue
+        short_segments = [seg for seg in segments if len(unicode_words(seg)) <= 4]
+        if len(short_segments) / len(segments) < 0.8:
+            continue
+        counts: dict[str, int] = {}
+        for segment in segments:
+            for word in set(_meaningful_words(segment)) - _MEASURE_WORDS:
+                counts[word] = counts.get(word, 0) + 1
+        most_repeated = max(counts.values(), default=0)
+        if most_repeated >= max(3, int(len(segments) * 0.4 + 0.999)):
+            return True
+    words = unicode_words(description)
     repeated_phrases = re.findall(r"\b([\w'’]+(?:\s+[\w'’]+){1,3})\b", description.casefold(), re.UNICODE)
     duplicates = len(repeated_phrases) - len(set(repeated_phrases))
-    return comma_heavy > 0 or duplicates >= 8
+    # Longer descriptions naturally repeat the subject; scale the allowance.
+    return duplicates >= max(8, len(words) // 12)
+
+
+# Grammar words that cannot end a title or follow "how to" as its verb.
+_DANGLING_TITLE_ENDINGS = {
+    "and", "but", "or", "with", "without", "from", "about", "to", "for", "of",
+    "after", "before", "into", "than", "the", "a", "an", "your", "my", "our",
+    "their", "his", "her", "its", "is", "are", "was", "were", "any",
+}
+# Only the words whose close repetition signals garbling ("How to you how
+# make ..."). Articles repeat legitimately: "The Good, the Bad and the Ugly".
+_REPEATABLE_FUNCTION_WORDS = {"how", "to"}
+_COORDINATORS = {"and", "or", "vs", "versus", "but"}
+_NOT_A_VERB_AFTER_HOW_TO = {
+    "you", "i", "we", "they", "he", "she", "it", "my", "your", "our", "their",
+    "the", "a", "an", "this", "that", "these", "those", "honest", "how", "to",
+}
+
+
+_TIME_UNITS = {
+    "second": "second", "seconds": "second", "sec": "second", "secs": "second",
+    "minute": "minute", "minutes": "minute", "min": "minute", "mins": "minute",
+    "hour": "hour", "hours": "hour", "hr": "hour", "hrs": "hour",
+    "day": "day", "days": "day", "week": "week", "weeks": "week",
+    "month": "month", "months": "month", "year": "year", "years": "year",
+}
+_UNIT_PATTERN = "|".join(sorted(_TIME_UNITS, key=len, reverse=True))
+# "after 30 days", "in minutes", "for 2 hours": a preposition, an optional
+# number, then a time unit. "of the year" is not a duration claim.
+_TITLE_DURATION_RE = re.compile(
+    rf"\b(?:after|in|for|within|over|under)\s+(\d+(?:\.\d+)?\s*)?({_UNIT_PATTERN})\b", re.IGNORECASE,
+)
+
+
+def title_duration_issues(title: str, source: str, *, index: int | None = None) -> list[dict[str, Any]]:
+    """A duration the source never gives, or one whose number was dropped.
+
+    "Honest review of cold brew coffee after days" on a script that says
+    "12 to 18 hours" invents a timescale; "... review after days" on a script
+    that says "30 days" lost its number. Tamil sources write units in Tamil
+    script, so only Latin-script sources can be judged this way.
+    """
+
+    source_text = normalize_unicode(source)
+    if not source_text or _TAMIL_RANGE.search(source_text):
+        return []
+    source_units: set[str] = set()
+    numbered_units: set[str] = set()
+    for match in re.finditer(rf"(\d+(?:\.\d+)?\s*(?:(?:-|to)\s*\d+(?:\.\d+)?\s*)?)?\b({_UNIT_PATTERN})\b", source_text, re.IGNORECASE):
+        unit = _TIME_UNITS[match.group(2).casefold()]
+        source_units.add(unit)
+        if match.group(1):
+            numbered_units.add(unit)
+    issues: list[dict[str, Any]] = []
+    for match in _TITLE_DURATION_RE.finditer(normalize_unicode(title)):
+        unit = _TIME_UNITS[match.group(2).casefold()]
+        if unit not in source_units:
+            issues.append(_issue(
+                "invented_timescale", "title",
+                f"Title claims a timescale in {unit}s ('{match.group(0)}'), which the creator source never gives.",
+                index=index,
+            ))
+            break
+        if not match.group(1) and unit in numbered_units:
+            issues.append(_issue(
+                "dropped_number", "title",
+                f"Title says '{match.group(0)}' but the source gives the exact number; keep it.",
+                index=index,
+            ))
+            break
+    return issues
+
+
+def title_fluency_issues(title: str, *, index: int | None = None) -> list[dict[str, Any]]:
+    """Catch the word-salad signatures that the source-overlap score cannot see.
+
+    Titles assembled from stopword-stripped fragments are made entirely of
+    the creator's words, so every overlap-based check rated them highly —
+    "How to you how make cold brew coffee home without" scored 100/100. These
+    checks look at word order instead.
+    """
+
+    clean = _SHORTS_TITLE_RE.sub(" ", normalize_unicode(title))
+    clean = _TITLE_EMOJI_RE.sub(" ", clean)
+    tokens = re.findall(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)?", clean.casefold())
+    if len(tokens) < 2:
+        return []
+    issues: list[dict[str, Any]] = []
+    if tokens[-1] in _DANGLING_TITLE_ENDINGS:
+        issues.append(_issue(
+            "broken_title_grammar", "title",
+            f"Title ends with the grammar word '{tokens[-1]}', so it reads as a cut-off phrase.",
+            index=index,
+        ))
+    for position in range(len(tokens) - 2):
+        if tokens[position] == "how" and tokens[position + 1] == "to" and tokens[position + 2] in _NOT_A_VERB_AFTER_HOW_TO:
+            issues.append(_issue(
+                "broken_title_grammar", "title",
+                f"'how to' is followed by '{tokens[position + 2]}' instead of a verb.",
+                index=index,
+            ))
+            break
+    for position, token in enumerate(tokens):
+        if token not in _REPEATABLE_FUNCTION_WORDS:
+            continue
+        window = tokens[position + 1:position + 4]
+        if token not in window:
+            continue
+        between = tokens[position + 1:position + 1 + window.index(token)]
+        # Coordination ("How to Cook and How to Store") is grammatical.
+        if set(between) & _COORDINATORS:
+            continue
+        issues.append(_issue(
+            "broken_title_grammar", "title",
+            f"Title repeats '{token}' within a few words, which reads as garbled wording.",
+            index=index,
+        ))
+        break
+    # Two search phrases jammed together repeat their shared words:
+    # "2 ingredient ice cream instant mango ice cream".
+    content = [token for token in tokens if token not in _DANGLING_TITLE_ENDINGS and len(token) > 1]
+    bigrams = list(zip(content, content[1:]))
+    repeated = next((pair for position, pair in enumerate(bigrams) if pair in bigrams[position + 1:]), None)
+    if repeated:
+        issues.append(_issue(
+            "keyword_stuffed_title", "title",
+            f"Title repeats '{' '.join(repeated)}', which reads as two search phrases stuck together.",
+            index=index,
+        ))
+    return issues
 
 
 def _has_latin_or_tamil(text: str) -> bool:

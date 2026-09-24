@@ -12,6 +12,7 @@ import logging
 import re
 from typing import Any
 
+from win_engine.analysis.transliteration import has_tamil, phonetic_keys, phonetic_match
 from win_engine.llm import gemini_client
 
 
@@ -383,8 +384,11 @@ def _introduces_unsupported_context(concept: str, source: str) -> bool:
 
 
 def _ground_tokens(value: str) -> set[str]:
+    # Tamil words are anchors too. An [A-Za-z]-only pattern gave a Tamil source
+    # no anchors, so every semantic concept Gemini proposed was discarded as
+    # ungrounded and Tamil videos always fell back to local analysis.
     return {
-        word.casefold() for word in re.findall(r"[A-Za-z][A-Za-z'-]*", value)
+        word.casefold() for word in re.findall(r"[A-Za-z][A-Za-z'-]*|[஀-௿]+", value)
         if len(word) > 2 and word.casefold() not in _GROUNDING_STOPWORDS
     }
 
@@ -393,7 +397,12 @@ def _grounded(value: Any, anchors: set[str]) -> bool:
     words = _ground_tokens(_clean(value))
     if not words:
         return False
-    return len(words & anchors) / len(words) >= 0.5
+    matched = words & anchors
+    if any(has_tamil(anchor) for anchor in anchors):
+        # "chettinad chicken biryani" is grounded in செட்டிநாடு சிக்கன் பிரியாணி.
+        keys = phonetic_keys(anchors)
+        matched |= {word for word in words if phonetic_match(word, keys)}
+    return len(matched) / len(words) >= 0.5
 
 
 def _source_text(script: str, brief: dict[str, Any] | None) -> str:

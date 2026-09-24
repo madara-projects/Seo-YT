@@ -9,7 +9,7 @@ from win_engine.analysis.entity_extractor import extract_entity_signals
 from win_engine.analysis.keyword_extractor import extract_keyword_signals
 from win_engine.analysis.research_insights import build_research_decision
 from win_engine.analysis.semantic_research import analyze_script_semantics, refine_research_semantics
-from win_engine.analysis.keyword_research import build_keyword_research
+from win_engine.analysis.keyword_research import build_keyword_research, demand_seed_phrases
 from win_engine.analysis.search_opportunities import discover_search_opportunities
 from win_engine.analysis.research_planner import brief_research_text, plan_research_queries
 from win_engine.analysis.strategy_layer import build_upload_timing
@@ -17,7 +17,8 @@ from win_engine.analysis.thumbnail_intelligence import analyze_thumbnails
 from win_engine.core.config import Settings
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.ingestion.cache import build_cache
-from win_engine.ingestion.youtube_client import YouTubeClient
+from win_engine.ingestion.search_suggest import SearchSuggestClient
+from win_engine.ingestion.youtube_client import YouTubeClient, unescape_result
 from win_engine.scoring.outlier_engine import score_outliers
 
 
@@ -36,6 +37,12 @@ class ResearchService:
         )
         self._youtube = YouTubeClient(settings.youtube_api_key_pool, settings.request_timeout_seconds)
         self._history = HistoryStore(settings.database_path)
+        self._suggest = SearchSuggestClient(
+            enabled=settings.search_suggest_enabled,
+            timeout_seconds=settings.search_suggest_timeout_seconds,
+            max_queries=settings.search_suggest_max_queries,
+            cache=self._cache,
+        )
 
     def gather(
         self,
@@ -126,6 +133,24 @@ class ResearchService:
                     youtube_results=scored_results, research_queries=research_queries, entity_signals=entity_signals,
                     creator_brief=creator_brief, search_opportunities=search_opportunities,
                     query_diagnostics=query_diagnostics)
+        # Demand pass: check the strongest source-grounded concepts against
+        # what viewers actually type, then rebuild the research with that
+        # evidence. Fails soft — without suggestions the research is unchanged.
+        seeds = demand_seed_phrases(keyword_research, semantic_analysis, creator_brief)
+        search_demand = self._suggest.fetch(seeds, language=primary_language, region=region)
+        if search_demand.get("suggestions"):
+            keyword_research = build_keyword_research(
+                script=script, semantic=semantic_analysis, youtube_results=scored_results,
+                research_queries=research_queries, entity_signals=entity_signals,
+                creator_brief=creator_brief, search_opportunities=search_opportunities,
+                query_diagnostics=query_diagnostics, search_demand=search_demand,
+            )
+        else:
+            keyword_research["search_demand"] = {
+                **(keyword_research.get("search_demand") or {}),
+                "status": search_demand.get("status"),
+                "queries": search_demand.get("queries") or [],
+            }
         owned_performance = self._history.owned_performance_summary()
         upload_timing = build_upload_timing(
             scored_results,
@@ -181,12 +206,18 @@ class ResearchService:
             cache_id = sha256(query.casefold().encode("utf-8")).hexdigest()[:20]
             youtube_key = f"yt:{cache_policy}:{cache_id}"
             results = self._cache.get(youtube_key)
-            cached = results is not None
-            if results is None:
+            # An empty entry written by a failed request is not evidence that
+            # the query has no videos; treat it as a miss and ask again.
+            cached = bool(results)
+            if not results:
                 results = self._youtube.search_videos(query, self._settings.youtube_max_results)
-                self._cache.set(youtube_key, results, ttl_seconds=ttl_seconds)
             runtime = self._youtube.runtime_state()
             warning = runtime.get("warning")
+            # A rate-limited or failed search returns [] with a warning. Caching
+            # that empty list kept the query "empty" for the whole cache
+            # lifetime, long after the quota recovered.
+            if not cached and (results or not warning):
+                self._cache.set(youtube_key, results, ttl_seconds=ttl_seconds)
             attempts.append({
                 "type": query_type, "query": query, "cache": "hit" if cached else "miss",
                 "result_count": len(results or []),
@@ -197,6 +228,7 @@ class ResearchService:
                 video_id = str(result.get("video_id") or "")
                 if not video_id:
                     continue
+                unescape_result(result)  # cached entries predate client-side decoding
                 existing = merged.get(video_id)
                 if existing:
                     matched = list(existing.get("matched_queries") or [])

@@ -15,6 +15,9 @@ from win_engine.analysis.generation_quality import (
     is_silent_quote_only_short,
     source_requires_noninstructional_framing,
 )
+from win_engine.analysis.topic_lock import infer_category, source_casing_map
+from win_engine.analysis.transliteration import has_tamil, phonetic_keys, phonetic_match
+from win_engine.ingestion.search_suggest import demand_rank, suggestion_index
 
 
 _FORMAT_GENERIC = {"short", "shorts", "yt", "video", "videos", "youtube", "content", "viral", "trending", "fyp"}
@@ -55,6 +58,7 @@ def build_keyword_research(
     creator_brief: dict[str, Any] | None = None,
     search_opportunities: dict[str, Any] | None = None,
     query_diagnostics: dict[str, Any] | None = None,
+    search_demand: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create classified candidate concepts and attach research evidence.
 
@@ -68,6 +72,15 @@ def build_keyword_research(
     query_rows = [item for item in research_queries if isinstance(item, dict)]
     content_terms = _content_terms(sem, script, brief)
     source_terms = _source_terms(script, brief)
+    entity_rows = [row for row in entity_signals]
+    reflective = bool(quote) or source_requires_noninstructional_framing(script, brief)
+    subjects = subject_terms(
+        sem, entity_rows, source_terms, themes=quote_themes(quote, script) if reflective else (),
+    )
+    # The background ("rainy road with vehicles") decorates the video; words
+    # only it mentions are not what the video is about.
+    visual_only = set(_tokens(brief.get("visual_requirements") or "")) - set(_tokens(script)) - set(_tokens(quote))
+    subjects -= visual_only
     visual_terms = set(_tokens(brief.get("visual_requirements") or ""))
     candidates: dict[str, dict[str, Any]] = {}
     opportunities = search_opportunities or {}
@@ -82,7 +95,7 @@ def build_keyword_research(
         if isinstance(cluster, dict):
             for value in cluster.get("candidates") or []:
                 _add(candidates, value, "semantic_cluster", "long_tail", content_terms, visual_terms, semantic_evidence=semantic_evidence)
-    for entity in entity_signals:
+    for entity in entity_rows:
         if isinstance(entity, dict):
             _add(candidates, entity.get("entity"), "entity", "entity", content_terms, visual_terms)
     for audience in sem.get("audience") or []:
@@ -116,11 +129,30 @@ def build_keyword_research(
                 content_terms, visual_terms, opportunity=opportunity,
             )
 
+    # Search suggestions are phrases real viewers type. One becomes a candidate
+    # only when every word is grounded in the creator's source or declared
+    # language/format — "chettinad chicken biryani in tamil" qualifies,
+    # "... in malayalam" and "s25 ultra vs iphone 17" do not.
+    demand_index = suggestion_index(search_demand)
+    source_letters = _single_letters(script, brief.get("content"), quote)
+    grounded_suggestions = [
+        phrase for phrase in demand_index
+        if _suggestion_is_grounded(phrase, source_terms, content_terms) and _mentions_subject(phrase, subjects)
+        and not _foreign_single_letters(phrase, source_letters)
+    ]
+    for phrase in grounded_suggestions:
+        _add(candidates, phrase, "search_demand", "long_tail", content_terms, visual_terms)
+    # Scoring treats "real viewers type this" as research evidence, so the
+    # rank must be known before a candidate is scored.
+    for candidate in candidates.values():
+        candidate["demand_rank"] = _validated_demand_rank(str(candidate.get("keyword") or ""), demand_index, subjects)
+
     scored: list[dict[str, Any]] = []
     rejected_before_selection = 0
     for candidate in candidates.values():
         entry = _score(candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms)
         if entry and not (non_instructional and has_unsupported_instructional_framing(entry.get("keyword"))):
+            _annotate_demand(entry, demand_index, subjects)
             scored.append(entry)
         else:
             rejected_before_selection += 1
@@ -141,11 +173,28 @@ def build_keyword_research(
         "candidates_survived_filtering": len(scored),
         "research_target_count": len(research_targets),
     }
+    demand_validated = [item["keyword"] for item in scored if item.get("demand_validated")]
+    demand_summary = {
+        "status": str((search_demand or {}).get("status") or "not_checked"),
+        "scope": "youtube_search_suggestions_not_volume",
+        "queries": list((search_demand or {}).get("queries") or []),
+        "suggestions": dict((search_demand or {}).get("suggestions") or {}),
+        "grounded_suggestions": grounded_suggestions,
+        "validated_keywords": demand_validated,
+        "explanation": (
+            "Phrases marked as validated appear in YouTube's own search suggestions, so real viewers type "
+            "them. Suggestion rank reflects relative popularity for that prefix; it is not search volume."
+        ),
+    }
     return {
         "status": "youtube_evidence" if result_rows else "semantic_only",
         "confidence": "observed_youtube_relevance" if result_rows else "limited_without_youtube_research",
         "evidence_scope": "sampled_youtube_results_not_search_volume" if result_rows else "semantic_source_only",
         "search_volume_available": False,
+        "search_demand_available": bool(demand_summary["suggestions"]),
+        "search_demand": demand_summary,
+        "subject_terms": sorted(subjects),
+        "primary_topic": _normalize(sem.get("primary_topic")),
         "limitations": [
             "The YouTube Data API exposes sampled matching results, not keyword search volume.",
             "A returned result supports phrase relevance only when the required meaningful terms appear in its public metadata.",
@@ -168,6 +217,7 @@ def select_final_tags(
     brief = creator_brief or {}
     short_requested = bool(is_short or is_short_content(script, brief))
     quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "")
+    source_letters = _single_letters(script, brief.get("content"), quote)
     non_instructional = source_requires_noninstructional_framing(script, brief)
     content_terms = set(research.get("content_terms") or _tokens(script))
     visual_terms = set(research.get("visual_terms") or [])
@@ -175,6 +225,8 @@ def select_final_tags(
         str(item.get("keyword") or ""): dict(item) for item in research.get("candidates") or []
         if isinstance(item, dict) and item.get("keyword")
     }
+    demand_index = suggestion_index(research.get("search_demand"))
+    subjects = set(research.get("subject_terms") or [])
 
     # Model tags are suggestions, not authority. They need semantic support and
     # cannot create an unsupported niche or bypass the same validation rules.
@@ -185,14 +237,17 @@ def select_final_tags(
             if not key or key in indexed:
                 continue
             classification, rejected = _classify(key, "model", content_terms, visual_terms)
-            if rejected or _is_broad_emotional(key) or not _semantic_support(key, content_terms):
+            searched = _validated_demand_rank(key, demand_index, subjects) is not None
+            if rejected or (_is_broad_emotional(key) and not searched) or not _semantic_support(key, content_terms):
                 rejected_candidates.append({
                     "keyword": key or str(text),
                     "reason": rejected or ("broad_term_without_research_evidence" if _is_broad_emotional(key) else "missing_semantic_support"),
                     "source": "model_suggestion",
                 })
                 continue
-            indexed[key] = _model_entry(key, classification, content_terms, visual_terms)
+            entry = _model_entry(key, classification, content_terms, visual_terms)
+            _annotate_demand(entry, demand_index, subjects)
+            indexed[key] = entry
 
     eligible: list[dict[str, Any]] = []
     rejected_count = 0
@@ -211,13 +266,43 @@ def select_final_tags(
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "weak_source_support", "source": entry.get("source")})
             continue
+        # One-letter model names carry the whole difference: "xbox series s"
+        # passed as grounded on a video about the Series X.
+        if _foreign_single_letters(entry.get("keyword"), source_letters):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "model_letter_not_in_source", "source": entry.get("source")})
+            continue
+        # Entity signals are lifted from competitor titles. A name the creator
+        # only partly used ("No Repeat Home" from "No Repeat Home Workout")
+        # names a different video, unless viewers demonstrably search it.
+        if (
+            entry.get("source") == "entity"
+            and int(entry.get("source_support_score") or 0) < 100
+            and not entry.get("demand_validated")
+        ):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "entity_not_in_source", "source": entry.get("source")})
+            continue
         if int(entry.get("keyword_relevance_score") or 0) < 50:
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "below_minimum_tag_quality", "source": entry.get("source")})
             continue
         eligible.append(entry)
     eligible.sort(key=lambda item: (-item["keyword_relevance_score"], item["keyword"]))
-    chosen = _diverse_tag_selection(eligible, limit=5 if short_requested else 10)
+    if short_requested:
+        # A Short has five tag slots. Phrases viewers really type fill them
+        # first; a high-scoring interpretation such as "trust violation" had
+        # been taking the slots of "betrayal quotes".
+        eligible.sort(key=lambda item: not item.get("demand_validated"))
+    primary_codes ={token for token in _tokens(research.get("primary_topic")) if _MODEL_CODE_RE.fullmatch(token)}
+    # A phrase YouTube was asked about and has no completions for is one
+    # nobody types ("vlookup sumif if formula chatgpt").
+    unsearched = {
+        _normalize(query) for query, rows in ((research.get("search_demand") or {}).get("suggestions") or {}).items()
+        if not rows
+    }
+    chosen = _diverse_tag_selection(eligible, limit=5 if short_requested else 12, subjects=subjects,
+                                    primary_codes=primary_codes, unsearched=unsearched)
     if short_requested:
         chosen_keywords = {item["keyword"] for item in chosen}
         for tag in _PREFERRED_SHORT_TAGS:
@@ -398,7 +483,10 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     tokens = set(_tokens(text))
     if evidence_count >= 1 and tokens and len(tokens & content_terms) == len(tokens) and len(tokens) >= 2:
         content_relevance = max(content_relevance, 42)
-    if _is_broad_emotional(text) and evidence_count < 2:
+    # A broad emotional phrase needs evidence that people look for it. Two
+    # matching results were the only accepted proof; appearing in YouTube's
+    # own search suggestions ("betrayal quotes") is stronger proof of exactly that.
+    if _is_broad_emotional(text) and evidence_count < 2 and candidate.get("demand_rank") is None:
         return None
     if classification == "entity" and content_relevance < 28:
         return None
@@ -534,8 +622,18 @@ def _classify(text: str, hint: str, content_terms: set[str], visual_terms: set[s
         return "generic", "generic"
     if _malformed(text):
         return "malformed", "malformed"
+    words = text.split()
+    # A named entity never starts with a bare verb. "make chettinad chicken"
+    # is a capitalised run lifted out of a competitor title
+    # ("How To Make Chettinad Chicken Biryani"), not an entity.
+    if hint == "entity" and words and words[0] in _ENTITY_VERB_STARTS:
+        return "malformed", "malformed_entity"
+    if _repeats_a_word(text):
+        return "malformed", "repeated_word"
     if _noisy(text):
         return "irrelevant", "noisy_competitor_phrase"
+    if _ungrounded_number(text, content_terms):
+        return "irrelevant", "number_not_in_source"
     if _creator_instruction_leak(text):
         return "irrelevant", "creator_instruction_leakage"
     if _fragmented(text):
@@ -578,7 +676,13 @@ def _reject_reason(entry: dict[str, Any], title: str, quote: str, content_terms:
     )
     grounded_paraphrase = bool(entry.get("semantic_evidence")
         and 1 < len(words) <= 4 and _normalize(text) not in _normalize(quote))
-    if _quote_like(text, quote) and not (focused_query_phrase or grounded_paraphrase):
+    # "painful love" reuses two quote words but is not a chopped span of the
+    # quote, and viewers really search it; only contiguous fragments are copies.
+    # Raw words: "betrayal quotes" is two typed words even though "quotes" is
+    # a stopword for relevance scoring.
+    searched_recombination = bool(entry.get("demand_validated")
+        and 1 < len(_normalize(text).split()) <= 4 and _normalize(text) not in _normalize(quote))
+    if _quote_like(text, quote) and not (focused_query_phrase or grounded_paraphrase or searched_recombination):
         return "quote_copy"
     independently_supported = classification in {"core_topic", "secondary_topic", "search_intent", "long_tail"} and int(entry.get("content_relevance_score") or 0) >= 28
     if _title_copy(text, title) and evidence < 12 and not independently_supported:
@@ -603,16 +707,104 @@ def _diverse(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]
     return selected
 
 
-def _diverse_tag_selection(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
-    """Select diverse subject tags while allowing at most one visual-context tag."""
+# YouTube caps the tag field at 500 characters (multi-word tags count their
+# quotes). Stay safely under it.
+_TAG_CHARACTER_BUDGET = 450
+
+
+def _tag_field_length(tags: Iterable[str]) -> int:
+    values = list(tags)
+    return sum(len(tag) + (2 if " " in tag else 0) for tag in values) + max(0, len(values) - 1)
+
+
+def _tag_modifiers(keyword: str, subjects: set[str] | None) -> list[str]:
+    """Words that narrow a search without naming the subject ("price", "india").
+
+    Format and intent words ("tutorial", "review", "beginners") are how people
+    search a subject at all, so they are not counted.
+    """
+
+    if not subjects:
+        return []
+    return [
+        token for token in dict.fromkeys(_tokens(keyword))
+        if token not in _GENERIC_SUBJECT_WORDS
+        and token not in _FUNCTION_WORDS
+        and not _mentions_subject(token, subjects)
+    ]
+
+
+def _diverse_tag_selection(
+    items: list[dict[str, Any]], *, limit: int, subjects: set[str] | None = None,
+    primary_codes: set[str] | None = None, unsearched: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Select diverse subject tags while allowing at most one visual-context tag.
+
+    Variants of the main keyword that real viewers type ("cold brew coffee",
+    "cold brew coffee recipe", "how to make cold brew coffee at home") are
+    different searches, not duplicates. Demand-validated variants may share a
+    topic family; unvalidated near-duplicates are still pruned.
+    """
 
     selected: list[dict[str, Any]] = []
     family_counts: dict[str, int] = {}
+    modifier_counts: dict[str, int] = {}
+    other_model_count = 0
     visual_count = 0
+    # When real searches are available, they fill the tag field first and
+    # unvalidated phrases only top it up. Script wording such as "just
+    # starting out" or "keep your knees safe" is grounded, but nobody searches it.
+    validated_available = sum(
+        1 for item in items if item.get("demand_validated") and item.get("classification") != "contextual"
+    )
+    demand_rich = validated_available >= 3
+    unvalidated_cap = 4 if demand_rich else limit
+    unvalidated_count = 0
     for item in items:
         contextual = item.get("classification") == "contextual"
         if contextual and visual_count >= 1:
             continue
+        if _tag_field_length([*(chosen["keyword"] for chosen in selected), item["keyword"]]) > _TAG_CHARACTER_BUDGET:
+            continue
+        # A review that asks "worth upgrading from the S24 Ultra?" once earned
+        # four S24 tags; one comparison tag helps, more dilute the S25 targeting.
+        keyword_tokens = set(_tokens(item["keyword"]))
+        other_model = bool(primary_codes) and not (keyword_tokens & primary_codes) and any(
+            _MODEL_CODE_RE.fullmatch(token) for token in keyword_tokens
+        )
+        if other_model and other_model_count >= 1:
+            continue
+        # Only prune once enough real searches exist to fill the space, and
+        # never prune a semantically validated interpretation ("new
+        # beginnings" for "doors closing are protection").
+        if demand_rich and not contextual and not item.get("demand_validated"):
+            if subjects and not item.get("semantic_evidence") and not _mentions_subject(item["keyword"], subjects):
+                continue  # names nothing this video is about
+            if unvalidated_count >= unvalidated_cap:
+                continue
+            if _normalize(item["keyword"]) in (unsearched or set()):
+                continue  # YouTube has no searches starting with it
+        if item.get("demand_validated") and not contextual:
+            # Five "... price in india" variants crowd a review's tag field
+            # with one sub-intent; a non-subject modifier may recur only twice.
+            modifiers = _tag_modifiers(item["keyword"], subjects)
+            if any(modifier_counts.get(modifier, 0) >= 2 for modifier in modifiers):
+                continue
+            family = _family(item["keyword"])
+            # Compare the words viewers type: relevance tokens drop "sad" and
+            # "quotes", which made "sad betrayal quotes" a copy of "betrayal quotes".
+            exact_overlap = max((_typed_similarity(item["keyword"], chosen["keyword"]) for chosen in selected), default=0.0)
+            if family_counts.get(family, 0) < 4 and exact_overlap < 0.9:
+                chosen = dict(item)
+                chosen["diversity_score"] = round(max(0.0, 100.0 - exact_overlap * 100.0), 1)
+                selected.append(chosen)
+                family_counts[family] = family_counts.get(family, 0) + 1
+                other_model_count += int(other_model)
+                for modifier in modifiers:
+                    modifier_counts[modifier] = modifier_counts.get(modifier, 0) + 1
+                if len(selected) >= limit:
+                    break
+                continue
         backed_count = sum(
             1 for chosen in selected
             if chosen.get("classification") != "contextual" and int(chosen.get("evidence_count") or 0) > 0
@@ -652,7 +844,9 @@ def _diverse_tag_selection(items: list[dict[str, Any]], *, limit: int) -> list[d
         chosen["diversity_score"] = round(max(0.0, 100.0 - overlap * 100.0), 1)
         selected.append(chosen)
         family_counts[family] = family_counts.get(family, 0) + 1
+        other_model_count += int(other_model)
         visual_count += int(contextual)
+        unvalidated_count += int(not contextual and not item.get("demand_validated"))
         if len(selected) >= limit:
             break
     return selected
@@ -674,7 +868,40 @@ def _content_terms(semantic: dict[str, Any], script: str, brief: dict[str, Any])
         values.append(brief.get("viewer_promise"))
     values.append(script)
     visual_context = set(_tokens(brief.get("visual_requirements") or "")) | _VISUAL_TERMS
+    # Declared language/format terms are deliberately NOT content terms: they
+    # may complete a phrase ("... in tamil") but must never make a tag relevant
+    # on their own ("tamil songs" on a biryani video).
     return {token for value in values for token in _tokens(value) if token not in visual_context}
+
+
+_LANGUAGE_SEARCH_WORDS = {
+    "tamil": {"tamil", "tamizh", "thamizh"},
+    "tanglish": {"tamil", "tamizh", "thamizh"},
+    "hindi": {"hindi"},
+    "hinglish": {"hindi"},
+}
+_FORMAT_SEARCH_WORDS = {
+    "tutorial": {"tutorial"}, "review": {"review"}, "unboxing": {"unboxing"},
+    "vlog": {"vlog"}, "comparison": {"comparison", "vs"}, "educational": {"explained"},
+}
+
+
+def _declared_context_terms(script: str, brief: dict[str, Any]) -> set[str]:
+    """Facts the creator declared about the video rather than said in it.
+
+    "chicken biryani recipe in tamil" is how Tamil viewers search, and "tamil"
+    is true of a video the creator marked as Tamil even though the script
+    never says the word. The same holds for the declared format.
+    """
+
+    terms: set[str] = set()
+    language = str(brief.get("language") or brief.get("video_language") or "").casefold()
+    terms |= _LANGUAGE_SEARCH_WORDS.get(language, set())
+    if has_tamil(script) or has_tamil(brief.get("content")):
+        terms |= _LANGUAGE_SEARCH_WORDS["tamil"]
+    video_format = str(brief.get("video_format") or "").casefold().strip()
+    terms |= _FORMAT_SEARCH_WORDS.get(video_format, set())
+    return terms
 
 
 def _source_terms(script: str, brief: dict[str, Any]) -> set[str]:
@@ -684,7 +911,7 @@ def _source_terms(script: str, brief: dict[str, Any]) -> set[str]:
         "content", "exact_quote", "on_screen_text", "topic", "viewer_promise", "unique_angle",
         "factual_claims", "visual_requirements", "creator_intent", "content_constraints",
     ))
-    return {token for value in values for token in _tokens(value)}
+    return {token for value in values for token in _tokens(value)} | _declared_context_terms(script, brief)
 
 
 def _creator_visual_concepts(value: Any) -> list[str]:
@@ -706,7 +933,11 @@ def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
     if not words:
         return 0, "no source concept"
     source_roots = {_term_root(word) for word in source_terms}
-    matched = {word for word in words if word in source_terms or _term_root(word) in source_roots}
+    cross_script = _cross_script_keys(source_terms)
+    matched = {
+        word for word in words
+        if word in source_terms or _term_root(word) in source_roots or _sounds_grounded(word, cross_script)
+    }
     # A related search result cannot add an unrelated domain, use case, or
     # decision frame merely because it is popular in YouTube search.
     unsupported_context = {"gaming", "performance", "region", "choosing", "correct", "best"}
@@ -747,7 +978,12 @@ def _result_relevant(row: dict[str, Any], content_terms: set[str]) -> bool:
 
 
 def _content_score(text: str, content_terms: set[str]) -> int:
-    return min(42, len(set(_tokens(text)) & content_terms) * 14)
+    tokens = set(_tokens(text))
+    matched = tokens & content_terms
+    keys = _cross_script_keys(content_terms)
+    if keys:
+        matched |= {token for token in tokens if _sounds_grounded(token, keys)}
+    return min(42, len(matched) * 14)
 
 
 def _visual_score(text: str, visual_terms: set[str]) -> int:
@@ -804,7 +1040,22 @@ def _malformed(text: str) -> bool:
 
 
 def _noisy(text: str) -> bool:
-    return any(token in _NOISY_TERMS or any(char.isdigit() for char in token) for token in _tokens(text))
+    return any(token in _NOISY_TERMS for token in _tokens(text))
+
+
+def _ungrounded_number(text: str, grounded_terms: set[str]) -> bool:
+    """A number the creator never wrote, such as a stale year from a competitor title.
+
+    Any token containing a digit used to be rejected outright, which removed
+    the terms tech and gaming viewers actually search: "galaxy s25 ultra",
+    "iphone 16", "windows 11", "ps5". Model numbers and figures that appear in
+    the creator's own source are grounded and kept.
+    """
+
+    return any(
+        any(char.isdigit() for char in token) and token not in grounded_terms
+        for token in _tokens(text)
+    )
 
 
 def _creator_instruction_leak(text: str) -> bool:
@@ -830,7 +1081,11 @@ def _fragmented(text: str) -> bool:
 
 def _semantic_support(text: str, content_terms: set[str]) -> bool:
     roots = {_term_root(term) for term in content_terms}
-    return bool(set(_tokens(text)) & content_terms) or any(_term_root(term) in roots for term in _tokens(text))
+    tokens = _tokens(text)
+    if set(tokens) & content_terms or any(_term_root(term) in roots for term in tokens):
+        return True
+    keys = _cross_script_keys(content_terms)
+    return any(_sounds_grounded(term, keys) for term in tokens)
 
 
 def _term_root(value: str) -> str:
@@ -902,6 +1157,15 @@ def _similar(left: str, right: str) -> float:
     return len(a & b) / max(len(a | b), 1)
 
 
+_TYPED_FILLER = {"the", "a", "an", "of", "in", "for", "to", "and", "on", "with"}
+
+
+def _typed_similarity(left: str, right: str) -> float:
+    a = set(_normalize(left).split()) - _TYPED_FILLER
+    b = set(_normalize(right).split()) - _TYPED_FILLER
+    return len(a & b) / max(len(a | b), 1)
+
+
 def _evidence_similarity(left: str, right: str) -> float:
     """Compare final tags while retaining intent words such as quote/quotes."""
 
@@ -941,11 +1205,322 @@ def _reason(classification: str, evidence_count: int, query_support: int, source
 
 
 def _normalize(value: Any) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9' -]", " ", str(value or "").casefold())).strip(" -")
+    # Tamil script is kept. Stripping everything outside [A-Za-z0-9] turned a
+    # Tamil script into an empty string, so a Tamil video had no source terms
+    # at all and every tag was automatically "unsupported".
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9஀-௿' -]", " ", str(value or "").casefold())).strip(" -")
 
 
 def _tokens(value: Any) -> list[str]:
-    return [word for word in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", _normalize(value)) if word not in _STOP and len(word) > 1]
+    return [
+        word for word in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?|[஀-௿]+", _normalize(value))
+        if word not in _STOP and len(word) > 1
+    ]
+
+
+def _cross_script_keys(terms: Iterable[str]) -> set[str]:
+    """Phonetic keys of the source, only when it contains Tamil script.
+
+    Sound-alike matching is what lets an English search tag be grounded in a
+    Tamil script. It is not applied to Latin-only sources: literal matching
+    already works there, and phonetic keys would let unrelated sound-alikes
+    ("bitter"/"better") pass as grounded.
+    """
+
+    words = list(terms)
+    if not any(has_tamil(word) for word in words):
+        return set()
+    return phonetic_keys(words)
+
+
+def _sounds_grounded(word: str, keys: set[str]) -> bool:
+    return bool(keys) and phonetic_match(word, keys)
+
+
+# Words that describe *how* a video treats its subject, not the subject itself.
+# A phrase made only of these ("hidden details", "trailer breakdown") matches
+# searches about every other video, so it proves nothing about this one.
+_GENERIC_SUBJECT_WORDS = {
+    "video", "videos", "tutorial", "review", "guide", "tips", "tip", "details", "detail",
+    "hidden", "breakdown", "analysis", "comparison", "compare", "trailer", "map", "new",
+    "best", "easy", "how", "make", "beginners", "beginner", "full", "complete", "part",
+    "episode", "things", "thing", "people", "city", "series", "missed", "every", "explained",
+    "recipe", "home", "simple", "quick", "top", "ultimate", "honest", "way", "ways",
+}
+
+
+# A product or model code such as "s24", "ps5" or "m3". Spec tokens that start
+# with a digit ("200mp", "5g", "4k") are not models.
+_MODEL_CODE_RE = re.compile(r"[a-z]+\d+[a-z0-9]*")
+# A standalone letter or digit ("Series X", "GTA 5"); the "s" of "game's" is not one.
+_SINGLE_CHAR_RE = re.compile(r"(?<![\w'’])[a-z0-9](?![\w'’])")
+
+
+def _single_letters(*sources: Any) -> set[str]:
+    return {char for source in sources for char in _SINGLE_CHAR_RE.findall(str(source or "").casefold())}
+
+
+def _foreign_single_letters(keyword: Any, source_letters: set[str]) -> set[str]:
+    """Standalone letters/digits in a phrase that the creator's source never uses.
+
+    _tokens drops one-character words, so "xbox series s" looked fully
+    grounded in a script about the Series X. "a" and "i" are ordinary words.
+    """
+
+    return set(_SINGLE_CHAR_RE.findall(str(keyword or "").casefold())) - source_letters - {"a", "i"}
+# Pronouns and function words survive _tokens but never name a subject: a
+# quote's only extracted "subject" was once "you", which blocked every seed.
+_FUNCTION_WORDS = {
+    "you", "your", "yours", "they", "them", "their", "we", "our", "us", "he", "him", "his",
+    "she", "her", "it", "its", "me", "my", "mine", "is", "be", "been", "being", "am",
+    "if", "so", "or", "an", "as", "by", "to", "do", "did", "does", "done", "would", "could",
+    "should", "will", "can", "may", "might", "must", "never", "ever", "who", "whom", "which",
+    "there", "then", "than", "no", "yes", "all", "any", "some", "one", "out", "up", "down",
+    "off", "over", "only", "also", "too", "very", "even", "still", "yet", "didn't", "don't",
+    "won't", "can't", "isn't", "wasn't", "that's", "it's", "you're", "they're", "i'm",
+}
+# Themes people search quote videos by ("betrayal quotes"). Semantic topics
+# tend to paraphrase them away ("hidden deceit"), so a quote's own theme word
+# is read from the creator's source directly.
+# Words that mostly appear in idioms ("it's time to", "by heart") are left out.
+_QUOTE_THEMES = {
+    "alone", "attitude", "betrayal", "breakup", "cheating", "dreams", "ego", "faith", "fake",
+    "family", "father", "friends", "friendship", "happiness", "heartbreak", "hope", "hurt",
+    "karma", "kindness", "lies", "life", "loneliness", "love", "loyalty", "memories",
+    "mother", "pain", "patience", "peace", "regret", "relationship", "relationships",
+    "respect", "sacrifice", "silence", "strength", "success", "trust", "truth",
+}
+
+
+_PAINFUL_QUOTE_RE = re.compile(
+    r"\b(?:pain(?:ful)?|hurts?|hurting|cry(?:ing)?|tears?|broken|lonely|alone|miss(?:ing)?|sad(?:ness)?|"
+    r"heartbreak|regrets?|lost|never)\b",
+    re.IGNORECASE,
+)
+
+
+def quote_themes(*sources: Any) -> list[str]:
+    """Searchable theme words the creator's own words use, in source order."""
+
+    found: list[str] = []
+    for source in sources:
+        for token in _tokens(source):
+            if token in _QUOTE_THEMES and token not in found:
+                found.append(token)
+    return found
+
+
+def _mentions_subject(text: str, subjects: set[str]) -> bool:
+    if not subjects:
+        return True  # no subject evidence available: do not filter
+    tokens = set(_tokens(text))
+    if tokens & subjects or {_term_root(token) for token in tokens} & {_term_root(term) for term in subjects}:
+        return True
+    keys = _cross_script_keys(subjects)
+    return any(_sounds_grounded(token, keys) for token in tokens)
+
+
+def subject_terms(
+    semantic: dict[str, Any] | None, entity_signals: Iterable[Any], source_terms: set[str],
+    *, themes: Iterable[str] = (),
+) -> set[str]:
+    """Words naming what this video is about, each grounded in the creator's source.
+
+    Built from the semantic topic and entities plus extracted entity signals,
+    keeping only words the creator actually used. Entity signals alone are
+    unreliable — they are lifted from competitor titles and can name other
+    videos entirely ("Avengers Doomsday") — so grounding is mandatory.
+    ``themes`` are quote themes already read from the creator's own words.
+    """
+
+    sem = semantic or {}
+    phrases: list[Any] = [sem.get("primary_topic"), *(sem.get("secondary_topics") or [])[:2]]
+    for entity in sem.get("entities") or []:
+        phrases.append(entity.get("name") or entity.get("entity") if isinstance(entity, dict) else entity)
+    for row in entity_signals or []:
+        if isinstance(row, dict):
+            phrases.append(row.get("entity"))
+    roots = {_term_root(term) for term in source_terms}
+    keys = _cross_script_keys(source_terms)
+    terms: set[str] = set(themes)
+    for phrase in phrases:
+        for token in _tokens(phrase):
+            if token in _GENERIC_SUBJECT_WORDS or token in _FUNCTION_WORDS:
+                continue
+            if token in source_terms or _term_root(token) in roots or _sounds_grounded(token, keys):
+                terms.add(token)
+    return terms
+
+
+def _written_as_name(word: str, source: str) -> bool:
+    """True for a model code or a word the creator writes as a name.
+
+    "FastAPI" and "GTA" read as names wherever they stand; "Munnar" counts
+    when the source capitalises it mid-sentence, which "cold" never is.
+    """
+
+    if any(char.isdigit() for char in word):
+        return True
+    for match in re.finditer(rf"(?<![\w'’]){re.escape(word)}(?![\w'’])", source, re.IGNORECASE):
+        form = match.group(0)
+        if form[1:] != form[1:].lower():
+            return True
+    return source_casing_map(source).get(word.casefold(), "")[:1].isupper()
+
+
+def demand_seed_phrases(
+    research: dict[str, Any], semantic: dict[str, Any] | None, creator_brief: dict[str, Any] | None,
+    *, limit: int = 6,
+) -> list[str]:
+    """Short, subject-anchored phrases to check against YouTube search suggestions.
+
+    Seeds must name the video's subject. Generic seeds ("hidden details",
+    "trailer breakdown") return suggestions about other videos entirely.
+    Shorter heads return the richest variants: "fastapi tutorial" surfaces
+    "fastapi tutorial in tamil", while "fastapi rest api tutorial" returns
+    only itself.
+    """
+
+    subjects = set(research.get("subject_terms") or [])
+    brief = creator_brief or {}
+    video_format = str(brief.get("video_format") or "").casefold().strip()
+    format_word = next(iter(_FORMAT_SEARCH_WORDS.get(video_format, set()) - {"vs"}), "")
+    if format_word == "tutorial" and infer_category(f"{brief.get('content') or ''} {brief.get('topic') or ''}") == "cooking":
+        format_word = "recipe"  # cooking viewers search "<dish> recipe", not "<dish> tutorial"
+    seeds: list[str] = []
+
+    def add(value: Any) -> None:
+        phrase = _normalize(value)
+        words = phrase.split()
+        if not 1 <= len(words) <= 5 or phrase in seeds:
+            return
+        if any(phrase in seed for seed in seeds) or not _mentions_subject(phrase, subjects):
+            return
+        seeds.append(phrase)
+
+    quote = brief.get("exact_quote") or brief.get("on_screen_text")
+    if quote:
+        # Quote viewers search by theme: "betrayal quotes", "trust quotes".
+        themes = quote_themes(quote, brief.get("content"))[:2]
+        for theme in themes:
+            add(f"{theme} quotes")
+        # A painful quote is searched as "sad love quotes"; only a quote that
+        # actually voices pain earns the "sad" seed.
+        if themes and _PAINFUL_QUOTE_RE.search(str(quote)):
+            add(f"sad {themes[0]} quotes")
+    primary = _normalize((semantic or {}).get("primary_topic"))
+    if primary:
+        # The head without trailing format words ("gta 6 trailer 2 breakdown"
+        # -> "gta 6 trailer 2"), then the full topic.
+        words = primary.split()
+        while len(words) > 1 and words[-1] in _GENERIC_SUBJECT_WORDS:
+            words = words[:-1]
+        head = " ".join(words)
+        add(head)
+        if format_word:
+            # "<subject> <format>" is how most people search tutorials and
+            # reviews: "fastapi tutorial", "galaxy s25 ultra review".
+            if len(words) <= 3:
+                add(f"{head} {format_word}")
+            # The first word alone must be a name ("fastapi tutorial"). An
+            # adjective head ("cold" from "cold brew coffee") seeded "cold
+            # recipe", whose suggestions shipped as the tag "cold recipes".
+            first = words[0]
+            if first in subjects and len(first) >= 4 and _written_as_name(first, str(brief.get("content") or "")):
+                add(f"{first} {format_word}")
+        add(primary)
+    for candidate in research.get("candidates") or []:
+        if len(seeds) >= limit:
+            break
+        if isinstance(candidate, dict) and candidate.get("classification") != "contextual":
+            add(candidate.get("keyword"))
+    return seeds[:limit]
+
+
+_ENTITY_VERB_STARTS = {
+    "make", "making", "cook", "cooking", "how", "watch", "try", "learn", "build", "get",
+    "see", "check", "do", "use", "buy", "best", "top", "easy", "quick",
+}
+
+
+# Words a searcher adds that describe the *kind* of video rather than claim a
+# new fact about it. A suggestion may carry at most one of these beyond the
+# words grounded in the creator's source.
+_NEUTRAL_SEARCH_MODIFIERS = {
+    "recipe", "recipes", "easy", "simple", "homemade", "home", "beginners", "beginner",
+    "tutorial", "explained", "review", "quotes", "quote", "make", "making", "step",
+    "steps", "method", "full", "complete", "tips", "guide",
+}
+
+
+def _repeats_a_word(text: str) -> bool:
+    """A content word used twice, as in the real (but garbled) suggestion
+    "chettinad biryani chicken biryani". "step by step" style idioms are fine."""
+
+    words = _normalize(text).split()
+    counts: dict[str, int] = {}
+    for position, word in enumerate(words):
+        if word in _STOP or len(word) <= 2:
+            continue
+        idiom = 0 < position < len(words) and words[position - 1] == "by"
+        if not idiom:
+            counts[word] = counts.get(word, 0) + 1
+    return any(count > 1 for count in counts.values())
+
+
+def _suggestion_is_grounded(phrase: str, source_terms: set[str], content_terms: set[str]) -> bool:
+    tokens = _tokens(phrase)
+    if not tokens or len(tokens) > _MAX_TAG_WORDS or not _semantic_support(phrase, content_terms):
+        return False
+    if _repeats_a_word(phrase):
+        return False
+    roots = {_term_root(term) for term in source_terms}
+    keys = _cross_script_keys(source_terms)
+    ungrounded = [
+        token for token in tokens
+        if token not in source_terms and _term_root(token) not in roots and not _sounds_grounded(token, keys)
+    ]
+    return not ungrounded or (len(ungrounded) == 1 and ungrounded[0] in _NEUTRAL_SEARCH_MODIFIERS)
+
+
+def _validated_demand_rank(
+    keyword: str, index: dict[str, dict[str, Any]], subjects: set[str] | None = None,
+) -> int | None:
+    """Suggestion rank, but only for phrases specific enough for it to mean anything.
+
+    A single generic word ("perspective", "importance") prefixes countless
+    suggestions, and a subject-less phrase ("hidden details") is typed by
+    people looking for other videos — neither says anything about this one.
+    """
+
+    # Count the words actually typed: "betrayal quotes" is two words even
+    # though "quotes" is a stopword for relevance scoring.
+    if not index or len(_normalize(keyword).split()) < 2 or not _mentions_subject(keyword, subjects or set()):
+        return None
+    return demand_rank(keyword, index)
+
+
+def _annotate_demand(
+    entry: dict[str, Any], index: dict[str, dict[str, Any]], subjects: set[str] | None = None,
+) -> None:
+    """Mark a keyword that real viewers type and lift it by its suggestion rank."""
+
+    if not index or entry.get("classification") == "platform_format":
+        return
+    rank = _validated_demand_rank(str(entry.get("keyword") or ""), index, subjects)
+    if rank is None:
+        return
+    # Weighted like result evidence (which scores up to 24): real viewers
+    # typing the phrase is at least as strong a relevance signal as a few
+    # sampled results containing it.
+    boost = max(10, 22 - 2 * rank)
+    entry["demand_validated"] = True
+    entry["demand_rank"] = rank
+    entry["search_demand"] = "youtube_search_suggestion"
+    entry["keyword_relevance_score"] = min(100, int(entry.get("keyword_relevance_score") or 0) + boost)
+    note = f"; typed by real viewers (YouTube search suggestion, rank {rank + 1})"
+    entry["reason"] = f"{entry.get('reason') or ''}{note}".lstrip("; ")
+    entry["selection_reason"] = entry["reason"]
 
 
 _EVIDENCE_STOP = {

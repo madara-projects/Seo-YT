@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from win_engine.analysis.topic_lock import source_lead_phrase
+
 
 _DISPLAY_NAMES = {
     "target_audience": "who the video is for",
@@ -49,20 +51,30 @@ def build_creator_brief(
     script_lower = script_text.lower()
 
     # Heuristic auto-inference for missing brief fields
-    is_quote_or_short = any(w in script_lower for w in ["quote", "betrayal", "shorts", "reels", "sunset", "aesthetic", "motivation", "life lesson"]) or (len(script_text) < 250 and '"' in script_text)
+    def mentions(*phrases: str) -> bool:
+        # Whole words only: a substring test read "day" in "Today I want to
+        # talk..." and labelled a talking-head script a vlog.
+        return any(re.search(rf"\b{re.escape(phrase)}\b", script_lower) for phrase in phrases)
+
+    # A bare emotional line over a described background is a quote Short even
+    # without quotation marks; it used to be read as a talking-head video.
+    standalone_quote = not exact_quote.strip() and _looks_like_standalone_quote(script_text, visual_requirements)
+    is_quote_or_short = standalone_quote or mentions("quote", "quotes", "betrayal", "shorts", "reels", "sunset", "aesthetic", "motivation", "motivational", "life lesson") or (len(script_text) < 250 and '"' in script_text)
 
     auto_format = video_format.strip()
     if not auto_format:
         if is_quote_or_short:
             auto_format = "youtube_shorts"
-        elif any(w in script_lower for w in ["how to", "tutorial", "step", "guide", "learn", "setup", "how2"]):
+        elif mentions("how to", "tutorial", "step", "steps", "guide", "learn", "learning", "setup", "how2"):
             auto_format = "tutorial"
-        elif any(w in script_lower for w in ["story", "vlog", "day", "routine", "my life", "experience"]):
+        elif mentions("story", "stories", "vlog", "day in my life", "my day", "routine", "my life", "experience"):
             auto_format = "vlog"
         else:
             auto_format = "talking_head"
 
     extracted_quote = exact_quote.strip() or _extract_quote(script_text)
+    if not extracted_quote and standalone_quote:
+        extracted_quote = re.sub(r"\s+", " ", script_text).strip(" \t\r\n\"'“”‘’")
     extracted_on_screen = on_screen_text.strip() or extracted_quote
     inferred_duration = duration_seconds if duration_seconds is not None else _extract_duration(script_text)
     inferred_visual = visual_requirements.strip() or _extract_visual_requirement(script_text)
@@ -231,11 +243,60 @@ def _extract_visual_requirement(content: str) -> str:
     return re.sub(r"\s+", " ", match.group(1)).strip(" .") if match else ""
 
 
+# Words that cannot end a topic phrase: cutting "... than to be in love" at a
+# word limit left "... than to be in".
+_TOPIC_TRAILING_WORDS = {
+    "a", "an", "the", "and", "or", "but", "to", "of", "in", "on", "at", "for", "with", "from", "by",
+    "than", "that", "which", "who", "if", "when", "as", "be", "is", "are", "was", "were", "been",
+    "my", "your", "our", "their", "his", "her", "its", "this", "these", "those", "so", "very", "more",
+}
+# Strong signals that a short line is an emotional quote, and weaker ones that
+# count only alongside a described background visual.
+_STRONG_QUOTE_WORDS = re.compile(
+    r"\b(?:love[sd]?|loving|heart\w*|pain(?:ful)?|hurts?|hurting|cry|crying|tears?|miss(?:ing|ed)?|alone|lonely|"
+    r"loneliness|silence|silent|trust|betray\w*|soul|broken|forgive\w*|regrets?|memories|sad(?:ness)?|"
+    r"happiness|heal\w*|goodbye|forget|forgotten|deserve[sd]?)\b",
+    re.IGNORECASE,
+)
+_WEAK_QUOTE_WORDS = re.compile(
+    r"\b(?:never|forever|always|nothing|everything|someone|people|life|hope|dreams?|peace|strong|strength|"
+    r"destiny|fate|karma|respect|feel(?:ings?)?|world)\b",
+    re.IGNORECASE,
+)
+# Video narration, not a quote. "We accept the love we think we deserve" is a
+# quote; "we hiked to Top Station" is a vlog, so only narrated past actions count.
+_NARRATION_CUES = re.compile(
+    r"\b(?:in this (?:video|short|vlog|episode)|today i|i will|we will|let me|i'?m going to|subscribe|how to|"
+    r"step|steps|tutorial|recipe|ingredients|review|unboxing|price|buy|download|link in|watch till|"
+    r"we\s+(?:\w+ed|went|made|had|tried|got|took|spent|did|bought|found|saw|came))\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_standalone_quote(text: str, visual_requirements: str = "") -> bool:
+    """A short emotional line with no video narration: the text of a quote Short."""
+
+    words = re.findall(r"[^\W_]+(?:['\u2019][^\W_]+)?", text or "", re.UNICODE)
+    sentences = [part for part in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if part]
+    if not 5 <= len(words) <= 45 or len(sentences) > 3 or _NARRATION_CUES.search(text or ""):
+        return False
+    if _STRONG_QUOTE_WORDS.search(text or ""):
+        return True
+    return bool(visual_requirements.strip()) and bool(_WEAK_QUOTE_WORDS.search(text or ""))
+
+
+def _clean_topic_phrase(words: list[str], limit: int) -> str:
+    words = list(words[:limit])
+    while len(words) > 1 and words[-1].casefold() in _TOPIC_TRAILING_WORDS:
+        words.pop()
+    return " ".join(words).strip()
+
+
 def _infer_topic(content: str, quote: str) -> str:
     if quote:
         sentence = re.split(r"(?<=[.!?])\s+|\.{2,}|[;\u2013\u2014]", quote, maxsplit=1)[0]
         words = re.findall(r"[^\W_]+(?:['\u2019][^\W_]+)?", sentence, re.UNICODE)
-        natural = " ".join(words[:12]).strip()
+        natural = _clean_topic_phrase(words, 12)
         if natural:
             return natural.casefold()
     source = quote or content
@@ -278,7 +339,7 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
         if words and words[0].lower() in {"a", "an", "the"}:
             words = words[1:]
         if words:
-            return " ".join(words[:10]).lower()
+            return _clean_topic_phrase(words, 10).lower()
 
     # Strip camera / background / visual setup headers
     clean_content = re.sub(
@@ -310,6 +371,14 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
         "overlay", "mood", "authentic", "photo", "image", "video", "shorts", "reels"
     })
 
+    # Prefer a contiguous phrase of the creator's words. The word bag below
+    # (first eight non-stopwords) produced unreadable topics such as "you how
+    # make cold brew coffee home without", which then became the fallback
+    # title. It remains only for inputs with no usable leading clause.
+    lead = source_lead_phrase(clean_content)
+    if len(lead.split()) >= 2:
+        return lead
+
     candidates: list[str] = []
     for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", clean_content.lower()):
         if len(word) < 3 or word in quote_stopwords or word in candidates:
@@ -317,7 +386,9 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
         candidates.append(word)
 
     if not candidates:
-        return "deep quote"
+        # Never a placeholder: "deep quote" used to leak into Tamil packages
+        # as #DeepQuote because Tamil script has no [A-Za-z] words.
+        return lead
     # Preserve the full inferred subject for ordinary instructional or
     # experience-led input.  Truncating to three words dropped the terms that
     # make otherwise similar topics distinct (for example ``csv files`` or a
