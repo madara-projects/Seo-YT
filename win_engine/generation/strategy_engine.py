@@ -22,6 +22,7 @@ from win_engine.analysis.package_builder import build_title_thumbnail_packages
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
 from win_engine.analysis.language_engine import build_language_strategy
 from win_engine.analysis.keyword_research import select_final_tags
+from win_engine.analysis.topic_lock import source_lead_phrase, strip_lead_in
 from win_engine.analysis.pacing_engine import analyze_script_pacing
 from win_engine.analysis.strategy_layer import (
     build_channel_intelligence,
@@ -121,6 +122,15 @@ def build_seo_package(
     generation_brief["seo_research_targets"] = [
         item.get("keyword") for item in (keyword_research.get("research_targets") or [])
         if isinstance(item, dict) and item.get("keyword")
+    ][:8]
+    # Phrases real viewers type, most popular first. The writer is told to
+    # front-load the best-fitting one; final tag selection re-validates them.
+    generation_brief["search_demand_phrases"] = [
+        item["keyword"] for item in sorted(
+            (row for row in (keyword_research.get("candidates") or [])
+             if isinstance(row, dict) and row.get("demand_validated") and row.get("keyword")),
+            key=lambda row: (int(row.get("demand_rank") or 0), -int(row.get("keyword_relevance_score") or 0)),
+        )
     ][:8]
     _LANGS = [selected_language]
     multilang_raw, generation_source = write_multilang_packages_with_source(
@@ -347,7 +357,8 @@ def build_seo_package(
             "character_count": len(variant),
             "package_intent": package_intents[index] if index < len(package_intents) else "Alternative",
             "mechanism": mechanism,
-            "reason": f"Offers a distinct {mechanism} framing while preserving the creator source.",
+            # The label may already end in "framing" ("direct topic framing").
+            "reason": f"Offers a distinct {mechanism if mechanism.endswith('framing') else mechanism + ' framing'} while preserving the creator source.",
             "discovery_surface": package_intents[index] if index < len(package_intents) else "Alternative",
             "evidence_used": personalization,
             "tradeoffs": ["Generated suggestion, not observed performance evidence.", "No reach or CTR outcome is guaranteed."],
@@ -372,17 +383,20 @@ def build_seo_package(
         competitor_titles=[str(item.get("title") or "") for item in research.get("youtube_results", []) if isinstance(item, dict)],
     )
 
+    short_form = is_short_content(script, creator_brief)
+    quote_short = short_form and bool(str((creator_brief or {}).get("exact_quote") or "").strip())
     content_audit = audit_content_package(
         script,
         title,
         primary_topic,
         secondary_topic,
         angle,
-        video_format=str((creator_brief or {}).get("video_format") or ""),
+        video_format="youtube_shorts" if short_form else str((creator_brief or {}).get("video_format") or ""),
         context_text=" ".join(
             str((creator_brief or {}).get(field) or "")
             for field in ("target_audience", "viewer_promise", "unique_angle")
         ),
+        exact_quote=str((creator_brief or {}).get("exact_quote") or "") if quote_short else "",
     )
     opportunity_gap_analysis = analyze_opportunity_gaps(
         keyword_signals=keyword_signals,
@@ -397,25 +411,33 @@ def build_seo_package(
         video_format=str((creator_brief or {}).get("video_format") or ""),
     )
     channel_intelligence = build_channel_intelligence(research.get("youtube_results", []))
+    # Series and follow-up suggestions come from the package's validated tags;
+    # the post-processor rebuilds them once the final tags and title are locked.
+    related_phrases = [tag for tag in tags if tag not in {"yt", "shorts"}]
     content_graph_strategy = build_content_graph_strategy(
         primary_topic=primary_topic,
         secondary_topic=secondary_topic,
         angle=angle,
         keyword_signals=keyword_signals,
+        related_phrases=related_phrases,
+        short_form=short_form,
     )
     chapters = build_chapters(script, keyword_signals, creator_brief)
-    session_expansion = build_session_expansion(title, keyword_signals)
-    binge_bridge = build_binge_bridge(title, angle)
+    session_expansion = build_session_expansion(title, keyword_signals, related_phrases=related_phrases, short_form=short_form)
+    binge_bridge = build_binge_bridge(title, angle, related_phrases=related_phrases, short_form=short_form)
     thumbnail_strategy = build_thumbnail_strategy(
         thumbnail_intelligence=research.get("thumbnail_intelligence", {}),
         title=title,
         content_angle=angle,
+        quote_short=quote_short,
+        video_format=str((creator_brief or {}).get("video_format") or ""),
     )
     automation_workflow = build_automation_workflow(
         title=title,
         hashtags=hashtags,
         chapters=chapters,
         content_graph_strategy=content_graph_strategy,
+        short_form=short_form,
     )
 
     feedback_package = build_feedback_package(
@@ -440,7 +462,11 @@ def build_seo_package(
         else 0.0,
         retention_risk=str(content_audit["retention_risk"]["level"]),
         opportunity_label=str(opportunity_gap_analysis["opportunity_score"]["label"]),
-        opportunity_score=float(opportunity_gap_analysis["opportunity_score"]["score"]),
+        # NULL when unmeasured, so History averages (SQL AVG) skip it.
+        opportunity_score=(
+            float(opportunity_gap_analysis["opportunity_score"]["score"])
+            if opportunity_gap_analysis["opportunity_score"].get("score") is not None else None
+        ),
         payload={
             "title": title, "description": description, "tags": tags, "hashtags": hashtags,
             "title_variants": title_variants_data, "title_thumbnail_packages": title_thumbnail_packages,
@@ -761,19 +787,18 @@ def _fallback_topic_variants(topic: str, suffix: str, instructional: bool) -> li
 
     clean = re.sub(r"\s+", " ", topic).strip(" .:-") or "The Video Topic"
     lower = clean.casefold()
-    if instructional:
-        if lower.startswith("how to "):
-            body = clean
-        elif lower.startswith("how "):
-            body = "How to " + clean[4:]
-        else:
-            body = f"How to {clean}"
+    first_word = lower.split(" ", 1)[0]
+    # "How to" is prepended only to a phrase that starts with a verb. Blindly
+    # prefixing it turned "honest review samsung galaxy..." into
+    # "How to honest review samsung galaxy s25 ultra after days".
+    if instructional and not lower.startswith("how ") and first_word in _INSTRUCTIONAL_VERBS:
+        body = f"How to {clean}"
     else:
         body = clean
     return [_fit_title(body[:1].upper() + body[1:], suffix)]
 
 
-def _fallback_title_topic(topic: str, content: str, video_format: str) -> str:
+def _fallback_title_topic(topic: str, content: str, video_format: str, instructional: bool = True) -> str:
     """Extract a compact source phrase for outage-mode instructional titles.
 
     Research signals can legitimately be full creator sentences. They remain
@@ -801,7 +826,89 @@ def _fallback_title_topic(topic: str, content: str, video_format: str) -> str:
         definition = re.match(r"(?:an?|the)\s+(.+?)\s+is\s+", clean_content, re.IGNORECASE)
         if definition:
             return definition.group(1).strip().title() + " Explained"
+    # Story and reflection sources keep their curated topic phrase ("waiting on
+    # an empty road"); the first clause of a narrative is not a title.
+    if not instructional:
+        return topic
+    # Everything below keeps a *contiguous* span of the creator's own words.
+    # The earlier path used the stopword-stripped topic, which produced titles
+    # like "How to you how make cold brew coffee home without".
+    body = strip_lead_in(clean_content)
+    how_to = re.search(r"\bhow to\b[^.!?\n:;]*", body, re.IGNORECASE)
+    if how_to:
+        return _trim_title_span(how_to.group(0))
+    if format_name == "review" or re.match(r"(?i)^(?:my\s+)?(?:honest\s+|full\s+)?review\b", body):
+        entity = _named_entity(body)
+        if entity:
+            span = re.search(r"\b(?:after|in)\s+\d+\s+(?:days?|weeks?|months?|years?)\b", body, re.IGNORECASE)
+            qualifier = " " + span.group(0).title() if span else ""
+            return _trim_title_span(f"{entity} Review{qualifier}")
+    lead = source_lead_phrase(clean_content)
+    if lead:
+        return _trim_title_span(_original_case_span(clean_content, lead))
     return topic
+
+
+_TITLE_DANGLING = {
+    "a", "an", "the", "and", "or", "but", "with", "without", "from", "about", "to", "for",
+    "of", "after", "before", "into", "than", "at", "in", "on", "by", "any", "your", "my",
+    "our", "their", "is", "are", "was", "were", "that", "which", "என்று",
+}
+_INSTRUCTIONAL_VERBS = {
+    "make", "cook", "bake", "brew", "build", "create", "fix", "clean", "install", "learn",
+    "use", "set", "setup", "grow", "write", "draw", "edit", "start", "earn", "save", "lose",
+    "gain", "improve", "remove", "get", "repair", "replace", "test", "parse", "deploy",
+    "train", "plan", "pack", "prepare", "grill", "roast", "fry", "store", "organize",
+    "design", "code", "program", "configure", "connect", "upgrade", "speed", "study",
+}
+
+
+# Words that open a trailing phrase. When a span is too long, dropping the whole
+# trailing phrase keeps grammar intact: "How to make cold brew coffee at home
+# [without any special equipment]" rather than "... without any special".
+_PHRASE_BOUNDARIES = {"without", "with", "in", "for", "and", "but", "or", "using", "from", "after", "before", "at", "on", "while"}
+
+
+def _trim_title_span(text: str, max_chars: int = 65) -> str:
+    """Cut at a phrase or word boundary without a dangling word or an ellipsis."""
+
+    words = re.sub(r"\s+", " ", str(text or "")).strip(" .,:;-").split(" ")
+    if len(" ".join(words)) > max_chars:
+        boundaries = [
+            index for index, word in enumerate(words)
+            if index >= 3 and word.casefold() in _PHRASE_BOUNDARIES
+            and len(" ".join(words[:index])) <= max_chars
+        ]
+        if boundaries:
+            words = words[:boundaries[-1]]
+    kept: list[str] = []
+    for word in words:
+        if kept and len(" ".join([*kept, word])) > max_chars:
+            break
+        kept.append(word)
+    while len(kept) > 1 and kept[-1].casefold().strip(".,:;!?") in _TITLE_DANGLING:
+        kept.pop()
+    trimmed = " ".join(kept).strip(" ,;:-")
+    return trimmed[:1].upper() + trimmed[1:] if trimmed else trimmed
+
+
+def _original_case_span(content: str, phrase: str) -> str:
+    """Recover the creator's casing ("Samsung Galaxy") for a folded phrase."""
+
+    words = [re.escape(word) for word in str(phrase or "").split()]
+    if not words:
+        return phrase
+    match = re.search(r"\s+".join(words), content or "", re.IGNORECASE)
+    return match.group(0) if match else phrase
+
+
+def _named_entity(text: str) -> str:
+    """Longest run of capitalised words or model codes, e.g. "Samsung Galaxy S25 Ultra"."""
+
+    token = r"(?:[A-Z][A-Za-z0-9]*|[A-Za-z]*\d+[A-Za-z0-9]*)"
+    runs = re.findall(rf"{token}(?:\s+{token})+", text or "")
+    runs = [run for run in runs if not re.match(r"(?i)^(?:honest|my|full|the|a|an)\b", run)]
+    return max(runs, key=len, default="")
 
 
 def _quote_search_concepts(quote: str) -> list[str]:
@@ -881,6 +988,30 @@ def _fallback_visual_sentence(value: str) -> str:
     if re.match(r"^[a-z-]+\s+scene\b", lowered):
         return f"A {visual} provides the visual setting."
     return f"The video follows {visual[:1].lower() + visual[1:]}."
+
+
+def _fallback_description(content: str, promise: str = "", max_words: int = 220) -> str:
+    """The creator's own sentences, whole, in short paragraphs.
+
+    The previous fallback sliced the script at 220 characters and appended an
+    ellipsis ("four cups of…"), which is what a viewer would have seen in
+    search. Sentences are now kept whole and grouped two per paragraph.
+    """
+
+    text = re.sub(r"\s+", " ", content or "").strip()
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?।])\s+", text) if part.strip()]
+    kept: list[str] = []
+    words = 0
+    for sentence in sentences:
+        count = len(sentence.split())
+        if kept and words + count > max_words:
+            break
+        kept.append(sentence if re.search(r"[.!?।]$", sentence) else sentence + ".")
+        words += count
+    paragraphs = [" ".join(kept[index:index + 2]) for index in range(0, len(kept), 2)]
+    if promise and promise.casefold() not in text.casefold():
+        paragraphs.append(promise.rstrip(".") + ".")
+    return "\n\n".join(paragraphs)
 
 
 def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -974,7 +1105,7 @@ def _content_specific_fallback(
         )
     else:
         instructional = not source_requires_noninstructional_framing(content or topic, brief)
-        title_topic = _fallback_title_topic(topic, content, video_format)
+        title_topic = _fallback_title_topic(topic, content, video_format, instructional)
         comparison_mode = video_format == "comparison" or (
             " while " in f" {content.casefold()} " and len(re.findall(r"\b[A-Z][A-Z0-9]{1,}\b", content)) >= 2
         )
@@ -982,13 +1113,21 @@ def _content_specific_fallback(
             variants = [_fit_title(f"{title_topic}: What's the Difference?", suffix)]
         else:
             variants = _fallback_topic_variants(title_topic, suffix, instructional)
-        source_excerpt = re.sub(r"\s+", " ", content or topic).strip(" .")
-        if len(source_excerpt) > 220:
-            source_excerpt = source_excerpt[:217].rsplit(" ", 1)[0] + "…"
-        description_parts = [source_excerpt or topic]
-        if promise:
-            description_parts.append(promise)
-        description = "\n\n".join(part.rstrip(".") + "." for part in description_parts if part)
+            # Additional readable alternatives, each a contiguous source span.
+            # A story's opening clause is not a title, so narratives keep one.
+            entity = _named_entity(strip_lead_in(content)) if instructional else ""
+            extra_bodies = [
+                _trim_title_span(_original_case_span(content, source_lead_phrase(content))),
+                f"{entity} Review" if entity and video_format == "review" else "",
+                _trim_title_span(seo_targets[0]) if seo_targets else "",
+            ] if instructional else []
+            for body in extra_bodies:
+                if not body or len(variants) >= 3:
+                    continue
+                candidate = _fit_title(body[:1].upper() + body[1:], suffix)
+                if all(candidate.casefold() != existing.casefold() for existing in variants):
+                    variants.append(candidate)
+        description = _fallback_description(content or topic, promise)
 
     tags: list[str] = []
     seen: set[str] = set()

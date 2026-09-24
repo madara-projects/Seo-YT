@@ -5,8 +5,15 @@ from typing import Any, Dict
 
 from win_engine.analysis.intent_classifier import classify_intent
 from win_engine.analysis.creator_brief import creator_topic
-from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality, filter_source_hashtags, focused_short_hashtags
+from win_engine.analysis.generation_quality import (
+    apply_quality_gate,
+    evaluate_package_quality,
+    filter_source_hashtags,
+    focused_short_hashtags,
+    is_short_content,
+)
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
+from win_engine.analysis.strategy_layer import build_content_graph_strategy
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.keyword_research import select_final_tags, synchronize_tag_evidence
 from win_engine.analysis.research_planner import brief_research_text
@@ -21,10 +28,14 @@ from win_engine.analysis.topic_lock import (
     force_topic_in_title,
     infer_category,
     is_short_idea,
+    normalize_hashtag,
     normalize_risk_terms,
+    source_casing_map,
 )
 from win_engine.core.schemas import AnalyzeResponse
 from win_engine.feedback.history_store import HistoryStore
+from win_engine.generation.automation_engine import build_automation_workflow
+from win_engine.generation.expansion_engine import build_binge_bridge, build_session_expansion
 from win_engine.generation.strategy_engine import build_seo_package
 from win_engine.generation.quality_refinement import refine_package, enforce_quality_target
 
@@ -79,6 +90,10 @@ def generate_seo_suggestions(
     # force_hashtags accepts the LLM's hashtags and only tops up if missing.
     locked_title = force_topic_in_title(seo_package["title"], main_topic, category)
     locked_description = force_topic_in_description(seo_package["description"], main_topic)
+    # Hashtags are built from lowercase tags; names keep the creator's casing.
+    casing = source_casing_map(
+        safe_script, str(creator_brief.get("content") or "") if isinstance(creator_brief, dict) else "",
+    )
     tag_context = [safe_script]
     if isinstance(creator_brief, dict):
         tag_context.extend(str(creator_brief.get(field) or "") for field in (
@@ -100,12 +115,12 @@ def generate_seo_suggestions(
         is_short=category in {"quotes", "shorts", "youtube_shorts"},
     )
     locked_hashtags = filter_source_hashtags(
-        force_hashtags(seo_package.get("hashtags") or [], main_topic, category),
+        force_hashtags(seo_package.get("hashtags") or [], main_topic, category, tags=locked_tags, casing=casing),
         safe_script,
         creator_brief if isinstance(creator_brief, dict) else None,
     )
     if category in {"quotes", "shorts", "youtube_shorts"}:
-        locked_hashtags = focused_short_hashtags(locked_tags)
+        locked_hashtags = focused_short_hashtags(locked_tags, casing)
     locked_description = format_upload_ready_description(
         locked_description,
         locked_hashtags,
@@ -126,7 +141,7 @@ def generate_seo_suggestions(
     locked_title, locked_variants = refined["title"], refined["variants"]
     locked_tags = refined.get("tags") or locked_tags
     keyword_research = synchronize_tag_evidence(keyword_research, locked_tags)
-    locked_hashtags = (focused_short_hashtags(locked_tags)
+    locked_hashtags = (focused_short_hashtags(locked_tags, casing)
         if category in {"quotes", "shorts", "youtube_shorts"}
         else (refined.get("hashtags") or locked_hashtags))
     locked_description = format_upload_ready_description(refined["description"], locked_hashtags,
@@ -153,6 +168,14 @@ def generate_seo_suggestions(
     locked_title = gated["title"]
     locked_variants = gated["variants"]
     final_gate = enforce_quality_target(final_gate)
+    # The writer stage records its own verdict under this key; the package the
+    # creator receives is the one judged here, after tag selection and refinement.
+    trace = seo_package["generation_trace"]
+    trace["writer_quality_verdict"] = trace.get("final_quality_verdict")
+    trace["final_quality_verdict"] = final_gate.get("verdict")
+    trace["final_quality_reasons"] = [
+        item.get("code") for item in final_gate.get("issues") or [] if isinstance(item, dict)
+    ]
 
     # Patch title_optimization so best_title + scored_variants are also topic-locked.
     title_opt = dict(seo_package.get("title_optimization") or {})
@@ -184,12 +207,12 @@ def generate_seo_suggestions(
         ]
         tags = locked_tags if lang == str(ctx.get("language") or "english").lower() else p.get("tags", []) or []
         hashtags = filter_source_hashtags(
-            force_hashtags(p.get("hashtags", []) or [], main_topic, category),
+            force_hashtags(p.get("hashtags", []) or [], main_topic, category, tags=tags, casing=casing),
             safe_script,
             creator_brief if isinstance(creator_brief, dict) else None,
         )
         if category in {"quotes", "shorts", "youtube_shorts"}:
-            hashtags = focused_short_hashtags(tags)
+            hashtags = focused_short_hashtags(tags, casing)
         description = p.get("description", "") or ""
         # Only English gets the topic-presence fallback; Tamil / Tanglish
         # descriptions stay in their own language, untouched.
@@ -240,21 +263,26 @@ def generate_seo_suggestions(
         )
     # --------------------------------------------------------------------
 
+    # One package per final title. Filtering the writer-stage variants by the
+    # final list left a single package whenever refinement produced new titles
+    # (1 of 4 for a quote Short), and packages are what the creator picks from.
+    writer_variants = {
+        str(item.get("title") or "").casefold(): item
+        for item in (seo_package.get("title_variants") or []) if isinstance(item, dict)
+    }
     final_variants_data = [
-        item for item in (seo_package.get("title_variants") or [])
-        if item.get("title") in set(locked_variants)
+        writer_variants.get(title.casefold()) or {
+            "title": title, "score": 0.0, "estimated_ctr": None,
+            "character_count": len(title), "package_intent": "Alternative",
+        }
+        for title in dict.fromkeys([locked_title, *locked_variants]) if title
     ]
-    if not final_variants_data:
-        final_variants_data = [
-            {"title": title, "score": 0.0, "estimated_ctr": None,
-             "character_count": len(title), "package_intent": "Alternative"}
-            for title in locked_variants
-        ]
     final_packages = build_title_thumbnail_packages(
         final_variants_data,
         creator_brief if isinstance(creator_brief, dict) else None,
         competitor_titles=[str(item.get("title") or "") for item in research_payload.get("youtube_results", []) if isinstance(item, dict)],
         validated=True,
+        focus_phrases=[tag for tag in locked_tags if tag not in {"yt", "shorts"}],
     )
     try:
         retention_learning = history_store.retention_learning_summary(
@@ -274,6 +302,26 @@ def generate_seo_suggestions(
         content_angle=str(seo_package.get("content_angle") or ""),
         packages=final_packages,
         retention_learning=retention_learning,
+    )
+
+    # Follow-up suggestions are rebuilt from what the creator will actually
+    # publish: the locked title, the validated final tags and hashtags.
+    short_form = category in {"quotes", "shorts", "youtube_shorts"} or is_short_content(
+        safe_script, creator_brief if isinstance(creator_brief, dict) else None,
+    )
+    related_phrases = [tag for tag in locked_tags if tag not in {"yt", "shorts"}]
+    angle = str(seo_package.get("content_angle") or "")
+    content_graph_strategy = build_content_graph_strategy(
+        primary_topic=main_topic, secondary_topic="", angle=angle, keyword_signals=[],
+        related_phrases=related_phrases, short_form=short_form,
+    )
+    session_expansion = build_session_expansion(
+        locked_title, [], related_phrases=related_phrases, short_form=short_form,
+    )
+    binge_bridge = build_binge_bridge(locked_title, angle, related_phrases=related_phrases, short_form=short_form)
+    automation_workflow = build_automation_workflow(
+        title=locked_title, hashtags=locked_hashtags, chapters=seo_package["chapters"],
+        content_graph_strategy=content_graph_strategy, short_form=short_form,
     )
 
     response = AnalyzeResponse(
@@ -306,12 +354,12 @@ def generate_seo_suggestions(
         language_strategy=seo_package["language_strategy"],
         pacing_analysis=seo_package["pacing_analysis"],
         channel_intelligence=seo_package["channel_intelligence"],
-        content_graph_strategy=seo_package["content_graph_strategy"],
+        content_graph_strategy=content_graph_strategy,
         thumbnail_strategy=seo_package["thumbnail_strategy"],
         chapters=seo_package["chapters"],
-        session_expansion=seo_package["session_expansion"],
-        binge_bridge=seo_package["binge_bridge"],
-        automation_workflow=seo_package["automation_workflow"],
+        session_expansion=session_expansion,
+        binge_bridge=binge_bridge,
+        automation_workflow=automation_workflow,
         performance_sync=seo_package["feedback_package"]["performance_sync"],
         learning_engine=seo_package["feedback_package"]["learning_engine"],
         winning_patterns=seo_package["feedback_package"]["winning_patterns"],
@@ -347,9 +395,12 @@ def format_upload_ready_description(
 
     # Gemini may put hashtags in its prose even though hashtags are returned
     # separately. Remove hashtag-only lines so we can render one clean final line.
+    # Hashtags are matched as "#" followed by any non-space run, not
+    # [A-Za-z0-9_]: an ASCII-only pattern missed Tamil hashtags, so a
+    # Tamil hashtag line survived here and was appended a second time below.
     prose_lines = [
         line for line in text.splitlines()
-        if not re.fullmatch(r"\s*(?:#[A-Za-z0-9_]+\s*)+", line)
+        if not re.fullmatch(r"\s*(?:#[^\s#]+\s*)+", line)
         and not re.fullmatch(r"\s*(?:yt|shorts?|youtube(?:\s+shorts?)?)\s*", line, re.IGNORECASE)
     ]
     text = "\n".join(prose_lines).strip()
@@ -377,13 +428,11 @@ def format_upload_ready_description(
         text = f"{emoji} {text}"
 
     selected: list[str] = []
-    existing = {match.casefold() for match in re.findall(r"#[A-Za-z0-9_]+", text)}
+    existing = {match.casefold().rstrip(".,!?;:") for match in re.findall(r"#[^\s#]+", text)}
     for raw in hashtags or []:
-        hashtag = str(raw or "").strip()
+        hashtag = normalize_hashtag(raw)
         if not hashtag:
             continue
-        if not hashtag.startswith("#"):
-            hashtag = f"#{hashtag.lstrip('#')}"
         if hashtag.casefold() not in existing:
             selected.append(hashtag)
             existing.add(hashtag.casefold())

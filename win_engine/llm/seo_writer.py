@@ -7,6 +7,7 @@ script + competitor context. Language-aware and auto-detects content type
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -19,9 +20,12 @@ from win_engine.analysis.generation_quality import (
     evaluate_package_quality,
     is_short_content,
     is_silent_quote_only_short,
+    narrates_process,
     source_requires_noninstructional_framing,
     source_withholds_message_content,
+    strip_process_narration,
 )
+from win_engine.analysis.topic_lock import normalize_hashtag, restore_source_casing, source_casing_map
 from win_engine.llm import gemini_client
 
 logger = logging.getLogger(__name__)
@@ -79,7 +83,7 @@ _SYSTEM_PROMPT = (
     "You are an expert YouTube SEO strategist. You analyze the user's video script, quote, or idea "
     "to write high-CTR title variants, descriptions, tags, and hashtags. "
     "Output ONLY valid JSON with keys: \"title\", \"variants\" (array of 5 strings), "
-    "\"description\", \"tags\" (array of up to 10 contextual strings), and \"hashtags\" (array of up to 3 strings). "
+    "\"description\", \"tags\" (array of up to 12 contextual strings), and \"hashtags\" (array of up to 3 strings). "
     "Every title must be an exact, upload-ready value rather than a stem or template."
     "For reflective quotes, use concise natural titles and one short complementary description paragraph. "
     "Avoid inflated claims such as 'changes everything', generic analysis language such as 'this video explores', "
@@ -93,16 +97,21 @@ _LANGUAGE_INSTRUCTIONS = {
         "Tags stay English. Hashtags stay English."
     ),
     "tamil": (
-        "Write title, variants, and description in spoken Tamil using Tamil script. "
-        "Use natural Tamil creator voice — not literal translation. Tamil words "
-        "for emotion and curiosity. Tags stay English (YouTube search needs them). "
-        "Hashtags stay English."
+        "Write the description in natural spoken Tamil using Tamil script (not literal translation). "
+        "Make the title bilingual, because most Tamil viewers search in English or Tanglish: the Tamil-script "
+        "phrase first, then ' | ' and the English search phrase viewers type, for example "
+        "'செட்டிநாடு சிக்கன் பிரியாணி | Chettinad Chicken Biryani in Tamil'. At least two variants follow the "
+        "same bilingual pattern. Tags: the English and Tanglish phrases Tamil viewers type (including "
+        "'<topic> in tamil' when true) plus at most two Tamil-script tags. Hashtags stay English."
     ),
     "tanglish": (
         "Write title, variants, and description in Tanglish — Tamil words written "
         "in English Roman letters mixed naturally with English. Use real creator "
-        "phrasing like 'da', 'macha', 'semma', 'vera level', 'illa', 'ah' where "
-        "they fit naturally. Do not force them. Tags stay English. Hashtags stay English."
+        "phrasing like 'da', 'macha', 'semma', 'vera level', 'illa', 'ah' only where "
+        "they fit the tone; keep tutorials and reviews clear rather than slangy. "
+        "Put the English search phrase viewers type near the start of the title "
+        "(for example 'FastAPI Tutorial in Tamil'). Tags: the English and Tanglish "
+        "phrases viewers type, including '<topic> in tamil' when true. Hashtags stay English."
     ),
     "hindi": (
         "Write title, variants, and description in Hinglish (Hindi-English mix in "
@@ -240,13 +249,19 @@ def _build_creator_brief_block(creator_brief: Optional[dict[str, Any]]) -> str:
     if not creator_brief:
         return ""
 
+    # A format guessed from keyword cues is not the creator's word; passed on
+    # as "source of truth" it came back as "In this talking head video".
+    video_format = str(creator_brief.get("video_format") or "")
+    format_source = ((creator_brief.get("field_provenance") or {}).get("video_format") or {}).get("source")
+    if format_source == "inferred" and video_format in {"talking_head", "vlog"}:
+        video_format = ""
     fields = [
         ("Topic", creator_brief.get("topic")),
         ("Target viewer", creator_brief.get("target_audience")),
         ("Viewer promise", creator_brief.get("viewer_promise")),
         ("Unique angle", creator_brief.get("unique_angle")),
         ("Proof or real footage", creator_brief.get("proof")),
-        ("Video format", creator_brief.get("video_format")),
+        ("Video format", video_format),
         ("Preferred title style", creator_brief.get("title_style")),
         ("Thumbnail direction", creator_brief.get("thumbnail_idea")),
         ("Exact quote", creator_brief.get("exact_quote")),
@@ -260,9 +275,31 @@ def _build_creator_brief_block(creator_brief: Optional[dict[str, Any]]) -> str:
         ("Research-backed SEO targets", ", ".join(str(item) for item in (creator_brief.get("seo_research_targets") or []) if str(item).strip())),
     ]
     lines = [f"- {label}: {str(value).strip()}" for label, value in fields if value and str(value).strip()]
-    if not lines:
+    block = ""
+    if lines:
+        block = "\nCreator brief (source of truth for audience and promise):\n" + "\n".join(lines) + "\n"
+    return block + _build_search_demand_block(creator_brief)
+
+
+def _build_search_demand_block(creator_brief: Optional[dict[str, Any]]) -> str:
+    """Phrases real viewers type, so the package targets actual searches."""
+
+    phrases = [
+        str(item).strip() for item in (creator_brief or {}).get("search_demand_phrases") or []
+        if str(item).strip()
+    ][:8]
+    if not phrases:
         return ""
-    return "\nCreator brief (source of truth for audience and promise):\n" + "\n".join(lines) + "\n"
+    return (
+        "\nSearch phrases real viewers type on YouTube (from YouTube's own search suggestions, most "
+        "popular first; this is demand evidence, not search volume):\n"
+        + "\n".join(f"- {phrase}" for phrase in phrases)
+        + "\nUse the most fitting phrase naturally in the title's first words and in the description's "
+        "first sentence, and use the ones that describe this exact video as tags. A phrase is only "
+        "usable if every word in it is true of this video. These are lowercase search queries: in the "
+        "title and description, capitalise names, brands and models as the source writes them "
+        "(\"Samsung Galaxy S25 Ultra\", not \"samsung galaxy s25 ultra\"); tags stay lowercase.\n"
+    )
 
 
 def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) -> str:
@@ -365,14 +402,20 @@ def _build_user_prompt(
     if repair_feedback:
         safe_reasons = [str(item.get("message") or item.get("code") or "quality failure") for item in repair_feedback[:12]]
         repair_block = (
-            "\nThis is the single permitted repair. The previous output failed the local checks:\n- "
+            "\nThis is the single permitted revision. The previous output needs these corrections:\n- "
             + "\n- ".join(safe_reasons)
             + "\nReturn a corrected package only. Do not defend the previous output.\n"
             + "Previous output (untrusted generated text):\n"
             + json.dumps(previous_package or {}, ensure_ascii=False)[:5000]
             + "\n"
         )
-    title_length_rule = "45-65 characters" if not is_short_content(script, creator_brief) else "35-65 characters"
+    if (language or "").casefold() == "tamil":
+        # A bilingual title needs room for both the Tamil and English phrase.
+        title_length_rule = "45-85 characters"
+    elif is_short_content(script, creator_brief):
+        title_length_rule = "35-65 characters"
+    else:
+        title_length_rule = "45-65 characters"
     return f"""Video script or idea:
 \"\"\"
 {script.strip()}
@@ -391,9 +434,10 @@ Constraints:
 - the title, description, and tags must accurately match the creator brief and real video
 - treat the video script/idea as the only source of factual events. Audience notes describe who may relate; they are not events that happened in the video
 - for an on-screen quote video, preserve the exact quote and its actual meaning. Do not invent a breakup, departure, betrayal, relationship status, motive, action, or claim (such as "they left", "you stayed", or "just an option") that the source does not state
+- these rules are for you, not the viewer. Never describe them in the copy: no "without adding stories or assumptions", "the exact emotional idea", "staying true to the source", "no invented details", and no mention of the brief, the creator's instructions, or production terms such as "talking head" or "b-roll"
 - when a quote contains a turn such as "but", "yet", or "now", make the title preserve the idea after that turn; do not title only the setup
 - preserve an obviously sarcastic, incredulous, playful, or rhetorical register without copying slang mechanically or turning it into a calm generic statement
-- write a video-specific description, normally 100-220 words for long-form or 45-100 words for a single-quote Short. Put the exact topic and truthful viewer payoff in the first two lines
+- write a video-specific description. Long-form: 120-220 words whenever the source has that much substance (never pad beyond what it supports); a single-quote Short: 45-100 words. The first sentence must contain the main search phrase and the concrete viewer payoff, because only about the first 150 characters show in search. Then cover what the video actually contains — each step, point, ingredient, comparison, or verdict the source mentions, in its order — so a viewer knows exactly what they will get
 - make the description easy to scan with short natural paragraphs and 1-3 restrained, topic-relevant emojis. Do not produce one dense wall of text
 - choose a description structure that fits this video. Do not reuse a universal hook, bullet list, chapter template, CTA, or "watch until the end" wording
 - include chapters only when real timestamps or a sufficiently detailed script supports them
@@ -402,11 +446,12 @@ Constraints:
 - tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". For a Short, include the creator-preferred platform tags "yt" and "shorts" as two separate tags; do not include youtube shorts, viral shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
 - hashtags must be topic-specific. Include #shorts for a Short, then use up to two hashtags derived from the strongest validated subject tags; avoid generic #quotes, #sad, #viral, #trending, and #fyp
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Return only tags justified by this specific video; do not pad the list to a fixed count and do not add generic viral/trending filler
+- for long-form, aim for 8-12 tags when the video supports them: the exact main search phrase first, then its closest real-search variants (prefer the search phrases listed above), then named products or entities written exactly as the source writes them, including model numbers (for example "galaxy s25 ultra review")
 - a researched YouTube title or result phrase is evidence only, never text to copy into a title, description, or tag. Research may improve wording for the same source-supported subject, but may not introduce a new situation, entity, relationship, product, lesson, or claim
 - a package that is merely valid is not enough: prefer a short, natural, source-faithful result over a generic, keyword-stuffed, or invented one
 - research may inform topic vocabulary, but it cannot invent what the video teaches, explains, demonstrates, or advises
 - do not infer a time of day, darkness, empty streets, weather, spoken narration, peace, comfort, or healing unless the creator source explicitly supplies it
-{silent_quote_rule}{non_instructional_rule}{undisclosed_message_rule}- title: {title_length_rule}, engaging, and matched to the actual content category
+{silent_quote_rule}{non_instructional_rule}{undisclosed_message_rule}- title: {title_length_rule}, engaging, and matched to the actual content category. Unless this is a quote video, put the main search phrase a viewer would type within the first five words, and make every title a complete, grammatical phrase
 - return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are additional truthful alternatives
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
 - use idiomatic language, but never infer "one-sided effort", exhaustion, abandonment, or another relationship dynamic unless the creator source states it
@@ -432,18 +477,31 @@ def _extract_json(raw: str) -> Optional[dict[str, Any]]:
     try:
         return json.loads(match.group(0))
     except json.JSONDecodeError as exc:
+        # A trailing comma before "]" or "}" is the model's most common JSON
+        # slip; repairing it costs nothing, whereas failing sent a usable
+        # package to the local fallback writer.
+        repaired = re.sub(r",\s*([}\]])", r"\1", match.group(0))
+        if repaired != match.group(0):
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
         logger.warning("Gemini returned malformed JSON: %s", exc)
         return None
 
 
 def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Shape-check + light coercion. Returns None on missing required fields."""
+    # The model can echo HTML entities from competitor titles ("&amp;").
+    def text(value: Any) -> str:
+        return html.unescape(str(value)).strip()
+
     try:
-        title = str(pkg["title"]).strip()
-        variants = _unique_text([str(v).strip() for v in pkg["variants"] if str(v).strip()])
-        description = str(pkg["description"]).strip()
-        tags = _unique_text([str(t).strip().lower().lstrip("#") for t in pkg["tags"] if str(t).strip()])
-        hashtags = _unique_text([str(h).strip() for h in pkg["hashtags"] if str(h).strip()])
+        title = text(pkg["title"])
+        variants = _unique_text([text(v) for v in pkg["variants"] if text(v)])
+        description = text(pkg["description"])
+        tags = _unique_text([text(t).lower().lstrip("#") for t in pkg["tags"] if text(t)])
+        hashtags = _unique_text([text(h) for h in pkg["hashtags"] if text(h)])
     except (KeyError, TypeError, AttributeError):
         return None
     # A sparse source may honestly have no defensible search tag. The final
@@ -451,12 +509,12 @@ def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
     # generic filler merely to satisfy a shape check.
     if not title or not description or not variants:
         return None
-    hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags]
+    hashtags = _unique_text([tag for tag in (normalize_hashtag(h) for h in hashtags) if tag])
     return {
         "title": title,
         "variants": variants[:5],
         "description": description,
-        "tags": tags[:10],
+        "tags": tags[:12],
         "hashtags": hashtags[:3],
     }
 
@@ -548,21 +606,31 @@ def _sanitize_generated_package(
             paragraphs = [item.strip() for item in re.split(r"\n\s*\n", description) if item.strip()]
             quote_words = set(re.findall(r"[\w’']+", quote.casefold(), re.UNICODE))
             if paragraphs:
-                first_words = set(re.findall(r"[\w’']+", paragraphs[0].casefold(), re.UNICODE))
-                if quote_words and len(quote_words & first_words) / len(quote_words) >= 0.8:
-                    paragraphs[0] = f'“{quote}”'
-                else:
-                    paragraphs.insert(0, f'“{quote}”')
+                # Replace only the sentences that paraphrase the quote. Replacing
+                # the whole first paragraph threw away every line of commentary
+                # the model wrote after the quote in that same paragraph.
+                sentences = re.split(r"(?<=[.!?”\"])\s+", paragraphs[0])
+                rest = [
+                    sentence for sentence in sentences
+                    if not quote_words or len(quote_words & set(re.findall(r"[\w’']+", sentence.casefold(), re.UNICODE)))
+                    / len(quote_words) < 0.8
+                ]
+                paragraphs = [f'“{quote}”', *([" ".join(rest)] if rest else []), *paragraphs[1:]]
             else:
                 paragraphs = [f'“{quote}”']
             description = "\n\n".join(paragraphs)
-    cleaned["description"] = description
+    # The model sometimes narrates its own rules to the viewer ("without adding
+    # external stories"); cut those clauses before anything is judged or shown.
+    description = strip_process_narration(description) or description
+    # Search phrases arrive lowercase; names keep the creator's casing.
+    casing = source_casing_map(script, str((creator_brief or {}).get("content") or ""))
+    cleaned["description"] = restore_source_casing(description, casing)
 
     titles = [str(cleaned.get("title") or ""), *(cleaned.get("variants") or [])]
     safe_titles: list[str] = []
     for raw_title in titles:
-        title = _naturalize_generated_text(raw_title)
-        if not title or (quote and _has_unsupported_quote_claim(title, script)):
+        title = restore_source_casing(_naturalize_generated_text(raw_title), casing)
+        if not title or (quote and _has_unsupported_quote_claim(title, script)) or narrates_process(title):
             continue
         if any(_title_similarity(title, existing) >= 0.90 for existing in safe_titles):
             continue
@@ -674,7 +742,7 @@ def write_seo_package(
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.75,
-    max_tokens: int = 1200,
+    max_tokens: int = 2400,
 ) -> Optional[dict[str, Any]]:
     """Generate a full SEO package with Gemini, or return ``None`` when unavailable."""
     if not script or not script.strip():
@@ -706,7 +774,7 @@ def write_multilang_packages(
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.75,
-    max_tokens: int = 1200,
+    max_tokens: int = 2400,
 ) -> dict[str, Optional[dict[str, Any]]]:
     packages, _ = write_multilang_packages_with_source(
         script,
@@ -723,6 +791,81 @@ def write_multilang_packages(
     return packages
 
 
+# Warnings worth one targeted improvement request on an otherwise passing package.
+_IMPROVABLE_WARNINGS = {"description_too_short"}
+
+
+def _word_count(text: Any) -> int:
+    return len(re.findall(r"[\w஀-௿]+", re.sub(r"#[^\s#]+", " ", str(text or ""))))
+
+
+def _improve_passing_package(
+    package: dict[str, Any],
+    gate: dict[str, Any],
+    *,
+    script: str,
+    competitors: Optional[list[Competitor]],
+    language: str,
+    region: str,
+    audience_type: str,
+    category: Optional[str],
+    creator_brief: Optional[dict[str, Any]],
+    channel_learning: Optional[dict[str, Any]],
+    temperature: float,
+    max_tokens: int,
+) -> dict[str, Any]:
+    """Ask once for a fuller package when a passing one is too thin.
+
+    A long-form video's description is its main search surface, and the audit
+    found every generated description at 32-54 words against the prompt's own
+    100-220 target. The improved package is kept only when it still passes
+    every check and is genuinely fuller; a failed improvement never downgrades
+    a passing package.
+    """
+
+    warnings = [
+        item for item in ((gate.get("final_seo_quality") or {}).get("warnings") or [])
+        if isinstance(item, dict) and item.get("code") in _IMPROVABLE_WARNINGS
+    ]
+    if not warnings:
+        return package
+    trace = package.setdefault("generation_trace", {})
+    improved = _generate_one(
+        script, competitors, language=language, region=region, audience_type=audience_type,
+        category=category, creator_brief=creator_brief, channel_learning=channel_learning,
+        temperature=temperature, max_tokens=max_tokens, repair_feedback=warnings,
+        previous_package=package,
+    )
+    if improved is None:
+        trace.setdefault("events", []).append("gemini_improvement_unavailable")
+        return package
+    improved_trace = dict(improved.pop("_provider_trace", {}) or {})
+    improved_gate = evaluate_package_quality(
+        improved, script=script, creator_brief=creator_brief, language=language,
+        recent_titles=(channel_learning or {}).get("recent_titles") or [],
+        published_titles=(channel_learning or {}).get("published_titles") or [],
+        require_shorts_tags=False,
+        competitor_titles=[str(item.get("title") or "") for item in (competitors or []) if isinstance(item, dict)],
+        enforce_final_tag_rules=False,
+    )
+    fuller = _word_count(improved.get("description")) > _word_count(package.get("description"))
+    if not (improved_gate["passed"] and fuller):
+        trace.setdefault("events", []).append("gemini_improvement_rejected")
+        return package
+    improved = apply_quality_gate(improved, improved_gate)
+    improved["generation_trace"] = {
+        **trace,
+        "gemini_call_count": int(trace.get("gemini_call_count") or 1) + 1,
+        "provider_requests": int(trace.get("provider_requests") or 1) + 1,
+        "improvement_attempted": True,
+        "improvement_accepted": True,
+        "improvement_reason": [item.get("code") for item in warnings],
+        "events": [*(trace.get("events") or []), "gemini_improvement_accepted"],
+        "improvement_provider_status": improved_trace.get("status"),
+    }
+    return improved
+
+
 def write_multilang_packages_with_source(
     script: str,
     competitors: Optional[list[Competitor]] = None,
@@ -734,7 +877,7 @@ def write_multilang_packages_with_source(
     creator_brief: Optional[dict[str, Any]] = None,
     channel_learning: Optional[dict[str, Any]] = None,
     temperature: float = 0.75,
-    max_tokens: int = 1200,
+    max_tokens: int = 2400,
 ) -> tuple[dict[str, Optional[dict[str, Any]]], str]:
     """Generate SEO packages for several languages in one pass.
 
@@ -794,6 +937,12 @@ def write_multilang_packages_with_source(
             **first_trace,
         }
         if gate["passed"] or not gate["repairable"]:
+            if gate["passed"]:
+                first = _improve_passing_package(
+                    first, gate, script=script, competitors=competitors, language=lang, region=region,
+                    audience_type=audience_type, category=category, creator_brief=creator_brief,
+                    channel_learning=channel_learning, temperature=temperature, max_tokens=max_tokens,
+                )
             language_diagnostics[lang] = dict(first["generation_trace"])
             out[lang] = first
             continue

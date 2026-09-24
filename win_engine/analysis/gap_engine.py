@@ -48,6 +48,18 @@ def analyze_opportunity_gaps(
     opportunity_score = _opportunity_score(keyword_gaps, competition, top_opportunities)
     format_lock = _format_lock_in(top_opportunities, youtube_results, competition)
     viability_verdict = _viability_verdict(opportunity_score, competition, idea_kill_switch, keyword_gaps)
+    if not youtube_results:
+        # Without competitor results the score was 25 from "empty competition"
+        # alone, labelled WEAK, beside a kill switch saying "strong enough to
+        # keep pursuing". Neither was measured; say so instead.
+        unmeasured = "No competitor results were available, so demand and competition could not be measured."
+        opportunity_score = {**opportunity_score, "score": None, "label": "UNMEASURED", "confidence": "NONE",
+                             "measured": False, "reason": unmeasured}
+        idea_kill_switch = {**idea_kill_switch, "proceed": True, "status": "insufficient_evidence",
+                            "reason": unmeasured + " This is not a verdict on the idea.", "confidence": "none",
+                            "recommended_action": "Re-run research when YouTube results are available before making a go/no-go call."}
+        viability_verdict = {"status": "unknown", "proceed": True,
+                             "summary": "Viability could not be judged without public YouTube results."}
 
     return {
         "keyword_gaps": keyword_gaps,

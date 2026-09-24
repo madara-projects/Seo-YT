@@ -53,19 +53,35 @@ def _ctr_prediction(
     }
 
 
+# A "recurring" pattern needs recurrence: one earlier run is not a pattern.
+_MIN_RUNS_FOR_PATTERN = 5
+_MIN_RUNS_PER_ANGLE = 3
+
+
 def _winning_patterns(
     angle_effectiveness: list[dict[str, Any]],
     winning_titles: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    best_angle = angle_effectiveness[0]["content_angle"] if angle_effectiveness else "UNKNOWN"
-    best_title = winning_titles[0]["title"] if winning_titles else ""
+    total_runs = sum(int(row.get("run_count") or 0) for row in angle_effectiveness)
+    leader = angle_effectiveness[0] if angle_effectiveness else {}
+    if total_runs < _MIN_RUNS_FOR_PATTERN or int(leader.get("run_count") or 0) < _MIN_RUNS_PER_ANGLE:
+        return {
+            "best_angle_so_far": "UNKNOWN",
+            "best_title_so_far": "",
+            "sample_size": total_runs,
+            "observation": (
+                f"Not enough history yet to identify a winning angle ({total_runs} analysed run(s); "
+                f"at least {_MIN_RUNS_FOR_PATTERN} are needed, with {_MIN_RUNS_PER_ANGLE} for the leading angle)."
+            ),
+        }
+    best_angle = leader["content_angle"]
     return {
         "best_angle_so_far": best_angle,
-        "best_title_so_far": best_title,
+        "best_title_so_far": winning_titles[0]["title"] if winning_titles else "",
+        "sample_size": total_runs,
         "observation": (
-            f"The strongest recurring angle so far is {best_angle}."
-            if best_angle != "UNKNOWN"
-            else "Not enough history yet to identify a dominant winning angle."
+            f"Across {total_runs} analysed runs, {best_angle} has the highest average local title score. "
+            "This compares packaging scores, not published performance."
         ),
     }
 
@@ -115,16 +131,17 @@ def _historical_comparison(
     internal_scorecard: dict[str, Any],
 ) -> dict[str, Any]:
     current_title_score = round(float(best_variant.get("score") or 0), 2)
-    current_opportunity_score = round(
-        float(seo_package.get("opportunity_gap_analysis", {}).get("opportunity_score", {}).get("score") or 0),
-        2,
-    )
+    raw_opportunity = seo_package.get("opportunity_gap_analysis", {}).get("opportunity_score", {}).get("score")
+    # An unmeasured opportunity (no competitor data) is not a score of 0.
+    current_opportunity_score = round(float(raw_opportunity), 2) if raw_opportunity is not None else None
     avg_title_score = round(float(internal_scorecard.get("avg_title_score") or 0), 2)
     avg_opportunity_score = round(float(internal_scorecard.get("avg_opportunity_score") or 0), 2)
 
     return {
         "title_score_vs_average": round(current_title_score - avg_title_score, 2),
-        "opportunity_score_vs_average": round(current_opportunity_score - avg_opportunity_score, 2),
+        "opportunity_score_vs_average": (
+            round(current_opportunity_score - avg_opportunity_score, 2) if current_opportunity_score is not None else None
+        ),
         "summary": _comparison_summary(
             current_title_score=current_title_score,
             avg_title_score=avg_title_score,
@@ -138,12 +155,15 @@ def _historical_comparison(
 def _comparison_summary(
     current_title_score: float,
     avg_title_score: float,
-    current_opportunity_score: float,
+    current_opportunity_score: float | None,
     avg_opportunity_score: float,
     total_runs: int,
 ) -> str:
     if total_runs < 3:
         return "The engine is still collecting history, so comparisons are directional rather than stable."
+    if current_opportunity_score is None:
+        side = "above" if current_title_score >= avg_title_score else "below"
+        return f"Packaging is scoring {side} your recent average; opportunity was not measured for this run."
     if current_title_score >= avg_title_score and current_opportunity_score >= avg_opportunity_score:
         return "This analysis is scoring above your recent average on both packaging and opportunity."
     if current_title_score < avg_title_score and current_opportunity_score < avg_opportunity_score:

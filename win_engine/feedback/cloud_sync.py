@@ -573,10 +573,10 @@ class CloudSyncService:
                 if mapping:
                     run_id = int(mapping[0])
                     local.execute("""UPDATE analysis_runs SET query=?,created_at=?,intent=?,content_angle=?,title=?,title_score=?,retention_risk=?,opportunity_label=?,opportunity_score=?,payload_json=? WHERE id=?""",
-                        (analysis["query"],analysis["created_at"],analysis.get("intent"),analysis.get("content_angle"),analysis.get("title"),analysis.get("title_score") or 0,analysis.get("retention_risk"),analysis.get("opportunity_label"),analysis.get("opportunity_score") or 0,json.dumps(analysis.get("package"),ensure_ascii=False) if analysis.get("package") is not None else None,run_id))
+                        (analysis["query"],analysis["created_at"],analysis.get("intent"),analysis.get("content_angle"),analysis.get("title"),analysis.get("title_score") or 0,analysis.get("retention_risk"),analysis.get("opportunity_label"),analysis.get("opportunity_score"),json.dumps(analysis.get("package"),ensure_ascii=False) if analysis.get("package") is not None else None,run_id))
                 else:
                     cursor = local.execute("""INSERT INTO analysis_runs(query,created_at,intent,content_angle,title,title_score,retention_risk,opportunity_label,opportunity_score,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        (analysis["query"],analysis["created_at"],analysis.get("intent"),analysis.get("content_angle"),analysis.get("title"),analysis.get("title_score") or 0,analysis.get("retention_risk"),analysis.get("opportunity_label"),analysis.get("opportunity_score") or 0,json.dumps(analysis.get("package"),ensure_ascii=False) if analysis.get("package") is not None else None))
+                        (analysis["query"],analysis["created_at"],analysis.get("intent"),analysis.get("content_angle"),analysis.get("title"),analysis.get("title_score") or 0,analysis.get("retention_risk"),analysis.get("opportunity_label"),analysis.get("opportunity_score"),json.dumps(analysis.get("package"),ensure_ascii=False) if analysis.get("package") is not None else None))
                     run_id = int(cursor.lastrowid)
                 selection = payload.get("selection")
                 if selection:

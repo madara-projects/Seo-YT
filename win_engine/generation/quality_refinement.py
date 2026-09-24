@@ -1,6 +1,7 @@
 """Bounded editorial refinement with explicit, measured acceptance targets."""
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -10,6 +11,31 @@ from win_engine.llm.seo_writer import _generate_one
 
 TARGET = 90.0
 SCORE_FIELDS = ("title_score", "description_score", "tag_score")
+# A tag this weak is dropped even from a small package.
+_WEAK_TAG_SCORE = 60.0
+# Minimum title score for search-phrase presence to decide between titles.
+_KEYWORD_TITLE_FLOOR = 70.0
+_WORD_RE = re.compile(r"[\w஀-௿]+")
+
+
+def title_demand_words(title: str, evidence: dict[str, Any] | None) -> int:
+    """Length in words of the longest real search phrase the title carries verbatim.
+
+    Titles that pass every check often tie on score; between "Step-by-step
+    cold brew coffee with a paper filter" and "Making cold brew coffee at home
+    without special gear", the one containing what viewers actually type
+    ("making cold brew coffee at home") should lead.
+    """
+
+    demand = (evidence or {}).get("search_demand") or {}
+    phrases = {*(demand.get("grounded_suggestions") or []), *(demand.get("validated_keywords") or [])}
+    folded = f" {' '.join(_WORD_RE.findall(str(title or '').casefold()))} "
+    best = 0
+    for phrase in phrases:
+        words = _WORD_RE.findall(str(phrase).casefold())
+        if len(words) >= 2 and f" {' '.join(words)} " in folded:
+            best = max(best, len(words))
+    return best
 
 
 def enforce_quality_target(gate: dict[str, Any]) -> dict[str, Any]:
@@ -39,12 +65,21 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
             language=language, require_shorts_tags=False, tag_evidence=evidence,
             competitor_titles=[str(row.get("title") or "") for row in competitors])
 
-    def rank(gate: dict[str, Any]) -> tuple[bool, float, float]:
+    def rank(gate: dict[str, Any], pkg: dict[str, Any]) -> tuple[bool, bool, float, float, int]:
         scores = gate.get("final_seo_quality", {})
         title = float(scores.get("title_score") or 0)
         description = float(scores.get("description_score") or 0)
         tag = float(scores.get("tag_score") or 0)
-        return bool(gate.get("passed")), min(title, description, tag), title + description + tag
+        # A reasonably grounded title that carries the phrase viewers search
+        # beats one that only echoes the quote: source overlap alone scored
+        # "If you didn't find out, they wouldn't have told you" (88) above
+        # "Hidden betrayal hurts the deepest" (85).
+        carries_keyword = title >= _KEYWORD_TITLE_FLOOR and not any(
+            isinstance(item, dict) and item.get("code") == "primary_keyword_missing_from_title"
+            for item in scores.get("warnings") or []
+        )
+        return (bool(gate.get("passed")), carries_keyword, min(title, description, tag), title + description + tag,
+                title_demand_words(str(pkg.get("title") or ""), evidence))
 
     def refine_tags_locally(pkg: dict[str, Any]) -> dict[str, Any]:
         pkg_tags = list(pkg.get("tags") or [])
@@ -56,7 +91,14 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
             if isinstance(item, dict) and item.get("keyword")
         }
         platform_tags = [t for t in pkg_tags if t.lower() in {"yt", "shorts"}]
-        topic_tags = [t for t in pkg_tags if t.lower() not in {"yt", "shorts"}]
+        # Phrases viewers demonstrably search are kept whatever their heuristic
+        # score: pruning "love quotes" (77) to lift the average toward 90
+        # improved the number and made the package worse.
+        protected = [
+            t for t in pkg_tags
+            if t.lower() not in {"yt", "shorts"} and selected_keywords.get(t.lower(), {}).get("demand_validated")
+        ]
+        topic_tags = [t for t in pkg_tags if t.lower() not in {"yt", "shorts"} and t not in protected]
         scored_topics = []
         for t in topic_tags:
             row = selected_keywords.get(t.lower(), {})
@@ -68,8 +110,15 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
         # Sort ascending to prune the lowest scoring tags pulling down the average
         scored_topics.sort(key=lambda x: x[1])
         pruned = False
-        while len(scored_topics) > 2 and (sum(s for _, s in scored_topics) / len(scored_topics)) < TARGET:
-            if scored_topics[0][1] < TARGET:
+        # At least two grounded tags beyond the validated ones are kept: pruning
+        # everything under 90 left a travel vlog with three tags. Below that
+        # floor only a genuinely weak interpretation ("forbidden love", 51) goes,
+        # and only when validated searches are there to carry the package.
+        while scored_topics and (sum(s for _, s in scored_topics) / len(scored_topics)) < TARGET:
+            lowest = scored_topics[0][1]
+            if lowest >= TARGET:
+                break
+            if len(scored_topics) > 2 or (protected and lowest < _WEAK_TAG_SCORE):
                 scored_topics.pop(0)
                 pruned = True
             else:
@@ -84,8 +133,8 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
 
         if not pruned:
             return pkg
-        new_topic_tags = [t for t, _ in scored_topics]
-        return {**pkg, "tags": [*new_topic_tags, *platform_tags]}
+        kept = {t for t, _ in scored_topics} | set(protected) | set(platform_tags)
+        return {**pkg, "tags": [t for t in pkg_tags if t in kept]}
 
     best = deepcopy(package)
     gate = evaluate(best)
@@ -93,12 +142,12 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
     candidate_tag_pkg = refine_tags_locally(best)
     if candidate_tag_pkg != best:
         candidate_tag_gate = evaluate(candidate_tag_pkg)
-        if rank(candidate_tag_gate) > rank(gate):
+        if rank(candidate_tag_gate, candidate_tag_pkg) > rank(gate, best):
             best, gate = candidate_tag_pkg, candidate_tag_gate
     for title in dict.fromkeys([best.get("title", ""), *(best.get("variants") or [])]):
         candidate = {**best, "title": title, "variants": [title, *(best.get("variants") or [])]}
         candidate_gate = evaluate(candidate)
-        if rank(candidate_gate) > rank(gate):
+        if rank(candidate_gate, candidate) > rank(gate, best):
             best, gate = candidate, candidate_gate
     trace: dict[str, Any] = {"target": TARGET, "attempted": False, "accepted": False,
                              "before": deepcopy(gate.get("final_seo_quality", {}))}
@@ -122,7 +171,7 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
             for title in dict.fromkeys([repaired_tag_pkg.get("title", ""), *(repaired_tag_pkg.get("variants") or [])]):
                 candidate = {**repaired_tag_pkg, "title": title, "variants": [title, *(repaired_tag_pkg.get("variants") or [])]}
                 cand_gate = evaluate(candidate)
-                if rank(cand_gate) > rank(gate):
+                if rank(cand_gate, candidate) > rank(gate, best):
                     best, gate = candidate, cand_gate
                     trace["accepted"] = True
     trace["after"] = deepcopy(gate.get("final_seo_quality", {}))
