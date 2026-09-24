@@ -39,6 +39,17 @@ class Settings(BaseSettings):
 
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash-lite"
+    # Tried once when the primary model is overloaded (503) or rate-limited
+    # (429). Models have separate quota buckets, so this usually succeeds where
+    # the local fallback writer would otherwise take over. Empty disables it.
+    gemini_fallback_model: str = "gemini-3.1-flash-lite"
+    gemini_timeout_seconds: float = Field(default=60.0, ge=5.0, le=300.0)
+
+    # YouTube search suggestions: the demand signal (what viewers actually
+    # type). Unofficial endpoint; bounded, cached, and fail-soft.
+    search_suggest_enabled: bool = True
+    search_suggest_timeout_seconds: float = Field(default=3.0, ge=0.5, le=15.0)
+    search_suggest_max_queries: int = Field(default=6, ge=0, le=12)
 
     snapshot_collector_enabled: bool = False
     snapshot_collector_dry_run: bool = False

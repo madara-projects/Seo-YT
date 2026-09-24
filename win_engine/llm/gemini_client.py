@@ -37,6 +37,13 @@ def _get_model() -> str:
     return (os.environ.get("WIN_ENGINE_GEMINI_MODEL") or get_settings().gemini_model or "gemini-1.5-flash").strip()
 
 
+def _get_fallback_model() -> str:
+    value = os.environ.get("WIN_ENGINE_GEMINI_FALLBACK_MODEL")
+    if value is None:
+        value = get_settings().gemini_fallback_model or ""
+    return value.strip()
+
+
 def is_available() -> bool:
     """A configured key is enough to attempt generation; errors stay non-fatal."""
     return bool(_get_key() and _get_model())
@@ -172,8 +179,13 @@ def generate_with_diagnostics(
 
     key = _get_key()
     model = _get_model()
+    fallback_model = _get_fallback_model()
+    switched_model = False
 
-    timeout = float(os.environ.get("WIN_ENGINE_GEMINI_TIMEOUT_SECONDS", "30"))
+    # 30s timed out routinely on full packages, costing a dead wait plus a
+    # retry. Read through Settings so a value in .env also works outside
+    # Docker, where os.environ is not populated from the file.
+    timeout = float(os.environ.get("WIN_ENGINE_GEMINI_TIMEOUT_SECONDS") or get_settings().gemini_timeout_seconds)
 
     payload = {
         "systemInstruction": {"parts": [{"text": system}]} if system else None,
@@ -202,13 +214,26 @@ def generate_with_diagnostics(
         retry_after: float | None = None,
         http_status: int | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
-        nonlocal retries
+        nonlocal retries, model, switched_model
         if retries < retry_limit:
             delay = _backoff_delay(retries, retry_after)
             retries += 1
             retry_reasons.append(category)
             logger.warning("Gemini %s; retrying %d/%d after %.2fs.", category, retries, retry_limit, delay)
             time.sleep(delay)
+            return True, None
+        # An overloaded or rate-limited model is not an unavailable provider:
+        # other models draw on separate capacity and quota. Try the backup
+        # once before counting a failure toward the cooldown.
+        if (
+            category in {"rate_limit", "provider_5xx", "timeout"}
+            and fallback_model and fallback_model != model and not switched_model
+        ):
+            logger.warning("Gemini %s on %s; switching to backup model %s.", category, model, fallback_model)
+            retry_reasons.append(f"{category}:switched_to_backup_model")
+            model = fallback_model
+            switched_model = True
+            retries = 0
             return True, None
         health_update = _record_transient_failure(category)
         diagnostic: dict[str, object] = {
@@ -299,7 +324,8 @@ def generate_with_diagnostics(
                 _record_provider_success()
                 diagnostic = {"status": "gemini_success", "attempts": attempts, "retries": retries,
                               "retry_reasons": retry_reasons, "rate_limited_before_success": rate_limited,
-                              "retry_after_seen": retry_after_seen, "failure_category": None}
+                              "retry_after_seen": retry_after_seen, "failure_category": None,
+                              "model": model, "backup_model_used": switched_model}
                 _LAST_DIAGNOSTIC.set(diagnostic)
                 return out_text, diagnostic
             diagnostic = {"status": "gemini_invalid_response", "failure_category": "malformed_provider_response",
