@@ -21,8 +21,13 @@ def build_title_thumbnail_packages(
     creator_brief: dict[str, Any] | None = None,
     competitor_titles: list[str] | None = None,
     validated: bool = False,
+    focus_phrases: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return only clear, non-duplicated packages a creator can compare."""
+    """Return only clear, non-duplicated packages a creator can compare.
+
+    ``focus_phrases`` are the video's final subject tags; the
+    thumbnail text keeps them when the title is too long to use whole.
+    """
 
     brief = creator_brief or {}
     packages: list[dict[str, Any]] = []
@@ -43,7 +48,7 @@ def build_title_thumbnail_packages(
                 "package_id": f"package-{chr(97 + len(packages))}",
                 "package": chr(65 + len(packages)),
                 "title": title,
-                "thumbnail_text": _thumbnail_text(title, brief),
+                "thumbnail_text": _thumbnail_text(title, brief, focus_phrases),
                 "thumbnail_visual": str(brief.get("thumbnail_idea") or _default_visual(brief)).strip(),
                 "viewer_promise": str(brief.get("viewer_promise") or _default_promise(brief)).strip(),
                 "why_click": _why_click(style, brief, package_intent),
@@ -86,7 +91,25 @@ def _meaningful_words(value: str) -> list[str]:
     return [word for word in unicode_words(value) if len(word) >= 3 and word not in _CONTEXT_STOPWORDS]
 
 
-def _thumbnail_text(title: str, brief: dict[str, Any]) -> str:
+# Words a thumbnail phrase may contain but must not start or end with: a
+# preposition, pronoun, auxiliary or negation leaves "LOVE QUOTES WHEN IT".
+_EDGE_WORDS = {
+    "of", "in", "on", "at", "for", "with", "and", "or", "but", "to", "from", "by", "than", "that", "is", "are",
+    "was", "were", "be", "been", "being", "it", "its", "when", "what", "which", "who", "about", "can", "cannot",
+    "can't", "never", "not", "so", "very", "more", "most", "there", "this", "these", "those", "them", "they",
+}
+
+
+def _stem(word: str) -> str:
+    folded = word.casefold()
+    for suffix in ("ing", "ed", "es", "s"):
+        if folded.endswith(suffix) and len(folded) - len(suffix) >= 3:
+            folded = folded[: -len(suffix)]
+            break
+    return folded.rstrip("e")
+
+
+def _thumbnail_text(title: str, brief: dict[str, Any], focus_phrases: list[str] | None = None) -> str:
     direction = str(brief.get("thumbnail_idea") or "").strip()
     if direction:
         words = unicode_words(direction.upper())[:4]
@@ -97,9 +120,53 @@ def _thumbnail_text(title: str, brief: dict[str, Any]) -> str:
         return "SILENCE KNOWS"
     if "deserve" in quote and "hard" in quote and "find" in quote:
         return "KNOW YOUR WORTH"
-    ignored = {"the", "a", "an", "how", "to", "my", "your", "and", "with", "for", "what", "is", "really"}
-    words = [word.upper() for word in unicode_words(title) if word.lower() not in ignored]
-    return " ".join(words[:4]) or "WATCH THIS"
+    # A validated search phrase that the title contains is a ready-made,
+    # grammatical thumbnail line ("SAD LOVE QUOTES", "PAINFUL LOVE").
+    phrases = [" ".join(str(item).split()) for item in (focus_phrases or []) if str(item).strip()]
+    title_folded = f" {' '.join(unicode_words(title))} ".casefold()
+    contained = [phrase for phrase in phrases if 2 <= len(phrase.split()) <= 4 and f" {phrase.casefold()} " in title_folded]
+    if contained:
+        return max(contained, key=lambda phrase: len(phrase.split())).upper()
+    ignored = {"the", "a", "an", "how", "to", "my", "your", "with", "for", "what", "is", "really", "shorts"}
+    words = [word for word in unicode_words(title) if word.lower() not in ignored]
+    # Next best: the strongest tag sharing a word with this title (stems, so
+    # "loving" finds "love quotes"). A real search phrase reads cleanly; a
+    # window cut from a sentence gave "HIDDEN DETAIL IN NEW".
+    title_stems = {_stem(word) for word in words if word.lower() not in _EDGE_WORDS}
+
+    def shared_count(phrase: str) -> int:
+        return len({_stem(word) for word in phrase.split()} & title_stems)
+
+    shared = [phrase for phrase in phrases if 2 <= len(phrase.split()) <= 4 and shared_count(phrase)]
+    if shared:
+        # The tag that overlaps this title most; the earlier (stronger) tag on ties.
+        return max(shared, key=lambda phrase: (shared_count(phrase), -phrases.index(phrase))).upper()
+    # The first four words cut "The heavy weight of impossible love" down to
+    # "HEAVY WEIGHT OF IMPOSSIBLE". Choose the window that names the most of the
+    # subject and does not start or end on a connective.
+    focus = {word.casefold() for phrase in phrases for word in phrase.split()}
+    best: tuple[int, int, list[str]] | None = None
+    for size in (4, 3, 2):
+        for start in range(0, max(len(words) - size, 0) + 1):
+            window = words[start:start + size]
+            while window and window[0].lower() in _EDGE_WORDS:
+                window = window[1:]
+            while window and window[-1].lower() in _EDGE_WORDS:
+                window = window[:-1]
+            if len(window) < 2 and len(words) >= 2:
+                continue
+            rank = (sum(word.casefold() in focus for word in window), len(window))
+            if best is None or rank > best[:2]:
+                best = (*rank, window)
+    if best is None:
+        chosen = words[:4]
+        while len(chosen) > 1 and chosen[0].lower() in _EDGE_WORDS:
+            chosen = chosen[1:]
+        while len(chosen) > 1 and chosen[-1].lower() in _EDGE_WORDS:
+            chosen = chosen[:-1]
+    else:
+        chosen = best[2]
+    return " ".join(word.upper() for word in chosen) or "WATCH THIS"
 
 
 def _default_visual(brief: dict[str, Any]) -> str:
@@ -130,17 +197,22 @@ def _title_style(title: str) -> str:
 
 
 def _why_click(style: str, brief: dict[str, Any], package_intent: str = "") -> str:
-    promise = str(brief.get("viewer_promise") or _default_promise(brief)).strip()
-    proof = str(brief.get("proof") or brief.get("visual_requirements") or "the creator-supplied video").strip()
+    # Whole sentences only: stitching the brief in produced "...while
+    # promising: A brief moment..." and "backed by Rainy road with vehicles."
+    proof = str(brief.get("proof") or "").strip().rstrip(".")
+    visual = str(brief.get("visual_requirements") or "").strip().rstrip(".")
+    support = (f" The proof ({proof[:1].lower() + proof[1:]}) backs it up." if proof
+               else f" The background ({visual[:1].lower() + visual[1:]}) sets the mood." if visual and len(visual.split()) <= 12
+               else "")
     if package_intent == "Existing audience":
-        return f"It reconnects returning viewers with the subject they already care about: {promise}"
+        return "It speaks directly to viewers who already follow this subject." + support
     if package_intent == "Browse":
-        return f"It creates a feed-friendly curiosity hook, backed by {proof}."
+        return "It leads with the feeling rather than a keyword, which suits the Home and Shorts feeds." + support
     if style == "searchable" or package_intent == "Search":
-        return f"It makes the outcome searchable while promising: {promise}"
+        return "It leads with the words viewers type into search, so the video can be found for that phrase."
     if style == "curiosity-led":
-        return f"It creates curiosity, backed by {proof}."
-    return f"It balances a clear topic with the viewer payoff: {promise}"
+        return "It raises a question the video answers." + support
+    return "It names the subject clearly and hints at the payoff." + support
 
 
 def _best_for(style: str, brief: dict[str, Any], package_intent: str = "") -> str:

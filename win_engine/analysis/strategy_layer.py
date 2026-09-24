@@ -269,13 +269,76 @@ def _window_in_utc(now: datetime, day: str, start: int, end: int, zone: ZoneInfo
     return f"{start_local:%H:%M} - {end_local:%H:%M} UTC"
 
 
+def diverse_followups(hub: str, phrases: list[str], limit: int = 2) -> list[str]:
+    """Follow-up topics that are different searches, not variants of the hub.
+
+    "cold brew" -> "cold brew coffee" is the same video twice; "mason jar
+    coffee" or "coffee brewing methods" is a real next video.
+    """
+
+    hub_words = set(hub.casefold().split())
+
+    def overlap(phrase: str) -> float:
+        words = set(phrase.casefold().split())
+        return len(words & hub_words) / max(len(words | hub_words), 1)
+
+    candidates = [phrase for phrase in phrases if phrase.casefold() != hub.casefold()]
+    distinct = [phrase for phrase in candidates if overlap(phrase) < 0.5]
+    if len(distinct) < limit:
+        distinct += [phrase for phrase in sorted(candidates, key=overlap)
+                     if phrase not in distinct and overlap(phrase) < 0.8]
+    chosen: list[str] = []
+    for phrase in distinct:
+        if all(overlap_between(phrase, other) < 0.6 for other in chosen):
+            chosen.append(phrase)
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
+def overlap_between(left: str, right: str) -> float:
+    a, b = set(left.casefold().split()), set(right.casefold().split())
+    return len(a & b) / max(len(a | b), 1)
+
+
 def build_content_graph_strategy(
     primary_topic: str,
     secondary_topic: str,
     angle: str,
     keyword_signals: list[dict[str, Any]],
+    *,
+    related_phrases: list[str] | None = None,
+    short_form: bool = False,
 ) -> dict[str, Any]:
-    """Suggest how this video can branch into a small content graph."""
+    """Suggest how this video can branch into a small content graph.
+
+    ``related_phrases`` are the video's validated search phrases. Without them
+    the spokes came from script n-grams, which turned a quote into a series on
+    "There Nothing" and "More Painful".
+    """
+
+    phrases = [" ".join(str(item).split()) for item in (related_phrases or []) if str(item).strip()]
+    if related_phrases is not None:
+        # The strongest validated phrase names the hub; the creator's lead
+        # sentence ("how to make cold brew coffee at home without any special
+        # equipment", or a whole Tamil sentence) is not a series name.
+        hub = (phrases[0] if phrases else primary_topic).strip()
+        spokes = diverse_followups(hub, phrases)
+        if short_form:
+            series = [f"{hub}: this Short"] + [f"{spoke}: a companion Short on the same theme" for spoke in spokes]
+            bridge = ("Group these Shorts into one series so a viewer who finishes one is shown the next."
+                      if spokes else "Group this Short with others on the same theme so viewers move from one to the next.")
+        else:
+            series = [f"{hub}: this video"] + [f"{spoke}: a follow-up video" for spoke in spokes]
+            bridge = (f"Link the follow-ups from this video's end screen and description to keep viewers around {hub}."
+                      if spokes else f"Plan the next video on a closely related search to keep viewers around {hub}.")
+        return {
+            "hub_topic": hub,
+            "supporting_topics": spokes,
+            "series_plan": series,
+            "bridge_strategy": bridge,
+            "basis": "validated_search_phrases",
+        }
 
     next_topics = [
         _humanize_keyword(str(item.get("keyword", "")))

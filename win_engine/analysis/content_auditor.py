@@ -12,11 +12,18 @@ def audit_content_package(
     content_angle: str,
     video_format: str = "",
     context_text: str = "",
+    exact_quote: str = "",
 ) -> dict[str, Any]:
     """Heuristic package audit for hook, retention, and alignment."""
 
     first_150_words = _first_words(script, 150)
+    short_format = any(term in video_format.lower() for term in ("short", "reel"))
+    if exact_quote.strip() and short_format:
+        # A single on-screen line: judge reading load, not long-form cues.
+        return _audit_quote_short(first_150_words, title, exact_quote)
     is_quote_short = _is_quote_short(script, video_format)
+    if not is_quote_short:
+        return _audit_long_form(script, title, primary_topic, secondary_topic, context_text)
     hook_audit = {
         "first_150_words": first_150_words,
         "keyword_in_opening": _contains_topic(first_150_words, primary_topic, secondary_topic),
@@ -51,6 +58,148 @@ def audit_content_package(
         "first_30_second_simulator": first_30_second_simulator,
         "pattern_interrupts": pattern_interrupts,
         "retention_risk": retention_risk,
+    }
+
+
+# Reading speed for on-screen text, in words per second (about 150 wpm).
+_ON_SCREEN_WORDS_PER_SECOND = 2.5
+_QUOTE_ALIGNMENT_STOPWORDS = {
+    "the", "and", "for", "that", "this", "with", "you", "your", "are", "was", "when", "what", "there",
+    "than", "into", "from", "they", "them", "their", "have", "has", "been", "being", "more", "most",
+    "shorts", "short",
+}
+
+
+def _audit_quote_short(first_150_words: str, title: str, quote: str) -> dict[str, Any]:
+    """Audit a quote Short by what decides it: can the line be read in time.
+
+    The long-form heuristics scored a 19-word quote "hook LOW, 30-second
+    drop-off HIGH" and asked for pattern interrupts, contradicting the pacing
+    and retention sections for the same video.
+    """
+
+    words = re.findall(r"[^\W_]+(?:['’][^\W_]+)?", quote)
+    read_seconds = round(len(words) / _ON_SCREEN_WORDS_PER_SECOND, 1)
+    hook = "HIGH" if len(words) <= 12 else "MEDIUM" if len(words) <= 25 else "LOW"
+    risk = "LOW" if read_seconds <= 5 else "MEDIUM" if read_seconds <= 10 else "HIGH"
+    quote_terms = {word.casefold() for word in words if len(word) >= 3} - _QUOTE_ALIGNMENT_STOPWORDS
+    title_terms = {
+        word.casefold() for word in re.findall(r"[^\W_]+(?:['’][^\W_]+)?", title) if len(word) >= 3
+    } - _QUOTE_ALIGNMENT_STOPWORDS
+    overlap = round(len(title_terms & quote_terms) / len(title_terms), 2) if title_terms else 0.0
+    hold_seconds = int(read_seconds + 2.5)
+    return {
+        "hook_audit": {
+            "first_150_words": first_150_words,
+            "keyword_in_opening": True,
+            "stakes_present": True,
+            "hook_strength": hook,
+            "basis": f"The quote is the hook; {len(words)} words is {'a quick' if hook == 'HIGH' else 'a moderate' if hook == 'MEDIUM' else 'a heavy'} read.",
+        },
+        "alignment": {
+            "title_script_alignment": overlap,
+            "package_match": "STRONG" if overlap >= 0.5 else "MEDIUM" if overlap > 0 else "WEAK",
+            "basis": "Share of title words taken from the quote; a title should echo the quote's theme without copying it.",
+        },
+        "first_30_second_simulator": {
+            "predicted_dropoff_risk": risk,
+            "engagement_strength": "UNKNOWN",
+            "basis": f"About {read_seconds}s to read the quote once; the risk is viewers swiping before they finish it.",
+        },
+        "pattern_interrupts": {
+            "count": 0,
+            "assessment": "NOT_APPLICABLE",
+            "note": "A single-quote Short carries one idea; cuts or pattern interrupts are not needed.",
+        },
+        "retention_risk": {
+            "level": risk,
+            "notes": [
+                f"Show the full quote within the first second and keep it on screen for at least {hold_seconds} seconds.",
+                "Use high-contrast text that stays readable on a phone over the moving background.",
+            ],
+        },
+    }
+
+
+# A concrete promise in the opening: what the viewer gets, learns or sees.
+_PAYOFF_CUE_RE = re.compile(
+    r"\b(?:how to|show you|i show|learn|you'?ll|i tested|i tried|tested|review|compare[sd]?|comparison|vs|verdict|"
+    r"results?|why|what happened|steps?|guide|recipe|make|build|fix|save|mistakes?|tips?|worth|breakdown|budget|"
+    r"itinerary|explained?)\b",
+    re.IGNORECASE,
+)
+_TRANSITION_RE = re.compile(
+    r"\b(?:first|then|next|after that|finally|at the end|but|however|instead|also|because|step)\b", re.IGNORECASE,
+)
+# Below this, the input is a summary rather than a script; pacing cannot be judged.
+_MIN_WORDS_FOR_PACING = 150
+
+
+def _audit_long_form(
+    script: str, title: str, primary_topic: str, secondary_topic: str, context_text: str,
+) -> dict[str, Any]:
+    """Audit an ordinary video's opening by signals that hold in any genre or language.
+
+    The previous hook check needed an "Experiment" or "Story" angle and words
+    like "result" or "failed", so every tutorial, review, vlog and Tamil
+    script scored "hook LOW, retention risk HIGH".
+    """
+
+    words = re.findall(r"\S+", script)
+    opening = " ".join(words[:40])
+    first_sentence = re.split(r"(?<=[.!?।])\s+", script.strip(), maxsplit=1)[0]
+    # Half the topic's words in the opening. (_contains_topic is always true
+    # when a topic is empty, because "" is in every string.)
+    topic_words = [word for word in re.findall(r"[^\W_]+", primary_topic.casefold()) if len(word) >= 3]
+    opening_folded = opening.casefold()
+    topic_early = bool(topic_words) and sum(word in opening_folded for word in topic_words) >= max(1, len(topic_words) // 2)
+    payoff = bool(_PAYOFF_CUE_RE.search(opening) or re.search(r"\d", opening))
+    concise = len(first_sentence.split()) <= 25
+    points = int(topic_early) + int(payoff) + int(concise)
+    hook = "HIGH" if points >= 3 else "MEDIUM" if points == 2 else "LOW"
+    dropoff = {"HIGH": "LOW", "MEDIUM": "MEDIUM", "LOW": "HIGH"}[hook]
+
+    alignment_source = " ".join(part for part in (script, context_text) if part)
+    transitions = len(_TRANSITION_RE.findall(script))
+    if len(words) < _MIN_WORDS_FOR_PACING:
+        interrupts = {
+            "count": transitions, "assessment": "NOT_ASSESSED",
+            "note": f"{len(words)} words is a summary, not a full script; paste the script to judge pacing.",
+        }
+    else:
+        interrupts = {"count": transitions, "assessment": "STRONG" if transitions >= 6 else "MEDIUM" if transitions >= 3 else "WEAK"}
+    risk = dropoff if interrupts["assessment"] != "WEAK" or dropoff == "HIGH" else "MEDIUM"
+
+    notes: list[str] = []
+    if not topic_early:
+        notes.append("Name the topic in the first sentence so viewers know they are in the right place.")
+    if not payoff:
+        notes.append("State what the viewer will get (the result, the steps, or the verdict) in the opening.")
+    if not concise:
+        notes.append("Shorten the first sentence; a long lead-in delays the promise.")
+    if interrupts["assessment"] == "WEAK":
+        notes.append("Signal the structure as you go (first, next, finally) so viewers can follow along.")
+    if not notes:
+        notes.append("The opening states the topic and the payoff quickly.")
+    return {
+        "hook_audit": {
+            "first_150_words": _first_words(script, 150),
+            "keyword_in_opening": topic_early,
+            "stakes_present": payoff,
+            "hook_strength": hook,
+            "basis": "topic named early, concrete payoff or number, concise first sentence",
+        },
+        "alignment": {
+            "title_script_alignment": _alignment_score(title, alignment_source, primary_topic, secondary_topic),
+            "package_match": _package_match_label(title, alignment_source, primary_topic, secondary_topic),
+        },
+        "first_30_second_simulator": {
+            "predicted_dropoff_risk": dropoff,
+            "engagement_strength": "UNKNOWN",
+            "basis": "Derived from the opening only; not a measurement of retention.",
+        },
+        "pattern_interrupts": interrupts,
+        "retention_risk": {"level": risk, "notes": notes},
     }
 
 

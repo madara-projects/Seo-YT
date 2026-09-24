@@ -20,14 +20,21 @@ def analyze_thumbnails(youtube_results: list[dict[str, Any]]) -> dict[str, Any]:
         if width and width < 480:
             low_resolution_count += 1
 
-    recommendation = (
-        "Most competing videos have usable thumbnail resolution. Focus on contrast, face/emotion, and short text."
-        if quality_counts["high"] or quality_counts["maxres"]
-        else "Competitor thumbnails skew low-resolution. A sharp, high-contrast thumbnail can stand out quickly."
-    )
+    # With no competitor results there is nothing to compare against; the old
+    # fallback branch claimed "competitor thumbnails skew low-resolution" from zero.
+    if not youtube_results:
+        recommendation = (
+            "No competitor thumbnails were available for this run, so there is no comparison to report. "
+            "Use a sharp, high-contrast image with little or no text."
+        )
+    elif quality_counts["high"] or quality_counts["maxres"]:
+        recommendation = "Most competing videos have usable thumbnail resolution. Focus on contrast, face/emotion, and short text."
+    else:
+        recommendation = "Competitor thumbnails skew low-resolution. A sharp, high-contrast thumbnail can stand out quickly."
 
     return {
         "quality_counts": quality_counts,
         "low_resolution_count": low_resolution_count,
+        "sample_size": len(youtube_results),
         "recommendation": recommendation,
     }
