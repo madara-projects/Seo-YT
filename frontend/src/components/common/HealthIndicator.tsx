@@ -1,31 +1,23 @@
-import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/api/client";
 import { cn } from "@/lib/utils";
-
-interface Health {
-  status?: string;
-  version?: string;
-  environment?: string;
-  database_ok?: boolean;
-  cache_ok?: boolean;
-}
+import { useHealth } from "@/hooks/useSystem";
 
 /**
- * Backend reachability in the sidebar. Polls slowly: this is an at-a-glance
- * reassurance, not a monitor, and the backend rate-limits per path.
+ * Backend reachability, shown in the sidebar footer. Polls slowly: this is an
+ * at-a-glance reassurance, not a monitor, and the backend rate-limits per path.
  */
-export function HealthIndicator() {
-  const { data, isError, isPending } = useQuery({
-    queryKey: ["health"],
-    queryFn: () => apiRequest<Health>("/health"),
-    refetchInterval: 60_000,
-    retry: 1,
-  });
+export function HealthIndicator({ className }: { className?: string }) {
+  const { data, isError, isPending } = useHealth();
 
   const healthy = !isError && data?.status === "ok";
-  const label = isPending ? "Checking" : isError ? "Unreachable" : healthy ? "Connected" : "Degraded";
+  const label = isPending
+    ? "Checking backend"
+    : isError
+      ? "Backend unreachable"
+      : healthy
+        ? "Backend online"
+        : "Backend degraded";
   const tone = isPending
-    ? "bg-muted-foreground"
+    ? "bg-sidebar-muted"
     : healthy
       ? "bg-tone-ok"
       : isError
@@ -33,15 +25,18 @@ export function HealthIndicator() {
         : "bg-tone-warn";
 
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
-      <span className={cn("h-2 w-2 shrink-0 rounded-full", tone)} aria-hidden="true" />
-      <div className="min-w-0 leading-tight">
-        <p className="text-[11px] font-semibold text-foreground">{label}</p>
-        <p className="truncate text-[10px] text-muted-foreground">
-          {data?.version ? `v${data.version}` : "Local backend"}
-          {data?.cache_ok === false ? " · cache off" : ""}
-        </p>
-      </div>
+    <div className={cn("flex items-center gap-2.5 px-1", className)}>
+      <span className="relative flex size-2 shrink-0" aria-hidden="true">
+        {healthy ? (
+          <span className={cn("absolute inline-flex size-full animate-ping rounded-full opacity-60", tone)} />
+        ) : null}
+        <span className={cn("relative inline-flex size-2 rounded-full", tone)} />
+      </span>
+      <p className="min-w-0 truncate text-xs text-sidebar-muted">
+        <span className="font-medium text-sidebar-foreground">{label}</span>
+        {data?.version ? ` · v${data.version}` : ""}
+        {data?.cache_ok === false ? " · cache off" : ""}
+      </p>
     </div>
   );
 }

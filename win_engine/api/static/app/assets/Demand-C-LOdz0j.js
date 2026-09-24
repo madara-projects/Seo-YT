@@ -1,0 +1,1 @@
+import{j as e}from"./query-BTye2Tri.js";import{N as r}from"./NotMigrated-JCAAIZNx.js";import"./react-C6WQlCgo.js";import"./index-Ch7gbQ-z.js";import"./forms-C9Ka6Sni.js";import"./arrow-up-right-DMDFPTVN.js";function n(){return e.jsx(r,{title:"Demand",description:"Demand explorer built from approved research and personal evidence.",legacyHash:"#demand"})}export{n as default};

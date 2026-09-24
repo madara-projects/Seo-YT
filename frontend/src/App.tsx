@@ -7,11 +7,12 @@ import { AppShell } from "@/layouts/AppShell";
 import { ScrollToTop } from "@/layouts/ScrollToTop";
 import { ThemeProvider, useTheme } from "@/lib/theme";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { CardSkeleton } from "@/components/common/States";
+import { PageSkeleton } from "@/components/common/States";
 import CreatorPage from "@/pages/Creator";
 
 const DashboardPage = lazy(() => import("@/pages/Dashboard"));
 const HistoryPage = lazy(() => import("@/pages/History"));
+const ChannelPage = lazy(() => import("@/pages/Channel"));
 const IdeasPage = lazy(() => import("@/pages/Ideas"));
 const DemandPage = lazy(() => import("@/pages/Demand"));
 const AuditsPage = lazy(() => import("@/pages/Audits"));
@@ -35,7 +36,15 @@ export function createQueryClient() {
 
 function ThemedToaster() {
   const { resolvedTheme } = useTheme();
-  return <Toaster theme={resolvedTheme} position="bottom-right" richColors closeButton />;
+  return (
+    <Toaster
+      theme={resolvedTheme}
+      position="bottom-right"
+      richColors
+      closeButton
+      toastOptions={{ className: "font-sans !rounded-xl" }}
+    />
+  );
 }
 
 export function App() {
@@ -56,10 +65,11 @@ export function App() {
               <Route
                 path="/*"
                 element={
-                  <Suspense fallback={<CardSkeleton rows={4} />}>
+                  <Suspense fallback={<PageSkeleton />}>
                     <Routes>
                       <Route path="/dashboard" element={<DashboardPage />} />
                       <Route path="/history" element={<HistoryPage />} />
+                      <Route path="/channel" element={<ChannelPage />} />
                       <Route path="/ideas" element={<IdeasPage />} />
                       <Route path="/demand" element={<DemandPage />} />
                       <Route path="/audits" element={<AuditsPage />} />

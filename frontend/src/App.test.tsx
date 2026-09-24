@@ -11,6 +11,13 @@ import { App } from "./App";
  * provider stack, router, lazy routes and the Creator page actually render.
  */
 
+/**
+ * Lazy routes load their chunk on first render; under a parallel test run on a
+ * busy machine that has exceeded the default wait, so their first query waits
+ * longer. The assertions themselves are unchanged.
+ */
+const LAZY = { timeout: 20_000 };
+
 function renderApp(route = "/creator") {
   return render(
     <MemoryRouter initialEntries={[route]}>
@@ -86,7 +93,7 @@ describe("App shell", () => {
     renderApp("/history");
 
     expect(
-      await screen.findByRole("heading", { name: "Package library", level: 1 }),
+      await screen.findByRole("heading", { name: "Package library", level: 1 }, LAZY),
     ).toBeInTheDocument();
     expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
   });
@@ -94,18 +101,53 @@ describe("App shell", () => {
   it("renders the migrated Dashboard page", async () => {
     renderApp("/dashboard");
 
-    expect(await screen.findByRole("heading", { name: "Dashboard", level: 1 })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Dashboard", level: 1 }, LAZY),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
   });
 
   it("still links unmigrated pages out to the legacy dashboard", async () => {
     renderApp("/ideas");
 
-    expect(await screen.findByRole("heading", { name: "Ideas", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Ideas", level: 1 }, LAZY)).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: /legacy dashboard/i })).toHaveAttribute(
       "href",
       "/dashboard_legacy#ideas",
     );
+  });
+
+  it("renders the Settings page instead of the legacy placeholder", async () => {
+    renderApp("/settings");
+
+    expect(
+      await screen.findByRole("heading", { name: "Settings", level: 1 }, LAZY),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
+  });
+
+  it("renders the Channel page", async () => {
+    renderApp("/channel");
+
+    expect(await screen.findByRole("heading", { name: "Channel", level: 1 }, LAZY)).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /Connect YouTube channel/ })).toBeInTheDocument();
+  });
+
+  it("jumps between pages from the command palette", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByRole("heading", { name: "Creator", level: 1 });
+
+    await user.keyboard("{Control>}k{/Control}");
+    const search = await screen.findByRole("combobox", { name: "Search pages and actions" });
+    await user.type(search, "history");
+    await user.keyboard("{Enter}");
+
+    expect(
+      await screen.findByRole("heading", { name: "Package library", level: 1 }, LAZY),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Search pages and actions" })).not.toBeInTheDocument();
   });
 
   it("offers a skip link for keyboard users", async () => {

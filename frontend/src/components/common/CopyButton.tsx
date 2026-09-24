@@ -71,7 +71,7 @@ export function CopyButton({
 
   return (
     <Button variant={variant} size={size} onClick={handleCopy} {...props}>
-      <Icon aria-hidden="true" />
+      <Icon aria-hidden="true" className={state === "copied" ? "text-tone-ok" : undefined} />
       {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : label}
     </Button>
   );

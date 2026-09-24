@@ -1,8 +1,8 @@
-import { Download } from "lucide-react";
+import { Ban, Download, Globe, Gauge, Lightbulb, Stamp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CopyButton } from "@/components/common/CopyButton";
 import { EvidenceChip, SourceLegend } from "@/components/common/EvidenceChip";
+import { Panel } from "@/components/common/Panel";
 import { EmptyState } from "@/components/common/States";
 import { asArray, asObject, displayValue, formatNumber } from "@/lib/utils";
 import { copyValue } from "@/lib/packages";
@@ -22,6 +22,7 @@ export function DecisionStage({
   if (!data || !selected) {
     return (
       <EmptyState
+        icon={Stamp}
         title="No decision to review yet"
         description="Run Analyze and select a package before reviewing the final decision."
       />
@@ -35,56 +36,84 @@ export function DecisionStage({
     : "No public YouTube result was returned.";
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-primary/40 bg-primary/5 p-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <EvidenceChip tone={selectionStatus === "saved" ? "ok" : "warn"}>
-            {selectionStatus === "saved" ? "Recorded in History" : "Selected for preview"}
-          </EvidenceChip>
-          <EvidenceChip tone="warn">Not published</EvidenceChip>
+    <div className="space-y-5">
+      <section className="relative overflow-hidden rounded-3xl border-gradient p-6 shadow-elevated sm:p-8">
+        <div
+          className="pointer-events-none absolute -right-20 -top-24 size-72 rounded-full bg-brand-gradient opacity-15 blur-3xl"
+          aria-hidden="true"
+        />
+        <div className="relative space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <EvidenceChip tone={selectionStatus === "saved" ? "ok" : "warn"}>
+              {selectionStatus === "saved" ? "Recorded in History" : "Selected for preview"}
+            </EvidenceChip>
+            <EvidenceChip tone="warn">Not published</EvidenceChip>
+          </div>
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-brand">
+            Your decision · {selected.label}
+          </p>
+          <h2 className="max-w-3xl font-display text-2xl font-semibold leading-tight tracking-tight text-foreground sm:text-3xl">
+            {selected.title}
+          </h2>
+          <p className="max-w-2xl text-[13px] leading-relaxed text-muted-foreground">
+            The recorded choice supports later attribution. It never changes or publishes a YouTube
+            video.
+          </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <CopyButton
+              value={copyValue(selected, "upload-package")}
+              label="Copy selected upload package"
+              variant="gradient"
+              size="default"
+            />
+            <Button variant="outline" onClick={onExport}>
+              <Download aria-hidden="true" />
+              Export full analysis and local decision
+            </Button>
+          </div>
         </div>
-        <h2 className="mt-3 text-lg font-bold leading-snug text-foreground">{selected.title}</h2>
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          {selected.label}. The recorded choice supports later attribution. It never changes or
-          publishes a YouTube video.
-        </p>
-      </div>
+      </section>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card>
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle>Why it was suggested</CardTitle>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Panel
+          icon={Lightbulb}
+          title="Why it was suggested"
+          aside={
             <EvidenceChip tone={selected.source === "AI suggestion" ? "info" : "warn"}>
               {selected.source}
             </EvidenceChip>
-          </CardHeader>
-          <CardContent className="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+          }
+        >
+          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
             <p>{selected.whySuggested}</p>
             <p>
               Approach: {selected.approach} · Intended use: {selected.bestFor}
             </p>
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
 
-        <Card>
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle>Public context</CardTitle>
+        <Panel
+          icon={Globe}
+          iconTone={publicCount ? "info" : "neutral"}
+          title="Public context"
+          aside={
             <EvidenceChip tone={publicCount ? "info" : "warn"}>
               {publicCount ? "Public observation" : "Unavailable"}
             </EvidenceChip>
-          </CardHeader>
-          <CardContent className="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+          }
+        >
+          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
             <p>{publicSentence}</p>
             <p>Public counts and patterns do not prove why another video performed.</p>
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
 
-        <Card>
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle>Pre-publication scoring</CardTitle>
-            <EvidenceChip tone="warn">Local heuristic</EvidenceChip>
-          </CardHeader>
-          <CardContent className="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+        <Panel
+          icon={Gauge}
+          title="Pre-publication scoring"
+          aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}
+        >
+          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
             <p>
               Opportunity: {displayValue(opportunity.score)} / 100. Title quality:{" "}
               {selected.titleQualityScore === null
@@ -96,15 +125,16 @@ export function DecisionStage({
               These scores help compare packaging. They do not predict actual CTR, views, reach, or
               growth.
             </p>
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
 
-        <Card>
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle>Unavailable before publishing</CardTitle>
-            <EvidenceChip tone="neutral">Unavailable</EvidenceChip>
-          </CardHeader>
-          <CardContent className="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+        <Panel
+          icon={Ban}
+          iconTone="neutral"
+          title="Unavailable before publishing"
+          aside={<EvidenceChip tone="neutral">Unavailable</EvidenceChip>}
+        >
+          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
             <p>
               Actual impressions, CTR, retention, views, and causal performance evidence are
               unavailable for this package.
@@ -113,23 +143,11 @@ export function DecisionStage({
               Link the published video in History and collect mature comparable snapshots before
               learning from results.
             </p>
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
       </div>
 
       <SourceLegend />
-
-      <div className="flex flex-wrap gap-2">
-        <CopyButton
-          value={copyValue(selected, "upload-package")}
-          label="Copy selected upload package"
-          variant="default"
-        />
-        <Button variant="outline" onClick={onExport}>
-          <Download aria-hidden="true" />
-          Export full analysis and local decision
-        </Button>
-      </div>
     </div>
   );
 }

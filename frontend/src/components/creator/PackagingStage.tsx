@@ -1,26 +1,101 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  CalendarClock,
+  Clapperboard,
+  FileText,
+  Hash,
+  HeartHandshake,
+  Image as ImageIcon,
+  ListOrdered,
+  Tag,
+  Target,
+  Type,
+  Bookmark,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/common/Badge";
 import { CopyButton } from "@/components/common/CopyButton";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
+import { Inset, Panel } from "@/components/common/Panel";
 import { EmptyState, UnavailableNote } from "@/components/common/States";
 import { StatCard } from "@/components/common/StatCard";
 import { asObject, cn, displayValue, formatNumber } from "@/lib/utils";
+import { formatSeconds } from "@/lib/format";
 import { copyValue } from "@/lib/packages";
+import { ThumbnailMock } from "./ThumbnailMock";
 import type { AnalyzeResponse, PackageOption, SelectionStatus } from "@/api/types";
 
+/** A common guideline, not a YouTube rule: long titles are cut off on phones. */
+const TITLE_TRUNCATION_GUIDE = 70;
+
 function TagList({ items, emptyLabel }: { items: string[]; emptyLabel: string }) {
-  if (!items.length) return <p className="text-xs text-muted-foreground">{emptyLabel}</p>;
+  if (!items.length) return <p className="text-[13px] text-muted-foreground">{emptyLabel}</p>;
   return (
     <ul className="flex flex-wrap gap-1.5">
       {items.map((item, index) => (
         <li
           key={`${item}-${index}`}
-          className="rounded-md border border-border bg-muted/50 px-2 py-1 text-[11px] text-foreground"
+          className="rounded-lg border border-border bg-elevated px-2.5 py-1 text-xs text-foreground"
         >
           {item}
         </li>
       ))}
     </ul>
+  );
+}
+
+function FieldHeader({
+  icon: Icon,
+  label,
+  count,
+  action,
+}: {
+  icon: React.ElementType;
+  label: string;
+  count?: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex items-center gap-2">
+        <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+        <span className="text-[13px] font-medium text-foreground">{label}</span>
+        {count ? <Badge variant="neutral" className="numeric">{count}</Badge> : null}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+/** How the selected package might look in a search list. A mock, labelled as one. */
+function SearchPreview({ option, duration }: { option: PackageOption; duration?: string }) {
+  const long = option.title.length > TITLE_TRUNCATION_GUIDE;
+  return (
+    <div className="space-y-3.5">
+      <ThumbnailMock text={option.thumbnailText} duration={duration} />
+      <div className="flex gap-3">
+        <span className="mt-0.5 size-9 shrink-0 rounded-full bg-brand-gradient opacity-80" aria-hidden="true" />
+        <div className="min-w-0">
+          <p className="line-clamp-2 text-[15px] font-semibold leading-snug text-foreground">
+            {option.title}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Your channel · no views until you publish
+          </p>
+        </div>
+      </div>
+      <p
+        className={cn(
+          "rounded-xl border px-3 py-2 text-xs leading-relaxed",
+          long
+            ? "border-tone-warn-border bg-tone-warn-bg text-foreground"
+            : "border-border bg-elevated text-muted-foreground",
+        )}
+      >
+        {long
+          ? `At ${option.title.length} characters this title may be cut off on phones and in suggested feeds (a common guideline is about ${TITLE_TRUNCATION_GUIDE}).`
+          : `${option.title.length} characters — within the common ~${TITLE_TRUNCATION_GUIDE}-character guideline for titles shown in full.`}
+      </p>
+    </div>
   );
 }
 
@@ -30,16 +105,19 @@ export function PackagingStage({
   selected,
   selectionStatus,
   onSelect,
+  durationSeconds,
 }: {
   data: AnalyzeResponse | null;
   options: PackageOption[];
   selected: PackageOption | null;
   selectionStatus: SelectionStatus;
   onSelect: (packageId: string) => void;
+  durationSeconds?: string;
 }) {
   if (!data) {
     return (
       <EmptyState
+        icon={Clapperboard}
         title="No package yet"
         description="Run Analyze to generate a title, description, tags, hashtags, and comparison options."
       />
@@ -52,6 +130,7 @@ export function PackagingStage({
   const opportunity = asObject(asObject(data.opportunity_gap_analysis).opportunity_score);
   const timing = asObject(data.upload_timing);
   const timingZone = String(timing.timezone ?? timing.today_timezone ?? "").trim();
+  const duration = durationSeconds ? formatSeconds(durationSeconds, "") : "";
 
   const recurringWindow =
     timing.recommended_time && timingZone
@@ -72,10 +151,11 @@ export function PackagingStage({
           : "Preview only until you select it.";
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-3">
+    <div className="space-y-5">
+      <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
           label="Opportunity score"
+          icon={Target}
           value={`${displayValue(opportunity.score)} / 100`}
           caption="Local heuristic, not a performance guarantee."
           tone="warn"
@@ -83,6 +163,7 @@ export function PackagingStage({
         />
         <StatCard
           label="Selected title quality"
+          icon={Type}
           value={
             selected.titleQualityScore === null
               ? "Unavailable"
@@ -94,6 +175,8 @@ export function PackagingStage({
         />
         <StatCard
           label="Selection"
+          icon={Bookmark}
+          iconTone={selectionStatus === "saved" ? "ok" : "brand"}
           value={selected.label}
           caption={selectionCaption}
           tone={selectionStatus === "saved" ? "ok" : selectionStatus === "error" ? "bad" : "warn"}
@@ -101,163 +184,193 @@ export function PackagingStage({
         />
       </div>
 
-      <Card>
-        <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
-          <CardTitle>Generated SEO package</CardTitle>
-          <EvidenceChip tone={data.generation_source === "gemini" ? "info" : "warn"}>
-            {selected.source}
-          </EvidenceChip>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-foreground">Selected title</span>
-                <span className="numeric rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                  {selected.title.length} chars
-                </span>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 space-y-5">
+          <Panel
+            icon={Clapperboard}
+            title="Generated SEO package"
+            description="Copy each field into YouTube Studio, or copy the whole bundle at once."
+            aside={
+              <>
+                <EvidenceChip tone={data.generation_source === "gemini" ? "info" : "warn"}>
+                  {selected.source}
+                </EvidenceChip>
+                <CopyButton
+                  value={copyValue(selected, "upload-package")}
+                  label="Copy all"
+                  variant="soft"
+                />
+              </>
+            }
+          >
+            <div className="space-y-6">
+              <div className="space-y-2.5">
+                <FieldHeader
+                  icon={Type}
+                  label="Selected title"
+                  count={`${selected.title.length} chars`}
+                  action={<CopyButton value={copyValue(selected, "title")} label="Copy title" />}
+                />
+                <p className="font-display text-xl font-semibold leading-snug tracking-tight text-foreground">
+                  {selected.title}
+                </p>
               </div>
-              <CopyButton value={copyValue(selected, "title")} label="Copy title" />
-            </div>
-            <p className="text-base font-bold leading-snug text-foreground">{selected.title}</p>
-          </div>
 
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-foreground">Description</span>
-                <span className="numeric rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                  {selected.description.length} chars
-                </span>
+              <div className="space-y-2.5">
+                <FieldHeader
+                  icon={FileText}
+                  label="Description"
+                  count={`${selected.description.length} chars`}
+                  action={
+                    <CopyButton value={copyValue(selected, "description")} label="Copy description" />
+                  }
+                />
+                <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[13px] leading-relaxed text-muted-foreground scrollbar-thin">
+                  {selected.description || "No description returned."}
+                </p>
               </div>
-              <CopyButton value={copyValue(selected, "description")} label="Copy description" />
-            </div>
-            <p className="whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
-              {selected.description || "No description returned."}
-            </p>
-          </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-foreground">Video tags</span>
-                <CopyButton value={copyValue(selected, "tags")} label="Copy tags" />
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div className="space-y-2.5">
+                  <FieldHeader
+                    icon={Tag}
+                    label="Video tags"
+                    count={String(selected.tags.length)}
+                    action={<CopyButton value={copyValue(selected, "tags")} label="Copy tags" />}
+                  />
+                  <TagList items={selected.tags} emptyLabel="No tags returned." />
+                </div>
+                <div className="space-y-2.5">
+                  <FieldHeader
+                    icon={Hash}
+                    label="Hashtags"
+                    count={String(selected.hashtags.length)}
+                    action={<CopyButton value={copyValue(selected, "hashtags")} label="Copy hashtags" />}
+                  />
+                  <TagList items={selected.hashtags} emptyLabel="No hashtags returned." />
+                </div>
               </div>
-              <TagList items={selected.tags} emptyLabel="No tags returned." />
             </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-foreground">Hashtags</span>
-                <CopyButton value={copyValue(selected, "hashtags")} label="Copy hashtags" />
+          </Panel>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Panel
+              icon={ImageIcon}
+              title="Thumbnail direction"
+              aside={<EvidenceChip tone="warn">Generated</EvidenceChip>}
+            >
+              <div className="space-y-2 text-[13px] leading-relaxed text-muted-foreground">
+                <p>{displayValue(selected.thumbnailVisual)}</p>
+                <p>
+                  Suggested text:{" "}
+                  <span className="font-semibold text-foreground">{displayValue(selected.thumbnailText)}</span>
+                </p>
               </div>
-              <TagList items={selected.hashtags} emptyLabel="No hashtags returned." />
+            </Panel>
+            <Panel
+              icon={HeartHandshake}
+              title="Viewer promise"
+              aside={<EvidenceChip tone="warn">Generated</EvidenceChip>}
+            >
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                {displayValue(selected.viewerPromise)}
+              </p>
+            </Panel>
+          </div>
+        </div>
+
+        <div className="space-y-5">
+          <Panel
+            icon={ImageIcon}
+            title="Preview"
+            description="A mock of the title and thumbnail text at feed size."
+            aside={<EvidenceChip tone="warn">Mock-up</EvidenceChip>}
+          >
+            <SearchPreview option={selected} duration={duration || undefined} />
+          </Panel>
+
+          <Panel
+            icon={CalendarClock}
+            title="Upload timing guidance"
+            data-testid="upload-timing-guidance"
+            aside={
+              <EvidenceChip tone={timing.confidence === "HIGH" ? "ok" : "warn"}>
+                {String(timing.confidence ?? "unavailable").toUpperCase()}
+              </EvidenceChip>
+            }
+          >
+            <div className="space-y-2.5">
+              <Inset>
+                <p className="text-xs text-muted-foreground">Best recurring window</p>
+                <p className="mt-1 text-[13px] font-medium text-foreground">
+                  {displayValue(timing.recommended_day)} · {recurringWindow}
+                </p>
+              </Inset>
+              <Inset>
+                <p className="text-xs text-muted-foreground">If uploading today</p>
+                <p className="mt-1 text-[13px] font-medium text-foreground">
+                  {displayValue(timing.today_recommendation)}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Window: {todayWindow}</p>
+              </Inset>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                <strong className="font-semibold text-foreground">Basis:</strong>{" "}
+                {String(timing.basis ?? "unavailable").replaceAll("_", " ")}.{" "}
+                {displayValue(
+                  timing.explanation,
+                  "Personalized upload timing is not yet established.",
+                )}
+              </p>
             </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card data-testid="upload-timing-guidance">
-        <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
-          <CardTitle>Upload timing guidance</CardTitle>
-          <EvidenceChip tone={timing.confidence === "HIGH" ? "ok" : "warn"}>
-            {String(timing.confidence ?? "unavailable").toUpperCase()}
-          </EvidenceChip>
-        </CardHeader>
-        <CardContent className="space-y-2.5">
-          <div className="rounded-md border border-border bg-muted/30 p-3">
-            <p className="text-xs font-semibold text-foreground">Best recurring window</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {displayValue(timing.recommended_day)} · {recurringWindow}
-            </p>
-          </div>
-          <div className="rounded-md border border-border bg-muted/30 p-3">
-            <p className="text-xs font-semibold text-foreground">If uploading today</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {displayValue(timing.today_recommendation)}
-              <br />
-              Window: {todayWindow}
-            </p>
-          </div>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            <strong className="text-foreground">Basis:</strong>{" "}
-            {String(timing.basis ?? "unavailable").replaceAll("_", " ")}.{" "}
-            {displayValue(timing.explanation, "Personalized upload timing is not yet established.")}
-          </p>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card>
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle>Thumbnail direction</CardTitle>
-            <EvidenceChip tone="warn">Generated</EvidenceChip>
-          </CardHeader>
-          <CardContent className="space-y-1 text-xs leading-relaxed text-muted-foreground">
-            <p>{displayValue(selected.thumbnailVisual)}</p>
-            <p>Suggested text: {displayValue(selected.thumbnailText)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle>Viewer promise</CardTitle>
-            <EvidenceChip tone="warn">Generated</EvidenceChip>
-          </CardHeader>
-          <CardContent className="text-xs leading-relaxed text-muted-foreground">
-            {displayValue(selected.viewerPromise)}
-          </CardContent>
-        </Card>
+          </Panel>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Title alternatives</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
+      <Panel icon={ListOrdered} title="Title alternatives">
+        <div className="space-y-2">
           {options.length ? (
-            options.map((option) => (
-              <div
-                key={option.id}
-                className={cn(
-                  "flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between",
-                  option.id === selected.id
-                    ? "border-primary/50 bg-primary/5"
-                    : "border-border bg-muted/20",
-                )}
-              >
-                <div className="min-w-0 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold text-foreground">{option.label}</span>
-                    {option.primary ? (
-                      <EvidenceChip tone="info">Primary</EvidenceChip>
-                    ) : null}
-                    <span className="numeric rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                      {option.title.length} chars
-                    </span>
+            options.map((option) => {
+              const isSelected = option.id === selected.id;
+              return (
+                <div
+                  key={option.id}
+                  className={cn(
+                    "flex flex-col gap-3 rounded-xl border p-3.5 transition-colors sm:flex-row sm:items-center sm:justify-between",
+                    isSelected ? "border-brand-border bg-brand-soft/50" : "border-border bg-elevated",
+                  )}
+                >
+                  <div className="min-w-0 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[13px] font-semibold text-foreground">{option.label}</span>
+                      {option.primary ? <Badge variant="brand">Primary</Badge> : null}
+                      <Badge variant="neutral" className="numeric">
+                        {option.title.length} chars
+                      </Badge>
+                    </div>
+                    <p className="break-words text-[13px] text-muted-foreground">{option.title}</p>
                   </div>
-                  <p className="break-words text-xs text-muted-foreground">{option.title}</p>
+                  <div className="flex shrink-0 gap-2">
+                    <CopyButton value={copyValue(option, "title")} label="Copy" />
+                    <Button
+                      size="sm"
+                      variant={isSelected ? "default" : "outline"}
+                      onClick={() => onSelect(option.id)}
+                      aria-pressed={isSelected}
+                    >
+                      {isSelected ? "Selected" : "Select"}
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex shrink-0 gap-2">
-                  <CopyButton value={copyValue(option, "title")} label="Copy" />
-                  <Button
-                    size="sm"
-                    variant={option.id === selected.id ? "default" : "outline"}
-                    onClick={() => onSelect(option.id)}
-                    aria-pressed={option.id === selected.id}
-                  >
-                    {option.id === selected.id ? "Selected" : "Select"}
-                  </Button>
-                </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <UnavailableNote>No title alternatives were returned.</UnavailableNote>
           )}
-          <p className="pt-1 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="pt-1 text-xs leading-relaxed text-muted-foreground">
             All choices reuse the generated description, tags, and hashtags, because the API returns
             title and thumbnail alternatives rather than separately generated metadata bundles.
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </Panel>
     </div>
   );
 }

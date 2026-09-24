@@ -1,19 +1,20 @@
+import { Check, Layers, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/common/Badge";
 import { CopyButton } from "@/components/common/CopyButton";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { EmptyState } from "@/components/common/States";
 import { cn, displayValue, formatNumber } from "@/lib/utils";
 import { copyValue } from "@/lib/packages";
+import { ThumbnailMock } from "./ThumbnailMock";
 import type { PackageOption, SelectionStatus } from "@/api/types";
 
 function Fact({ label, value, note }: { label: string; value: string; note: string }) {
   return (
-    <div className="space-y-0.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
-      <p className="text-xs font-bold text-foreground">{value}</p>
-      <p className="text-[10px] text-muted-foreground">{note}</p>
+    <div className="min-w-0 space-y-0.5">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="break-words text-[13px] font-semibold text-foreground">{value}</p>
+      <p className="text-[10.5px] text-muted-foreground">{note}</p>
     </div>
   );
 }
@@ -32,6 +33,7 @@ export function CompareStage({
   if (!options.length) {
     return (
       <EmptyState
+        icon={Layers}
         title="Nothing to compare yet"
         description="Run Analyze to create comparable package options."
       />
@@ -39,9 +41,9 @@ export function CompareStage({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-card sm:flex-row sm:items-center sm:justify-between">
+        <p className="max-w-2xl text-[13px] leading-relaxed text-muted-foreground">
           Scores and best-for labels are local heuristics or generated suggestions. They are not
           measured CTR, reach, or performance predictions.
         </p>
@@ -52,7 +54,7 @@ export function CompareStage({
         </EvidenceChip>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {options.map((option) => {
           const selected = option.id === selectedId;
           return (
@@ -61,24 +63,45 @@ export function CompareStage({
               data-testid="package-option-card"
               data-package-id={option.id}
               className={cn(
-                "flex flex-col rounded-xl border bg-card transition-colors",
-                selected ? "border-primary ring-1 ring-primary/30" : "border-border",
+                "group relative flex flex-col overflow-hidden rounded-2xl bg-card shadow-card transition-shadow",
+                selected
+                  ? "border-gradient shadow-elevated"
+                  : "border border-border hover:shadow-elevated",
               )}
             >
-              <div className="flex items-start justify-between gap-2 p-4 pb-3">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-xs font-bold text-foreground">{option.label}</span>
-                  {option.primary ? <EvidenceChip tone="info">Primary</EvidenceChip> : null}
+              <div className="relative p-3 pb-0">
+                <ThumbnailMock text={option.thumbnailText} />
+                <div className="absolute left-5 top-5 flex flex-wrap gap-1.5">
+                  <Badge variant="solid" className="bg-black/70 text-white backdrop-blur">
+                    {option.label}
+                  </Badge>
+                  {option.primary ? (
+                    <Badge variant="solid" className="bg-white/90 text-black">
+                      Primary
+                    </Badge>
+                  ) : null}
                 </div>
-                <EvidenceChip tone={option.source === "AI suggestion" ? "info" : "warn"}>
-                  {option.source}
-                </EvidenceChip>
+                {selected ? (
+                  <span
+                    className="absolute right-5 top-5 grid size-7 place-items-center rounded-full bg-white text-black shadow-card"
+                    aria-hidden="true"
+                  >
+                    <Check className="size-4" strokeWidth={3} />
+                  </span>
+                ) : null}
               </div>
 
-              <div className="flex-1 space-y-3 px-4">
-                <h3 className="text-sm font-bold leading-snug text-foreground">{option.title}</h3>
+              <div className="flex flex-1 flex-col gap-4 p-4">
+                <div className="space-y-2">
+                  <EvidenceChip tone={option.source === "AI suggestion" ? "info" : "warn"}>
+                    {option.source}
+                  </EvidenceChip>
+                  <h3 className="font-display text-base font-semibold leading-snug text-foreground">
+                    {option.title}
+                  </h3>
+                </div>
 
-                <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-muted/30 p-3">
+                <div className="grid grid-cols-2 gap-3 rounded-xl border border-border/80 bg-elevated p-3">
                   <Fact
                     label="Title quality"
                     value={
@@ -98,27 +121,30 @@ export function CompareStage({
                 </div>
 
                 <div className="space-y-1">
-                  <p className="text-[11px] font-semibold text-foreground">Why suggested</p>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
+                  <p className="text-xs font-medium text-foreground">Why suggested</p>
+                  <p className="text-[13px] leading-relaxed text-muted-foreground">
                     {option.whySuggested}
                   </p>
                 </div>
 
                 <div className="space-y-1">
-                  <p className="text-[11px] font-semibold text-foreground">Thumbnail direction</p>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
+                  <p className="text-xs font-medium text-foreground">Thumbnail direction</p>
+                  <p className="text-[13px] leading-relaxed text-muted-foreground">
                     {displayValue(option.thumbnailVisual)}
                     {option.thumbnailText ? ` · Text: ${option.thumbnailText}` : ""}
                   </p>
                 </div>
 
-                <p className="rounded-md border border-tone-warn-border bg-tone-warn-bg px-2.5 py-2 text-[10px] leading-relaxed text-foreground">
-                  Misleading-risk check: {option.misleadingRisk}. This is a generated or local
-                  assessment and must be manually reviewed.
+                <p className="mt-auto flex gap-2 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3 py-2.5 text-[11px] leading-relaxed text-foreground">
+                  <ShieldAlert className="mt-px size-3.5 shrink-0 text-tone-warn" aria-hidden="true" />
+                  <span>
+                    Misleading-risk check: {option.misleadingRisk}. This is a generated or local
+                    assessment and must be manually reviewed.
+                  </span>
                 </p>
               </div>
 
-              <div className="flex gap-2 p-4 pt-3">
+              <div className="flex gap-2 border-t border-border p-4">
                 <CopyButton
                   value={copyValue(option, "title")}
                   label="Copy title"

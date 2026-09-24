@@ -1,14 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import {
+  BadgeCheck,
+  Cloud,
+  Library,
+  Link2,
+  Package,
+  Plus,
+  Search,
+  Target,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/PageHeader";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { CardSkeleton, EmptyState, ErrorState } from "@/components/common/States";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { HistoryRow } from "@/components/history/HistoryRow";
 import { HistoryDetail } from "@/components/history/HistoryDetail";
 import { DeleteRunsDialog, LinkVideoDialog } from "@/components/history/HistoryDialogs";
@@ -21,27 +33,74 @@ import {
   useLinkVideo,
 } from "@/hooks/useHistory";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
-import { matchesQuery, resultSummary, savedCountLabel } from "@/lib/historyFormat";
+import { matchesQuery, resultSummary, runTitle, savedCountLabel } from "@/lib/historyFormat";
 import { asArray } from "@/lib/utils";
+import { toFiniteNumber } from "@/lib/format";
 import type { HistoryRun } from "@/api/historyTypes";
+
+function LibraryStat({
+  icon: Icon,
+  label,
+  value,
+  pending,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  pending: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-3.5 rounded-2xl border border-border bg-card p-4 shadow-card">
+      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand ring-1 ring-inset ring-brand-border" aria-hidden="true">
+        <Icon className="size-[18px]" />
+      </span>
+      <div className="min-w-0">
+        {pending ? (
+          <Skeleton className="h-6 w-12" />
+        ) : (
+          <p className="font-display text-2xl font-semibold leading-none tracking-tight text-foreground">
+            {value}
+          </p>
+        )}
+        <p className="mt-1 truncate text-xs text-muted-foreground">{label}</p>
+      </div>
+    </div>
+  );
+}
 
 export default function HistoryPage() {
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [openRunId, setOpenRunId] = useState<number | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<number[] | null>(null);
   const [linkTarget, setLinkTarget] = useState<HistoryRun | null>(null);
-  const selectAllRef = useRef<HTMLButtonElement>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // The open package lives in the URL (`?run=12`), so the Dashboard can link
+  // straight to one and a reload keeps it open.
+  const requestedRun = Number(searchParams.get("run"));
+  const openRunId = Number.isInteger(requestedRun) && requestedRun > 0 ? requestedRun : null;
+
+  const setOpenRunId = useCallback(
+    (runId: number | null) => {
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          if (runId === null) next.delete("run");
+          else next.set("run", String(runId));
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
 
   const runsQuery = useHistoryRuns(50, 0);
   const detailQuery = useHistoryRun(openRunId);
   const deleteRuns = useDeleteRuns();
   const linkVideo = useLinkVideo();
 
-  const runs = useMemo(
-    () => asArray<HistoryRun>(runsQuery.data?.runs),
-    [runsQuery.data],
-  );
+  const runs = useMemo(() => asArray<HistoryRun>(runsQuery.data?.runs), [runsQuery.data]);
   const visibleRuns = useMemo(
     () => runs.filter((run) => matchesQuery(run, query)),
     [runs, query],
@@ -61,12 +120,6 @@ export default function HistoryPage() {
   const selectedVisibleCount = visibleRuns.filter((run) => selectedIds.has(run.id)).length;
   const allVisibleSelected = visibleRuns.length > 0 && selectedVisibleCount === visibleRuns.length;
   const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
-
-  // Radix renders a button, so the tri-state has to be set on the DOM node.
-  useEffect(() => {
-    const node = selectAllRef.current;
-    if (node) node.dataset.indeterminate = String(someVisibleSelected);
-  }, [someVisibleSelected]);
 
   const toggleSelection = useCallback((runId: number, checked: boolean) => {
     setSelectedIds((current) => {
@@ -109,7 +162,7 @@ export default function HistoryPage() {
     } catch (error) {
       toast.error(formatApiError(error, "Could not delete selected package(s)."));
     }
-  }, [deleteTargets, deleteRuns, openRunId]);
+  }, [deleteTargets, deleteRuns, openRunId, setOpenRunId]);
 
   const handleLink = useCallback(
     async (youtubeVideoId: string) => {
@@ -130,43 +183,69 @@ export default function HistoryPage() {
 
   const total = runs.length;
   const bulkCapped = selectedIds.size > MAX_BULK_DELETE;
+  const withSelection = runs.filter((run) => run.selected_package_id).length;
+  const linked = runs.filter((run) => run.linked_youtube_video_id).length;
+  const scored = runs
+    .map((run) => toFiniteNumber(run.opportunity_score))
+    .filter((value): value is number => value !== null);
+  const avgOpportunity = scored.length
+    ? (scored.reduce((sum, value) => sum + value, 0) / scored.length).toFixed(1)
+    : "—";
+  const openRun = runs.find((run) => run.id === openRunId);
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="mx-auto w-full max-w-[1200px] animate-fade-up">
       <PageHeader
+        eyebrow="Studio"
+        icon={Library}
         title="Package library"
         description="Review the exact metadata, script, and publishing plan saved for every generation. Link a package after it is published to keep its performance history together."
         actions={
-          runsQuery.isSuccess ? (
-            <EvidenceChip tone="info">{savedCountLabel(total)}</EvidenceChip>
-          ) : runsQuery.isError ? (
-            <EvidenceChip tone="bad">Records unavailable</EvidenceChip>
-          ) : (
-            <EvidenceChip tone="neutral">Loading records</EvidenceChip>
-          )
+          <>
+            {runsQuery.isSuccess ? (
+              <EvidenceChip tone="info">{savedCountLabel(total)}</EvidenceChip>
+            ) : runsQuery.isError ? (
+              <EvidenceChip tone="bad">Records unavailable</EvidenceChip>
+            ) : (
+              <EvidenceChip tone="neutral">Loading records</EvidenceChip>
+            )}
+            <Button variant="gradient" size="sm" asChild>
+              <Link to="/creator">
+                <Plus aria-hidden="true" />
+                New package
+              </Link>
+            </Button>
+          </>
         }
       />
 
-      <p className="mb-4 text-[11px] text-muted-foreground">
-        Stored locally and synced when cloud sync is enabled.
-      </p>
+      <div className="space-y-5">
+        <section aria-label="Library summary" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <LibraryStat icon={Package} label="Total packages" value={String(total)} pending={runsQuery.isPending} />
+          <LibraryStat icon={BadgeCheck} label="With a recorded choice" value={String(withSelection)} pending={runsQuery.isPending} />
+          <LibraryStat icon={Link2} label="Linked to YouTube" value={String(linked)} pending={runsQuery.isPending} />
+          <LibraryStat icon={Target} label="Avg opportunity" value={avgOpportunity} pending={runsQuery.isPending} />
+        </section>
 
-      <div className="space-y-4">
-        <Card>
-          <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <Card className="overflow-hidden">
+          <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div className="space-y-0.5">
-              <p className="text-sm font-semibold text-foreground">Saved packages</p>
-              <p className="text-[11px] text-muted-foreground" data-testid="history-result-summary">
-                {runsQuery.isPending
-                  ? "Loading saved packages…"
-                  : runsQuery.isError
-                    ? "Could not load saved packages."
-                    : resultSummary(total, visibleRuns.length, query)}
+              <h2 className="font-display text-base font-semibold text-foreground">Saved packages</h2>
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Cloud className="size-3.5 shrink-0" aria-hidden="true" />
+                <span data-testid="history-result-summary">
+                  {runsQuery.isPending
+                    ? "Loading saved packages…"
+                    : runsQuery.isError
+                      ? "Could not load saved packages."
+                      : resultSummary(total, visibleRuns.length, query)}
+                </span>
+                <span className="hidden md:inline">· stored locally, synced when cloud sync is on</span>
               </p>
             </div>
-            <div className="relative sm:w-72">
+            <div className="relative sm:w-80">
               <Search
-                className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                 aria-hidden="true"
               />
               <Input
@@ -177,7 +256,7 @@ export default function HistoryPage() {
                 placeholder="Search title or topic"
                 aria-label="Search saved packages"
                 autoComplete="off"
-                className="pl-8"
+                className="pl-9"
               />
             </div>
           </div>
@@ -186,18 +265,17 @@ export default function HistoryPage() {
             <div
               role="toolbar"
               aria-label="Bulk actions for saved packages"
-              className="flex flex-wrap items-center gap-3 border-b border-border bg-muted/30 px-4 py-2.5"
+              className="flex flex-wrap items-center gap-3 border-b border-border bg-muted/40 px-4 py-2.5 sm:px-5"
             >
-              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground">
+              <label className="flex cursor-pointer items-center gap-2.5 text-[13px] font-medium text-foreground">
                 <Checkbox
-                  ref={selectAllRef}
-                  checked={allVisibleSelected}
+                  checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
                   onCheckedChange={(value) => toggleAllVisible(value === true)}
                   aria-label="Select visible packages"
                 />
                 Select visible
               </label>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="rounded-full bg-card px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-inset ring-border">
                 {selectedIds.size} selected
               </span>
               {bulkCapped ? (
@@ -207,12 +285,10 @@ export default function HistoryPage() {
               ) : null}
               <Button
                 size="sm"
-                variant="outline"
+                variant="danger"
                 disabled={selectedIds.size === 0}
-                onClick={() =>
-                  setDeleteTargets([...selectedIds].slice(0, MAX_BULK_DELETE))
-                }
-                className="ml-auto text-tone-bad hover:bg-tone-bad-bg hover:text-tone-bad"
+                onClick={() => setDeleteTargets([...selectedIds].slice(0, MAX_BULK_DELETE))}
+                className="ml-auto"
               >
                 <Trash2 aria-hidden="true" />
                 Delete selected
@@ -220,7 +296,7 @@ export default function HistoryPage() {
             </div>
           ) : null}
 
-          <CardContent className="p-0" aria-live="polite">
+          <div aria-live="polite">
             {runsQuery.isPending ? (
               <div className="p-5">
                 <CardSkeleton rows={4} />
@@ -236,11 +312,22 @@ export default function HistoryPage() {
             ) : !visibleRuns.length ? (
               <div className="p-5">
                 <EmptyState
+                  icon={total ? Search : Library}
                   title={total ? "No matching packages" : "No saved packages yet"}
                   description={
                     total
                       ? "No saved packages match your search."
                       : "No saved packages yet. Generate an SEO package and it will appear here."
+                  }
+                  action={
+                    total ? undefined : (
+                      <Button variant="gradient" asChild>
+                        <Link to="/creator">
+                          <Plus aria-hidden="true" />
+                          Create your first package
+                        </Link>
+                      </Button>
+                    )
                   }
                 />
               </div>
@@ -258,22 +345,21 @@ export default function HistoryPage() {
                 />
               ))
             )}
-          </CardContent>
+          </div>
         </Card>
-
-        {openRunId !== null ? (
-          <HistoryDetail
-            run={detailQuery.data ?? null}
-            isLoading={detailQuery.isPending}
-            error={detailQuery.error}
-            onClose={() => setOpenRunId(null)}
-            onLink={() => {
-              const run = runs.find((item) => item.id === openRunId);
-              if (run) setLinkTarget(run);
-            }}
-          />
-        ) : null}
       </div>
+
+      <HistoryDetail
+        open={openRunId !== null}
+        run={detailQuery.data ?? null}
+        fallbackTitle={openRun ? runTitle(openRun) : undefined}
+        isLoading={detailQuery.isPending}
+        error={detailQuery.error}
+        onClose={() => setOpenRunId(null)}
+        onLink={() => {
+          if (openRun) setLinkTarget(openRun);
+        }}
+      />
 
       <DeleteRunsDialog
         open={Boolean(deleteTargets?.length)}

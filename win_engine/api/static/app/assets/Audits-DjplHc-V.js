@@ -1,1 +1,0 @@
-import{j as t}from"./query-B9DEEuwb.js";import{N as i}from"./NotMigrated-BzmWAIHR.js";import"./react-DrhP_K9g.js";import"./index-hWuAA6qr.js";import"./forms-BuCz4DTw.js";function e(){return t.jsx(i,{title:"Audits",description:"Published-video audits and findings.",legacyHash:"#audits"})}export{e as default};

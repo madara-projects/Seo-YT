@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Zap } from "lucide-react";
+import { ArrowRight, Wand2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -11,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Panel } from "@/components/common/Panel";
 import { TEMPLATE_TEXT } from "@/lib/creatorConstants";
 
 /**
@@ -20,7 +20,7 @@ import { TEMPLATE_TEXT } from "@/lib/creatorConstants";
  * through router state, so there is exactly one place that spends quota and
  * one place that owns the eight-stage workflow.
  */
-export function QuickLaunch() {
+export function QuickLaunch({ className }: { className?: string }) {
   const navigate = useNavigate();
   const [script, setScript] = useState("");
   const [language, setLanguage] = useState("english");
@@ -30,20 +30,30 @@ export function QuickLaunch() {
     navigate("/creator", { state: { script: script.trim(), language, region } });
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
-        <CardTitle className="flex items-center gap-2">
-          <Zap className="h-4 w-4 text-primary" aria-hidden="true" />
-          Start a new SEO package
-        </CardTitle>
-        <span className="text-[11px] text-muted-foreground">
-          Gemini when configured, local fallback otherwise
-        </span>
-      </CardHeader>
+    <Panel
+      className={className}
+      icon={Zap}
+      title="Start a new SEO package"
+      description="Draft here, then review and generate in Creator. Nothing runs until you press Generate there."
+    >
+      <div className="space-y-4">
+        <div className="relative">
+          <Textarea
+            value={script}
+            onChange={(event) => setScript(event.target.value)}
+            rows={4}
+            aria-label="Script or video idea"
+            placeholder="Paste a script excerpt, a raw idea, or a quote…"
+            className="resize-none bg-elevated pb-10 text-[15px]"
+          />
+          <span className="numeric pointer-events-none absolute bottom-2.5 right-3 text-[11px] text-muted-foreground">
+            {script.length.toLocaleString()} chars
+          </span>
+        </div>
 
-      <CardContent className="space-y-3">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <span className="mr-1 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Wand2 className="size-3.5" aria-hidden="true" />
             Try an idea
           </span>
           {Object.entries(TEMPLATE_TEXT).map(([key, template]) => (
@@ -51,7 +61,8 @@ export function QuickLaunch() {
               key={key}
               type="button"
               variant="outline"
-              size="sm"
+              size="xs"
+              className="rounded-full"
               onClick={() => setScript(template.text)}
             >
               {template.label}
@@ -59,18 +70,10 @@ export function QuickLaunch() {
           ))}
         </div>
 
-        <Textarea
-          value={script}
-          onChange={(event) => setScript(event.target.value)}
-          rows={3}
-          aria-label="Script or video idea"
-          placeholder="Paste a script excerpt, raw idea, or quote…"
-        />
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex gap-2">
+        <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="grid grid-cols-2 gap-2 sm:flex">
             <Select value={language} onValueChange={setLanguage}>
-              <SelectTrigger className="w-36" aria-label="Output language">
+              <SelectTrigger className="sm:w-36" aria-label="Output language">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -80,7 +83,7 @@ export function QuickLaunch() {
               </SelectContent>
             </Select>
             <Select value={region} onValueChange={setRegion}>
-              <SelectTrigger className="w-36" aria-label="Target region">
+              <SelectTrigger className="sm:w-36" aria-label="Target region">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -90,12 +93,12 @@ export function QuickLaunch() {
             </Select>
           </div>
 
-          <Button onClick={launch} disabled={!script.trim()}>
-            <Zap aria-hidden="true" />
+          <Button variant="gradient" onClick={launch} disabled={!script.trim()}>
             Open in Creator
+            <ArrowRight aria-hidden="true" />
           </Button>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </Panel>
   );
 }

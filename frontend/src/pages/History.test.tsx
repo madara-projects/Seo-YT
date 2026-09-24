@@ -34,13 +34,13 @@ function jsonResponse(body: unknown) {
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
-function renderPage() {
+function renderPage(route = "/history") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[route]}>
         <HistoryPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -197,6 +197,26 @@ describe("HistoryPage", () => {
         "No saved packages yet. Generate an SEO package and it will appear here.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("opens a package straight from a ?run= link", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("/api/history/runs?")) return jsonResponse({ runs: RUNS });
+      if (String(url).endsWith("/api/history/runs/2")) {
+        return jsonResponse({
+          id: 2,
+          title: "Top AI Tools",
+          created_at: "2026-09-21T10:00:00Z",
+          package: { title: "Top AI Tools", description: "A tour of five tools.", tags: ["ai tools"], hashtags: ["#ai"] },
+        });
+      }
+      return jsonResponse({});
+    });
+    renderPage("/history?run=2");
+
+    const detail = await screen.findByTestId("history-detail");
+    expect(await within(detail).findByText("A tour of five tools.")).toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: "Copy upload package" })).toBeEnabled();
   });
 
   it("surfaces a load failure with its request id", async () => {

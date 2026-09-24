@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
  * failure. Keep them distinguishable by text as well as colour.
  */
 const chipVariants = cva(
-  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide whitespace-nowrap",
+  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4",
   {
     variants: {
       tone: {
@@ -37,6 +37,7 @@ interface EvidenceChipProps extends VariantProps<typeof chipVariants> {
 export function EvidenceChip({ children, tone, className, title }: EvidenceChipProps) {
   return (
     <span className={cn(chipVariants({ tone }), className)} title={title}>
+      <span className="size-1.5 shrink-0 rounded-full bg-current opacity-80" aria-hidden="true" />
       {children}
     </span>
   );
@@ -63,11 +64,11 @@ export function SourceLegend({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 p-3",
+        "flex flex-wrap items-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-4 py-3",
         className,
       )}
     >
-      <span className="text-xs font-semibold text-foreground">Source guide</span>
+      <span className="mr-1 text-xs font-medium text-muted-foreground">How to read the labels</span>
       <EvidenceChip tone="ok">Creator-entered</EvidenceChip>
       <EvidenceChip tone="info">Public observation</EvidenceChip>
       <EvidenceChip tone="warn">Local heuristic</EvidenceChip>

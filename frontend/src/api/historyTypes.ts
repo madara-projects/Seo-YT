@@ -149,6 +149,17 @@ export interface PublishedVideoLink {
   verified?: boolean;
   published_at?: string | null;
   latest_snapshot?: Record<string, unknown> | null;
+  /** The title recorded when linking, and the saved package's own title. */
+  selected_title?: string | null;
+  package_topic?: string | null;
+  ownership_verified?: boolean;
+  youtube_metadata?: { title?: string } | null;
+  latest_performance?: {
+    views?: number | null;
+    avg_view_percentage?: number | null;
+    snapshot_window?: string | null;
+    captured_at?: string | null;
+  } | null;
   [key: string]: unknown;
 }
 

@@ -64,11 +64,46 @@ mutation never retries and has no client-side timeout. `AnalysisProgress` shows
 elapsed time and the expected range rather than a synthetic percentage, because
 the backend emits no progress events.
 
+## Design system
+
+The look is a "studio console": a dark sidebar in both themes, cool ink
+neutrals, and a violet brand. Tokens live in `src/styles/index.css` as oklch CSS
+variables with a `.dark` override, mapped into Tailwind through `@theme inline`.
+
+- **Two brand colours on purpose.** `--primary` fills solid controls and keeps
+  white text at WCAG AA in both themes; `--brand` is for brand-tinted text and
+  icons and is lighter in dark mode, where the fill colour would fail AA as
+  text. Use `text-brand`, not `text-primary`, for coloured text.
+- **The gradient is decoration only** (logo, glows, the current step). It never
+  carries meaning. Buttons that use it (`variant="gradient"`) draw from separate
+  `--cta-*` stops that keep white text at AA.
+- **Type:** Bricolage Grotesque for display (page titles, card titles, big
+  numbers), Geist for UI text, Geist Mono for tabular figures. Fonts load
+  without blocking the first paint, so the app renders at once, and offline, in
+  system fonts.
+- **Building blocks:** `PageHeader` (eyebrow, the page's only `<h1>`, actions),
+  `Panel` (icon, title, description, a chip or actions), `StatCard`,
+  `EvidenceChip`, `Delta`, `Meter`, and the shared empty, error and loading
+  states. New pages should compose these rather than style cards by hand.
+- **Command palette:** Ctrl/⌘ K jumps to any page. It only navigates and
+  switches the theme; it never calls the API.
+- Grid items may shrink below their content width (a base rule in the
+  stylesheet), so a long unbroken title truncates inside its card instead of
+  widening the page on a phone.
+
 ## Testing
 
-Vitest covers the package-derivation rules, the checklist, and an App mount
-smoke test. The Python Playwright suite in `../tests/browser/` still targets the
-legacy dashboard; it needs porting when `/app` is switched over.
+Vitest covers the package-derivation rules, the formatting helpers, the
+checklist, the Settings and Channel pages, History, and an App mount smoke test
+that also exercises the command palette.
+
+`npm run e2e` runs Playwright against the Docker backend at `127.0.0.1:8000`, so
+start the stack first with `docker compose up -d`. It checks every migrated page
+for console errors and horizontal overflow at desktop, tablet and phone widths.
+A connected channel is mocked, and every call that could spend quota or change
+saved data is intercepted. The Python Playwright suite in `../tests/browser/`
+still targets the legacy dashboard; it needs porting when `/app` is switched
+over.
 
 ## Charts
 
@@ -78,31 +113,39 @@ one-bar bar chart — claiming a comparison the data cannot support is the same
 failure as inventing a number.
 
 Where a chart is right, it is single-series, so colour carries no identity and
-no legend is needed. The data hue is `--chart-1` (blue), deliberately not the
-brand red: red is reserved for destructive and critical status and must never
-double as a series colour. Both mode steps were validated for lightness band,
-chroma floor and >=3:1 contrast against the card surface. Every chart also
-ships a "View as table" disclosure so identity is never colour-alone.
+no legend is needed. The data hue is `--chart-1`, the brand violet, at 5.4:1
+(light) and 6.6:1 (dark) against the card surface. Red is reserved for failures
+and destructive actions; the only place it marks data is a decline in a
+period-over-period comparison, which also carries a minus sign and a down
+arrow. The title-quality chart ships a "View as table" disclosure, and the
+Channel uploads chart sits beside the full uploads table, so no value depends
+on colour alone.
 
 ## Status
 
-Migrated: the application shell, the design system, the eight-stage Creator
-workflow, the **Dashboard**, and **History** (list, search, tri-state bulk
-selection, delete with confirmation, video linking, and the full package detail
-with whole-bundle copy).
+Migrated: the application shell and design system, the eight-stage **Creator**
+workflow, the **Dashboard**, **History** (list, search, tri-state bulk
+selection, delete with confirmation, video linking, and a package detail panel
+that opens from a shareable `?run=` link), **Channel** (28-day analytics against
+the previous period, an uploads chart and table, learning, and linked packages)
+and **Settings** (channel connection, cloud sync, providers with an on-demand
+live check, database, snapshot collector, appearance, and about).
 
-Not yet migrated: Ideas, Demand, Audits, Experiments, Watchlist, and Settings.
-Each has a route and an honest placeholder linking to the working legacy page.
+Not yet migrated: Ideas, Demand, Audits, Experiments, and Watchlist. Each has a
+route and an honest placeholder linking to the working legacy page.
 
 ### Known gaps and deliberate deviations
 
-- **OAuth return is not handled under `/next`.** The backend redirects the
-  consent callback to `/?youtube=connected`, which the legacy app answers by
-  POSTing `/youtube/channel/refresh`, stripping the query param, and refreshing.
-  There is no React equivalent. It does not affect Dashboard or History today
-  because the redirect lands on the legacy root, but it must be built before
-  Settings is migrated, including a once-per-load guard — without one, a React
-  effect would re-POST on every navigation and spend real quota.
+- **OAuth returns to the page that started it.** Settings and Channel link to
+  `/youtube/channel/connect?return_to=/next/settings` (or `/next/channel`). The
+  backend keeps that choice in a short-lived HttpOnly cookie, checked against an
+  allow-list, and the callback redirects there with `?youtube=connected|error`.
+  The page announces the result once and removes the parameters. The legacy
+  flow passes no `return_to` and still lands on `/`. Unlike the legacy app, the
+  React page does not POST a second refresh after connecting, because the
+  server already syncs during the connection; instead the Channel page
+  refreshes a sync older than two minutes once per app session, guarded per
+  QueryClient so navigating can never re-POST.
 - **`on_screen_text` and `audience_type`** are accepted by the API but were
   never wired into the legacy Creator form, so they are left out here too.
 - **Fallback vocabulary is standardised.** The legacy mixed "Not available",

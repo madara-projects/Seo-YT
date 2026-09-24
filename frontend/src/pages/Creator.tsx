@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/PageHeader";
+import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { ErrorState } from "@/components/common/States";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { AnalysisProgress } from "@/components/creator/AnalysisProgress";
 import { AngleStage } from "@/components/creator/AngleStage";
 import { BriefStage } from "@/components/creator/BriefStage";
@@ -178,6 +180,13 @@ export default function CreatorPage() {
     setChecklist((current) => ({ ...current, [key]: checked }));
   }, []);
 
+  // A new stage starts at the top of the page, not wherever the last one ended.
+  useEffect(() => {
+    if (window.scrollY <= 120) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
+  }, [stage]);
+
   const stageIndex = STAGES.findIndex((item) => item.key === stage);
   const currentStage = STAGES[stageIndex] ?? STAGES[0];
   const unlocked = Boolean(data);
@@ -188,44 +197,66 @@ export default function CreatorPage() {
     if (next) setStage(next.key);
   };
 
+  const warningCount = asArray<string>(data?.research_warnings).length;
+  const previousStage = STAGES[stageIndex - 1];
+  const nextStage = STAGES[stageIndex + 1];
+
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="mx-auto w-full max-w-[1200px] animate-fade-up">
       <PageHeader
+        eyebrow="Studio"
+        icon={Sparkles}
         title="Creator"
         description="Turn a script or idea into a reviewed, comparable SEO package. Nothing here uploads, publishes, or changes a YouTube video."
+        actions={
+          data ? (
+            <>
+              <EvidenceChip tone={data.generation_source === "gemini" ? "info" : "warn"}>
+                {data.generation_source === "gemini" ? "Written with Gemini" : "Local fallback"}
+              </EvidenceChip>
+              <EvidenceChip tone={warningCount ? "warn" : "ok"}>
+                {warningCount
+                  ? `${warningCount} research ${warningCount === 1 ? "warning" : "warnings"}`
+                  : "No research warnings"}
+              </EvidenceChip>
+            </>
+          ) : undefined
+        }
       />
 
-      <div className="space-y-4">
-        <StageNav current={stage} unlocked={unlocked} onSelect={setStage} />
+      <div className="space-y-5">
+        <Card className="p-2 sm:p-2.5">
+          <StageNav current={stage} unlocked={unlocked} onSelect={setStage} />
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-y border-border py-2.5">
-          <p className="text-xs text-muted-foreground">
-            <span className="font-semibold text-foreground">
-              Stage {currentStage.step} / {STAGES.length} · {currentStage.label}
-            </span>{" "}
-            — {currentStage.hint}
-          </p>
-          <div className="flex gap-1.5">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => move(-1)}
-              disabled={stageIndex <= 0}
-            >
-              <ChevronLeft aria-hidden="true" />
-              Back
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => move(1)}
-              disabled={stageIndex >= STAGES.length - 1 || !unlocked}
-            >
-              Next
-              <ChevronRight aria-hidden="true" />
-            </Button>
+          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-3 border-t border-border px-2 pt-2.5 sm:px-2.5">
+            <p className="min-w-0 text-[13px] text-muted-foreground">
+              <span className="font-semibold text-foreground">
+                Stage {currentStage.step} / {STAGES.length} · {currentStage.label}
+              </span>{" "}
+              <span className="hidden sm:inline">— {currentStage.hint}</span>
+            </p>
+            <div className="flex gap-1.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => move(-1)}
+                disabled={stageIndex <= 0}
+              >
+                <ChevronLeft aria-hidden="true" />
+                Back
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => move(1)}
+                disabled={stageIndex >= STAGES.length - 1 || !unlocked}
+              >
+                Next
+                <ChevronRight aria-hidden="true" />
+              </Button>
+            </div>
           </div>
-        </div>
+        </Card>
 
         {analyze.isPending ? <AnalysisProgress elapsed={elapsed} /> : null}
 
@@ -243,62 +274,90 @@ export default function CreatorPage() {
           <IdeaStage form={form} onSubmit={handleSubmit} isPending={analyze.isPending} />
         </div>
 
-        {stage === "brief" ? (
-          <BriefStage
-            brief={(asObject(data?.creator_brief) as CreatorBrief) ?? null}
-            submitted={submitted}
-          />
-        ) : null}
+        <div key={stage} className="animate-fade-up">
+          {stage === "brief" ? (
+            <BriefStage
+              brief={(asObject(data?.creator_brief) as CreatorBrief) ?? null}
+              submitted={submitted}
+            />
+          ) : null}
 
-        {stage === "research" ? (
-          <ResearchStage
-            data={data}
-            status={researchStatus}
-            errorMessage={
-              analyze.isError ? formatApiError(analyze.error, "Analysis failed.") : undefined
-            }
-          />
-        ) : null}
+          {stage === "research" ? (
+            <ResearchStage
+              data={data}
+              status={researchStatus}
+              errorMessage={
+                analyze.isError ? formatApiError(analyze.error, "Analysis failed.") : undefined
+              }
+            />
+          ) : null}
 
-        {stage === "angle" ? (
-          <AngleStage data={data} submitted={submitted} selected={selected} />
-        ) : null}
+          {stage === "angle" ? (
+            <AngleStage data={data} submitted={submitted} selected={selected} />
+          ) : null}
 
-        {stage === "packaging" ? (
-          <PackagingStage
-            data={data}
-            options={options}
-            selected={selected}
-            selectionStatus={selectionStatus}
-            onSelect={handleSelect}
-          />
-        ) : null}
+          {stage === "packaging" ? (
+            <PackagingStage
+              data={data}
+              options={options}
+              selected={selected}
+              selectionStatus={selectionStatus}
+              onSelect={handleSelect}
+              durationSeconds={submitted?.duration_seconds}
+            />
+          ) : null}
 
-        {stage === "compare" ? (
-          <CompareStage
-            options={options}
-            selectedId={selected?.id ?? null}
-            selectionStatus={selectionStatus}
-            onSelect={handleSelect}
-          />
-        ) : null}
+          {stage === "compare" ? (
+            <CompareStage
+              options={options}
+              selectedId={selected?.id ?? null}
+              selectionStatus={selectionStatus}
+              onSelect={handleSelect}
+            />
+          ) : null}
 
-        {stage === "decision" ? (
-          <DecisionStage
-            data={data}
-            selected={selected}
-            selectionStatus={selectionStatus}
-            onExport={handleExport}
-          />
-        ) : null}
+          {stage === "decision" ? (
+            <DecisionStage
+              data={data}
+              selected={selected}
+              selectionStatus={selectionStatus}
+              onExport={handleExport}
+            />
+          ) : null}
 
-        {stage === "checklist" ? (
-          <ChecklistStage
-            selected={selected}
-            checklist={checklist}
-            onToggle={handleToggleChecklist}
-            onExport={handleExport}
-          />
+          {stage === "checklist" ? (
+            <ChecklistStage
+              selected={selected}
+              checklist={checklist}
+              onToggle={handleToggleChecklist}
+              onExport={handleExport}
+            />
+          ) : null}
+        </div>
+
+        {stage !== "idea" && unlocked ? (
+          <nav
+            aria-label="Stage pages"
+            className="grid grid-cols-2 items-center gap-3 border-t border-border pt-5"
+          >
+            {previousStage ? (
+              <Button variant="ghost" onClick={() => move(-1)} className="min-w-0 justify-self-start">
+                <ChevronLeft aria-hidden="true" />
+                <span className="truncate">{previousStage.label}</span>
+              </Button>
+            ) : (
+              <span />
+            )}
+            {nextStage ? (
+              <Button variant="outline" onClick={() => move(1)} className="min-w-0 max-w-full justify-self-end">
+                <span className="truncate">
+                  <span className="hidden sm:inline">Continue to </span>
+                  {nextStage.label}
+                </span>
+                <ChevronRight aria-hidden="true" />
+              </Button>
+            ) : null}
+          </nav>
         ) : null}
       </div>
     </div>

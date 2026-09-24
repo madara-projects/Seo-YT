@@ -27,6 +27,31 @@ export function historyDate(value?: string | null): string {
   })} IST`;
 }
 
+/** Date only, in the same zone as `historyDate`: "24 Sept 2026". */
+export function shortDate(value?: string | null): string {
+  if (!value) return "Unknown";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Unknown";
+
+  return parsed.toLocaleDateString(DISPLAY_LOCALE, {
+    timeZone: DISPLAY_TIME_ZONE,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/** The greeting for the current hour in the creator's zone. */
+export function greetingFor(date: Date = new Date()): string {
+  const hour = Number(
+    date.toLocaleString("en-US", { timeZone: DISPLAY_TIME_ZONE, hour: "numeric", hourCycle: "h23" }),
+  );
+  if (hour < 5) return "Working late";
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
 /**
  * Search matching, ported verbatim: case-insensitive substring across title,
  * query, content angle, and intent.

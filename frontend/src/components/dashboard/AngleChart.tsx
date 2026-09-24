@@ -2,7 +2,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   LabelList,
   ResponsiveContainer,
   Tooltip,
@@ -45,7 +44,7 @@ function ChartTooltip({
   if (!row) return null;
 
   return (
-    <div className="rounded-md border border-border bg-popover px-3 py-2 shadow-md">
+    <div className="rounded-xl border border-border bg-popover px-3 py-2 shadow-elevated">
       <p className="text-xs font-semibold text-popover-foreground">{row.angle}</p>
       <p className="numeric mt-0.5 text-[11px] text-muted-foreground">
         {row.score.toFixed(1)} / 10 average title quality
@@ -69,29 +68,45 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
 
   if (rows.length < MIN_ANGLES_FOR_CHART) {
     return (
-      <UnavailableNote>
-        {rows.length === 1
-          ? `Only one content angle has been analysed so far (${rows[0]?.angle}, averaging ${rows[0]?.score.toFixed(1)} / 10). A comparison needs at least two.`
-          : "No scored content angles yet. Generate a few packages and their angles will be compared here."}
-      </UnavailableNote>
+      <div className="space-y-4">
+        {/* The shape of the chart to come; decorative, and carries no values. */}
+        <div className="space-y-2.5 opacity-60" aria-hidden="true">
+          {[82, 64, 46].map((width) => (
+            <div key={width} className="flex items-center gap-3">
+              <span className="h-2.5 w-20 rounded-full bg-muted" />
+              <span
+                className="h-6 rounded-r-lg border border-dashed border-border bg-linear-to-r from-transparent to-muted"
+                style={{ width: `${width}%` }}
+              />
+            </div>
+          ))}
+        </div>
+        <UnavailableNote>
+          {rows.length === 1
+            ? `Only one content angle has been analysed so far (${rows[0]?.angle}, averaging ${rows[0]?.score.toFixed(1)} / 10). A comparison needs at least two.`
+            : "No scored content angles yet. Generate a few packages and their angles will be compared here."}
+        </UnavailableNote>
+      </div>
     );
   }
 
   return (
     <>
-      <div style={{ height: Math.max(140, rows.length * 44) }}>
+      <div style={{ height: Math.max(150, rows.length * 46) }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={rows}
             layout="vertical"
             margin={{ top: 4, right: 44, bottom: 4, left: 4 }}
-            barCategoryGap={6}
+            barCategoryGap={8}
           >
-            <CartesianGrid
-              horizontal={false}
-              stroke="var(--chart-grid)"
-              strokeDasharray="2 4"
-            />
+            <defs>
+              <linearGradient id="angle-bar" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stopColor="var(--chart-1)" stopOpacity={0.55} />
+                <stop offset="1" stopColor="var(--chart-1)" stopOpacity={1} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid horizontal={false} stroke="var(--chart-grid)" strokeDasharray="2 4" />
             <XAxis
               type="number"
               domain={[0, 10]}
@@ -103,25 +118,27 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
             <YAxis
               type="category"
               dataKey="angle"
-              width={110}
+              width={116}
               tick={{ fill: "var(--chart-axis)", fontSize: 11 }}
               tickLine={false}
               axisLine={false}
             />
             <Tooltip
               content={<ChartTooltip />}
-              cursor={{ fill: "var(--chart-grid)", fillOpacity: 0.25 }}
+              cursor={{ fill: "var(--chart-grid)", fillOpacity: 0.35 }}
             />
-            <Bar dataKey="score" radius={[0, 4, 4, 0]} isAnimationActive={false}>
-              {rows.map((row) => (
-                <Cell key={row.angle} fill="var(--chart-1)" />
-              ))}
+            <Bar
+              dataKey="score"
+              fill="url(#angle-bar)"
+              radius={[0, 8, 8, 0]}
+              isAnimationActive={false}
+            >
               <LabelList
                 dataKey="score"
                 position="right"
                 offset={8}
                 formatter={(value: number) => value.toFixed(1)}
-                style={{ fill: "var(--chart-axis)", fontSize: 11, fontWeight: 600 }}
+                style={{ fill: "var(--foreground)", fontSize: 11, fontWeight: 600 }}
               />
             </Bar>
           </BarChart>
@@ -129,16 +146,16 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
       </div>
 
       {/* Identity is never colour-alone: the same numbers as a table. */}
-      <details className="mt-2">
-        <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">
+      <details className="group mt-3">
+        <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
           View as table
         </summary>
         <table className="mt-2 w-full text-left text-xs">
           <thead>
-            <tr className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground">
-              <th scope="col" className="pb-1.5 font-semibold">Content angle</th>
-              <th scope="col" className="pb-1.5 font-semibold">Avg title quality</th>
-              <th scope="col" className="pb-1.5 font-semibold">Runs</th>
+            <tr className="border-b border-border text-[11px] text-muted-foreground">
+              <th scope="col" className="pb-1.5 font-medium">Content angle</th>
+              <th scope="col" className="pb-1.5 font-medium">Avg title quality</th>
+              <th scope="col" className="pb-1.5 font-medium">Runs</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -153,7 +170,7 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
         </table>
       </details>
 
-      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
         Average local title-quality heuristic per angle across your saved analyses. It reflects how
         the generator scored the packaging, not how videos performed.
       </p>

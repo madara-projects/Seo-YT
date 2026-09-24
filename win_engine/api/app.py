@@ -97,12 +97,19 @@ def create_app() -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Cache-Control"] = "no-store"
+        # React build files carry a content hash in their name, so a cached copy
+        # can never go stale; everything else, including the HTML, stays uncached.
+        response.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable"
+            if request.url.path.startswith("/app-assets/assets/") and response.status_code == 200
+            else "no-store"
+        )
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "connect-src 'self'; "
-            "img-src 'self' data:; "
+            # Public YouTube thumbnails on the Channel and research views.
+            "img-src 'self' data: https://i.ytimg.com; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com; "
             "script-src 'self' 'unsafe-inline'; "

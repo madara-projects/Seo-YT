@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { Link2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,10 +41,13 @@ export function DeleteRunsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-tone-bad" aria-hidden="true" />
-            {count === 1 ? "Delete saved package" : `Delete ${count} packages`}
-          </DialogTitle>
+          <span
+            className="mb-1 grid size-11 place-items-center rounded-2xl bg-tone-bad-bg text-tone-bad ring-1 ring-inset ring-tone-bad-border"
+            aria-hidden="true"
+          >
+            <Trash2 className="size-5" />
+          </span>
+          <DialogTitle>{count === 1 ? "Delete saved package" : `Delete ${count} packages`}</DialogTitle>
           <DialogDescription>{message}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -96,9 +99,15 @@ export function LinkVideoDialog({
             event.preventDefault();
             if (canSubmit) onSubmit(trimmed);
           }}
-          className="space-y-4"
+          className="space-y-5"
         >
           <DialogHeader>
+            <span
+              className="mb-1 grid size-11 place-items-center rounded-2xl bg-brand-soft text-brand ring-1 ring-inset ring-brand-border"
+              aria-hidden="true"
+            >
+              <Link2 className="size-5" />
+            </span>
             <DialogTitle>{isRelink ? "Change linked video" : "Link published video"}</DialogTitle>
             <DialogDescription>
               Enter the YouTube video ID or URL for the video you published from this package.
@@ -107,7 +116,7 @@ export function LinkVideoDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label htmlFor="youtube-video-id">YouTube video ID or URL</Label>
             <Input
               id="youtube-video-id"
@@ -120,7 +129,7 @@ export function LinkVideoDialog({
             />
             <p
               id="youtube-video-id-help"
-              className={tooShort ? "text-[11px] text-tone-bad" : "text-[11px] text-muted-foreground"}
+              className={tooShort ? "text-xs text-tone-bad" : "text-xs text-muted-foreground"}
             >
               {tooShort
                 ? "A YouTube video ID is at least 11 characters."

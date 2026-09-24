@@ -8,6 +8,10 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
+  // Parallel browsers share one single-process backend, so a first page load
+  // (bundle, lazy route chunk, then data) can outlast the default 5s wait on a
+  // busy machine. The assertions are unchanged; only the patience is.
+  expect: { timeout: 15_000 },
   reporter: [["list"]],
   use: {
     baseURL: "http://127.0.0.1:8000",

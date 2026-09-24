@@ -5,6 +5,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter
 from fastapi import HTTPException
@@ -37,6 +38,11 @@ _NO_CACHE_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+# Pages the YouTube OAuth callback may return the browser to. Anything else
+# falls back to the legacy dashboard root, so the value can never become an
+# open redirect.
+_OAUTH_RETURN_PATHS = frozenset({"/", "/next/settings", "/next/channel"})
+_OAUTH_RETURN_COOKIE = "win_engine_oauth_return"
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -209,25 +215,38 @@ def youtube_channel_status():
 
 
 @router.get("/youtube/channel/connect")
-def connect_youtube_channel():
+def connect_youtube_channel(return_to: str = "/"):
     service = YouTubeChannelService(get_settings())
     try:
-        return RedirectResponse(service.authorization_url())
+        response = RedirectResponse(service.authorization_url())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Remember which page started the flow. A connect without a valid
+    # return_to clears any earlier choice so the callback cannot reuse it.
+    if return_to in _OAUTH_RETURN_PATHS and return_to != "/":
+        response.set_cookie(_OAUTH_RETURN_COOKIE, return_to, max_age=600, httponly=True, samesite="lax", path="/")
+    else:
+        response.delete_cookie(_OAUTH_RETURN_COOKIE, path="/")
+    return response
 
 
 @router.get("/oauth/youtube/callback")
-def youtube_oauth_callback(code: str = "", state: str = "", error: str = ""):
+def youtube_oauth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    return_to = request.cookies.get(_OAUTH_RETURN_COOKIE, "/")
+    base = return_to if return_to in _OAUTH_RETURN_PATHS else "/"
+
+    def finish(**params: str) -> RedirectResponse:
+        response = RedirectResponse(url=f"{base}?{urlencode(params)}")
+        response.delete_cookie(_OAUTH_RETURN_COOKIE, path="/")
+        return response
+
     if error:
-        return RedirectResponse(url=f"/?youtube=error&reason={error}")
+        return finish(youtube="error", reason=error)
     try:
         YouTubeChannelService(get_settings()).complete_authorization(code=code, state=state)
-    except ValueError as exc:
-        return RedirectResponse(url="/?youtube=error")
     except Exception:
-        return RedirectResponse(url="/?youtube=error")
-    return RedirectResponse(url="/?youtube=connected")
+        return finish(youtube="error")
+    return finish(youtube="connected")
 
 
 @router.post("/youtube/channel/refresh")

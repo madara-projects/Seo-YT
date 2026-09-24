@@ -1,4 +1,4 @@
-import { ExternalLink } from "lucide-react";
+import { ArrowUpRight, Construction, FlaskConical } from "lucide-react";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/States";
@@ -17,16 +17,17 @@ export function NotMigrated({
   legacyHash: string;
 }) {
   return (
-    <div className="mx-auto max-w-4xl">
-      <PageHeader title={title} description={description} />
+    <div className="mx-auto w-full max-w-4xl animate-fade-up">
+      <PageHeader eyebrow="Research lab" icon={FlaskConical} title={title} description={description} />
       <EmptyState
+        icon={Construction}
         title="Not migrated yet"
-        description="This page still runs in the legacy dashboard. The React migration starts with Creator; this one follows the same component system."
+        description="This page still runs in the classic dashboard, which keeps working in a new tab. It will move into this workspace with the same components as Creator, Dashboard and History."
         action={
           <Button variant="outline" asChild>
             <a href={`/dashboard_legacy${legacyHash}`} target="_blank" rel="noreferrer">
-              <ExternalLink aria-hidden="true" />
               Open in legacy dashboard
+              <ArrowUpRight aria-hidden="true" />
             </a>
           </Button>
         }

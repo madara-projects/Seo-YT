@@ -1,21 +1,35 @@
-import { Link2, Trash2 } from "lucide-react";
+import { Eye, Link2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
+import { Meter } from "@/components/common/Meter";
 import { cn, displayValue } from "@/lib/utils";
+import { initialOf, toFiniteNumber } from "@/lib/format";
 import { historyDate, runTitle } from "@/lib/historyFormat";
 import type { HistoryRun } from "@/api/historyTypes";
 
-function Score({ label, value, suffix }: { label: string; value: unknown; suffix: string }) {
+function Score({
+  label,
+  value,
+  suffix,
+  max,
+}: {
+  label: string;
+  value: unknown;
+  suffix: string;
+  max: number;
+}) {
+  const number = toFiniteNumber(value);
   return (
-    <div className="min-w-[5.5rem]">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
-      <p className="numeric text-sm font-bold text-foreground">
+    <div className="w-24 space-y-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-[11px] text-muted-foreground">{label}</p>
+      </div>
+      <p className="numeric text-sm font-semibold text-foreground">
         {displayValue(value, "Unavailable")}
         {value === null || value === undefined || value === "" ? "" : suffix}
       </p>
+      <Meter value={number} max={max} label={`${label} score`} size="sm" />
     </div>
   );
 }
@@ -46,60 +60,70 @@ export function HistoryRow({
       data-history-run={run.id}
       data-testid="history-row"
       className={cn(
-        "flex flex-col gap-3 border-b border-border p-4 transition-colors last:border-b-0 sm:flex-row sm:items-center",
-        selected && "bg-primary/5",
-        isOpen && "bg-muted/50",
+        "group relative flex flex-col gap-4 border-b border-border px-4 py-4 transition-colors last:border-b-0 sm:px-5 lg:flex-row lg:items-center lg:gap-6",
+        selected ? "bg-brand-soft/40" : "hover:bg-accent/40",
+        isOpen && "bg-accent/60",
       )}
     >
-      <Checkbox
-        checked={selected}
-        onCheckedChange={(value) => onToggleSelect(value === true)}
-        aria-label={`Select ${title}`}
-        className="shrink-0"
-      />
+      {isOpen ? (
+        <span className="absolute inset-y-3 left-0 w-1 rounded-r-full bg-brand-gradient" aria-hidden="true" />
+      ) : null}
 
-      <div className="min-w-0 flex-1 space-y-1.5">
-        <button
-          type="button"
-          onClick={onOpen}
-          title={title}
-          className="block max-w-full truncate text-left text-sm font-semibold text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      <div className="flex min-w-0 flex-1 items-start gap-3.5">
+        <Checkbox
+          checked={selected}
+          onCheckedChange={(value) => onToggleSelect(value === true)}
+          aria-label={`Select ${title}`}
+          className="mt-3"
+        />
+        <span
+          className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-soft font-display text-base font-semibold text-brand ring-1 ring-inset ring-brand-border"
+          aria-hidden="true"
         >
-          {title}
-        </button>
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-          <span>{historyDate(run.created_at)}</span>
-          <span aria-hidden="true">·</span>
-          <span>{angle}</span>
-          {run.selected_package_id ? (
-            <EvidenceChip tone="ok">Selected package</EvidenceChip>
-          ) : (
-            <EvidenceChip tone="neutral">Selection unknown</EvidenceChip>
-          )}
-          {isLinked ? <EvidenceChip tone="ok">YouTube linked</EvidenceChip> : null}
+          {initialOf(title)}
+        </span>
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <button
+            type="button"
+            onClick={onOpen}
+            title={title}
+            className="block max-w-full truncate rounded-md text-left text-[15px] font-semibold text-foreground transition-colors hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {title}
+          </button>
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <span>{historyDate(run.created_at)}</span>
+            <span aria-hidden="true">·</span>
+            <span>{angle}</span>
+            {run.selected_package_id ? (
+              <EvidenceChip tone="ok">Selected package</EvidenceChip>
+            ) : (
+              <EvidenceChip tone="neutral">Selection unknown</EvidenceChip>
+            )}
+            {isLinked ? <EvidenceChip tone="ok">YouTube linked</EvidenceChip> : null}
+          </div>
         </div>
       </div>
 
-      <div className="flex gap-4 sm:gap-5" aria-label="Package scores">
-        <Score label="Opportunity" value={run.opportunity_score} suffix="/100" />
-        <Score label="Title quality" value={run.title_score} suffix="/10" />
+      <div
+        role="group"
+        aria-label="Package scores"
+        className="flex gap-5 pl-[4.35rem] lg:pl-0"
+      >
+        <Score label="Opportunity" value={run.opportunity_score} suffix="/100" max={100} />
+        <Score label="Title quality" value={run.title_score} suffix="/10" max={10} />
       </div>
 
-      <div className="flex shrink-0 flex-wrap gap-1.5">
+      <div className="flex shrink-0 flex-wrap gap-1.5 pl-[4.35rem] lg:pl-0">
         <Button size="sm" onClick={onOpen}>
+          <Eye aria-hidden="true" />
           View package
         </Button>
         <Button size="sm" variant="outline" onClick={onLink}>
           <Link2 aria-hidden="true" />
           {isLinked ? "Change link" : "Link video"}
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onDelete}
-          aria-label={`Delete ${title}`}
-          className="text-tone-bad hover:bg-tone-bad-bg hover:text-tone-bad"
-        >
+        <Button size="sm" variant="danger" onClick={onDelete} aria-label={`Delete ${title}`}>
           <Trash2 aria-hidden="true" />
           Delete
         </Button>
