@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, List
 
@@ -8,6 +10,21 @@ import requests
 
 
 logger = logging.getLogger(__name__)
+_ESCAPED_TEXT_FIELDS = ("title", "description", "channel_title")
+
+
+def unescape_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Decode the HTML entities search.list puts in text fields.
+
+    "Hidden Details &amp; Easter Eggs" reached the writer's prompt as-is, and
+    the model copied "&amp;" into a generated title.
+    """
+
+    for field in _ESCAPED_TEXT_FIELDS:
+        value = result.get(field)
+        if isinstance(value, str) and "&" in value:
+            result[field] = html.unescape(value)
+    return result
 
 
 class YouTubeClient:
@@ -16,6 +33,11 @@ class YouTubeClient:
     _SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
     _VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
     _CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
+    # Short-window limits clear within seconds; the daily quota does not, so
+    # only these reasons are retried.
+    _BURST_LIMIT_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+    _RATE_LIMIT_RETRIES = 2
+    _RATE_LIMIT_BACKOFF_SECONDS = 1.0
 
     def __init__(self, api_keys: List[str], timeout_seconds: int) -> None:
         self._api_keys = api_keys
@@ -68,7 +90,7 @@ class YouTubeClient:
             video_ids.append(video_id)
             if channel_id:
                 channel_ids.append(channel_id)
-            results.append(
+            results.append(unescape_result(
                 {
                     "video_id": video_id,
                     "channel_id": channel_id,
@@ -78,7 +100,7 @@ class YouTubeClient:
                     "published_at": snippet.get("publishedAt"),
                     "thumbnails": snippet.get("thumbnails", {}),
                 }
-            )
+            ))
 
         stats = self._fetch_video_stats(video_ids, raise_on_error=raise_on_error)
         channel_stats = self._fetch_channel_stats(channel_ids, raise_on_error=raise_on_error)
@@ -232,8 +254,7 @@ class YouTubeClient:
             request_params = {**params, "key": api_key}
 
             try:
-                response = requests.get(url, params=request_params, timeout=self._timeout)
-                response.raise_for_status()
+                response = self._get_with_backoff(url, request_params)
                 self._active_key_index = key_index
                 if warnings:
                     self._last_warning = " ".join(warnings)
@@ -247,7 +268,9 @@ class YouTubeClient:
                     )
                     logger.warning("Rotating YouTube API key due to %s", reason or "quota/access issue")
                     continue
-                logger.warning("YouTube request failed with HTTP status %s: %s", exc.response.status_code if exc.response else "unknown", reason or "unknown error")
+                # A 4xx Response is falsy, so test for None explicitly.
+                status = exc.response.status_code if exc.response is not None else "unknown"
+                logger.warning("YouTube request failed with HTTP status %s: %s", status, reason or "unknown error")
                 self._last_warning = f"YouTube API request failed: {reason or 'unknown error'}"
                 if raise_on_error:
                     raise
@@ -264,6 +287,23 @@ class YouTubeClient:
         if raise_on_error and last_error is not None:
             raise last_error
         return {}
+
+    def _get_with_backoff(self, url: str, params: dict[str, Any]) -> requests.Response:
+        """GET once, retrying briefly when YouTube reports a burst rate limit.
+
+        A research run fires several searches back to back; without a retry a
+        momentary "rateLimitExceeded" silently dropped that query's evidence.
+        """
+
+        for attempt in range(self._RATE_LIMIT_RETRIES + 1):
+            response = requests.get(url, params=params, timeout=self._timeout)
+            if response.status_code in {403, 429} and attempt < self._RATE_LIMIT_RETRIES:
+                if response.status_code == 429 or self._extract_error_reason(response) in self._BURST_LIMIT_REASONS:
+                    time.sleep(self._RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1))
+                    continue
+            response.raise_for_status()
+            return response
+        raise AssertionError("unreachable")  # the final attempt returns or raises
 
     def _refresh_quota_window(self) -> None:
         current_date = datetime.now(timezone.utc).date()
