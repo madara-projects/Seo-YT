@@ -34,7 +34,7 @@ import type { HistoryRunDetail } from "@/api/historyTypes";
 const NOT_STORED = "Not stored in this older record.";
 
 function TagList({ items }: { items: string[] }) {
-  if (!items.length) return <p className="text-[13px] text-muted-foreground">{NOT_STORED}</p>;
+  if (!items.length) return <p className="text-[0.8125rem] text-muted-foreground">{NOT_STORED}</p>;
   return (
     <ul className="flex flex-wrap gap-1.5">
       {items.map((item, index) => (
@@ -63,7 +63,7 @@ function Section({
   return (
     <section className="space-y-2.5">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+        <h3 className="flex items-center gap-2 text-[0.8125rem] font-semibold text-foreground">
           <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
           {title}
         </h3>
@@ -93,7 +93,7 @@ function Callout({
     <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3.5">
       <IconBadge icon={icon} tone={tone === "neutral" ? "neutral" : tone} size="sm" />
       <div className="min-w-0 flex-1 space-y-0.5">
-        <p className="text-[13px] font-semibold text-foreground">{title}</p>
+        <p className="text-[0.8125rem] font-semibold text-foreground">{title}</p>
         <p className="text-xs leading-relaxed text-muted-foreground">{body}</p>
       </div>
       {chip ? <EvidenceChip tone={tone}>{chip}</EvidenceChip> : null}
@@ -120,7 +120,7 @@ function ScoreTile({
         {label}
       </p>
       <p className="mt-1.5 font-display text-lg font-semibold text-foreground">{value}</p>
-      <p className="text-[11px] text-muted-foreground">{note}</p>
+      <p className="text-[0.6875rem] text-muted-foreground">{note}</p>
     </div>
   );
 }
@@ -235,7 +235,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
         action={description ? <CopyButton value={description} label="Copy" size="xs" /> : null}
       >
         {description ? (
-          <p className="whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[13px] leading-relaxed text-muted-foreground">
+          <p className="whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[0.8125rem] leading-relaxed text-muted-foreground">
             {description}
           </p>
         ) : (
@@ -269,7 +269,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
               {variants.map((variant, index) => (
                 <li
                   key={index}
-                  className="rounded-xl border border-border bg-elevated px-3.5 py-2.5 text-[13px] text-muted-foreground"
+                  className="rounded-xl border border-border bg-elevated px-3.5 py-2.5 text-[0.8125rem] text-muted-foreground"
                 >
                   {variant}
                 </li>
@@ -303,7 +303,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
         action={fullScript ? <CopyButton value={fullScript} label="Copy" size="xs" /> : null}
       >
         {fullScript ? (
-          <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[13px] leading-relaxed text-muted-foreground scrollbar-thin">
+          <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[0.8125rem] leading-relaxed text-muted-foreground scrollbar-thin">
             {fullScript}
           </p>
         ) : (

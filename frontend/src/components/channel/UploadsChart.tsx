@@ -13,6 +13,9 @@ import { shortDate } from "@/lib/historyFormat";
 import { recentUploadsSeries } from "@/lib/channelFormat";
 import type { ChannelVideo } from "@/api/systemTypes";
 
+/** In rem, so chart text follows the interface scale like everything else. */
+const CHART_TEXT = "0.6875rem";
+
 interface Point {
   id: string;
   title: string;
@@ -27,11 +30,11 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: { paylo
   const point = active ? payload?.[0]?.payload : undefined;
   if (!point) return null;
   return (
-    <div className="max-w-[240px] rounded-xl border border-border bg-popover px-3 py-2.5 shadow-elevated">
+    <div className="max-w-60 rounded-xl border border-border bg-popover px-3 py-2.5 shadow-elevated">
       <p className="line-clamp-2 text-xs font-semibold text-popover-foreground">{point.title}</p>
-      <p className="mt-0.5 text-[11px] text-muted-foreground">{point.date}</p>
+      <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">{point.date}</p>
       <p className="numeric mt-1.5 text-xs text-foreground">{point.views.toLocaleString()} views</p>
-      <p className="numeric text-[11px] text-muted-foreground">
+      <p className="numeric text-[0.6875rem] text-muted-foreground">
         {point.likes === null ? "Likes unavailable" : `${point.likes.toLocaleString()} likes`} ·{" "}
         {point.comments === null ? "comments unavailable" : `${point.comments.toLocaleString()} comments`}
       </p>
@@ -87,14 +90,14 @@ export function UploadsChart({ videos }: { videos: ChannelVideo[] }) {
             <CartesianGrid vertical={false} stroke="var(--chart-grid)" strokeDasharray="2 4" />
             <XAxis
               dataKey="axis"
-              tick={{ fill: "var(--chart-axis)", fontSize: 11 }}
+              tick={{ fill: "var(--chart-axis)", fontSize: CHART_TEXT }}
               tickLine={false}
               axisLine={false}
               interval="preserveStartEnd"
             />
             <YAxis
               tickFormatter={(value: number) => formatCompact(value)}
-              tick={{ fill: "var(--chart-axis)", fontSize: 11 }}
+              tick={{ fill: "var(--chart-axis)", fontSize: CHART_TEXT }}
               tickLine={false}
               axisLine={false}
               width={48}

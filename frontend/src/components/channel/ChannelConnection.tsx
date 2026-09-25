@@ -58,7 +58,7 @@ export function OAuthNoticeBanner({
       ) : (
         <TriangleAlert className="mt-0.5 size-4 shrink-0 text-tone-bad" aria-hidden="true" />
       )}
-      <p className="flex-1 text-[13px] font-medium text-foreground">{notice.message}</p>
+      <p className="flex-1 text-[0.8125rem] font-medium text-foreground">{notice.message}</p>
       <Button variant="ghost" size="icon-sm" onClick={onDismiss} aria-label="Dismiss message" className="-my-1">
         <X aria-hidden="true" />
       </Button>
@@ -85,7 +85,7 @@ export function ConnectChannelCard({
         className="pointer-events-none absolute inset-0 bg-dots [mask-image:radial-gradient(ellipse_at_top_right,black,transparent_60%)]"
         aria-hidden="true"
       />
-      <div className={cn("relative grid gap-6", !compact && "lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)] lg:items-center")}>
+      <div className={cn("relative grid gap-6", !compact && "lg:grid-cols-[minmax(0,1fr)_minmax(0,18.75rem)] lg:items-center")}>
         <div className="space-y-4">
           <span
             className="grid size-12 place-items-center rounded-2xl bg-[#ff0033] text-white shadow-[0_10px_24px_-10px_#ff0033]"
@@ -97,7 +97,7 @@ export function ConnectChannelCard({
             <h3 className="font-display text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
               Connect your YouTube channel
             </h3>
-            <p className="max-w-xl text-[13px] leading-relaxed text-muted-foreground">
+            <p className="max-w-xl text-[0.8125rem] leading-relaxed text-muted-foreground">
               See real 28-day views, watch time, subscribers and per-video numbers next to your
               packages. Access is read-only: Win-Engine can never upload, edit or delete anything
               on your channel.
@@ -123,11 +123,11 @@ export function ConnectChannelCard({
           </p>
           <ul className="space-y-2">
             {PERMISSIONS.map(({ label, scope }) => (
-              <li key={scope} className="flex items-start gap-2 text-[13px] text-foreground">
+              <li key={scope} className="flex items-start gap-2 text-[0.8125rem] text-foreground">
                 <Eye className="mt-0.5 size-3.5 shrink-0 text-brand" aria-hidden="true" />
                 <span>
                   {label}
-                  <code className="numeric block text-[11px] text-muted-foreground">{scope}</code>
+                  <code className="numeric block text-[0.6875rem] text-muted-foreground">{scope}</code>
                 </span>
               </li>
             ))}
@@ -140,7 +140,7 @@ export function ConnectChannelCard({
             ].map(({ icon: Icon, label }) => (
               <div key={label} className="space-y-1">
                 <Icon className="mx-auto size-4 text-muted-foreground" aria-hidden="true" />
-                <p className="text-[11px] text-muted-foreground">{label}</p>
+                <p className="text-[0.6875rem] text-muted-foreground">{label}</p>
               </div>
             ))}
           </div>
@@ -157,8 +157,8 @@ export function ChannelSetupNeeded({ message }: { message?: string | null }) {
       <div className="flex items-start gap-3">
         <KeyRound className="mt-0.5 size-4 shrink-0 text-tone-warn" aria-hidden="true" />
         <div className="space-y-1">
-          <p className="text-[13px] font-semibold text-foreground">YouTube OAuth is not set up</p>
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
+          <p className="text-[0.8125rem] font-semibold text-foreground">YouTube OAuth is not set up</p>
+          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
             {message ||
               "Add YouTube OAuth client credentials and an encryption key to .env to connect your channel."}
           </p>

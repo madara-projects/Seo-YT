@@ -39,9 +39,9 @@ export function UploadsTable({ videos }: { videos: ChannelVideo[] }) {
       </Tabs>
 
       <div className="-mx-5 overflow-x-auto sm:-mx-6">
-        <table className="w-full min-w-[640px] text-left">
+        <table className="w-full min-w-160 text-left">
           <thead>
-            <tr className="border-y border-border bg-muted/40 text-[11px] font-medium text-muted-foreground">
+            <tr className="border-y border-border bg-muted/40 text-[0.6875rem] font-medium text-muted-foreground">
               <th scope="col" className="px-5 py-2.5 font-medium sm:px-6">Upload</th>
               <th scope="col" className="px-3 py-2.5 text-right font-medium">Views</th>
               <th scope="col" className="px-3 py-2.5 text-right font-medium">Likes</th>
@@ -69,13 +69,13 @@ export function UploadsTable({ videos }: { videos: ChannelVideo[] }) {
                             href={url}
                             target="_blank"
                             rel="noreferrer"
-                            className="group line-clamp-2 text-[13px] font-medium leading-snug text-foreground hover:text-brand"
+                            className="group line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground hover:text-brand"
                           >
                             {video.title || "Untitled upload"}
                             <ArrowUpRight className="ml-0.5 inline size-3 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
                           </a>
                         ) : (
-                          <p className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
+                          <p className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
                             {video.title || "Untitled upload"}
                           </p>
                         )}
@@ -84,7 +84,7 @@ export function UploadsTable({ videos }: { videos: ChannelVideo[] }) {
                     </div>
                   </td>
                   <td className="px-3 py-3 text-right">
-                    <p className="numeric text-[13px] font-semibold text-foreground">{formatNumber(video.views)}</p>
+                    <p className="numeric text-[0.8125rem] font-semibold text-foreground">{formatNumber(video.views)}</p>
                     <div className="ml-auto mt-1.5 h-1 w-16 overflow-hidden rounded-full bg-muted" aria-hidden="true">
                       <div
                         className="h-full rounded-full bg-brand-gradient"
@@ -92,13 +92,13 @@ export function UploadsTable({ videos }: { videos: ChannelVideo[] }) {
                       />
                     </div>
                   </td>
-                  <td className="numeric px-3 py-3 text-right text-[13px] text-muted-foreground">
+                  <td className="numeric px-3 py-3 text-right text-[0.8125rem] text-muted-foreground">
                     {formatNumber(video.likes)}
                   </td>
-                  <td className="numeric px-3 py-3 text-right text-[13px] text-muted-foreground">
+                  <td className="numeric px-3 py-3 text-right text-[0.8125rem] text-muted-foreground">
                     {formatNumber(video.comments)}
                   </td>
-                  <td className="numeric px-5 py-3 text-right text-[13px] text-foreground sm:px-6">
+                  <td className="numeric px-5 py-3 text-right text-[0.8125rem] text-foreground sm:px-6">
                     {rate === null ? "—" : rate.toFixed(1)}
                   </td>
                 </tr>

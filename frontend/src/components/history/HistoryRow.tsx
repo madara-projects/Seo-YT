@@ -23,7 +23,7 @@ function Score({
   return (
     <div className="w-24 space-y-1.5">
       <div className="flex items-baseline justify-between gap-2">
-        <p className="text-[11px] text-muted-foreground">{label}</p>
+        <p className="text-[0.6875rem] text-muted-foreground">{label}</p>
       </div>
       <p className="numeric text-sm font-semibold text-foreground">
         {displayValue(value, "Unavailable")}
@@ -87,7 +87,7 @@ export function HistoryRow({
             type="button"
             onClick={onOpen}
             title={title}
-            className="block max-w-full truncate rounded-md text-left text-[15px] font-semibold text-foreground transition-colors hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="block max-w-full truncate rounded-md text-left text-[0.9375rem] font-semibold text-foreground transition-colors hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {title}
           </button>

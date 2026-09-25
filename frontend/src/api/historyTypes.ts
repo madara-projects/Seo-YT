@@ -62,6 +62,7 @@ export interface LatestSync {
   synced_at?: string | null;
   channel?: OwnedChannel;
   period?: { start?: string; end?: string };
+  current_28_days?: { views?: number | null; estimatedMinutesWatched?: number | null };
 }
 
 export interface OwnedPerformance {
@@ -108,15 +109,11 @@ export interface HistoryRun {
   package_selected_at?: string | null;
 
   /**
-   * `GET /api/history/runs` does NOT currently return these two, though the
-   * legacy row renderer and its search filter both read them — so in practice
-   * the angle always fell back to "General" and searching by angle or intent
-   * never matched anything. They are declared because the detail endpoint does
-   * return them and the list endpoint may later; the UI must keep tolerating
-   * their absence.
+   * Shown on each row and matched by search. Older records may have neither,
+   * and the list then falls back to "General".
    */
-  content_angle?: string;
-  intent?: string;
+  content_angle?: string | null;
+  intent?: string | null;
 }
 
 export interface HistoryRunsResponse {

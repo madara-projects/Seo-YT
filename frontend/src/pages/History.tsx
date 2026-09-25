@@ -52,7 +52,7 @@ function LibraryStat({
   return (
     <div className="flex items-center gap-3.5 rounded-2xl border border-border bg-card p-4 shadow-card">
       <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand ring-1 ring-inset ring-brand-border" aria-hidden="true">
-        <Icon className="size-[18px]" />
+        <Icon className="size-4.5" />
       </span>
       <div className="min-w-0">
         {pending ? (
@@ -194,7 +194,7 @@ export default function HistoryPage() {
   const openRun = runs.find((run) => run.id === openRunId);
 
   return (
-    <div className="mx-auto w-full max-w-[1200px] animate-fade-up">
+    <div className="mx-auto w-full max-w-page animate-fade-up">
       <PageHeader
         eyebrow="Studio"
         icon={Library}
@@ -267,7 +267,7 @@ export default function HistoryPage() {
               aria-label="Bulk actions for saved packages"
               className="flex flex-wrap items-center gap-3 border-b border-border bg-muted/40 px-4 py-2.5 sm:px-5"
             >
-              <label className="flex cursor-pointer items-center gap-2.5 text-[13px] font-medium text-foreground">
+              <label className="flex cursor-pointer items-center gap-2.5 text-[0.8125rem] font-medium text-foreground">
                 <Checkbox
                   checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
                   onCheckedChange={(value) => toggleAllVisible(value === true)}

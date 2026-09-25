@@ -76,6 +76,9 @@ export interface CloudSyncStatus {
   mapped_packages?: number | null;
   synced_packages?: number | null;
   conflicts_detected?: number | null;
+  /** Runs in a row that could not reach the cloud; the retry wait doubles with each. */
+  consecutive_failures?: number;
+  retry_delay_seconds?: number | null;
 }
 
 export interface CloudSyncRunResult {

@@ -171,7 +171,7 @@ export function CommandPalette({
             aria-autocomplete="list"
             aria-activedescendant={results.length ? `${listId}-${active}` : undefined}
             aria-label="Search pages and actions"
-            className="h-14 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
+            className="h-14 flex-1 bg-transparent text-[0.9375rem] text-foreground outline-none placeholder:text-muted-foreground"
           />
           <Kbd>Esc</Kbd>
         </div>
@@ -181,12 +181,12 @@ export function CommandPalette({
           id={listId}
           role="listbox"
           aria-label="Results"
-          className="max-h-[min(60vh,420px)] overflow-y-auto p-2 scrollbar-thin"
+          className="max-h-[min(60vh,26.25rem)] overflow-y-auto p-2 scrollbar-thin"
         >
           {groups.length ? (
             groups.map(({ group, items }) => (
               <div key={group} role="group" aria-label={group} className="pb-1">
-                <p className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                <p className="px-2.5 pb-1 pt-2 text-[0.6875rem] font-medium uppercase tracking-[0.12em] text-muted-foreground">
                   {group}
                 </p>
                 {items.map(({ command, index }) => {

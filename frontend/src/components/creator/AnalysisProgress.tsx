@@ -41,7 +41,7 @@ export function AnalysisProgress({ elapsed }: { elapsed: number }) {
             <p className="font-display text-base font-semibold text-foreground">
               Analyzing and packaging
             </p>
-            <p className="truncate text-[13px] text-muted-foreground">{active.detail}</p>
+            <p className="truncate text-[0.8125rem] text-muted-foreground">{active.detail}</p>
           </div>
         </div>
         <span className="numeric shrink-0 text-2xl font-semibold tabular-nums text-foreground">

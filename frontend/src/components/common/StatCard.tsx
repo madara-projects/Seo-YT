@@ -53,7 +53,7 @@ export function StatCard({
           {toneLabel ? <EvidenceChip tone={tone}>{toneLabel}</EvidenceChip> : null}
         </div>
       ) : null}
-      <p className="relative mt-3 text-[13px] font-medium leading-snug text-muted-foreground">
+      <p className="relative mt-3 text-[0.8125rem] font-medium leading-snug text-muted-foreground">
         {label}
       </p>
       <p

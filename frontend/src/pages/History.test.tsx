@@ -97,6 +97,26 @@ describe("HistoryPage", () => {
     );
   });
 
+  it("shows each package's content angle and finds packages by it", async () => {
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({
+        runs: [
+          { ...RUNS[0], content_angle: "Story", intent: "SUGGESTED" },
+          { ...RUNS[1], content_angle: "Review", intent: "SUGGESTED" },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText("Three Morning Habits");
+    expect(screen.getByText("Story")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Search saved packages"), "review");
+
+    await waitFor(() => expect(screen.queryByText("Three Morning Habits")).not.toBeInTheDocument());
+    expect(screen.getByText("Top AI Tools")).toBeInTheDocument();
+  });
+
   it("shows a distinct empty state for a search with no matches", async () => {
     const user = userEvent.setup();
     renderPage();

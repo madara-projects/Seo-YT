@@ -1,1 +1,0 @@
-import{j as t}from"./query-BTye2Tri.js";import{N as i}from"./NotMigrated-JCAAIZNx.js";import"./react-C6WQlCgo.js";import"./index-Ch7gbQ-z.js";import"./forms-C9Ka6Sni.js";import"./arrow-up-right-DMDFPTVN.js";function p(){return t.jsx(i,{title:"Watchlist",description:"Tracked channels and videos.",legacyHash:"#watchlist"})}export{p as default};

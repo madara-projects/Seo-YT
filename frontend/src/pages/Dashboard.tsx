@@ -24,6 +24,7 @@ import {
   roundOpportunity,
   roundTitleScore,
   savedAnalysesCaption,
+  watchTimeSource,
 } from "@/lib/dashboardFormat";
 import type {
   AngleEffectiveness,
@@ -46,6 +47,8 @@ export default function DashboardPage() {
   const syncChannel = asObject(sync.channel);
   const channelTitle = String(channel.title ?? syncChannel.title ?? "");
   const isConnected = Boolean(channel.id || channelTitle);
+  const watchSource = watchTimeSource(owned as OwnedPerformance);
+  const linkedCount = toFiniteNumber(owned.linked_videos_count) ?? 0;
 
   const recentRuns = asArray<RecentRun>(learning.recent_runs);
   const angles = asArray<AngleEffectiveness>(learning.angle_effectiveness);
@@ -59,7 +62,7 @@ export default function DashboardPage() {
   const titleDelta = toFiniteNumber(scorecard.title_score_delta_vs_previous_window);
 
   return (
-    <div className="mx-auto w-full max-w-[1200px] space-y-6 animate-fade-up">
+    <div className="mx-auto w-full max-w-page space-y-6 animate-fade-up">
       <DashboardHero totalRuns={typeof totalRuns === "number" ? totalRuns : undefined} />
 
       {summary.isError ? (
@@ -89,14 +92,26 @@ export default function DashboardPage() {
           <StatCard
             label="Estimated watch time"
             icon={Clock}
-            value={formatWatchTime(owned.estimated_watch_minutes, isConnected)}
-            caption={
-              isConnected
-                ? "Total estimated watch time from the 28-day sync."
-                : "Unavailable until a YouTube Analytics sync succeeds."
+            value={
+              watchSource === "none"
+                ? "Unavailable"
+                : formatWatchTime(owned.estimated_watch_minutes, true)
             }
-            tone={isConnected ? "info" : "neutral"}
-            toneLabel={isConnected ? "YouTube data" : "Not connected"}
+            caption={
+              watchSource === "channel"
+                ? "Total estimated watch time from the 28-day sync."
+                : watchSource === "linked"
+                  ? `Across your ${linkedCount} linked ${linkedCount === 1 ? "video" : "videos"} at their latest snapshots — not a 28-day channel total.`
+                  : "Unavailable until a YouTube Analytics sync succeeds."
+            }
+            tone={watchSource === "none" ? "neutral" : "info"}
+            toneLabel={
+              watchSource === "channel"
+                ? "YouTube data"
+                : watchSource === "linked"
+                  ? "Linked videos"
+                  : "Not connected"
+            }
           />
           <StatCard
             label="Avg opportunity score"

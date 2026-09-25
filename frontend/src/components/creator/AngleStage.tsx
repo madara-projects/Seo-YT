@@ -92,7 +92,7 @@ export function AngleStage({
           title="Research synthesis"
           aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}
         >
-          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
+          <div className="space-y-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
             <p className="font-medium text-foreground">{displayValue(decision.recommended_angle)}</p>
             <p>{displayValue(decision.reason, "No research reasoning was returned.")}</p>
           </div>
@@ -108,7 +108,7 @@ export function AngleStage({
             </EvidenceChip>
           }
         >
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
+          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
             {displayValue(brief.unique_angle)}
           </p>
         </Panel>
@@ -123,7 +123,7 @@ export function AngleStage({
             </EvidenceChip>
           }
         >
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
+          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
             {publicCount
               ? `${formatNumber(publicCount)} public result${publicCount === 1 ? " was" : "s were"} returned for context. This does not prove why a video performed.`
               : "No public result was returned for this run."}
@@ -223,19 +223,19 @@ export function AngleStage({
                   {risks.map((risk, index) => (
                     <li key={index} className="relative">
                       <span
-                        className="absolute -left-[26px] top-4 size-2.5 rounded-full border-2 border-card bg-brand-gradient"
+                        className="absolute -left-6.5 top-4 size-2.5 rounded-full border-2 border-card bg-brand-gradient"
                         aria-hidden="true"
                       />
                       <Inset>
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-[13px] font-medium text-foreground">
+                          <p className="text-[0.8125rem] font-medium text-foreground">
                             {displayValue(risk.stage)} · {displayValue(risk.risk_code)}
                           </p>
                           <EvidenceChip tone={severityTone(risk.severity)}>
                             {String(risk.severity ?? "review").toUpperCase()}
                           </EvidenceChip>
                         </div>
-                        <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
+                        <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
                           {displayValue(risk.explanation)}
                         </p>
                         <dl className="mt-2 grid gap-1 text-xs leading-relaxed text-muted-foreground">
@@ -269,7 +269,7 @@ export function AngleStage({
                 {recommendations.length ? (
                   recommendations.map((row, index) => (
                     <Inset key={index}>
-                      <p className="text-[13px] font-medium text-foreground">
+                      <p className="text-[0.8125rem] font-medium text-foreground">
                         {displayValue(row.recommendation)}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
@@ -290,7 +290,7 @@ export function AngleStage({
                 {alternatives.length ? (
                   alternatives.map((row, index) => (
                     <Inset key={index}>
-                      <p className="text-[13px] font-medium text-foreground">
+                      <p className="text-[0.8125rem] font-medium text-foreground">
                         {displayValue(row.alternative_code)}
                       </p>
                       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">

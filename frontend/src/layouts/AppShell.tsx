@@ -77,8 +77,8 @@ function SidebarChannel({ onNavigate }: { onNavigate?: () => void }) {
       className="group flex items-center gap-3 rounded-xl border border-sidebar-border bg-white/[0.03] p-2.5 transition-colors hover:border-white/15 hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-brand"
     >
       {connected ? (
-        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-gradient p-[2px]" aria-hidden="true">
-          <span className="grid size-full place-items-center rounded-full bg-sidebar font-display text-[13px] font-semibold text-sidebar-foreground">
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-gradient p-0.5" aria-hidden="true">
+          <span className="grid size-full place-items-center rounded-full bg-sidebar font-display text-[0.8125rem] font-semibold text-sidebar-foreground">
             {initialOf(title)}
           </span>
         </span>
@@ -88,10 +88,10 @@ function SidebarChannel({ onNavigate }: { onNavigate?: () => void }) {
         </span>
       )}
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-sidebar-foreground">
+        <span className="block truncate text-[0.8125rem] font-medium text-sidebar-foreground">
           {connected ? title : "Connect your channel"}
         </span>
-        <span className="block truncate text-[11px] text-sidebar-muted">{subtitle}</span>
+        <span className="block truncate text-[0.6875rem] text-sidebar-muted">{subtitle}</span>
       </span>
       <ChevronRight
         className="size-4 shrink-0 text-sidebar-muted transition-transform group-hover:translate-x-0.5"
@@ -109,15 +109,15 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         aria-hidden="true"
       />
       <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-[radial-gradient(oklch(1_0_0/0.05)_1px,transparent_1px)] [background-size:18px_18px] [mask-image:linear-gradient(to_bottom,black,transparent)]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-[radial-gradient(oklch(1_0_0/0.05)_1px,transparent_1px)] [background-size:1.125rem_1.125rem] [mask-image:linear-gradient(to_bottom,black,transparent)]"
         aria-hidden="true"
       />
 
       <div className="relative flex items-center gap-3 px-5 pb-5 pt-6">
         <BrandMark />
         <div className="min-w-0 leading-tight">
-          <p className="font-display text-[17px] font-semibold tracking-tight">Win-Engine</p>
-          <p className="text-[11px] text-sidebar-muted">Creator intelligence</p>
+          <p className="font-display text-[1.0625rem] font-semibold tracking-tight">Win-Engine</p>
+          <p className="text-[0.6875rem] text-sidebar-muted">Creator intelligence</p>
         </div>
       </div>
 
@@ -135,7 +135,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       <nav aria-label="Main" className="relative mt-5 flex-1 space-y-5 overflow-y-auto px-4 pb-4 scrollbar-none">
         {NAV_GROUPS.map((group) => (
           <div key={group.label}>
-            <p className="px-3 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.16em] text-sidebar-muted">
+            <p className="px-3 pb-1.5 text-[0.65625rem] font-semibold uppercase tracking-[0.16em] text-sidebar-muted">
               {group.label}
             </p>
             <ul className="space-y-0.5">
@@ -147,7 +147,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                     title={legacy ? `${hint} · still served by the classic dashboard` : hint}
                     className={({ isActive }) =>
                       cn(
-                        "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-[13.5px] font-medium transition-colors",
+                        "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-[0.84375rem] font-medium transition-colors",
                         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-brand",
                         isActive
                           ? "bg-sidebar-accent text-sidebar-foreground shadow-[inset_0_1px_0_oklch(1_0_0/0.05)]"
@@ -165,14 +165,14 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                         ) : null}
                         <Icon
                           className={cn(
-                            "size-[18px] shrink-0 transition-colors",
+                            "size-4.5 shrink-0 transition-colors",
                             isActive ? "text-sidebar-brand" : "group-hover:text-sidebar-foreground",
                           )}
                           aria-hidden="true"
                         />
                         <span className="flex-1 truncate">{label}</span>
                         {legacy ? (
-                          <span className="rounded-md border border-sidebar-border px-1.5 py-px text-[9.5px] font-semibold uppercase tracking-wider text-sidebar-muted">
+                          <span className="rounded-md border border-sidebar-border px-1.5 py-px text-[0.59375rem] font-semibold uppercase tracking-wider text-sidebar-muted">
                             Legacy
                           </span>
                         ) : null}
@@ -305,7 +305,7 @@ export function AppShell() {
       <div className={cn("relative", SIDEBAR_WIDTH)}>
         {/* Ambient light at the top of every page. Decorative only. */}
         <div
-          className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[560px] overflow-hidden"
+          className="pointer-events-none absolute inset-x-0 top-0 z-0 h-140 overflow-hidden"
           aria-hidden="true"
         >
           <div className="absolute inset-0 app-glow" />
@@ -339,7 +339,7 @@ export function AppShell() {
               onClick={() => setPaletteOpen(true)}
               aria-label="Search pages and actions"
               aria-keyshortcuts="Control+K Meta+K"
-              className="flex h-9 items-center gap-2 rounded-xl border border-border bg-card/70 px-2.5 text-[13px] text-muted-foreground shadow-[0_1px_2px_oklch(0.2_0.03_286/0.05)] transition-colors hover:border-foreground/20 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:w-64 md:px-3"
+              className="flex h-9 items-center gap-2 rounded-xl border border-border bg-card/70 px-2.5 text-[0.8125rem] text-muted-foreground shadow-[0_1px_2px_oklch(0.2_0.03_286/0.05)] transition-colors hover:border-foreground/20 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:w-64 md:px-3"
             >
               <Search className="size-4 shrink-0" aria-hidden="true" />
               <span className="hidden flex-1 text-left md:inline">Jump to…</span>

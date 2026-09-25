@@ -42,7 +42,9 @@ function ThemedToaster() {
       position="bottom-right"
       richColors
       closeButton
-      toastOptions={{ className: "font-sans !rounded-xl" }}
+      // Sonner sizes toasts in px; rem keeps them in step with the interface scale.
+      style={{ "--width": "22.25rem" } as React.CSSProperties}
+      toastOptions={{ className: "font-sans !rounded-xl !text-[0.8125rem]" }}
     />
   );
 }

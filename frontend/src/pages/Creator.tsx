@@ -202,7 +202,7 @@ export default function CreatorPage() {
   const nextStage = STAGES[stageIndex + 1];
 
   return (
-    <div className="mx-auto w-full max-w-[1200px] animate-fade-up">
+    <div className="mx-auto w-full max-w-page animate-fade-up">
       <PageHeader
         eyebrow="Studio"
         icon={Sparkles}
@@ -229,7 +229,7 @@ export default function CreatorPage() {
           <StageNav current={stage} unlocked={unlocked} onSelect={setStage} />
 
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-3 border-t border-border px-2 pt-2.5 sm:px-2.5">
-            <p className="min-w-0 text-[13px] text-muted-foreground">
+            <p className="min-w-0 text-[0.8125rem] text-muted-foreground">
               <span className="font-semibold text-foreground">
                 Stage {currentStage.step} / {STAGES.length} · {currentStage.label}
               </span>{" "}

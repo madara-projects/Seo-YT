@@ -84,12 +84,12 @@ export function BriefStage({
               )}
             >
               <div className="flex items-start justify-between gap-3">
-                <p className="text-[13px] font-medium text-foreground">{row.label}</p>
+                <p className="text-[0.8125rem] font-medium text-foreground">{row.label}</p>
                 <EvidenceChip tone={row.tone} className="shrink-0">
                   {row.sourceLabel}
                 </EvidenceChip>
               </div>
-              <p className="break-words text-[13px] leading-relaxed text-muted-foreground">
+              <p className="break-words text-[0.8125rem] leading-relaxed text-muted-foreground">
                 {row.value || "Not provided"}
               </p>
             </li>

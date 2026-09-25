@@ -1,0 +1,1 @@
+import{j as t}from"./query-BTye2Tri.js";import{N as e}from"./NotMigrated-Dy3KBMuA.js";import"./react-C6WQlCgo.js";import"./index-CtAuKoVi.js";import"./forms-C9Ka6Sni.js";import"./arrow-up-right-Bec8Hd8d.js";function a(){return t.jsx(e,{title:"Experiments",description:"Experiment center for package comparisons.",legacyHash:"#experiments"})}export{a as default};

@@ -28,7 +28,7 @@ import type { AnalyzeResponse, PackageOption, SelectionStatus } from "@/api/type
 const TITLE_TRUNCATION_GUIDE = 70;
 
 function TagList({ items, emptyLabel }: { items: string[]; emptyLabel: string }) {
-  if (!items.length) return <p className="text-[13px] text-muted-foreground">{emptyLabel}</p>;
+  if (!items.length) return <p className="text-[0.8125rem] text-muted-foreground">{emptyLabel}</p>;
   return (
     <ul className="flex flex-wrap gap-1.5">
       {items.map((item, index) => (
@@ -58,7 +58,7 @@ function FieldHeader({
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex items-center gap-2">
         <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
-        <span className="text-[13px] font-medium text-foreground">{label}</span>
+        <span className="text-[0.8125rem] font-medium text-foreground">{label}</span>
         {count ? <Badge variant="neutral" className="numeric">{count}</Badge> : null}
       </div>
       {action}
@@ -75,7 +75,7 @@ function SearchPreview({ option, duration }: { option: PackageOption; duration?:
       <div className="flex gap-3">
         <span className="mt-0.5 size-9 shrink-0 rounded-full bg-brand-gradient opacity-80" aria-hidden="true" />
         <div className="min-w-0">
-          <p className="line-clamp-2 text-[15px] font-semibold leading-snug text-foreground">
+          <p className="line-clamp-2 text-[0.9375rem] font-semibold leading-snug text-foreground">
             {option.title}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -184,7 +184,7 @@ export function PackagingStage({
         />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22.5rem]">
         <div className="min-w-0 space-y-5">
           <Panel
             icon={Clapperboard}
@@ -225,7 +225,7 @@ export function PackagingStage({
                     <CopyButton value={copyValue(selected, "description")} label="Copy description" />
                   }
                 />
-                <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[13px] leading-relaxed text-muted-foreground scrollbar-thin">
+                <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[0.8125rem] leading-relaxed text-muted-foreground scrollbar-thin">
                   {selected.description || "No description returned."}
                 </p>
               </div>
@@ -258,7 +258,7 @@ export function PackagingStage({
               title="Thumbnail direction"
               aside={<EvidenceChip tone="warn">Generated</EvidenceChip>}
             >
-              <div className="space-y-2 text-[13px] leading-relaxed text-muted-foreground">
+              <div className="space-y-2 text-[0.8125rem] leading-relaxed text-muted-foreground">
                 <p>{displayValue(selected.thumbnailVisual)}</p>
                 <p>
                   Suggested text:{" "}
@@ -271,7 +271,7 @@ export function PackagingStage({
               title="Viewer promise"
               aside={<EvidenceChip tone="warn">Generated</EvidenceChip>}
             >
-              <p className="text-[13px] leading-relaxed text-muted-foreground">
+              <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
                 {displayValue(selected.viewerPromise)}
               </p>
             </Panel>
@@ -301,13 +301,13 @@ export function PackagingStage({
             <div className="space-y-2.5">
               <Inset>
                 <p className="text-xs text-muted-foreground">Best recurring window</p>
-                <p className="mt-1 text-[13px] font-medium text-foreground">
+                <p className="mt-1 text-[0.8125rem] font-medium text-foreground">
                   {displayValue(timing.recommended_day)} · {recurringWindow}
                 </p>
               </Inset>
               <Inset>
                 <p className="text-xs text-muted-foreground">If uploading today</p>
-                <p className="mt-1 text-[13px] font-medium text-foreground">
+                <p className="mt-1 text-[0.8125rem] font-medium text-foreground">
                   {displayValue(timing.today_recommendation)}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">Window: {todayWindow}</p>
@@ -340,13 +340,13 @@ export function PackagingStage({
                 >
                   <div className="min-w-0 space-y-1.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[13px] font-semibold text-foreground">{option.label}</span>
+                      <span className="text-[0.8125rem] font-semibold text-foreground">{option.label}</span>
                       {option.primary ? <Badge variant="brand">Primary</Badge> : null}
                       <Badge variant="neutral" className="numeric">
                         {option.title.length} chars
                       </Badge>
                     </div>
-                    <p className="break-words text-[13px] text-muted-foreground">{option.title}</p>
+                    <p className="break-words text-[0.8125rem] text-muted-foreground">{option.title}</p>
                   </div>
                   <div className="flex shrink-0 gap-2">
                     <CopyButton value={copyValue(option, "title")} label="Copy" />

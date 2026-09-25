@@ -1,1 +1,0 @@
-import{j as t}from"./query-BTye2Tri.js";import{N as e}from"./NotMigrated-JCAAIZNx.js";import"./react-C6WQlCgo.js";import"./index-Ch7gbQ-z.js";import"./forms-C9Ka6Sni.js";import"./arrow-up-right-DMDFPTVN.js";function d(){return t.jsx(e,{title:"Ideas",description:"Idea workspace with dated research snapshots.",legacyHash:"#ideas"})}export{d as default};

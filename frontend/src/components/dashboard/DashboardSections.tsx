@@ -61,7 +61,7 @@ export function ChannelSnapshot({
         <div className="space-y-4">
           <div className="flex items-center gap-3.5">
             <span
-              className="grid size-12 shrink-0 place-items-center rounded-full bg-brand-gradient p-[2px]"
+              className="grid size-12 shrink-0 place-items-center rounded-full bg-brand-gradient p-0.5"
               aria-hidden="true"
             >
               <span className="grid size-full place-items-center rounded-full bg-card font-display text-lg font-semibold text-foreground">
@@ -85,7 +85,7 @@ export function ChannelSnapshot({
               ["Last synced", syncedAt ? historyDate(syncedAt) : "Never"],
             ].map(([label, value]) => (
               <Inset key={label} className="p-3">
-                <dt className="text-[11px] text-muted-foreground">{label}</dt>
+                <dt className="text-[0.6875rem] text-muted-foreground">{label}</dt>
                 <dd
                   className={cn(
                     "mt-0.5 font-semibold text-foreground",
@@ -194,7 +194,7 @@ export function LearningPanel({
             max={threshold ?? Math.max(sample, 1)}
             label="Comparable videos collected toward the next learning level"
           />
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
+          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
             {data?.recommendation ?? "Learning status is unavailable for this window."}
           </p>
         </div>
@@ -255,13 +255,13 @@ export function RecentPackages({
                     <span className="numeric block text-sm font-semibold text-foreground">
                       {formatNumber(run.opportunity_score)}
                     </span>
-                    <span className="block text-[11px] text-muted-foreground">Opportunity</span>
+                    <span className="block text-[0.6875rem] text-muted-foreground">Opportunity</span>
                   </span>
                   <span>
                     <span className="numeric block text-sm font-semibold text-foreground">
                       {formatNumber(run.title_score)}
                     </span>
-                    <span className="block text-[11px] text-muted-foreground">Title</span>
+                    <span className="block text-[0.6875rem] text-muted-foreground">Title</span>
                   </span>
                 </span>
                 <ArrowRight

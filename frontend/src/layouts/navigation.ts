@@ -46,7 +46,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Research lab",
     items: [
       { to: "/ideas", label: "Ideas", icon: Lightbulb, hint: "Idea workspace", legacy: true },
-      { to: "/demand", label: "Demand", icon: TrendingUp, hint: "Demand explorer", legacy: true },
+      { to: "/demand", label: "Demand", icon: TrendingUp, hint: "Check interest before you film" },
       { to: "/audits", label: "Audits", icon: ClipboardCheck, hint: "Published-video audits", legacy: true },
       { to: "/experiments", label: "Experiments", icon: FlaskConical, hint: "Experiment center", legacy: true },
       { to: "/watchlist", label: "Watchlist", icon: BarChart3, hint: "Channels and videos", legacy: true },

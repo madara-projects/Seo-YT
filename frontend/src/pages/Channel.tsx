@@ -73,7 +73,7 @@ function ChannelBanner({
       <div className="relative flex flex-col gap-7 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-4">
           <span
-            className="grid size-16 shrink-0 place-items-center rounded-full bg-brand-gradient p-[3px] shadow-[0_10px_30px_-10px_oklch(0.55_0.25_300/0.8)]"
+            className="grid size-16 shrink-0 place-items-center rounded-full bg-brand-gradient p-0.75 shadow-[0_10px_30px_-10px_oklch(0.55_0.25_300/0.8)]"
             aria-hidden="true"
           >
             <span className="grid size-full place-items-center rounded-full bg-card font-display text-2xl font-semibold text-foreground">
@@ -104,7 +104,7 @@ function ChannelBanner({
           </div>
         </div>
 
-        <dl className="grid grid-cols-3 gap-3 sm:gap-4 lg:w-[440px]">
+        <dl className="grid grid-cols-3 gap-3 sm:gap-4 lg:w-110">
           {[
             ["Subscribers", channel.subscribers],
             ["Lifetime views", channel.real_total_views],
@@ -120,7 +120,7 @@ function ChannelBanner({
               >
                 {formatCompact(value)}
               </dd>
-              <dt className="mt-1 text-[11px] text-muted-foreground">{label}</dt>
+              <dt className="mt-1 text-[0.6875rem] text-muted-foreground">{label}</dt>
             </div>
           ))}
         </dl>
@@ -145,7 +145,7 @@ function ConnectedPreview() {
           {["Views", "Watch time", "Avg view duration", "Subscribers gained"].map((label) => (
             <div key={label} className="rounded-2xl border border-dashed border-border bg-card/60 p-5">
               <div className="size-7 rounded-lg bg-muted" />
-              <p className="mt-3 text-[13px] font-medium text-muted-foreground">{label} (28 days)</p>
+              <p className="mt-3 text-[0.8125rem] font-medium text-muted-foreground">{label} (28 days)</p>
               <div className="mt-2 h-7 w-24 rounded-md bg-muted" />
               <div className="mt-3 h-3 w-32 rounded bg-muted" />
             </div>
@@ -153,7 +153,7 @@ function ConnectedPreview() {
         </div>
         <div className="grid gap-4 lg:grid-cols-5">
           <div className="rounded-2xl border border-dashed border-border bg-card/60 p-5 lg:col-span-3">
-            <p className="text-[13px] font-medium text-muted-foreground">Recent uploads</p>
+            <p className="text-[0.8125rem] font-medium text-muted-foreground">Recent uploads</p>
             <div className="mt-4 flex h-36 items-end gap-2">
               {bars.map((height, index) => (
                 <span
@@ -165,7 +165,7 @@ function ConnectedPreview() {
             </div>
           </div>
           <div className="space-y-3 rounded-2xl border border-dashed border-border bg-card/60 p-5 lg:col-span-2">
-            <p className="text-[13px] font-medium text-muted-foreground">This period vs the last</p>
+            <p className="text-[0.8125rem] font-medium text-muted-foreground">This period vs the last</p>
             {[70, 55, 80, 45].map((width) => (
               <div key={width} className="space-y-1.5">
                 <div className="h-3 rounded bg-muted" style={{ width: `${width}%` }} />
@@ -221,7 +221,7 @@ function LearningPanel({ fallbackSample }: { fallbackSample?: number }) {
             max={threshold ?? Math.max(sample, 1)}
             label="Comparable linked videos collected"
           />
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
+          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
             {data?.recommendation ?? "Learning status is unavailable for this window."}
           </p>
         </div>
@@ -238,7 +238,7 @@ function BestVideos({ videos }: { videos: LearningVideo[] }) {
         <li key={video.video_id ?? index} className="flex items-center gap-3 rounded-xl border border-border bg-elevated p-2.5">
           <VideoThumb videoId={video.video_id} title={video.title} className="w-20" />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[13px] font-medium text-foreground">{video.title || "Untitled"}</p>
+            <p className="truncate text-[0.8125rem] font-medium text-foreground">{video.title || "Untitled"}</p>
             <p className="numeric text-xs text-muted-foreground">
               {formatNumber(video.views_per_day)} views/day · {video.snapshot_window ?? "window unknown"}
             </p>
@@ -285,7 +285,7 @@ function LinkedPackages() {
                 >
                   <VideoThumb videoId={link.youtube_video_id} title={title} className="w-20" />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-medium text-foreground">{title}</p>
+                    <p className="truncate text-[0.8125rem] font-medium text-foreground">{title}</p>
                     <p className="text-xs text-muted-foreground">
                       {views === null || views === undefined
                         ? "No snapshot yet"
@@ -395,7 +395,7 @@ export default function ChannelPage() {
   ];
 
   return (
-    <div className="mx-auto w-full max-w-[1200px] animate-fade-up">
+    <div className="mx-auto w-full max-w-page animate-fade-up">
       <PageHeader
         eyebrow="Performance"
         icon={Youtube}

@@ -44,9 +44,9 @@ export function QuickLaunch({ className }: { className?: string }) {
             rows={4}
             aria-label="Script or video idea"
             placeholder="Paste a script excerpt, a raw idea, or a quote…"
-            className="resize-none bg-elevated pb-10 text-[15px]"
+            className="resize-none bg-elevated pb-10 text-[0.9375rem]"
           />
-          <span className="numeric pointer-events-none absolute bottom-2.5 right-3 text-[11px] text-muted-foreground">
+          <span className="numeric pointer-events-none absolute bottom-2.5 right-3 text-[0.6875rem] text-muted-foreground">
             {script.length.toLocaleString()} chars
           </span>
         </div>

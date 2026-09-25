@@ -1,4 +1,7 @@
-@import "tailwindcss";
+/* Classes are collected from the app's source only. Scanning the whole
+   frontend folder also read the README and the browser tests, so editing
+   documentation could add CSS and change every hashed file in the build. */
+@import "tailwindcss" source("..");
 
 /* Dark mode is class-driven so the theme can be toggled and persisted rather
    than following the OS only. */
@@ -228,12 +231,16 @@
   --font-display: "Bricolage Grotesque", "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 
-  --radius-sm: calc(var(--radius) - 6px);
-  --radius-md: calc(var(--radius) - 4px);
-  --radius-lg: calc(var(--radius) - 2px);
+  /* Offsets are in rem too, so corners keep their proportions at every scale. */
+  --radius-sm: calc(var(--radius) - 0.375rem);
+  --radius-md: calc(var(--radius) - 0.25rem);
+  --radius-lg: calc(var(--radius) - 0.125rem);
   --radius-xl: var(--radius);
-  --radius-2xl: calc(var(--radius) + 4px);
-  --radius-3xl: calc(var(--radius) + 10px);
+  --radius-2xl: calc(var(--radius) + 0.25rem);
+  --radius-3xl: calc(var(--radius) + 0.625rem);
+
+  /* The widest a page's content grows. */
+  --container-page: 75rem;
 }
 
 @theme {
@@ -291,6 +298,16 @@
   html {
     -webkit-text-size-adjust: 100%;
     text-rendering: optimizeLegibility;
+  }
+
+  /* Every size in the app is in rem, so the root font size sets the scale of
+     the whole interface. Desktop screens get the denser 80% scale; phones and
+     tablets keep full size for comfortable reading and touch. The breakpoint
+     matches `lg`, where the fixed sidebar appears. */
+  @media (min-width: 64rem) {
+    html {
+      font-size: 80%;
+    }
   }
 
   body {
@@ -378,7 +395,7 @@
 
 @utility bg-dots {
   background-image: radial-gradient(var(--dot-color) 1px, transparent 1px);
-  background-size: 22px 22px;
+  background-size: 1.375rem 1.375rem;
 }
 
 /* Ambient light behind the page content. Purely decorative. */

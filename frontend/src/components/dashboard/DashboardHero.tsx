@@ -35,7 +35,7 @@ function CreatorLoop() {
     <div
       role="group"
       aria-label="Creator loop"
-      className="relative mx-auto aspect-square w-full max-w-[320px]"
+      className="relative mx-auto aspect-square w-full max-w-80"
     >
       <svg viewBox="0 0 100 100" className="absolute inset-0 size-full" aria-hidden="true">
         <defs>
@@ -65,10 +65,10 @@ function CreatorLoop() {
 
       <div className="absolute inset-[26%] grid place-items-center rounded-full border border-border bg-card/80 text-center shadow-card backdrop-blur-sm">
         <div className="px-2">
-          <p className="font-display text-[15px] font-semibold leading-tight text-foreground">
+          <p className="font-display text-[0.9375rem] font-semibold leading-tight text-foreground">
             Creator loop
           </p>
-          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+          <p className="mt-1 text-[0.6875rem] leading-snug text-muted-foreground">
             Idea to insight. Publishing stays manual.
           </p>
         </div>
@@ -88,9 +88,9 @@ function CreatorLoop() {
                     : "border-dashed border-border bg-muted text-muted-foreground",
                 )}
               >
-                <Icon className="size-[18px]" aria-hidden="true" />
+                <Icon className="size-4.5" aria-hidden="true" />
               </span>
-              <span className="mt-1 block whitespace-nowrap rounded-md bg-card/90 px-1.5 py-0.5 text-center text-[11px] font-medium text-foreground shadow-[0_0_0_1px_var(--border)]">
+              <span className="mt-1 block whitespace-nowrap rounded-md bg-card/90 px-1.5 py-0.5 text-center text-[0.6875rem] font-medium text-foreground shadow-[0_0_0_1px_var(--border)]">
                 {index + 1}. {step.label}
               </span>
             </>
@@ -138,7 +138,7 @@ export function DashboardHero({ totalRuns }: { totalRuns?: number }) {
         className="pointer-events-none absolute inset-0 bg-dots [mask-image:radial-gradient(ellipse_at_top_right,black,transparent_65%)]"
         aria-hidden="true"
       />
-      <div className="relative grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-center xl:gap-12">
+      <div className="relative grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-center xl:gap-12">
         <div className="space-y-5">
           <p className="inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-3 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm">
             <span className="size-1.5 rounded-full bg-brand-gradient" aria-hidden="true" />
@@ -148,7 +148,7 @@ export function DashboardHero({ totalRuns }: { totalRuns?: number }) {
             <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">
               <span className="text-gradient">Dashboard</span>
             </h1>
-            <p className="max-w-xl text-[15px] leading-relaxed text-muted-foreground">
+            <p className="max-w-xl text-[0.9375rem] leading-relaxed text-muted-foreground">
               Your creator studio at a glance. Everything saved locally from your packaging work,
               with each number labelled by where it came from
               {typeof totalRuns === "number" && totalRuns > 0

@@ -25,7 +25,7 @@ export function PeriodComparison({ metrics }: { metrics: PeriodMetric[] }) {
           <li key={metric.key} className="space-y-2">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[13px] font-medium text-foreground">{metric.label}</p>
+                <p className="text-[0.8125rem] font-medium text-foreground">{metric.label}</p>
                 <p className="numeric text-xs text-muted-foreground">
                   {formatMetric(metric, metric.current)}
                   <span className="font-sans"> vs </span>
@@ -38,7 +38,7 @@ export function PeriodComparison({ metrics }: { metrics: PeriodMetric[] }) {
               />
             </div>
             <div className="relative h-1.5 rounded-full bg-muted" aria-hidden="true">
-              <span className="absolute inset-y-[-3px] left-1/2 w-px bg-border" />
+              <span className="absolute -inset-y-0.75 left-1/2 w-px bg-border" />
               {metric.change !== null ? (
                 <span
                   className={cn(

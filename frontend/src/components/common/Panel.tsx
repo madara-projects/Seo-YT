@@ -42,7 +42,7 @@ export function Panel({
               {title}
             </Heading>
             {description ? (
-              <p className="text-[13px] leading-relaxed text-muted-foreground">{description}</p>
+              <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">{description}</p>
             ) : null}
           </div>
         </div>
@@ -73,7 +73,7 @@ export function Field({
       <dd
         className={cn(
           "break-words text-sm font-medium text-foreground",
-          mono && "numeric text-[13px]",
+          mono && "numeric text-[0.8125rem]",
         )}
       >
         {children}

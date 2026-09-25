@@ -41,7 +41,7 @@ export function EmptyState({
       <div className="relative space-y-1.5">
         <p className="font-display text-base font-semibold text-foreground">{title}</p>
         {description ? (
-          <p className="mx-auto max-w-md text-[13px] leading-relaxed text-muted-foreground">
+          <p className="mx-auto max-w-md text-[0.8125rem] leading-relaxed text-muted-foreground">
             {description}
           </p>
         ) : null}
@@ -61,7 +61,7 @@ export function UnavailableNote({
   return (
     <div
       className={cn(
-        "rounded-xl border border-dashed border-border bg-muted/40 px-3.5 py-3 text-[13px] leading-relaxed text-muted-foreground",
+        "rounded-xl border border-dashed border-border bg-muted/40 px-3.5 py-3 text-[0.8125rem] leading-relaxed text-muted-foreground",
         className,
       )}
     >
@@ -96,7 +96,7 @@ export function ErrorState({
         <div className="space-y-0.5 pt-1">
           <p className="text-sm font-medium text-foreground">{message}</p>
           {requestId ? (
-            <p className="numeric text-[11px] text-muted-foreground">Request ID: {requestId}</p>
+            <p className="numeric text-[0.6875rem] text-muted-foreground">Request ID: {requestId}</p>
           ) : null}
         </div>
       </div>
@@ -111,7 +111,7 @@ export function ErrorState({
 
 export function NoResults({ label = "No results" }: { label?: string }) {
   return (
-    <div className="flex items-center gap-2 px-1 py-6 text-[13px] text-muted-foreground">
+    <div className="flex items-center gap-2 px-1 py-6 text-[0.8125rem] text-muted-foreground">
       <SearchX className="size-4" aria-hidden="true" />
       {label}
     </div>
@@ -163,7 +163,7 @@ export function GridSkeleton({ cards = 4 }: { cards?: number }) {
 /** Full-page placeholder while a lazy route loads. */
 export function PageSkeleton() {
   return (
-    <div className="mx-auto w-full max-w-[1200px] space-y-6" role="status" aria-label="Loading page">
+    <div className="mx-auto w-full max-w-page space-y-6" role="status" aria-label="Loading page">
       <div className="space-y-3">
         <Skeleton className="h-3 w-24" />
         <Skeleton className="h-9 w-64" />

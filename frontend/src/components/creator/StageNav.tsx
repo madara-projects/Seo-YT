@@ -38,7 +38,7 @@ export function StageNav({
       aria-label="Creator workflow stages"
       className="relative overflow-x-auto scrollbar-none max-md:[mask-image:linear-gradient(to_right,transparent,black_6%,black_88%,transparent)]"
     >
-      <ol className="grid min-w-[680px] grid-cols-8">
+      <ol className="grid min-w-170 grid-cols-8">
         {STAGES.map((stage, index) => {
           const isCurrent = stage.key === current;
           const isComplete = unlocked && index < currentIndex;
@@ -87,7 +87,7 @@ export function StageNav({
                 </span>
                 <span
                   className={cn(
-                    "text-[12px] font-medium leading-tight",
+                    "text-xs font-medium leading-tight",
                     isCurrent ? "text-foreground" : "text-muted-foreground",
                     isLocked && "text-muted-foreground/60",
                     !isLocked && !isCurrent && "group-hover:text-foreground",

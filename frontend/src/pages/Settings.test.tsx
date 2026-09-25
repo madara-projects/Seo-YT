@@ -193,12 +193,30 @@ describe("SettingsPage", () => {
     const user = userEvent.setup();
     renderSettings();
 
-    expect(await screen.findByText(/could not reach the cloud database/)).toBeInTheDocument();
+    // A driver error arrives as a bare class name; its message stays on the server.
+    expect(await screen.findByText(/The last attempt failed/)).toBeInTheDocument();
+    expect(screen.getByText("RuntimeError")).toBeInTheDocument();
     expect(screen.getByText("Offline · changes queued")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Sync now" }));
 
     await waitFor(() => expect(calls("POST", "/api/cloud-sync/run")).toBe(1));
+  });
+
+  it("shows a configuration fault in plain words and explains the backoff", async () => {
+    Object.assign(CLOUD, {
+      last_error:
+        "CA certificate not found at /runtime/secrets/aiven-ca.pem inside the container; check WIN_ENGINE_CLOUD_SYNC_SSL_CA_PATH against the volume mount.",
+      consecutive_failures: 4,
+    });
+    try {
+      renderSettings();
+
+      expect(await screen.findByText(/CA certificate not found at \/runtime\/secrets/)).toBeInTheDocument();
+      expect(screen.getByText(/4 attempts in a row have failed/)).toBeInTheDocument();
+    } finally {
+      Object.assign(CLOUD, { last_error: "RuntimeError", consecutive_failures: undefined });
+    }
   });
 
   it("announces an OAuth return once and removes it from the URL", async () => {

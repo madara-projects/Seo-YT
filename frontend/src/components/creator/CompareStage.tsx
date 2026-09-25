@@ -12,9 +12,9 @@ import type { PackageOption, SelectionStatus } from "@/api/types";
 function Fact({ label, value, note }: { label: string; value: string; note: string }) {
   return (
     <div className="min-w-0 space-y-0.5">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="break-words text-[13px] font-semibold text-foreground">{value}</p>
-      <p className="text-[10.5px] text-muted-foreground">{note}</p>
+      <p className="text-[0.6875rem] text-muted-foreground">{label}</p>
+      <p className="break-words text-[0.8125rem] font-semibold text-foreground">{value}</p>
+      <p className="text-[0.65625rem] text-muted-foreground">{note}</p>
     </div>
   );
 }
@@ -43,7 +43,7 @@ export function CompareStage({
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-card sm:flex-row sm:items-center sm:justify-between">
-        <p className="max-w-2xl text-[13px] leading-relaxed text-muted-foreground">
+        <p className="max-w-2xl text-[0.8125rem] leading-relaxed text-muted-foreground">
           Scores and best-for labels are local heuristics or generated suggestions. They are not
           measured CTR, reach, or performance predictions.
         </p>
@@ -122,20 +122,20 @@ export function CompareStage({
 
                 <div className="space-y-1">
                   <p className="text-xs font-medium text-foreground">Why suggested</p>
-                  <p className="text-[13px] leading-relaxed text-muted-foreground">
+                  <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
                     {option.whySuggested}
                   </p>
                 </div>
 
                 <div className="space-y-1">
                   <p className="text-xs font-medium text-foreground">Thumbnail direction</p>
-                  <p className="text-[13px] leading-relaxed text-muted-foreground">
+                  <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
                     {displayValue(option.thumbnailVisual)}
                     {option.thumbnailText ? ` · Text: ${option.thumbnailText}` : ""}
                   </p>
                 </div>
 
-                <p className="mt-auto flex gap-2 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3 py-2.5 text-[11px] leading-relaxed text-foreground">
+                <p className="mt-auto flex gap-2 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3 py-2.5 text-[0.6875rem] leading-relaxed text-foreground">
                   <ShieldAlert className="mt-px size-3.5 shrink-0 text-tone-warn" aria-hidden="true" />
                   <span>
                     Misleading-risk check: {option.misleadingRisk}. This is a generated or local

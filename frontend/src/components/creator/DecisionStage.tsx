@@ -55,7 +55,7 @@ export function DecisionStage({
           <h2 className="max-w-3xl font-display text-2xl font-semibold leading-tight tracking-tight text-foreground sm:text-3xl">
             {selected.title}
           </h2>
-          <p className="max-w-2xl text-[13px] leading-relaxed text-muted-foreground">
+          <p className="max-w-2xl text-[0.8125rem] leading-relaxed text-muted-foreground">
             The recorded choice supports later attribution. It never changes or publishes a YouTube
             video.
           </p>
@@ -84,7 +84,7 @@ export function DecisionStage({
             </EvidenceChip>
           }
         >
-          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
+          <div className="space-y-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
             <p>{selected.whySuggested}</p>
             <p>
               Approach: {selected.approach} · Intended use: {selected.bestFor}
@@ -102,7 +102,7 @@ export function DecisionStage({
             </EvidenceChip>
           }
         >
-          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
+          <div className="space-y-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
             <p>{publicSentence}</p>
             <p>Public counts and patterns do not prove why another video performed.</p>
           </div>
@@ -113,7 +113,7 @@ export function DecisionStage({
           title="Pre-publication scoring"
           aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}
         >
-          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
+          <div className="space-y-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
             <p>
               Opportunity: {displayValue(opportunity.score)} / 100. Title quality:{" "}
               {selected.titleQualityScore === null
@@ -134,7 +134,7 @@ export function DecisionStage({
           title="Unavailable before publishing"
           aside={<EvidenceChip tone="neutral">Unavailable</EvidenceChip>}
         >
-          <div className="space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
+          <div className="space-y-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
             <p>
               Actual impressions, CTR, retention, views, and causal performance evidence are
               unavailable for this package.

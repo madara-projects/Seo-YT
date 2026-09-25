@@ -5,6 +5,7 @@ import {
   roundOpportunity,
   roundTitleScore,
   savedAnalysesCaption,
+  watchTimeSource,
 } from "./dashboardFormat";
 import { historyDate, matchesQuery, resultSummary, runTitle, savedCountLabel } from "./historyFormat";
 import type { HistoryRun } from "@/api/historyTypes";
@@ -116,5 +117,23 @@ describe("history labels", () => {
     expect(resultSummary(10, 3, "focus")).toBe("3 of 10 packages match “focus”");
     expect(resultSummary(10, 10, "")).toBe("10 packages available");
     expect(resultSummary(1, 1, "")).toBe("1 package available");
+  });
+});
+
+describe("watchTimeSource", () => {
+  it("prefers the 28-day channel total, even when it is a measured zero", () => {
+    expect(
+      watchTimeSource({ latest_sync: { current_28_days: { estimatedMinutesWatched: 0 } } }),
+    ).toBe("channel");
+  });
+
+  it("labels the linked-video fallback as its own measure", () => {
+    expect(watchTimeSource({ estimated_watch_minutes: 132, linked_videos_count: 19 })).toBe("linked");
+  });
+
+  it("does not present the fallback's zero as a measurement", () => {
+    expect(watchTimeSource({ estimated_watch_minutes: 0, linked_videos_count: 19 })).toBe("none");
+    expect(watchTimeSource({ estimated_watch_minutes: 40, linked_videos_count: 0 })).toBe("none");
+    expect(watchTimeSource({})).toBe("none");
   });
 });

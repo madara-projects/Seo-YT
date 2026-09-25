@@ -226,7 +226,7 @@ export function IdeaStage({
   const overLimit = script.length > 12000;
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_21.25rem]">
       <div className="min-w-0 space-y-5">
         <Card className="overflow-hidden">
           <div className="flex items-start gap-3 p-5 pb-4 sm:px-6 sm:pt-6">
@@ -235,7 +235,7 @@ export function IdeaStage({
               <h2 className="font-display text-base font-semibold tracking-tight text-foreground">
                 Script or video idea
               </h2>
-              <p className="text-[13px] leading-relaxed text-muted-foreground">
+              <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
                 The only required input. Everything else sharpens the brief and is optional —
                 anything you leave blank is inferred and clearly labelled as such.
               </p>
@@ -248,7 +248,7 @@ export function IdeaStage({
                 <Label htmlFor="script">Script</Label>
                 <span
                   className={cn(
-                    "numeric text-[11px]",
+                    "numeric text-[0.6875rem]",
                     overLimit ? "font-semibold text-tone-bad" : "text-muted-foreground",
                   )}
                 >
@@ -261,7 +261,7 @@ export function IdeaStage({
                 placeholder="Paste the script, or describe the video idea in a sentence or two…"
                 aria-invalid={Boolean(scriptError)}
                 aria-describedby="script-help"
-                className="min-h-[190px] resize-y bg-elevated text-[15px]"
+                className="min-h-47.5 resize-y bg-elevated text-[0.9375rem]"
                 {...form.register("script")}
               />
               <FieldError message={scriptError} />
@@ -328,12 +328,12 @@ export function IdeaStage({
                         Creator brief (optional)
                       </span>
                       {filledBrief ? (
-                        <span className="rounded-full bg-tone-ok-bg px-2 py-0.5 text-[11px] font-medium text-tone-ok">
+                        <span className="rounded-full bg-tone-ok-bg px-2 py-0.5 text-[0.6875rem] font-medium text-tone-ok">
                           {filledBrief} filled
                         </span>
                       ) : null}
                     </span>
-                    <span className="block text-[13px] leading-relaxed text-muted-foreground">
+                    <span className="block text-[0.8125rem] leading-relaxed text-muted-foreground">
                       Fifteen optional fields. Anything you supply is marked{" "}
                       <strong className="font-semibold text-tone-ok">Creator-entered</strong> instead of{" "}
                       <strong className="font-semibold text-tone-warn">Inferred</strong>.
@@ -469,7 +469,7 @@ export function IdeaStage({
         </Collapsible>
 
         <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 shadow-card sm:flex-row sm:items-center sm:justify-between sm:p-5">
-          <p className="max-w-md text-[13px] leading-relaxed text-muted-foreground">
+          <p className="max-w-md text-[0.8125rem] leading-relaxed text-muted-foreground">
             One run spends YouTube API quota and several Gemini calls. Nothing is uploaded or
             published.
           </p>
@@ -504,7 +504,7 @@ export function IdeaStage({
                   <Icon className="size-3.5" />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-[13px] font-medium text-foreground">{title}</span>
+                  <span className="block text-[0.8125rem] font-medium text-foreground">{title}</span>
                   <span className="block text-xs leading-relaxed text-muted-foreground">{body}</span>
                 </span>
               </li>

@@ -26,8 +26,15 @@ import type { AngleEffectiveness } from "@/api/historyTypes";
  */
 const MIN_ANGLES_FOR_CHART = 2;
 
+/** In rem, so chart text follows the interface scale like everything else. */
+const CHART_TEXT = "0.6875rem";
+
+/**
+ * Deliberately not called "angle": Recharts passes each row's fields to its
+ * labels, and `angle` there means text rotation.
+ */
 interface Row {
-  angle: string;
+  contentAngle: string;
   score: number;
   runs: number;
 }
@@ -45,11 +52,11 @@ function ChartTooltip({
 
   return (
     <div className="rounded-xl border border-border bg-popover px-3 py-2 shadow-elevated">
-      <p className="text-xs font-semibold text-popover-foreground">{row.angle}</p>
-      <p className="numeric mt-0.5 text-[11px] text-muted-foreground">
+      <p className="text-xs font-semibold text-popover-foreground">{row.contentAngle}</p>
+      <p className="numeric mt-0.5 text-[0.6875rem] text-muted-foreground">
         {row.score.toFixed(1)} / 10 average title quality
       </p>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[0.6875rem] text-muted-foreground">
         {row.runs} {row.runs === 1 ? "run" : "runs"}
       </p>
     </div>
@@ -60,7 +67,7 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
   const rows: Row[] = data
     .filter((item) => typeof item.avg_title_score === "number")
     .map((item) => ({
-      angle: String(item.content_angle ?? "Unknown"),
+      contentAngle: String(item.content_angle ?? "Unknown"),
       score: Number(item.avg_title_score),
       runs: Number(item.run_count ?? 0),
     }))
@@ -83,7 +90,7 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
         </div>
         <UnavailableNote>
           {rows.length === 1
-            ? `Only one content angle has been analysed so far (${rows[0]?.angle}, averaging ${rows[0]?.score.toFixed(1)} / 10). A comparison needs at least two.`
+            ? `Only one content angle has been analysed so far (${rows[0]?.contentAngle}, averaging ${rows[0]?.score.toFixed(1)} / 10). A comparison needs at least two.`
             : "No scored content angles yet. Generate a few packages and their angles will be compared here."}
         </UnavailableNote>
       </div>
@@ -92,7 +99,7 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
 
   return (
     <>
-      <div style={{ height: Math.max(150, rows.length * 46) }}>
+      <div style={{ height: `${Math.max(9.375, rows.length * 2.875)}rem` }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={rows}
@@ -110,16 +117,16 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
             <XAxis
               type="number"
               domain={[0, 10]}
-              tick={{ fill: "var(--chart-axis)", fontSize: 11 }}
+              tick={{ fill: "var(--chart-axis)", fontSize: CHART_TEXT }}
               stroke="var(--chart-grid)"
               tickLine={false}
               axisLine={false}
             />
             <YAxis
               type="category"
-              dataKey="angle"
+              dataKey="contentAngle"
               width={116}
-              tick={{ fill: "var(--chart-axis)", fontSize: 11 }}
+              tick={{ fill: "var(--chart-axis)", fontSize: CHART_TEXT }}
               tickLine={false}
               axisLine={false}
             />
@@ -138,7 +145,7 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
                 position="right"
                 offset={8}
                 formatter={(value: number) => value.toFixed(1)}
-                style={{ fill: "var(--foreground)", fontSize: 11, fontWeight: 600 }}
+                style={{ fill: "var(--foreground)", fontSize: CHART_TEXT, fontWeight: 600 }}
               />
             </Bar>
           </BarChart>
@@ -152,7 +159,7 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
         </summary>
         <table className="mt-2 w-full text-left text-xs">
           <thead>
-            <tr className="border-b border-border text-[11px] text-muted-foreground">
+            <tr className="border-b border-border text-[0.6875rem] text-muted-foreground">
               <th scope="col" className="pb-1.5 font-medium">Content angle</th>
               <th scope="col" className="pb-1.5 font-medium">Avg title quality</th>
               <th scope="col" className="pb-1.5 font-medium">Runs</th>
@@ -160,8 +167,8 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
           </thead>
           <tbody className="divide-y divide-border">
             {rows.map((row) => (
-              <tr key={row.angle}>
-                <td className="py-1.5 text-foreground">{row.angle}</td>
+              <tr key={row.contentAngle}>
+                <td className="py-1.5 text-foreground">{row.contentAngle}</td>
                 <td className="numeric py-1.5 text-muted-foreground">{row.score.toFixed(1)} / 10</td>
                 <td className="numeric py-1.5 text-muted-foreground">{row.runs}</td>
               </tr>

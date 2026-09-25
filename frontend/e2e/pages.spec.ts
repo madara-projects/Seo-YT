@@ -33,13 +33,19 @@ test.describe("Dashboard", () => {
   });
 
   test("labels unavailable channel metrics instead of showing zero", async ({ page }) => {
+    // No channel and no linked videos: the channel-derived cards must read as
+    // unavailable rather than as a fabricated 0.
+    await page.route("**/api/history", (route) =>
+      route.fulfill({
+        json: {
+          learning: {},
+          scorecard: { total_runs: 3 },
+          owned_performance: { channel: null, latest_sync: null, estimated_watch_minutes: 0, linked_videos_count: 0 },
+        },
+      }),
+    );
     await page.goto("/next/dashboard");
     await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
-
-    // No channel is connected in this environment, so the channel-derived
-    // cards must read as unavailable rather than as a fabricated 0. A real
-    // measured zero elsewhere on the page (e.g. "comparable videos: 0") is
-    // correct and deliberately not asserted against.
     await expect(page.getByText("Connect and refresh your channel in Settings.")).toBeVisible();
 
     for (const label of ["Views (28 days)", "Estimated watch time"]) {
@@ -47,6 +53,59 @@ test.describe("Dashboard", () => {
       await expect(card).toContainText("Unavailable");
       await expect(card).not.toContainText(/^0$/);
     }
+  });
+
+  test("labels linked-video watch time as its own measure", async ({ page }) => {
+    // Without a channel sync the backend falls back to linked videos' latest
+    // snapshots; that is not a 28-day channel total and must not look like one.
+    await page.route("**/api/history", (route) =>
+      route.fulfill({
+        json: {
+          learning: {},
+          scorecard: { total_runs: 41 },
+          owned_performance: { channel: null, latest_sync: null, estimated_watch_minutes: 132, linked_videos_count: 19 },
+        },
+      }),
+    );
+    await page.goto("/next/dashboard");
+
+    const card = page.locator('[data-stat="Estimated watch time"]');
+    await expect(card).toContainText("2.2 hrs");
+    await expect(card).toContainText("Linked videos");
+    await expect(card).toContainText("Across your 19 linked videos");
+    await expect(card).not.toContainText("Not connected");
+  });
+
+  test("draws the angle comparison without SVG errors", async ({ page }) => {
+    // Regression: rows once had an `angle` field, which Recharts passes to
+    // each label as its rotation, producing transform="rotate(Story, ...)".
+    const errors = collectErrors(page);
+    await page.route("**/api/history", (route) =>
+      route.fulfill({
+        json: {
+          learning: {
+            angle_effectiveness: [
+              { content_angle: "Authority", run_count: 4, avg_title_score: 8.1 },
+              { content_angle: "Story", run_count: 9, avg_title_score: 7.4 },
+              { content_angle: "Mistake", run_count: 2, avg_title_score: 6.9 },
+            ],
+            recent_runs: [],
+            winning_titles: [],
+            retention_pattern: [],
+          },
+          scorecard: { total_runs: 15, avg_title_score: 7.5, avg_opportunity_score: 40 },
+          owned_performance: {},
+        },
+      }),
+    );
+
+    await page.goto("/next/dashboard");
+    const chart = page.locator(".recharts-wrapper");
+    await expect(chart).toBeVisible();
+    await expect(chart.getByText("8.1", { exact: true })).toBeVisible();
+    await expect(chart.getByText("Mistake", { exact: true })).toBeVisible();
+
+    expect(errors).toEqual([]);
   });
 
   test("hands a draft to Creator without analysing on the Dashboard", async ({ page }) => {

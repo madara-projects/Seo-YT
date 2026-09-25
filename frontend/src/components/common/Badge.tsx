@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
  * colours carry meaning.
  */
 const badgeVariants = cva(
-  "inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium leading-4",
+  "inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium leading-4",
   {
     variants: {
       variant: {

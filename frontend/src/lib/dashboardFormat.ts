@@ -47,3 +47,28 @@ export function savedAnalysesCaption(totalRuns: unknown): string {
     totalRuns === 1 ? "analysis" : "analyses"
   }.`;
 }
+
+export type WatchTimeSource = "channel" | "linked" | "none";
+
+/**
+ * Where the Dashboard's watch-time figure comes from. With a channel sync the
+ * backend reports the 28-day channel total; without one it falls back to the
+ * total of linked videos at their latest snapshots. Those are different
+ * measures, so each gets its own label, and a fallback of zero is not shown
+ * as a measurement.
+ */
+export function watchTimeSource(owned: {
+  latest_sync?: { current_28_days?: { estimatedMinutesWatched?: number | null } } | null;
+  estimated_watch_minutes?: number | null;
+  linked_videos_count?: number | null;
+}): WatchTimeSource {
+  if (typeof owned.latest_sync?.current_28_days?.estimatedMinutesWatched === "number") {
+    return "channel";
+  }
+  const minutes = owned.estimated_watch_minutes;
+  const linked = owned.linked_videos_count;
+  if (typeof minutes === "number" && minutes > 0 && typeof linked === "number" && linked > 0) {
+    return "linked";
+  }
+  return "none";
+}

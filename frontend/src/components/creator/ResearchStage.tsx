@@ -30,8 +30,8 @@ import type {
 function Item({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <Inset>
-      <p className="text-[13px] font-medium text-foreground">{label}</p>
-      <div className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{children}</div>
+      <p className="text-[0.8125rem] font-medium text-foreground">{label}</p>
+      <div className="mt-1 text-[0.8125rem] leading-relaxed text-muted-foreground">{children}</div>
     </Inset>
   );
 }
@@ -207,7 +207,7 @@ export function ResearchStage({
                 <li key={row.video_id ?? index} className="flex items-center gap-3.5 py-3 first:pt-0">
                   <VideoThumb videoId={row.video_id} title={row.title} className="w-28 sm:w-32" />
                   <div className="min-w-0 flex-1">
-                    <p className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
+                    <p className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
                       {displayValue(row.title)}
                     </p>
                     <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -216,16 +216,16 @@ export function ResearchStage({
                   </div>
                   <div className="hidden shrink-0 gap-5 text-right sm:flex">
                     <div>
-                      <p className="numeric text-[13px] font-semibold text-foreground">
+                      <p className="numeric text-[0.8125rem] font-semibold text-foreground">
                         {formatNumber(row.view_count)}
                       </p>
-                      <p className="text-[11px] text-muted-foreground">Views</p>
+                      <p className="text-[0.6875rem] text-muted-foreground">Views</p>
                     </div>
                     <div>
-                      <p className="numeric text-[13px] font-semibold text-foreground">
+                      <p className="numeric text-[0.8125rem] font-semibold text-foreground">
                         {displayValue(row.outlier_score)}
                       </p>
-                      <p className="text-[11px] text-muted-foreground">Outlier</p>
+                      <p className="text-[0.6875rem] text-muted-foreground">Outlier</p>
                     </div>
                   </div>
                 </li>
@@ -251,9 +251,9 @@ export function ResearchStage({
             {queries.map((row, index) => (
               <li
                 key={index}
-                className="inline-flex max-w-full items-center gap-2 rounded-xl border border-border bg-elevated px-3 py-2 text-[13px]"
+                className="inline-flex max-w-full items-center gap-2 rounded-xl border border-border bg-elevated px-3 py-2 text-[0.8125rem]"
               >
-                <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[0.65625rem] font-medium uppercase tracking-wide text-muted-foreground">
                   {displayValue(row.type)}
                 </span>
                 <span className="min-w-0 break-words text-foreground">{displayValue(row.query)}</span>
@@ -301,8 +301,8 @@ export function ResearchStage({
                   className="rounded-xl border border-border bg-elevated px-3 py-2"
                   title={`Mentions: ${displayValue(row.mentions)} · Strength: ${displayValue(row.strength)}`}
                 >
-                  <p className="text-[13px] font-medium text-foreground">{displayValue(row.keyword)}</p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[0.8125rem] font-medium text-foreground">{displayValue(row.keyword)}</p>
+                  <p className="text-[0.6875rem] text-muted-foreground">
                     Mentions: {displayValue(row.mentions)} · Strength: {displayValue(row.strength)}
                   </p>
                 </li>
@@ -322,8 +322,8 @@ export function ResearchStage({
             <ul className="flex flex-wrap gap-2">
               {entities.slice(0, 10).map((row, index) => (
                 <li key={index} className="rounded-xl border border-border bg-elevated px-3 py-2">
-                  <p className="text-[13px] font-medium text-foreground">{displayValue(row.entity)}</p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[0.8125rem] font-medium text-foreground">{displayValue(row.entity)}</p>
+                  <p className="text-[0.6875rem] text-muted-foreground">
                     Type: {displayValue(row.type)} · Mentions: {displayValue(row.mentions)}
                   </p>
                 </li>
@@ -387,7 +387,7 @@ export function ResearchStage({
                 <li
                   key={index}
                   className={cn(
-                    "rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-2.5 text-[13px] leading-relaxed text-foreground",
+                    "rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground",
                   )}
                 >
                   {warning}

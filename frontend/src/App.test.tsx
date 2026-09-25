@@ -127,6 +127,14 @@ describe("App shell", () => {
     expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
   });
 
+  it("renders the Demand page instead of the legacy placeholder", async () => {
+    renderApp("/demand");
+
+    expect(await screen.findByRole("heading", { name: "Demand", level: 1 }, LAZY)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Research a topic" })).toBeInTheDocument();
+    expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
+  });
+
   it("renders the Channel page", async () => {
     renderApp("/channel");
 

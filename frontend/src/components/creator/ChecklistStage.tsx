@@ -111,7 +111,7 @@ export function ChecklistStage({
                       aria-label={item.label}
                     />
                     <span className="space-y-1">
-                      <span className="block text-[13px] font-medium leading-relaxed text-foreground">
+                      <span className="block text-[0.8125rem] font-medium leading-relaxed text-foreground">
                         {item.label}
                       </span>
                       <span className="block text-xs leading-relaxed text-muted-foreground">
@@ -138,7 +138,7 @@ export function ChecklistStage({
               aria-hidden="true"
             />
             <div>
-              <p className="text-[13px] font-semibold text-foreground">
+              <p className="text-[0.8125rem] font-semibold text-foreground">
                 {allDone ? "Manual review completed" : "Manual review still required"}
               </p>
               <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">

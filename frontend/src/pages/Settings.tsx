@@ -90,7 +90,7 @@ function SectionNav({ active }: { active: SectionId }) {
               onClick={() => jump(id)}
               aria-current={active === id ? "true" : undefined}
               className={cn(
-                "flex w-full items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2 text-[13px] font-medium transition-colors",
+                "flex w-full items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2 text-[0.8125rem] font-medium transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active === id
                   ? "bg-card text-foreground shadow-card ring-1 ring-border"
@@ -169,7 +169,7 @@ function ChannelSection() {
         <div className="space-y-5">
           <div className="flex flex-wrap items-center gap-4">
             <span
-              className="grid size-14 shrink-0 place-items-center rounded-full bg-brand-gradient p-[2px]"
+              className="grid size-14 shrink-0 place-items-center rounded-full bg-brand-gradient p-0.5"
               aria-hidden="true"
             >
               <span className="grid size-full place-items-center rounded-full bg-card font-display text-xl font-semibold text-foreground">
@@ -312,10 +312,25 @@ function CloudSyncSection() {
             {counts.failed ? `, with ${formatNumber(counts.failed)} failed` : ""}.
           </p>
           {data.last_error ? (
-            <div className="rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-3 text-[13px] leading-relaxed text-foreground">
-              The last attempt could not reach the cloud database (
-              <code className="numeric text-xs">{data.last_error}</code>). Packages stay safe in
-              local SQLite and the sync retries automatically.
+            <div className="space-y-1 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-3 text-[0.8125rem] leading-relaxed text-foreground">
+              <p>
+                {/^\w+$/.test(data.last_error) ? (
+                  // Driver errors arrive as a bare class name: their messages
+                  // can contain connection details, so the server keeps those.
+                  <>
+                    The last attempt failed (
+                    <code className="numeric text-xs">{data.last_error}</code>).
+                  </>
+                ) : (
+                  data.last_error
+                )}{" "}
+                Packages stay safe in local SQLite.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {(data.consecutive_failures ?? 0) > 1
+                  ? `${data.consecutive_failures} attempts in a row have failed, so retries are spaced further apart${data.next_run_at ? `; the next is ${relativeTime(data.next_run_at)}` : ""}.`
+                  : "The sync retries automatically."}
+              </p>
             </div>
           ) : null}
         </div>
@@ -340,7 +355,7 @@ function ProviderTile({
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-elevated p-4">
       <div className="flex items-start justify-between gap-2">
-        <span className="flex items-center gap-2.5 text-[13px] font-semibold text-foreground">
+        <span className="flex items-center gap-2.5 text-[0.8125rem] font-semibold text-foreground">
           <span className="grid size-8 place-items-center rounded-lg bg-card text-muted-foreground ring-1 ring-inset ring-border" aria-hidden="true">
             <Icon className="size-4" />
           </span>
@@ -459,7 +474,7 @@ function ProvidersSection() {
           <Inset className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-0.5">
-                <p className="text-[13px] font-semibold text-foreground">Live YouTube check</p>
+                <p className="text-[0.8125rem] font-semibold text-foreground">Live YouTube check</p>
                 <p className="text-xs text-muted-foreground">
                   Runs one real YouTube search to prove the key works (about 100 quota units).
                 </p>
@@ -602,7 +617,7 @@ function CollectorSection() {
         <UnavailableNote>Collector status unavailable.</UnavailableNote>
       ) : (
         <div className="space-y-4">
-          <p className="text-[13px] leading-relaxed text-muted-foreground">{explanation}</p>
+          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">{explanation}</p>
           <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {([
               ["Mode", collector.enabled ? (collector.dry_run ? "Dry run" : "Live") : "Off"],
@@ -688,7 +703,7 @@ function AppearanceSection() {
                   )}
                 />
               </span>
-              <span className="flex items-center gap-2 border-t border-border bg-card px-3.5 py-2.5 text-[13px] font-medium text-foreground">
+              <span className="flex items-center gap-2 border-t border-border bg-card px-3.5 py-2.5 text-[0.8125rem] font-medium text-foreground">
                 <Icon className={cn("size-4", checked ? "text-brand" : "text-muted-foreground")} aria-hidden="true" />
                 {label}
                 {checked ? <span className="ml-auto size-2 rounded-full bg-brand-gradient" aria-hidden="true" /> : null}
@@ -776,7 +791,7 @@ export default function SettingsPage() {
   }, []);
 
   return (
-    <div className="mx-auto w-full max-w-[1200px] animate-fade-up">
+    <div className="mx-auto w-full max-w-page animate-fade-up">
       <PageHeader
         eyebrow="System"
         icon={Settings2}
@@ -784,7 +799,7 @@ export default function SettingsPage() {
         description="Connections, sync and system health in one place. Secret values such as keys and tokens are never shown here."
       />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[210px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[13.125rem_minmax(0,1fr)]">
         <SectionNav active={active} />
         <div className="min-w-0 space-y-5">
           <OAuthNoticeBanner notice={notice} onDismiss={dismiss} />

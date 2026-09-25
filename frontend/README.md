@@ -90,12 +90,20 @@ variables with a `.dark` override, mapped into Tailwind through `@theme inline`.
 - Grid items may shrink below their content width (a base rule in the
   stylesheet), so a long unbroken title truncates inside its card instead of
   widening the page on a phone.
+- **Sizes are in rem, and desktop renders at 80%.** From 64rem (1024px) up,
+  the root font size is 80%, which gives the density of an 80% browser zoom;
+  phones and tablets keep the browser default. Everything scales together only
+  because sizes are in rem, so write `text-[0.8125rem]` or a spacing-scale
+  class such as `w-110` rather than px (shadows, blurs and hairlines excepted).
+  Chart text takes rem strings too. Do not add custom font sizes such as
+  `text-13` to the theme: tailwind-merge v2 reads an unknown `text-*` class as
+  a colour and drops it when `cn()` merges it with a real colour class.
 
 ## Testing
 
 Vitest covers the package-derivation rules, the formatting helpers, the
-checklist, the Settings and Channel pages, History, and an App mount smoke test
-that also exercises the command palette.
+checklist, the Settings, Channel and Demand pages, History, and an App mount
+smoke test that also exercises the command palette.
 
 `npm run e2e` runs Playwright against the Docker backend at `127.0.0.1:8000`, so
 start the stack first with `docker compose up -d`. It checks every migrated page
@@ -127,12 +135,16 @@ Migrated: the application shell and design system, the eight-stage **Creator**
 workflow, the **Dashboard**, **History** (list, search, tri-state bulk
 selection, delete with confirmation, video linking, and a package detail panel
 that opens from a shareable `?run=` link), **Channel** (28-day analytics against
-the previous period, an uploads chart and table, learning, and linked packages)
-and **Settings** (channel connection, cloud sync, providers with an on-demand
-live check, database, snapshot collector, appearance, and about).
+the previous period, an uploads chart and table, learning, and linked packages),
+**Settings** (channel connection, cloud sync, providers with an on-demand
+live check, database, snapshot collector, appearance, and about) and **Demand**
+(topic research saved as dated snapshots, the classification with its reasons,
+each observed signal with its provenance, the sampled public videos the legacy
+page stored but never showed, and package generation that links to the saved
+History run).
 
-Not yet migrated: Ideas, Demand, Audits, Experiments, and Watchlist. Each has a
-route and an honest placeholder linking to the working legacy page.
+Not yet migrated: Ideas, Audits, Experiments, and Watchlist. Each has a route
+and an honest placeholder linking to the working legacy page.
 
 ### Known gaps and deliberate deviations
 
@@ -151,10 +163,19 @@ route and an honest placeholder linking to the working legacy page.
 - **Fallback vocabulary is standardised.** The legacy mixed "Not available",
   "--" and "Unknown" for absent values; this app says "Unavailable"
   everywhere. Deliberate, and a visible difference from the legacy dashboard.
-- **`GET /api/history/runs` does not return `content_angle` or `intent`**,
-  though the legacy row renderer and its search filter both read them — so the
-  angle always fell back to "General" and searching by angle never matched.
-  The types declare them and the UI tolerates their absence.
+- **`GET /api/history/runs` now returns `content_angle` and `intent`**, which
+  the legacy row renderer and search always read but never received. Rows show
+  the angle, search matches it, and records saved without one say "General".
 - **Timestamps are pinned to IST** (`historyDate`), matching the backend's
   `WIN_ENGINE_CREATOR_TIMEZONE` default. Use it for every stored timestamp;
   there is deliberately no viewer-locale date helper.
+- **Demand's language and region are choices, not free text.** The lists hold
+  every value the research engine acts on, including Tamil Nadu, Sri Lanka and
+  the Gulf; anything else the legacy fields accepted was saved and then
+  ignored. Snapshots researched from an idea keep the Ideas form's spellings
+  (`in`, `global`, `unknown`), which display as the options they mean.
+- **Watch time says what it measures.** The Dashboard card shows the 28-day
+  channel total when a YouTube Analytics sync provides one, and otherwise the
+  total across linked videos at their latest snapshots, labelled "Linked
+  videos". The backend used to add up every snapshot of each video (24-hour,
+  7-day, 28-day and current), counting the same watch time once per snapshot.

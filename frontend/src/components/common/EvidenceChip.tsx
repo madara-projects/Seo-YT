@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
  * failure. Keep them distinguishable by text as well as colour.
  */
 const chipVariants = cva(
-  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4",
+  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium leading-4",
   {
     variants: {
       tone: {
