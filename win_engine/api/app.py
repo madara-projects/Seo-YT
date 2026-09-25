@@ -6,6 +6,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -21,6 +22,28 @@ from win_engine.feedback.cloud_sync import CloudSyncService
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def is_cross_site_write(request: Request) -> bool:
+    """True for a request that changes data and was sent by another website.
+
+    Binding to localhost keeps the network out, but not a page open in the
+    same browser: a plain form on any site can POST here. Browsers label every
+    request with Sec-Fetch-Site, so anything other than this app's own pages
+    (or the user typing an address) is refused. Clients that send no such
+    header, such as curl, scripts and tests, are judged by Origin instead and
+    allowed when they send none.
+    """
+    if request.method in _SAFE_METHODS:
+        return False
+    site = request.headers.get("sec-fetch-site")
+    if site:
+        return site not in {"same-origin", "none"}
+    origin = request.headers.get("origin")
+    if not origin:
+        return False
+    return urlsplit(origin).netloc != request.headers.get("host", "")
 
 
 def create_app() -> FastAPI:
@@ -116,6 +139,23 @@ def create_app() -> FastAPI:
             "base-uri 'self'; frame-ancestors 'none'"
         )
         return response
+
+    # Registered last, so it runs first: a refused request never reaches a
+    # handler or spends rate-limit budget.
+    @app.middleware("http")
+    async def reject_cross_site_writes(request: Request, call_next):
+        if is_cross_site_write(request):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": {
+                        "code": "cross_site_request",
+                        "message": "Requests from other websites cannot change data here.",
+                        "request_id": getattr(request.state, "request_id", "unavailable"),
+                    }
+                },
+            )
+        return await call_next(request)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):

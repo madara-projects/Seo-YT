@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     cloud_sync_ssl_ca_path: str = "/run/secrets/aiven-ca.pem"
     cloud_sync_interval_seconds: int = Field(default=60, ge=30)
     cloud_sync_initial_delay_seconds: int = Field(default=10, ge=0)
+    # Ceiling for the doubling wait after runs that cannot reach the cloud.
+    cloud_sync_retry_max_seconds: int = Field(default=900, ge=60)
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="WIN_ENGINE_", extra="ignore")
 

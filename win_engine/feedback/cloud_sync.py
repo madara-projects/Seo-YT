@@ -26,6 +26,28 @@ def _hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+class CloudSyncConfigError(RuntimeError):
+    """A local configuration problem. Its message names no credentials or
+    endpoints, so unlike a driver error it is safe to show in Settings."""
+
+
+def _validated_ca_path(configured: str | None) -> Path:
+    """The CA certificate for the TLS connection, checked before any network use."""
+    ca = Path(str(configured or ""))
+    if not ca.is_file():
+        raise CloudSyncConfigError(
+            f"CA certificate not found at {ca} inside the container; "
+            "check WIN_ENGINE_CLOUD_SYNC_SSL_CA_PATH against the volume mount."
+        )
+    try:
+        text = ca.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise CloudSyncConfigError(f"CA certificate at {ca} could not be read.") from exc
+    if "-----BEGIN CERTIFICATE-----" not in text:
+        raise CloudSyncConfigError(f"CA certificate at {ca} is empty or is not a PEM certificate.")
+    return ca
+
+
 class CloudSyncService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -41,9 +63,12 @@ class CloudSyncService:
             "last_activity_at": None,
             "last_activity_counts": {"queued": 0, "pushed": 0, "pulled": 0},
             "remote_packages": None,
+            "consecutive_failures": 0, "retry_delay_seconds": None,
         }
         self._last_push_failures = 0
         self._last_pull_conflicts = 0
+        # Runs in a row that could not complete; drives the retry backoff.
+        self._consecutive_failures = 0
 
     def configured(self) -> bool:
         s = self.settings
@@ -110,24 +135,31 @@ class CloudSyncService:
                     self._status["remote_packages"] = int(cursor.fetchone()[0])
             finally:
                 remote.close()
+            # The run reached the cloud, so any outage is over even if a
+            # single package still failed; that one retries on the normal cycle.
+            self._consecutive_failures = 0
             if counts["failed"]:
                 self._status.update({"state": "offline/pending", "last_error": "One or more sync operations remain pending."})
             else:
                 self._status["state"] = "healthy/idle"
         except Exception as exc:
             counts["failed"] += 1
+            self._consecutive_failures += 1
             self._mark_all_pending_failures(type(exc).__name__)
             # Error details from database drivers can contain endpoint or
-            # account information; status remains useful without exposing it.
-            self._status.update({"state": "offline/pending", "last_error": type(exc).__name__})
-            logger.warning("Cloud package sync remains pending: %s", type(exc).__name__)
+            # account information, so for those only the class name is kept. A
+            # local configuration problem describes itself in a safe message.
+            reason = str(exc) if isinstance(exc, CloudSyncConfigError) else type(exc).__name__
+            self._status.update({"state": "offline/pending", "last_error": reason})
+            logger.warning("Cloud package sync remains pending: %s", reason)
         finally:
             if counts["queued"] or counts["pushed"] or counts["pulled"]:
                 self._status["last_activity_at"] = _now()
                 self._status["last_activity_counts"] = {
                     "queued": counts["queued"], "pushed": counts["pushed"], "pulled": counts["pulled"]
                 }
-            self._status.update({"running": False, "last_finished_at": _now(), "last_counts": counts})
+            self._status.update({"running": False, "last_finished_at": _now(), "last_counts": counts,
+                                 "consecutive_failures": self._consecutive_failures})
             self._lock.release()
         return {"state": self._status["state"], "counts": counts}
 
@@ -231,9 +263,7 @@ class CloudSyncService:
 
     def _remote_connection(self):
         import pymysql
-        ca = Path(str(self.settings.cloud_sync_ssl_ca_path or ""))
-        if not ca.is_file():
-            raise RuntimeError("Cloud sync CA certificate is missing inside the application container.")
+        ca = _validated_ca_path(self.settings.cloud_sync_ssl_ca_path)
         return pymysql.connect(host=self.settings.cloud_sync_host, port=self.settings.cloud_sync_port,
             user=self.settings.cloud_sync_user, password=self.settings.cloud_sync_password,
             database=self.settings.cloud_sync_database, charset="utf8mb4", autocommit=False,
@@ -593,12 +623,27 @@ class CloudSyncService:
                 pulled += 1
         return pulled
 
+    def retry_delay(self) -> int:
+        """Seconds until the next scheduled run.
+
+        After a run that could not complete (no connection, bad configuration)
+        the wait doubles each time, up to the configured ceiling, so an outage
+        is retried steadily instead of with a connection attempt and a warning
+        every minute.
+        """
+        base = max(30, self.settings.cloud_sync_interval_seconds)
+        if not self._consecutive_failures:
+            return base
+        ceiling = max(base, self.settings.cloud_sync_retry_max_seconds)
+        return min(ceiling, base * 2 ** min(self._consecutive_failures, 16))
+
     def _loop(self) -> None:
         if self._stop.wait(max(0, self.settings.cloud_sync_initial_delay_seconds)):
             return
         while not self._stop.is_set():
             self.run_once()
-            next_run = time.time() + max(30, self.settings.cloud_sync_interval_seconds)
-            self._status["next_run_at"] = datetime.fromtimestamp(next_run, timezone.utc).isoformat()
-            if self._stop.wait(max(30, self.settings.cloud_sync_interval_seconds)):
+            delay = self.retry_delay()
+            self._status["retry_delay_seconds"] = delay
+            self._status["next_run_at"] = datetime.fromtimestamp(time.time() + delay, timezone.utc).isoformat()
+            if self._stop.wait(delay):
                 return

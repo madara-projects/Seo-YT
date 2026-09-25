@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import re
 import time
@@ -319,7 +320,8 @@ def _require_admin(request: Request, settings) -> None:
         raise HTTPException(status_code=403, detail="This endpoint is disabled until an admin token is configured.")
 
     provided = request.headers.get("X-Admin-Token", "").strip()
-    if provided != expected:
+    # Constant-time comparison, so response timing reveals nothing about the token.
+    if not hmac.compare_digest(provided.encode(), expected.encode()):
         raise HTTPException(status_code=403, detail="Admin token required for this endpoint.")
 
 

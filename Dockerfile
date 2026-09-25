@@ -20,6 +20,14 @@ RUN pip install --upgrade pip && \
 
 COPY . .
 
+# Run as an unprivileged user. Only runtime/data, which holds the SQLite
+# database and its backups and is bind-mounted by compose.yaml, is writable.
+RUN groupadd --system --gid 10001 winengine \
+    && useradd --system --uid 10001 --gid winengine --home-dir /app --shell /usr/sbin/nologin winengine \
+    && mkdir -p /app/runtime/data \
+    && chown -R winengine:winengine /app/runtime
+USER winengine
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \

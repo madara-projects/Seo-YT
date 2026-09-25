@@ -374,7 +374,7 @@ class HistoryStore:
                 """
                 SELECT a.id, a.created_at, a.title, a.opportunity_score, a.title_score,
                        a.query, a.payload_json, p.id, p.youtube_video_id,
-                       ps.generated_package_id, ps.selected_at
+                       ps.generated_package_id, ps.selected_at, a.content_angle, a.intent
                 FROM analysis_runs a
                 LEFT JOIN analysis_package_selections ps ON ps.analysis_run_id = a.id
                 LEFT JOIN published_video_links p ON p.id = (
@@ -396,6 +396,9 @@ class HistoryStore:
                 "linked_youtube_video_id": row[8],
                 "selected_package_id": row[9],
                 "package_selected_at": row[10],
+                # Shown on each row and searched, as the legacy list always expected.
+                "content_angle": row[11],
+                "intent": row[12],
             }
             for row in rows
         ]
@@ -742,11 +745,20 @@ class HistoryStore:
                 """
             ).fetchall()
 
+            # Snapshots are cumulative (24h, 7d, 28d, current), so each linked
+            # video counts once, at its highest recorded value. Summing every
+            # snapshot counted the same watch time once per snapshot.
             linked_row = connection.execute(
                 """
-                SELECT COUNT(DISTINCT l.youtube_video_id), SUM(s.views), SUM(s.watch_time_minutes)
-                FROM published_video_links l
-                LEFT JOIN video_performance_snapshots s ON l.youtube_video_id = s.youtube_video_id
+                SELECT COUNT(*), SUM(best_views), SUM(best_watch)
+                FROM (
+                    SELECT l.youtube_video_id,
+                           MAX(s.views) AS best_views,
+                           MAX(s.watch_time_minutes) AS best_watch
+                    FROM published_video_links l
+                    LEFT JOIN video_performance_snapshots s ON l.youtube_video_id = s.youtube_video_id
+                    GROUP BY l.youtube_video_id
+                )
                 """
             ).fetchone()
 

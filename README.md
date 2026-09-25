@@ -294,6 +294,10 @@ Open:
 
 Docker publishes the application only on `127.0.0.1:8000`. Redis is available only to the Compose network and has no host port.
 
+The application container runs as an unprivileged user (UID 10001). Docker Desktop, the supported setup, lets it write the bind-mounted `runtime/data` directory as it is. On a plain Linux Docker host, give that UID write access once with `sudo chown -R 10001:10001 runtime/data`.
+
+Requests that change data (anything other than GET, HEAD and OPTIONS) are refused when a browser marks them as coming from another website, so a page open in the same browser cannot disconnect the channel or delete packages. Scripts and `curl` calls, which send no such marking, are unaffected.
+
 Before a versioned schema migration, the application creates and independently verifies a SQLite online backup under `runtime/data/backups/`; database and backup files are ignored by Git.
 
 Stop the application while preserving the database:
