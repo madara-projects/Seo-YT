@@ -33,13 +33,16 @@ class AuditExperimentStore:
                        ORDER BY x.captured_at DESC,x.id DESC LIMIT 1)"""
             ).fetchall()
             idea_rows = connection.execute("SELECT published_video_link_id,id,topic FROM content_ideas WHERE published_video_link_id IS NOT NULL").fetchall()
+            # Only whether a selection exists matters here. Reading them in one
+            # query replaces a connection per linked video, which made the list slow.
+            selected_runs = {int(row[0]) for row in connection.execute("SELECT DISTINCT analysis_run_id FROM analysis_package_selections").fetchall()}
         audits = {row[0]: {"audit_id": row[1], "audit_captured_at": row[2], "audit_state": row[3]} for row in audit_rows}
         ideas = {row[0]: {"id": row[1], "topic": row[2]} for row in idea_rows}
         result = []
         for link in self.history.published_video_links_list():
             latest = link.get("latest_performance") or {}
             state = "mature" if latest.get("snapshot_window") in {"24h", "7d", "28d"} else "observed" if latest else "unavailable"
-            item = {**link, **audits.get(link["id"], {"audit_id": None, "audit_captured_at": None, "audit_state": "not_run"}), "idea": ideas.get(link["id"]), "evidence_state": state, "selection_state": "selected" if self.history.package_selection(int(link["analysis_run_id"])) else "unknown"}
+            item = {**link, **audits.get(link["id"], {"audit_id": None, "audit_captured_at": None, "audit_state": "not_run"}), "idea": ideas.get(link["id"]), "evidence_state": state, "selection_state": "selected" if int(link["analysis_run_id"]) in selected_runs else "unknown"}
             if evidence_state and state != evidence_state:
                 continue
             if audit_state and item["audit_state"] != audit_state:

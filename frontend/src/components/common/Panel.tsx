@@ -35,7 +35,9 @@ export function Panel({
   return (
     <Card className={cn("flex flex-col", className)} {...rest}>
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 p-5 pb-4 sm:px-6 sm:pt-6">
-        <div className="flex min-w-0 items-start gap-3">
+        {/* Grows from a 15rem basis, so a long description wraps beside a small
+            action instead of pushing the action onto a line of its own. */}
+        <div className="flex min-w-0 flex-1 basis-60 items-start gap-3">
           {icon ? <IconBadge icon={icon} tone={iconTone} /> : null}
           <div className="min-w-0 space-y-1 pt-0.5">
             <Heading className="font-display text-base font-semibold leading-snug tracking-tight text-foreground">

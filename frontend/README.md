@@ -10,7 +10,8 @@ database, and the legacy dashboard are all unchanged.
 | `/`, `/app`, `/dashboard_view` | The existing extracted dashboard (unchanged) |
 | `/dashboard_legacy` | The original embedded dashboard (unchanged) |
 
-`/app` is handed over to React only once every page reaches feature parity.
+Every page is now migrated. `/` and `/app` still serve the extracted dashboard;
+switching them over to React is a separate step.
 
 ## Stack
 
@@ -85,6 +86,10 @@ variables with a `.dark` override, mapped into Tailwind through `@theme inline`.
   `Panel` (icon, title, description, a chip or actions), `StatCard`,
   `EvidenceChip`, `Delta`, `Meter`, and the shared empty, error and loading
   states. New pages should compose these rather than style cards by hand.
+- **Research pages share one shape:** a `ListPanel` of `SelectableItem`s
+  beside an inspector, with the open record in the URL through `useSelection`
+  (`?idea=`, `?video=`, `?link=`), so any record can be linked to. `StepFlow`,
+  `PublicVideoList`, `SavedRunNotice` and `ConfirmDialog` cover the rest.
 - **Command palette:** Ctrl/⌘ K jumps to any page. It only navigates and
   switches the theme; it never calls the API.
 - Grid items may shrink below their content width (a base rule in the
@@ -102,8 +107,10 @@ variables with a `.dark` override, mapped into Tailwind through `@theme inline`.
 ## Testing
 
 Vitest covers the package-derivation rules, the formatting helpers, the
-checklist, the Settings, Channel and Demand pages, History, and an App mount
-smoke test that also exercises the command palette.
+checklist, every page, and an App mount smoke test that also exercises the
+command palette. The audit and experiment fixtures in `src/test/fixtures/` were
+produced by running the real `build_published_audit` and `compare_experiment`
+offline, so the pages are tested against the backend's actual output.
 
 `npm run e2e` runs Playwright against the Docker backend at `127.0.0.1:8000`, so
 start the stack first with `docker compose up -d`. It checks every migrated page
@@ -137,14 +144,24 @@ selection, delete with confirmation, video linking, and a package detail panel
 that opens from a shareable `?run=` link), **Channel** (28-day analytics against
 the previous period, an uploads chart and table, learning, and linked packages),
 **Settings** (channel connection, cloud sync, providers with an on-demand
-live check, database, snapshot collector, appearance, and about) and **Demand**
-(topic research saved as dated snapshots, the classification with its reasons,
-each observed signal with its provenance, the sampled public videos the legacy
-page stored but never showed, and package generation that links to the saved
-History run).
+live check, database, snapshot collector, appearance, and about), and the
+research lab:
 
-Not yet migrated: Ideas, Audits, Experiments, and Watchlist. Each has a route
-and an honest placeholder linking to the working legacy page.
+- **Ideas**: the backlog with status filters and paging, a new-idea form, each
+  idea's lifecycle, angles and production plan, its dated research and demand
+  check, and research, demand, generate and status actions.
+- **Demand**: topic research saved as dated snapshots, the classification with
+  its reasons, each observed signal with its provenance, the sampled public
+  videos the legacy page stored but never showed, and package generation that
+  links to the saved History run.
+- **Audits**: every package linked to a published video, with a field-by-field
+  check of what went live against what was generated, performance by
+  completed window, findings, the saved pre-publish checks and audit history.
+- **Experiments**: planned and observational comparisons, assigning verified
+  videos to each side, every status change the backend allows, and the saved
+  comparison with its metrics and limits.
+- **Watchlist**: public channels and videos with their dated snapshots, the
+  local outlier check, a channel's watched uploads, and archiving.
 
 ### Known gaps and deliberate deviations
 
@@ -179,3 +196,22 @@ and an honest placeholder linking to the working legacy page.
   total across linked videos at their latest snapshots, labelled "Linked
   videos". The backend used to add up every snapshot of each video (24-hour,
   7-day, 28-day and current), counting the same watch time once per snapshot.
+- **Ideas use the regions research acts on.** The legacy form offered Global,
+  `in` and US; this one saves `india` (which the research planner recognises;
+  `in` it did not) and adds Tamil Nadu, Sri Lanka, the Gulf, the UK and Hindi.
+  Older `in` records display as India. Restoring an archived idea returns it to
+  "package generated" when it has a package, instead of back to "idea".
+- **Audits read the backend's field states.** The legacy page tested for
+  `"match"`, which the audit never returns (it says `exact_match`), so it
+  reported differences on every audit. The audit list also loads about ten
+  times faster: it checked each video's package selection on a new database
+  connection, and now reads them in one query.
+- **Experiments offer every allowed status change**, not only the next one:
+  pause, resume, inconclusive and cancel too. Completing, marking inconclusive
+  and cancelling ask first, because the backend never reopens them.
+- **The watchlist takes channel IDs, not handles.** The backend looks channels
+  up by ID only, so an `@handle` is refused in the form rather than after
+  spending a quota call, and a `youtube.com/channel/UC…` link is accepted.
+  Video search waits for a pause in typing instead of querying on every key.
+  Channels show initials: their avatars are served from a host the Content
+  Security Policy doesn't allow.

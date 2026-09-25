@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useMemo } from "react";
 import { TrendingUp } from "lucide-react";
 import { PageHeader } from "@/components/common/PageHeader";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
@@ -7,6 +6,7 @@ import { DemandForm } from "@/components/demand/DemandForm";
 import { SnapshotDetail } from "@/components/demand/SnapshotDetail";
 import { SnapshotList } from "@/components/demand/SnapshotList";
 import { useDemandSnapshot, useDemandSnapshots } from "@/hooks/useDemand";
+import { useSelectedId } from "@/hooks/useSelection";
 import { asArray } from "@/lib/utils";
 import type { DemandSnapshot } from "@/api/researchTypes";
 
@@ -16,45 +16,11 @@ import type { DemandSnapshot } from "@/api/researchTypes";
  * lives in the URL (`?snapshot=`), so it can be linked to and survives a reload.
  */
 export default function DemandPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const requested = Number(searchParams.get("snapshot"));
-  const selectedId = Number.isInteger(requested) && requested > 0 ? requested : null;
-  const detailRef = useRef<HTMLDivElement>(null);
+  const { selectedId, select, detailRef } = useSelectedId("snapshot");
 
   const list = useDemandSnapshots();
   const detail = useDemandSnapshot(selectedId);
   const snapshots = useMemo(() => asArray<DemandSnapshot>(list.data?.research), [list.data]);
-
-  const select = useCallback(
-    (id: number) => {
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          next.set("snapshot", String(id));
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  // When the list and the inspector are stacked, bring the inspector into view.
-  const pendingScroll = useRef(false);
-  const selectAndReveal = useCallback(
-    (id: number) => {
-      pendingScroll.current = true;
-      select(id);
-    },
-    [select],
-  );
-  useEffect(() => {
-    if (!pendingScroll.current || selectedId === null) return;
-    pendingScroll.current = false;
-    if (window.matchMedia?.("(max-width: 63.99rem)").matches) {
-      detailRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-    }
-  }, [selectedId]);
 
   // Prefer the list's copy while the single snapshot loads: it is the same record.
   const selected =
@@ -78,7 +44,7 @@ export default function DemandPage() {
       />
 
       <div className="space-y-5">
-        <DemandForm onResearched={(snapshot) => selectAndReveal(snapshot.id)} />
+        <DemandForm onResearched={(snapshot) => select(snapshot.id)} />
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
           <SnapshotList
@@ -87,7 +53,7 @@ export default function DemandPage() {
             error={list.error}
             isFetching={list.isFetching}
             selectedId={selectedId}
-            onSelect={selectAndReveal}
+            onSelect={select}
             onRefresh={() => void list.refetch()}
           />
           <div ref={detailRef} className="min-w-0 scroll-mt-24">

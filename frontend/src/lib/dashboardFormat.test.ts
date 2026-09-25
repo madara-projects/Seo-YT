@@ -7,7 +7,15 @@ import {
   savedAnalysesCaption,
   watchTimeSource,
 } from "./dashboardFormat";
-import { historyDate, matchesQuery, resultSummary, runTitle, savedCountLabel } from "./historyFormat";
+import {
+  historyDate,
+  matchesQuery,
+  resultSummary,
+  runTitle,
+  savedCountLabel,
+  shortDate,
+  withReadableDates,
+} from "./historyFormat";
 import type { HistoryRun } from "@/api/historyTypes";
 
 describe("formatWatchTime", () => {
@@ -117,6 +125,22 @@ describe("history labels", () => {
     expect(resultSummary(10, 3, "focus")).toBe("3 of 10 packages match “focus”");
     expect(resultSummary(10, 10, "")).toBe("10 packages available");
     expect(resultSummary(1, 1, "")).toBe("1 package available");
+  });
+});
+
+describe("withReadableDates", () => {
+  it("shows timestamps inside backend prose as dates", () => {
+    const stamp = "2026-09-19T14:03:11Z";
+    expect(withReadableDates(`Most recent observed publication: ${stamp}. Not search volume.`)).toBe(
+      `Most recent observed publication: ${shortDate(stamp)}. Not search volume.`,
+    );
+    expect(withReadableDates("Captured 2026-09-21T10:00:00.123456+00:00 and 2026-09-01T08:00:00+05:30")).toBe(
+      `Captured ${shortDate("2026-09-21T10:00:00.123456+00:00")} and ${shortDate("2026-09-01T08:00:00+05:30")}`,
+    );
+  });
+
+  it("leaves other text alone", () => {
+    expect(withReadableDates("Observed 6 results across 4 queries.")).toBe("Observed 6 results across 4 queries.");
   });
 });
 

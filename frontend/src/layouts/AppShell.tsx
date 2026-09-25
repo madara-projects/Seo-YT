@@ -139,12 +139,12 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               {group.label}
             </p>
             <ul className="space-y-0.5">
-              {group.items.map(({ to, label, icon: Icon, hint, legacy }) => (
+              {group.items.map(({ to, label, icon: Icon, hint }) => (
                 <li key={to}>
                   <NavLink
                     to={to}
                     onClick={onNavigate}
-                    title={legacy ? `${hint} · still served by the classic dashboard` : hint}
+                    title={hint}
                     className={({ isActive }) =>
                       cn(
                         "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-[0.84375rem] font-medium transition-colors",
@@ -171,11 +171,6 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                           aria-hidden="true"
                         />
                         <span className="flex-1 truncate">{label}</span>
-                        {legacy ? (
-                          <span className="rounded-md border border-sidebar-border px-1.5 py-px text-[0.59375rem] font-semibold uppercase tracking-wider text-sidebar-muted">
-                            Legacy
-                          </span>
-                        ) : null}
                       </>
                     )}
                   </NavLink>

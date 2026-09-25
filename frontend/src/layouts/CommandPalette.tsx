@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { Badge } from "@/components/common/Badge";
 import { Kbd } from "@/components/common/Kbd";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
@@ -23,7 +22,6 @@ interface Command {
   label: string;
   hint?: string;
   icon: LucideIcon;
-  badge?: string;
   run: () => void;
 }
 
@@ -60,7 +58,6 @@ export function CommandPalette({
         label: item.label,
         hint: item.hint,
         icon: item.icon,
-        badge: item.legacy ? "Legacy" : undefined,
         run: () => navigate(item.to),
       })),
       {
@@ -83,7 +80,7 @@ export function CommandPalette({
         id: "action-legacy",
         group: "Actions",
         label: "Open the classic dashboard",
-        hint: "Pages not yet migrated",
+        hint: "The original interface, still available",
         icon: ExternalLink,
         run: () => window.open("/dashboard_legacy", "_blank", "noopener"),
       },
@@ -223,7 +220,6 @@ export function CommandPalette({
                           </span>
                         ) : null}
                       </span>
-                      {command.badge ? <Badge variant="outline">{command.badge}</Badge> : null}
                       {selected ? (
                         <CornerDownLeft className="size-3.5 text-muted-foreground" aria-hidden="true" />
                       ) : null}

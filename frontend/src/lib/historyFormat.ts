@@ -41,6 +41,19 @@ export function shortDate(value?: string | null): string {
   });
 }
 
+const ISO_TIMESTAMP = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?/g;
+
+/**
+ * Backend explanations embed raw timestamps ("Most recent observed
+ * publication: 2026-09-19T14:03:11Z."); shows each as a date instead.
+ */
+export function withReadableDates(text: string): string {
+  return text.replace(ISO_TIMESTAMP, (match) => {
+    const date = shortDate(match);
+    return date === "Unknown" ? match : date;
+  });
+}
+
 /** The greeting for the current hour in the creator's zone. */
 export function greetingFor(date: Date = new Date()): string {
   const hour = Number(

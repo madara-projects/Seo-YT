@@ -1,4 +1,5 @@
 import type { EvidenceTone } from "@/components/common/EvidenceChip";
+import { humanize, optionLabel } from "@/lib/labels";
 import { DEMAND_FORMAT_OPTIONS, DEMAND_LANGUAGE_OPTIONS, DEMAND_REGION_OPTIONS } from "@/schemas/demand";
 
 /**
@@ -88,27 +89,8 @@ const REGION_ALIASES = new Map([
 ]);
 const FORMAT_ALIASES = new Map([["unknown", ""]]);
 
-function optionLabel(
-  options: { value: string; label: string }[],
-  value: unknown,
-  empty: string,
-  aliases: ReadonlyMap<string, string> = new Map(),
-): string {
-  const raw = String(value ?? "").trim();
-  const key = raw.toLowerCase();
-  const canonical = aliases.get(key) ?? key;
-  if (!canonical) return empty;
-  // Free text from the legacy form, or an idea format like `tutorial`.
-  return options.find((option) => option.value === canonical)?.label ?? humanize(raw);
-}
-
 export const languageLabel = (value: unknown) => optionLabel(DEMAND_LANGUAGE_OPTIONS, value, "Any language");
 export const formatLabel = (value: unknown) =>
   optionLabel(DEMAND_FORMAT_OPTIONS, value, "Any format", FORMAT_ALIASES);
 export const regionLabel = (value: unknown) =>
   optionLabel(DEMAND_REGION_OPTIONS, value, "Any region", REGION_ALIASES);
-
-function humanize(value: string): string {
-  const text = value.replaceAll("_", " ").trim();
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
-}

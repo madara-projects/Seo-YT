@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -17,6 +17,24 @@ import { App } from "./App";
  * longer. The assertions themselves are unchanged.
  */
 const LAZY = { timeout: 20_000 };
+
+// The first import of a lazy page transforms its whole module graph (Recharts
+// for Dashboard and Channel), which on a cold cache and a busy machine has
+// outrun the wait above. Loading them once here, under a hook timeout sized
+// for that, leaves each test's wait to measure rendering alone.
+beforeAll(async () => {
+  await Promise.all([
+    import("@/pages/Dashboard"),
+    import("@/pages/History"),
+    import("@/pages/Channel"),
+    import("@/pages/Settings"),
+    import("@/pages/Ideas"),
+    import("@/pages/Demand"),
+    import("@/pages/Audits"),
+    import("@/pages/Experiments"),
+    import("@/pages/Watchlist"),
+  ]);
+}, 120_000);
 
 function renderApp(route = "/creator") {
   return render(
@@ -107,14 +125,24 @@ describe("App shell", () => {
     expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
   });
 
-  it("still links unmigrated pages out to the legacy dashboard", async () => {
-    renderApp("/ideas");
+  it.each([
+    ["/ideas", "Ideas", "Backlog"],
+    ["/watchlist", "Watchlist", "Watch something new"],
+    ["/audits", "Audits", "Published videos"],
+    ["/experiments", "Experiments", "Comparisons"],
+  ])("renders the migrated %s page", async (route, title, section) => {
+    renderApp(route);
 
-    expect(await screen.findByRole("heading", { name: "Ideas", level: 1 }, LAZY)).toBeInTheDocument();
-    expect(await screen.findByRole("link", { name: /legacy dashboard/i })).toHaveAttribute(
-      "href",
-      "/dashboard_legacy#ideas",
-    );
+    expect(await screen.findByRole("heading", { name: title, level: 1 }, LAZY)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: section })).toBeInTheDocument();
+    expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
+  });
+
+  it("marks no page in the navigation as legacy", async () => {
+    renderApp();
+
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    expect(nav).not.toHaveTextContent(/legacy/i);
   });
 
   it("renders the Settings page instead of the legacy placeholder", async () => {

@@ -1,6 +1,0 @@
-import{j as a}from"./query-BTye2Tri.js";import{c as s,ap as i,b5 as o,aw as n,B as h}from"./index-CtAuKoVi.js";import{A as d}from"./arrow-up-right-Bec8Hd8d.js";/**
- * @license lucide-react v0.469.0 - ISC
- *
- * This source code is licensed under the ISC license.
- * See the LICENSE file in the root directory of this source tree.
- */const c=s("Construction",[["rect",{x:"2",y:"6",width:"20",height:"8",rx:"1",key:"1estib"}],["path",{d:"M17 14v7",key:"7m2elx"}],["path",{d:"M7 14v7",key:"1cm7wv"}],["path",{d:"M17 3v3",key:"1v4jwn"}],["path",{d:"M7 3v3",key:"7o6guu"}],["path",{d:"M10 14 2.3 6.3",key:"1023jk"}],["path",{d:"m14 6 7.7 7.7",key:"1s8pl2"}],["path",{d:"m8 6 8 8",key:"hl96qh"}]]);function u({title:e,description:t,legacyHash:r}){return a.jsxs("div",{className:"mx-auto w-full max-w-4xl animate-fade-up",children:[a.jsx(i,{eyebrow:"Research lab",icon:o,title:e,description:t}),a.jsx(n,{icon:c,title:"Not migrated yet",description:"This page still runs in the classic dashboard, which keeps working in a new tab. It will move into this workspace with the same components as Creator, Dashboard and History.",action:a.jsx(h,{variant:"outline",asChild:!0,children:a.jsxs("a",{href:`/dashboard_legacy${r}`,target:"_blank",rel:"noreferrer",children:["Open in legacy dashboard",a.jsx(d,{"aria-hidden":"true"})]})})})]})}export{u as N};

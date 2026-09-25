@@ -1,11 +1,8 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import {
-  ArrowRight,
   BadgeCheck,
   Binoculars,
   Brain,
-  CheckCircle2,
   Loader2,
   Scale,
   ShieldAlert,
@@ -19,13 +16,16 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { Inset, Panel } from "@/components/common/Panel";
+import { SectionTitle } from "@/components/common/SectionTitle";
 import { CardSkeleton, EmptyState, ErrorState, UnavailableNote } from "@/components/common/States";
-import { VideoThumb } from "@/components/common/VideoThumb";
+import { PublicVideoList } from "@/components/research/PublicVideoList";
+import { SavedRunNotice } from "@/components/research/SavedRunNotice";
+import { StepFlow } from "@/components/research/StepFlow";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { useGenerateFromDemand } from "@/hooks/useDemand";
 import { formatDuration, useElapsedSeconds } from "@/hooks/useElapsed";
 import { asArray, formatNumber } from "@/lib/utils";
-import { historyDate, shortDate } from "@/lib/historyFormat";
+import { historyDate } from "@/lib/historyFormat";
 import {
   classificationLabel,
   formatLabel,
@@ -40,17 +40,6 @@ import type {
   DemandSnapshot,
   DemandWatchlistMatch,
 } from "@/api/researchTypes";
-
-const PUBLIC_RESULTS_SHOWN = 8;
-
-function SectionTitle({ children, aside }: { children: React.ReactNode; aside?: React.ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="font-display text-sm font-semibold text-foreground">{children}</h3>
-      {aside}
-    </div>
-  );
-}
 
 function SignalTile({ signal }: { signal: DemandSignal }) {
   const source = sourceLabel(signal.source);
@@ -137,23 +126,7 @@ function GenerateAction({ snapshot }: { snapshot: DemandSnapshot }) {
         />
       ) : null}
 
-      {generate.isSuccess ? (
-        <div
-          role="status"
-          className="flex flex-col gap-3 rounded-xl border border-tone-ok-border bg-tone-ok-bg p-3.5 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <CheckCircle2 className="size-4 shrink-0 text-tone-ok" aria-hidden="true" />
-            {runId ? `Package saved to History as run #${runId}.` : "Package generated and saved to History."}
-          </p>
-          <Button variant="outline" size="sm" asChild>
-            <Link to={runId ? `/history?run=${runId}` : "/history"}>
-              Open in History
-              <ArrowRight aria-hidden="true" />
-            </Link>
-          </Button>
-        </div>
-      ) : null}
+      {generate.isSuccess ? <SavedRunNotice runId={runId} /> : null}
     </div>
   );
 }
@@ -234,26 +207,20 @@ export function SnapshotDetail({
           ) : null}
         </div>
 
-        <ol className="grid gap-2 sm:grid-cols-3" aria-label="How this snapshot was classified">
-          {[
-            { step: "1. Topic", value: snapshot.topic || "Untitled topic" },
+        <StepFlow
+          label="How this snapshot was classified"
+          steps={[
+            { label: "Topic", value: snapshot.topic || "Untitled topic" },
             {
-              step: "2. Public signals",
+              label: "Public signals",
               value:
                 typeof sampled === "number"
                   ? `${formatNumber(sampled)} sampled ${sampled === 1 ? "result" : "results"}`
                   : "Unavailable",
             },
-            { step: "3. Classification", value: classification.label },
-          ].map((item) => (
-            <li key={item.step} className="rounded-xl border border-border bg-card p-3">
-              <p className="text-[0.6875rem] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                {item.step}
-              </p>
-              <p className="mt-1 line-clamp-2 text-sm font-semibold text-foreground">{item.value}</p>
-            </li>
-          ))}
-        </ol>
+            { label: "Classification", value: classification.label },
+          ]}
+        />
 
         <div className="rounded-2xl border border-brand-border bg-brand-soft/50 p-4">
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-brand">
@@ -263,11 +230,8 @@ export function SnapshotDetail({
         </div>
 
         <section className="space-y-3">
-          <SectionTitle aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}>
-            <span className="inline-flex items-center gap-2">
-              <Brain className="size-4 text-muted-foreground" aria-hidden="true" />
-              Why this classification
-            </span>
+          <SectionTitle icon={Brain} aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}>
+            Why this classification
           </SectionTitle>
           {reasons.length ? (
             <ul className="space-y-1.5">
@@ -284,12 +248,7 @@ export function SnapshotDetail({
         </section>
 
         <section className="space-y-3">
-          <SectionTitle>
-            <span className="inline-flex items-center gap-2">
-              <Scale className="size-4 text-muted-foreground" aria-hidden="true" />
-              Observed signals
-            </span>
-          </SectionTitle>
+          <SectionTitle icon={Scale}>Observed signals</SectionTitle>
           {signals.length ? (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {signals.map((signal, index) => (
@@ -302,51 +261,10 @@ export function SnapshotDetail({
         </section>
 
         <section className="space-y-3">
-          <SectionTitle aside={<EvidenceChip tone="info">Public observation</EvidenceChip>}>
-            <span className="inline-flex items-center gap-2">
-              <Youtube className="size-4 text-muted-foreground" aria-hidden="true" />
-              Sampled public videos
-            </span>
+          <SectionTitle icon={Youtube} aside={<EvidenceChip tone="info">Public observation</EvidenceChip>}>
+            Sampled public videos
           </SectionTitle>
-          {results.length ? (
-            <ul className="divide-y divide-border rounded-2xl border border-border">
-              {results.slice(0, PUBLIC_RESULTS_SHOWN).map((result, index) => (
-                <li
-                  key={result.video_id ?? index}
-                  // On phones the count sits under the title so the title keeps
-                  // its room; wider screens give the count a column of its own.
-                  className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5 p-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
-                >
-                  <VideoThumb
-                    videoId={result.video_id}
-                    title={result.title}
-                    className="row-span-2 w-20 sm:row-span-1 sm:w-28"
-                  />
-                  <div className="min-w-0 self-end sm:self-center">
-                    <p className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
-                      {result.title || "Untitled video"}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {result.channel_title || "Channel unavailable"} · {shortDate(result.published_at)}
-                    </p>
-                  </div>
-                  <p className="self-start text-xs text-muted-foreground sm:self-center sm:text-right sm:text-[0.6875rem]">
-                    <span className="numeric font-semibold text-foreground sm:block sm:text-[0.8125rem]">
-                      {formatNumber(result.view_count)}
-                    </span>{" "}
-                    views at capture
-                  </p>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <UnavailableNote>No public results were stored with this snapshot.</UnavailableNote>
-          )}
-          {results.length > PUBLIC_RESULTS_SHOWN ? (
-            <p className="text-xs text-muted-foreground">
-              Showing {PUBLIC_RESULTS_SHOWN} of {results.length} sampled results.
-            </p>
-          ) : null}
+          <PublicVideoList videos={results} empty="No public results were stored with this snapshot." />
         </section>
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -380,16 +298,14 @@ export function SnapshotDetail({
 
           <Inset className="space-y-2.5 p-4">
             <SectionTitle
+              icon={UserRound}
               aside={
                 <EvidenceChip tone={personal.learning_allowed ? "ok" : "warn"}>
                   {personal.confidence_label || (personal.learning_allowed ? "Eligible" : "Collecting evidence")}
                 </EvidenceChip>
               }
             >
-              <span className="inline-flex items-center gap-2">
-                <UserRound className="size-4 text-muted-foreground" aria-hidden="true" />
-                Your channel's evidence
-              </span>
+              Your channel's evidence
             </SectionTitle>
             <p className="text-sm text-foreground">
               {personal.learning_allowed
@@ -403,12 +319,7 @@ export function SnapshotDetail({
         </div>
 
         <section className="space-y-2.5">
-          <SectionTitle>
-            <span className="inline-flex items-center gap-2">
-              <ShieldAlert className="size-4 text-muted-foreground" aria-hidden="true" />
-              Limits of this evidence
-            </span>
-          </SectionTitle>
+          <SectionTitle icon={ShieldAlert}>Limits of this evidence</SectionTitle>
           <ul className="space-y-1.5">
             {(limitations.length
               ? limitations

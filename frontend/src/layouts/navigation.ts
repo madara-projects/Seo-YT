@@ -1,6 +1,6 @@
 import {
-  BarChart3,
   ClipboardCheck,
+  Eye,
   FlaskConical,
   Library,
   Lightbulb,
@@ -17,8 +17,6 @@ export interface NavItem {
   label: string;
   icon: LucideIcon;
   hint: string;
-  /** Still served by the legacy dashboard; the React route is a placeholder. */
-  legacy?: boolean;
 }
 
 export interface NavGroup {
@@ -45,11 +43,11 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Research lab",
     items: [
-      { to: "/ideas", label: "Ideas", icon: Lightbulb, hint: "Idea workspace", legacy: true },
+      { to: "/ideas", label: "Ideas", icon: Lightbulb, hint: "Your backlog of video ideas" },
       { to: "/demand", label: "Demand", icon: TrendingUp, hint: "Check interest before you film" },
-      { to: "/audits", label: "Audits", icon: ClipboardCheck, hint: "Published-video audits", legacy: true },
-      { to: "/experiments", label: "Experiments", icon: FlaskConical, hint: "Experiment center", legacy: true },
-      { to: "/watchlist", label: "Watchlist", icon: BarChart3, hint: "Channels and videos", legacy: true },
+      { to: "/audits", label: "Audits", icon: ClipboardCheck, hint: "What went live, and how it did" },
+      { to: "/experiments", label: "Experiments", icon: FlaskConical, hint: "Test one decision at a time" },
+      { to: "/watchlist", label: "Watchlist", icon: Eye, hint: "Channels and videos to learn from" },
     ],
   },
   {

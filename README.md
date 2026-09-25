@@ -416,7 +416,7 @@ Or inside the running Docker service:
 docker compose exec -T win-engine python -m unittest discover -s tests
 ```
 
-The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full discovery run contains 393 tests, with 40 browser tests skipped when optional Playwright/Chromium tooling is unavailable. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
+The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full discovery run contains 540 tests, with 40 browser tests skipped when optional Playwright/Chromium tooling is unavailable. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
 
 ## Repository structure
 

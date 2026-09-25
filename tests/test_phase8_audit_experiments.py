@@ -161,6 +161,12 @@ class PublishedAuditTests(Phase8Fixture):
         self.assertEqual(candidate["selection_state"], "unknown")
         self.assertEqual(candidate["audit_state"], "mature_observation")
 
+    def test_candidate_list_tells_selected_and_unselected_packages_apart(self):
+        _, selected_link, _ = self.add_video(selected=True)
+        _, unselected_link, _ = self.add_video(selected=False)
+        states = {item["id"]: item["selection_state"] for item in self.store.audit_candidates()}
+        self.assertEqual(states, {selected_link: "selected", unselected_link: "unknown"})
+
     def test_five_comparable_videos_enable_actionable_observation_not_causality(self):
         link_id = None
         for index in range(5):
