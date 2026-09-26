@@ -86,7 +86,7 @@ test.describe("Ideas", () => {
     const calls = { created: [] as unknown[], generated: 0 };
     await mockIdeas(page, calls);
 
-    await page.goto("/next/ideas");
+    await page.goto("/ideas");
     await expect(page.getByRole("heading", { name: "Ideas", level: 1 })).toBeVisible();
     await expect(page.getByTestId("idea-item")).toHaveCount(1);
 
@@ -98,7 +98,7 @@ test.describe("Ideas", () => {
     await form.getByLabel(/Target duration/).fill("45");
     await form.getByRole("button", { name: "Save idea" }).click();
 
-    await expect(page).toHaveURL(/\/next\/ideas\?idea=8$/);
+    await expect(page).toHaveURL(/\/ideas\?idea=8$/);
     await expect(form).toBeHidden();
     expect(calls.created).toEqual([
       expect.objectContaining({
@@ -116,7 +116,7 @@ test.describe("Ideas", () => {
 
     await detail.getByRole("button", { name: "Generate package" }).click();
     await expect(detail.getByText("Package saved to History as run #42.")).toBeVisible();
-    await expect(detail.getByRole("link", { name: "Open in History" })).toHaveAttribute("href", "/next/history?run=42");
+    await expect(detail.getByRole("link", { name: "Open in History" })).toHaveAttribute("href", "/history?run=42");
     expect(calls.generated).toBe(1);
 
     expect(errors).toEqual([]);
@@ -124,19 +124,19 @@ test.describe("Ideas", () => {
 
   test("shows the research explanation with readable dates", async ({ page }) => {
     await mockIdeas(page, { created: [], generated: 0 });
-    await page.goto("/next/ideas?idea=7");
+    await page.goto("/ideas?idea=7");
 
     const detail = page.getByTestId("idea-detail");
     await expect(detail).toContainText("Most recent observed publication: 19 Sept 2026");
     await expect(detail).not.toContainText("2026-09-19T14:03:11Z");
-    await expect(detail.getByRole("link", { name: /Open in Demand/ })).toHaveAttribute("href", "/next/demand?snapshot=12");
+    await expect(detail.getByRole("link", { name: /Open in Demand/ })).toHaveAttribute("href", "/demand?snapshot=12");
   });
 
   for (const [name, viewport] of Object.entries(VIEWPORTS)) {
     test(`lays out without horizontal overflow at ${name}`, async ({ page }) => {
       await mockIdeas(page, { created: [], generated: 0 });
       await page.setViewportSize(viewport);
-      await page.goto("/next/ideas?idea=7");
+      await page.goto("/ideas?idea=7");
       await expect(page.getByTestId("idea-detail")).toBeVisible();
 
       await expectNoHorizontalOverflow(page);

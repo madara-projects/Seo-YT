@@ -100,7 +100,7 @@ describe("ChannelPage", () => {
     renderChannel();
 
     const connect = await screen.findByRole("link", { name: /Connect YouTube channel/ });
-    expect(connect).toHaveAttribute("href", "/youtube/channel/connect?return_to=%2Fnext%2Fchannel");
+    expect(connect).toHaveAttribute("href", "/youtube/channel/connect?return_to=%2Fchannel");
     expect(screen.getByText("Appears after you connect")).toBeInTheDocument();
     expect(refreshCalls()).toBe(0);
   });

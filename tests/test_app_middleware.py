@@ -38,7 +38,7 @@ class PureHelperTests(unittest.TestCase):
             route_template("/api/experiment-center/experiments/3/assignments/41"),
             "/api/experiment-center/experiments/{id}/assignments/{id}",
         )
-        self.assertEqual(route_template("/next/ideas"), "/next/ideas")
+        self.assertEqual(route_template("/ideas"), "/ideas")
 
     def test_every_spelling_the_id_parser_reads_as_a_number_is_one_record(self):
         # The request path arrives decoded, so "%201" is " 1" here.
@@ -46,7 +46,7 @@ class PureHelperTests(unittest.TestCase):
                      "/api/ideas/1_0/generate", "/api/ideas/01/generate", "/api/ideas/-1/generate"):
             self.assertEqual(route_template(path), "/api/ideas/{id}/generate", path)
         # Static files keep one budget per file, including names that start with a digit.
-        for path in ("/static/js/app.js", "/app-assets/assets/0123abc.js"):
+        for path in ("/app-assets/theme-init.js", "/app-assets/assets/0123abc.js"):
             self.assertEqual(route_template(path), path)
 
     def test_quota_spending_writes_are_costly(self):

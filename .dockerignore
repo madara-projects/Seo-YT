@@ -48,7 +48,6 @@ scripts/
 docs/
 **/*.md
 requirements-dev.txt
-requirements-browser.txt
 compose.yaml
 Dockerfile
 **/test-results/

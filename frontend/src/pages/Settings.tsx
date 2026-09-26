@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import {
   Activity,
   ArrowRight,
-  ArrowUpRight,
   Bot,
   Cloud,
   CloudUpload,
@@ -182,7 +181,7 @@ function ChannelSection() {
       ) : data?.configured === false ? (
         <ChannelSetupNeeded message={data.setup_message} />
       ) : !connected ? (
-        <ConnectChannelCard returnTo="/next/settings" compact />
+        <ConnectChannelCard returnTo="/settings" compact />
       ) : (
         <div className="space-y-5">
           <div className="flex flex-wrap items-center gap-4">
@@ -841,15 +840,6 @@ function AboutSection() {
             <Field label="Uptime">{formatUptime(health.data?.uptime_seconds)}</Field>
           </Inset>
         </dl>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <a href="/app" target="_blank" rel="noreferrer">
-              Open the classic dashboard
-              <ArrowUpRight aria-hidden="true" />
-              <span className="sr-only">(opens in a new tab)</span>
-            </a>
-          </Button>
-        </div>
       </div>
     </Panel>
   );

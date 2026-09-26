@@ -58,42 +58,42 @@ class OAuthReturnTests(unittest.TestCase):
         return self.client.get(f"/oauth/youtube/callback{query}", follow_redirects=False)
 
     def test_connect_remembers_an_allowed_react_page(self):
-        response = self._connect("?return_to=/next/settings")
+        response = self._connect("?return_to=/settings")
 
         self.assertEqual(response.headers["location"], GOOGLE_URL)
         set_cookie = response.headers["set-cookie"]
         # Starlette quotes values containing "/"; the request parser unquotes them.
-        self.assertIn(f'{COOKIE}="/next/settings"', set_cookie)
+        self.assertIn(f'{COOKIE}="/settings"', set_cookie)
         self.assertIn("HttpOnly", set_cookie)
         self.assertIn("samesite=lax", set_cookie.lower())
 
     def test_the_cookie_set_on_connect_steers_the_callback(self):
         self.client.cookies.clear()
-        self._connect("?return_to=/next/channel")  # the client keeps the cookie, as a browser would
+        self._connect("?return_to=/channel")  # the client keeps the cookie, as a browser would
         with patch.object(routes.YouTubeChannelService, "complete_authorization", return_value={}):
             response = self.client.get("/oauth/youtube/callback?code=abc&state=xyz", follow_redirects=False)
 
-        self.assertEqual(response.headers["location"], "/next/channel?youtube=connected")
+        self.assertEqual(response.headers["location"], "/channel?youtube=connected")
 
     def test_connect_without_a_valid_page_clears_any_earlier_choice(self):
-        for query in ("", "?return_to=https://evil.example/", "?return_to=/next/history"):
+        for query in ("", "?return_to=https://evil.example/", "?return_to=/history"):
             with self.subTest(query=query):
                 set_cookie = self._connect(query).headers["set-cookie"]
                 self.assertIn(f'{COOKIE}=""', set_cookie)
                 self.assertIn("Max-Age=0", set_cookie)
 
     def test_denied_consent_returns_to_the_starting_page_with_the_reason(self):
-        response = self._callback("?error=access_denied", cookie="/next/channel")
+        response = self._callback("?error=access_denied", cookie="/channel")
 
-        self.assertEqual(response.headers["location"], "/next/channel?youtube=error&reason=access_denied")
+        self.assertEqual(response.headers["location"], "/channel?youtube=error&reason=access_denied")
         self.assertIn("Max-Age=0", response.headers["set-cookie"])
 
     def test_successful_connection_returns_to_settings(self):
         with patch.object(routes.YouTubeChannelService, "complete_authorization", return_value={}) as complete:
-            response = self._callback("?code=abc&state=xyz", cookie="/next/settings")
+            response = self._callback("?code=abc&state=xyz", cookie="/settings")
 
         complete.assert_called_once_with(code="abc", state="xyz")
-        self.assertEqual(response.headers["location"], "/next/settings?youtube=connected")
+        self.assertEqual(response.headers["location"], "/settings?youtube=connected")
 
     def test_legacy_flow_without_a_cookie_keeps_the_root_redirect(self):
         with patch.object(routes.YouTubeChannelService, "complete_authorization", return_value={}):
@@ -120,19 +120,19 @@ class OAuthReturnTests(unittest.TestCase):
             ),
             self.assertLogs("win_engine.api.routes", level="WARNING") as logs,
         ):
-            response = self._callback("?code=abc&state=xyz", cookie="/next/settings")
+            response = self._callback("?code=abc&state=xyz", cookie="/settings")
 
-        self.assertEqual(response.headers["location"], "/next/settings?youtube=error&reason=connect_failed")
+        self.assertEqual(response.headers["location"], "/settings?youtube=error&reason=connect_failed")
         self.assertNotIn("secrets", "\n".join(logs.output))
 
     def test_connect_moves_to_the_redirect_host_first(self):
         # Browsing as localhost while Google returns to 127.0.0.1 would lose the return cookie.
         self.settings.youtube_oauth_redirect_uri = "http://127.0.0.1:8000/oauth/youtube/callback"
-        response = self._connect("?return_to=/next/channel")
+        response = self._connect("?return_to=/channel")
 
         target = urlsplit(response.headers["location"])
         self.assertEqual((target.scheme, target.netloc, target.path), ("http", "127.0.0.1:8000", "/youtube/channel/connect"))
-        self.assertEqual(parse_qs(target.query), {"return_to": ["/next/channel"]})
+        self.assertEqual(parse_qs(target.query), {"return_to": ["/channel"]})
         self.assertNotIn("set-cookie", response.headers)
 
     def test_connect_does_not_bounce_on_another_spelling_of_the_redirect_host(self):
@@ -158,14 +158,14 @@ class OAuthReturnTests(unittest.TestCase):
 
     def test_connect_without_oauth_setup_returns_to_the_page_with_a_reason(self):
         with patch.object(routes.YouTubeChannelService, "authorization_url", side_effect=ValueError("not configured")):
-            response = self._connect("?return_to=/next/settings")
+            response = self._connect("?return_to=/settings")
 
-        self.assertEqual(response.headers["location"], "/next/settings?youtube=error&reason=not_configured")
+        self.assertEqual(response.headers["location"], "/settings?youtube=error&reason=not_configured")
 
     def test_free_text_in_the_error_parameter_is_not_echoed(self):
-        response = self._callback("?error=call%20555-0100%20for%20help", cookie="/next/settings")
+        response = self._callback("?error=call%20555-0100%20for%20help", cookie="/settings")
 
-        self.assertEqual(response.headers["location"], "/next/settings?youtube=error&reason=unknown")
+        self.assertEqual(response.headers["location"], "/settings?youtube=error&reason=unknown")
 
 
 if __name__ == "__main__":

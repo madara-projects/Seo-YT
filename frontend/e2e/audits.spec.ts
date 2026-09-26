@@ -92,7 +92,7 @@ test.describe("Audits", () => {
     await mockChannel(page, true);
     await mockAudits(page, calls);
 
-    await page.goto("/next/audits?link=6");
+    await page.goto("/audits?link=6");
     const detail = page.getByTestId("audit-detail");
     await expect(detail.getByText("What an audit does")).toBeVisible();
 
@@ -107,7 +107,7 @@ test.describe("Audits", () => {
   test("keeps the open video's facts when a filter hides it", async ({ page }) => {
     await mockChannel(page, true);
     await mockAudits(page, { refreshed: 0 });
-    await page.goto("/next/audits?link=6");
+    await page.goto("/audits?link=6");
     const detail = page.getByTestId("audit-detail");
     await expect(detail.getByRole("link", { name: "Run #43" })).toBeVisible();
 
@@ -120,10 +120,10 @@ test.describe("Audits", () => {
   test("points to connecting the channel instead of offering an audit that can't run", async ({ page }) => {
     await mockChannel(page, false);
     await mockAudits(page, { refreshed: 0 });
-    await page.goto("/next/audits?link=6");
+    await page.goto("/audits?link=6");
 
     const detail = page.getByTestId("audit-detail");
-    await expect(detail.getByRole("link", { name: /Connect your channel/ })).toHaveAttribute("href", "/next/channel");
+    await expect(detail.getByRole("link", { name: /Connect your channel/ })).toHaveAttribute("href", "/channel");
     await expect(detail.getByRole("button", { name: "Run audit" })).toHaveCount(0);
   });
 
@@ -132,7 +132,7 @@ test.describe("Audits", () => {
       await mockChannel(page, true);
       await mockAudits(page, { refreshed: 0 });
       await page.setViewportSize(viewport);
-      await page.goto("/next/audits?link=5");
+      await page.goto("/audits?link=5");
       await expect(page.getByTestId("audit-detail").getByText("Differences found")).toBeVisible();
 
       await expectNoHorizontalOverflow(page);

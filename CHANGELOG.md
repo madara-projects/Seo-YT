@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-26 - One interface at the root
+
+- The React interface is now served at `/` and on each page path (`/creator`, `/history`, `/settings`, …); the classic dashboard, its static files and its Chromium tests are removed.
+- Old addresses keep working: `/next/*`, `/app` and `/dashboard_view` redirect to the same page (only known pages, so a crafted path cannot redirect off-site), and classic bookmarks such as `/#history` open that page. YouTube sign-in now returns to `/settings` or `/channel`.
+- The Creator page is two screens (choose Short or Long video, then four result tabs), the sidebar folds into an icon rail, theme switches cross-fade, and every page uses the full width up to a 120rem cap.
+
 ## 2026-09-26 - Full audit and hardening
 
 - Numbers are reported only when measured: hidden or missing YouTube statistics, unmeasured scores, unrun analytics and failed syncs show as unavailable instead of zero; lifetime upload views are no longer presented as 28-day views, and a failed part of a channel sync is named.

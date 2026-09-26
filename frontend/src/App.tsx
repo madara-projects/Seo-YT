@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 
@@ -33,6 +33,28 @@ export function createQueryClient() {
   });
 }
 
+// The classic dashboard, which this app replaced at the root, named its pages
+// in the hash ("/#history"). Old bookmarks open the same page here.
+const CLASSIC_PAGES: Record<string, string> = {
+  dashboard: "/dashboard",
+  creator: "/creator",
+  history: "/history",
+  analytics: "/channel",
+  ideas: "/ideas",
+  demand: "/demand",
+  watchlist: "/watchlist",
+  audits: "/audits",
+  experiments: "/experiments",
+  settings: "/settings",
+};
+
+/** The root: a classic bookmark's page, else the Creator. The query string travels along. */
+function RootRedirect() {
+  const { hash, search } = useLocation();
+  const classic = Object.hasOwn(CLASSIC_PAGES, hash.slice(1)) ? CLASSIC_PAGES[hash.slice(1)] : undefined;
+  return <Navigate to={{ pathname: classic ?? "/creator", search }} replace />;
+}
+
 function ThemedToaster() {
   const { resolvedTheme } = useTheme();
   return (
@@ -60,7 +82,7 @@ export function App() {
         <ScrollToTop />
         <Routes>
           <Route element={<AppShell />}>
-            <Route index element={<Navigate to="/creator" replace />} />
+            <Route index element={<RootRedirect />} />
             <Route path="/creator" element={<CreatorPage />} />
             <Route
               path="/*"

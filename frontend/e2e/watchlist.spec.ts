@@ -94,13 +94,13 @@ test.describe("Watchlist", () => {
     const calls = { added: [] as unknown[], analyzed: 0, searches: [] as string[] };
     await mockWatchlist(page, calls);
 
-    await page.goto("/next/watchlist");
+    await page.goto("/watchlist");
     await expect(page.getByRole("heading", { name: "Watchlist", level: 1 })).toBeVisible();
 
     await page.getByLabel("Video ID or link").fill("https://www.youtube.com/shorts/e2ewatch002");
     await page.getByRole("button", { name: "Add video" }).click();
 
-    await expect(page).toHaveURL(/\/next\/watchlist\?video=22$/);
+    await expect(page).toHaveURL(/\/watchlist\?video=22$/);
     expect(calls.added).toEqual([{ video_id: "e2ewatch002", notes: "" }]);
     const detail = page.getByTestId("watch-detail");
     await expect(detail.getByRole("heading", { name: "Letters I never sent" })).toBeVisible();
@@ -116,7 +116,7 @@ test.describe("Watchlist", () => {
   test("searches videos after a pause and switches to channels", async ({ page }) => {
     const calls = { added: [] as unknown[], analyzed: 0, searches: [] as string[] };
     await mockWatchlist(page, calls);
-    await page.goto("/next/watchlist");
+    await page.goto("/watchlist");
 
     await page.getByLabel("Search watched videos").pressSequentially("wrap", { delay: 30 });
     await expect(page.getByTestId("watch-video")).toHaveCount(1);
@@ -125,7 +125,7 @@ test.describe("Watchlist", () => {
     await page.getByRole("tab", { name: /Channels/ }).click();
     await page.getByTestId("watch-channel").click();
     // The search stays in the URL beside the open channel.
-    await expect(page).toHaveURL(/\/next\/watchlist\?(.*&)?channel=3(&|$)/);
+    await expect(page).toHaveURL(/\/watchlist\?(.*&)?channel=3(&|$)/);
     await expect(page).toHaveURL(/[?&]q=wrap(&|$)/);
     await expect(page.getByTestId("watch-detail")).toContainText("Watched uploads (1)");
   });
@@ -134,7 +134,7 @@ test.describe("Watchlist", () => {
     test(`lays out without horizontal overflow at ${name}`, async ({ page }) => {
       await mockWatchlist(page, { added: [], analyzed: 0, searches: [] });
       await page.setViewportSize(viewport);
-      await page.goto("/next/watchlist?video=21");
+      await page.goto("/watchlist?video=21");
       await expect(page.getByTestId("watch-detail")).toBeVisible();
 
       await expectNoHorizontalOverflow(page);

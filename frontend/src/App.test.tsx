@@ -176,19 +176,21 @@ describe("App shell", () => {
     expect(screen.queryByRole("combobox", { name: "Search pages and actions" })).not.toBeInTheDocument();
   });
 
-  it("opens the classic dashboard at /app from the palette", async () => {
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  it("opens a classic dashboard bookmark on the same page", async () => {
+    // The classic dashboard, which this app replaced at the root, kept its page in the hash.
+    renderApp("/#history");
+    expect(await screen.findByRole("heading", { name: "Package library", level: 1 })).toBeInTheDocument();
+  });
+
+  it("offers no classic dashboard any more", async () => {
     const user = userEvent.setup();
     renderApp();
     await screen.findByRole("heading", { name: "Creator", level: 1 });
 
     await user.keyboard("{Control>}k{/Control}");
     await user.type(await screen.findByRole("combobox", { name: "Search pages and actions" }), "classic");
-    await user.keyboard("{Enter}");
 
-    // /app is the static classic dashboard; the old embedded route no longer exists.
-    expect(open).toHaveBeenCalledWith("/app", "_blank", "noopener");
-    open.mockRestore();
+    expect(screen.queryByText(/classic dashboard/i)).not.toBeInTheDocument();
   });
 
   it("returns focus to the menu button when the navigation drawer closes", async () => {

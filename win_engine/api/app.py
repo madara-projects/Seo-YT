@@ -177,19 +177,15 @@ def create_app() -> FastAPI:
     )
     app.state.snapshot_collector = collector
     app.state.cloud_sync = cloud_sync
-    # The extracted frontend is served by FastAPI itself. Keeping the mount
-    # same-origin avoids a second frontend server and works identically in
-    # local and Docker deployments.
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-    # Hashed assets for the React build served at /next. Mounted only when the
-    # bundle exists so a checkout without a frontend build still boots; the
-    # /next route reports the missing build itself.
+    # The interface is served by FastAPI itself, same-origin, so there is no
+    # second frontend server in local or Docker runs. Its hashed assets are
+    # mounted only when the bundle exists, so a checkout without a frontend
+    # build still boots; the page routes report the missing build themselves.
     react_dir = STATIC_DIR / "app"
     if react_dir.is_dir():
         app.mount("/app-assets", StaticFiles(directory=react_dir), name="react-assets")
     else:
-        logger.info("React frontend build not found at %s; /next will report it.", react_dir)
+        logger.info("Frontend build not found at %s; the pages will report it.", react_dir)
 
     app_start = time.time()
     allowed_hosts = settings.allowed_host_set

@@ -72,7 +72,7 @@ test.describe("Settings", () => {
       if (new URL(request.url()).pathname === "/diagnostics") diagnostics += 1;
     });
 
-    await page.goto("/next/settings");
+    await page.goto("/settings");
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     for (const name of ["YouTube channel", "Cloud sync", "AI & data providers", "Local database"]) {
       await expect(page.getByRole("heading", { name, level: 2 })).toBeVisible();
@@ -85,42 +85,37 @@ test.describe("Settings", () => {
 
   test("points the connect button back at Settings", async ({ page }) => {
     await mockChannelStatus(page, NOT_CONNECTED);
-    await page.goto("/next/settings");
+    await page.goto("/settings");
 
     await expect(page.getByRole("link", { name: /Connect YouTube channel/ })).toHaveAttribute(
       "href",
-      "/youtube/channel/connect?return_to=%2Fnext%2Fsettings",
+      "/youtube/channel/connect?return_to=%2Fsettings",
     );
   });
 
   test("shows the OAuth result once and cleans the URL", async ({ page }) => {
     await mockChannelStatus(page, connected());
-    await page.goto("/next/settings?youtube=connected");
+    await page.goto("/settings?youtube=connected");
 
     await expect(
       page.getByRole("status").filter({ hasText: "YouTube channel connected with read-only access." }),
     ).toBeVisible();
-    await expect(page).toHaveURL(/\/next\/settings$/);
+    await expect(page).toHaveURL(/\/settings$/);
   });
 
   test("does not announce a connection the server doesn't have", async ({ page }) => {
     // Anyone can put ?youtube=connected in a link; the page checks with the server.
     await mockChannelStatus(page, NOT_CONNECTED);
-    await page.goto("/next/settings?youtube=connected");
+    await page.goto("/settings?youtube=connected");
 
     await expect(page.getByRole("alert").filter({ hasText: /no connected channel/ })).toBeVisible();
     await expect(page.getByText("YouTube channel connected with read-only access.")).toHaveCount(0);
   });
 
-  test("links to the classic dashboard at /app", async ({ page }) => {
-    await page.goto("/next/settings");
-    await expect(page.getByRole("link", { name: /Open the classic dashboard/ })).toHaveAttribute("href", "/app");
-  });
-
   for (const [name, viewport] of Object.entries(VIEWPORTS)) {
     test(`lays out without horizontal overflow at ${name}`, async ({ page }) => {
       await page.setViewportSize(viewport);
-      await page.goto("/next/settings");
+      await page.goto("/settings");
       await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
       await expect(page.getByText("Schema · size")).toBeVisible();
 
@@ -134,12 +129,12 @@ test.describe("Channel", () => {
   test("invites a connection when no channel is connected", async ({ page }) => {
     const errors = collectErrors(page);
     await mockChannelStatus(page, NOT_CONNECTED);
-    await page.goto("/next/channel");
+    await page.goto("/channel");
 
     await expect(page.getByRole("heading", { name: "Channel", level: 1 })).toBeVisible();
     await expect(page.getByRole("link", { name: /Connect YouTube channel/ })).toHaveAttribute(
       "href",
-      "/youtube/channel/connect?return_to=%2Fnext%2Fchannel",
+      "/youtube/channel/connect?return_to=%2Fchannel",
     );
     expect(errors).toEqual([]);
   });
@@ -151,7 +146,7 @@ test.describe("Channel", () => {
       if (new URL(request.url()).pathname === "/youtube/channel/refresh") refreshes += 1;
     });
     await mockChannelStatus(page, connected());
-    await page.goto("/next/channel");
+    await page.goto("/channel");
 
     await expect(page.getByRole("heading", { name: "E2E Fixture Channel" })).toBeVisible();
     const views = page.locator('[data-stat="Views (28 days)"]');
@@ -174,7 +169,7 @@ test.describe("Channel", () => {
     test(`lays out without horizontal overflow at ${name}`, async ({ page }) => {
       await mockChannelStatus(page, connected());
       await page.setViewportSize(viewport);
-      await page.goto("/next/channel");
+      await page.goto("/channel");
       await expect(page.getByRole("heading", { name: "E2E Fixture Channel" })).toBeVisible();
 
       await expectNoHorizontalOverflow(page);
@@ -186,7 +181,7 @@ test.describe("Channel", () => {
 test.describe("Navigation", () => {
   test("jumps to a page from the command palette", async ({ page }) => {
     await mockChannelStatus(page, NOT_CONNECTED);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
     await expect(page.getByRole("heading", { name: "Creator", level: 1 })).toBeVisible();
 
     await page.keyboard.press("Control+k");
@@ -195,7 +190,7 @@ test.describe("Navigation", () => {
     await search.fill("channel");
     await page.keyboard.press("Enter");
 
-    await expect(page).toHaveURL(/\/next\/channel$/);
+    await expect(page).toHaveURL(/\/channel$/);
     await expect(page.getByRole("heading", { name: "Channel", level: 1 })).toBeVisible();
     await expect(page).toHaveTitle(/^Channel · Win-Engine$/);
     await page.screenshot({ path: "screenshots/palette-navigated.png" });
@@ -203,19 +198,19 @@ test.describe("Navigation", () => {
 
   test("opens a saved package from a shareable link", async ({ page }) => {
     await mockHistoryRuns(page);
-    await page.goto("/next/history");
+    await page.goto("/history");
     const rows = page.getByTestId("history-row");
     await expect(page.getByTestId("history-result-summary")).not.toHaveText(/Loading saved packages/);
     await expect(rows).toHaveCount(2);
 
     await rows.first().getByRole("button", { name: "View package" }).click();
-    await expect(page).toHaveURL(/\/next\/history\?run=\d+$/);
+    await expect(page).toHaveURL(/\/history\?run=\d+$/);
     const link = page.url();
 
     await page.goto(link);
     await expect(page.getByTestId("history-detail")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("history-detail")).toBeHidden();
-    await expect(page).toHaveURL(/\/next\/history$/);
+    await expect(page).toHaveURL(/\/history$/);
   });
 });

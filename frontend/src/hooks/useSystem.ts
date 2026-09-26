@@ -128,6 +128,6 @@ export function useDisconnectChannel() {
 }
 
 /** Where the OAuth flow should return the browser to once Google is done. */
-export function channelConnectUrl(returnTo: "/next/settings" | "/next/channel"): string {
+export function channelConnectUrl(returnTo: "/settings" | "/channel"): string {
   return `/youtube/channel/connect?return_to=${encodeURIComponent(returnTo)}`;
 }

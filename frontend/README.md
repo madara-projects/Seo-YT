@@ -1,16 +1,14 @@
 # Win-Engine frontend
 
-React + TypeScript + Vite rebuild of the Win-Engine dashboard. It runs beside the
-existing interface rather than replacing it: both interfaces use the same API and
-SQLite database.
+The Win-Engine interface: React + TypeScript + Vite, served by FastAPI at the root.
 
 | Route | Serves |
 |---|---|
-| `/next` | This React app |
-| `/`, `/app`, `/dashboard_view` | The classic dashboard |
+| `/` and each page (`/creator`, `/history`, `/settings`, …) | This app |
+| `/next/*`, `/app`, `/dashboard_view` | A redirect to the same page |
 
-Every page is now migrated. `/` and `/app` still serve the extracted dashboard;
-switching them over to React is a separate step.
+The classic dashboard this app replaced is gone. Its old addresses, including
+bookmarks such as `/#history`, open the same page here.
 
 ## Stack
 
@@ -25,7 +23,7 @@ and the app gains nothing from 19's new features today.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173/next/, proxies the API to 127.0.0.1:8000
+npm run dev        # http://localhost:5173/, proxies the API to 127.0.0.1:8000
 npm run build      # builds into ../win_engine/api/static/app/
 npm run test       # Vitest
 npm run typecheck  # tsc --noEmit
@@ -40,7 +38,7 @@ base URL.
 `index.html` has no inline script or event handler, so the server's Content
 Security Policy can forbid inline scripts. The pre-paint theme switch is
 `public/theme-init.js`, served at `/app-assets/theme-init.js` when built and at
-`/next/theme-init.js` by the dev server.
+`/theme-init.js` by the dev server.
 
 Switching themes is one step (`transitionTheme` in `src/lib/theme.tsx`): a
 250 ms View Transition cross-fade where the browser has one, otherwise a shared
@@ -142,9 +140,7 @@ offline, so the pages are tested against the backend's actual output.
 start the stack first with `docker compose up -d`. It checks every migrated page
 for console errors and horizontal overflow at desktop, tablet and phone widths.
 A connected channel is mocked, and every call that could spend quota or change
-saved data is intercepted. The Python Playwright suite in `../tests/browser/`
-still targets the legacy dashboard; it needs porting when `/app` is switched
-over.
+saved data is intercepted.
 
 ## Charts
 
@@ -195,11 +191,11 @@ research lab:
 ### Known gaps and deliberate deviations
 
 - **OAuth returns to the page that started it.** Settings and Channel link to
-  `/youtube/channel/connect?return_to=/next/settings` (or `/next/channel`). The
+  `/youtube/channel/connect?return_to=/settings` (or `/channel`). The
   backend keeps that choice in a short-lived HttpOnly cookie, checked against an
   allow-list, and the callback redirects there with `?youtube=connected|error`.
-  The page announces the result once and removes the parameters. The legacy
-  flow passes no `return_to` and still lands on `/`. Unlike the legacy app, the
+  The page announces the result once and removes the parameters. A connect
+  started without `return_to` lands on `/`. Unlike the legacy app, the
   React page does not POST a second refresh after connecting, because the
   server already syncs during the connection; instead the Channel page
   refreshes a sync older than two minutes once per app session, guarded per

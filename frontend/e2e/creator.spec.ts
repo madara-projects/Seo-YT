@@ -42,7 +42,7 @@ test.describe("Creator", () => {
     const errors = collectErrors(page);
     const bodies: unknown[] = [];
     await mockAnalyze(page, bodies);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     // The radios are visually hidden inside their cards; the card (label) takes the click.
     await page.getByRole("radio", { name: /Long video/ }).check({ force: true });
@@ -69,7 +69,7 @@ test.describe("Creator", () => {
 
   test("keeps the package panel and Generate beside the form on wide screens", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.desktop);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     const panel = page.getByRole("complementary", { name: "Your package" });
     await expect(panel.getByRole("button", { name: "Generate package" })).toBeVisible();
@@ -85,7 +85,7 @@ test.describe("Creator", () => {
 
   test("keeps Generate in a bottom bar on phones", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.mobile);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     await expect(page.getByTestId("setup-bar").getByRole("button", { name: "Generate package" })).toBeVisible();
     await expect(page.getByRole("complementary", { name: "Your package" })).toHaveCount(0);
@@ -93,14 +93,14 @@ test.describe("Creator", () => {
 
   test("opens an old ?stage= link on the matching tab", async ({ page }) => {
     await mockAnalyze(page, []);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
     await page.getByLabel("Script").fill("Silence says everything.");
     await page.getByRole("button", { name: "Generate package" }).click();
     await expect(page.getByRole("tab", { name: "Package" })).toBeVisible();
 
     // An in-app link to an old stage, as History or a bookmark might hold.
     await page.evaluate(() => {
-      window.history.pushState({}, "", "/next/creator?stage=checklist");
+      window.history.pushState({}, "", "/creator?stage=checklist");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     await expect(page.getByRole("tab", { name: "Before you publish" })).toHaveAttribute("aria-selected", "true");
@@ -110,7 +110,7 @@ test.describe("Creator", () => {
     test(`lays out the results without horizontal overflow at ${name}`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await mockAnalyze(page, []);
-      await page.goto("/next/creator");
+      await page.goto("/creator");
       await page.getByLabel("Script").fill("Silence says everything.");
       await page.getByRole("button", { name: "Generate package" }).click();
       await expect(page.getByRole("tab", { name: "Package" })).toBeVisible();

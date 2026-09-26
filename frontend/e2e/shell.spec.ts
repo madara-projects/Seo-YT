@@ -17,7 +17,7 @@ test.describe("React shell", () => {
   test("mounts the Creator page with no console errors", async ({ page }) => {
     const errors = collectErrors(page);
 
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     await expect(page.getByRole("heading", { name: "Creator", level: 1 })).toBeVisible();
     await expect(page.getByRole("group", { name: "What are you making?" })).toBeVisible();
@@ -28,22 +28,29 @@ test.describe("React shell", () => {
   });
 
   test("serves a deep link directly without a client redirect", async ({ page }) => {
-    const response = await page.goto("/next/history");
+    const response = await page.goto("/history");
     expect(response?.status()).toBe(200);
     await expect(page.getByRole("heading", { name: "Package library", level: 1 })).toBeVisible();
   });
 
-  test("keeps the legacy dashboard reachable and untouched", async ({ page }) => {
-    const response = await page.goto("/app");
-    expect(response?.status()).toBe(200);
-    // The legacy shell, not the React app.
-    await expect(page.locator("#view-creator")).toHaveCount(1);
+  test("sends old addresses to the same page", async ({ page }) => {
+    // The app used to live under /next, and the classic dashboard at /app with its page in the hash.
+    await page.goto("/next/history");
+    await expect(page).toHaveURL(/\/history$/);
+    await expect(page.getByRole("heading", { name: "Package library", level: 1 })).toBeVisible();
+
+    await page.goto("/app");
+    await expect(page).toHaveURL(/\/creator$/);
+
+    await page.goto("/#settings");
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
   });
 
   for (const [name, viewport] of Object.entries(VIEWPORTS)) {
     test(`lays out without horizontal overflow at ${name}`, async ({ page }) => {
       await page.setViewportSize(viewport);
-      await page.goto("/next/creator");
+      await page.goto("/creator");
       await expect(page.getByRole("heading", { name: "Creator", level: 1 })).toBeVisible();
 
       await expectNoHorizontalOverflow(page);
@@ -54,7 +61,7 @@ test.describe("React shell", () => {
 
   test("hides the sidebar on mobile and opens it as a drawer", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.mobile);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     const openButton = page.getByRole("button", { name: "Open navigation" });
     await expect(openButton).toBeVisible();
@@ -70,7 +77,7 @@ test.describe("React shell", () => {
 
   test("keeps keyboard focus inside the open navigation drawer", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.mobile);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     await page.getByRole("button", { name: "Open navigation" }).click();
     const drawer = page.getByRole("dialog", { name: "Navigation" });
@@ -82,7 +89,7 @@ test.describe("React shell", () => {
 
   test("serves the page with no inline script or event handler", async ({ request }) => {
     // The Content Security Policy allows only scripts served as files by this server.
-    const html = await (await request.get("/next/creator")).text();
+    const html = await (await request.get("/creator")).text();
     expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/i);
     expect(html).not.toMatch(/\son[a-z]+\s*=/i);
     expect(html).toContain("/app-assets/theme-init.js");
@@ -90,7 +97,7 @@ test.describe("React shell", () => {
 
   test("shows the desktop sidebar at full width", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.desktop);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open navigation" })).toBeHidden();
@@ -98,7 +105,7 @@ test.describe("React shell", () => {
 
   test("toggles between dark and light themes", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.desktop);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     const toggle = page.getByRole("button", { name: /Switch to (light|dark) theme/ });
     const startedDark = await page.evaluate(() =>
@@ -120,7 +127,7 @@ test.describe("React shell", () => {
   });
 
   test("expands the optional details", async ({ page }) => {
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     const trigger = page.getByRole("button", { name: /More details \(optional\)/ });
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
@@ -131,7 +138,7 @@ test.describe("React shell", () => {
   });
 
   test("keeps Generate disabled, with the reason, until there is a script", async ({ page }) => {
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     const generate = page.getByRole("button", { name: "Generate package" });
     await expect(generate).toBeDisabled();
@@ -143,7 +150,7 @@ test.describe("React shell", () => {
 
   test("keeps the Generate bar in view while the form scrolls", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.mobile);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     await page.getByRole("button", { name: /More details \(optional\)/ }).click();
     await page.mouse.wheel(0, 400);
@@ -152,7 +159,7 @@ test.describe("React shell", () => {
 
   test("folds the desktop sidebar to an icon rail and remembers it", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.desktop);
-    await page.goto("/next/creator");
+    await page.goto("/creator");
     const sidebar = page.locator("#app-sidebar");
     const wide = (await sidebar.boundingBox())?.width ?? 0;
 
@@ -170,7 +177,7 @@ test.describe("React shell", () => {
   });
 
   test("reaches the primary action by keyboard alone", async ({ page }) => {
-    await page.goto("/next/creator");
+    await page.goto("/creator");
 
     await page.keyboard.press("Tab");
     await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();

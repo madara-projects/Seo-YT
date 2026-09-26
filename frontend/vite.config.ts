@@ -6,12 +6,10 @@ import path from "node:path";
 export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
   // The production bundle is served by FastAPI from `win_engine/api/static/app/`,
-  // so every built asset is requested under `/app-assets/`, which also avoids
-  // the root-relative lookups that would collide with the classic dashboard at
-  // `/static`. The dev server has no FastAPI in front of it, so it serves the
-  // app itself at `/next/`, the router's basename; with `/app-assets/` there a
-  // page URL such as /next/creator was a 404.
-  base: command === "build" ? "/app-assets/" : "/next/",
+  // so every built asset is requested under `/app-assets/`, apart from the page
+  // paths the app itself uses. The dev server has no FastAPI in front of it, so
+  // it serves the app at the root, where the router expects it.
+  base: command === "build" ? "/app-assets/" : "/",
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },

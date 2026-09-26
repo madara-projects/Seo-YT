@@ -37,7 +37,7 @@ Implemented and available now:
 - Advanced Creator brief values persist through accordion collapse and are submitted in the single intentional Analyze request.
 - Collector status clearly distinguishes disabled, dry-run, and unavailable/error states; collector remains disabled by default.
 - Phase 3C local static frontend extraction: FastAPI serves same-origin HTML/CSS/native ES modules, with shared API/error/state/navigation modules.
-- A React interface at `/next` covers every page (Dashboard, Creator, History, Channel, Ideas, Demand, Watchlist, Audits, Experiments, Settings) beside the classic dashboard at `/`.
+- The React interface at `/` covers every page (Dashboard, Creator, History, Channel, Ideas, Demand, Watchlist, Audits, Experiments, Settings). It replaced the classic dashboard, whose old addresses redirect to the same page.
 - Complete Phase 3D Creator decision workflow: Idea, Brief, Research, Angle, Packaging, Compare, Decision, and Checklist.
 - Deterministic local package comparison, evidence-aware decision summaries, manual pre-publish acknowledgments, safe copy, and full JSON export. Explicit package selection is saved to History; checklist state remains local, and neither action publishes or changes YouTube.
 - Phase 4 generation quality gate checks quote fidelity, unsupported claims, title repetition/diversity, template leakage, description/tag contamination, hashtags, the Shorts title hashtag, contradictions, and Unicode-aware Tamil/Tanglish behavior.
@@ -51,8 +51,7 @@ Implemented and available now:
 - Phase 8 Published Audits append immutable snapshots that preserve the generated package, explicit creator selection or unknown attribution, actual owned-video metadata, saved pre-publish quality/retention/research traces, available post-publish windows, deterministic findings, and evidence-gated learning candidates.
 - Phase 8 Experiment Center records explicit hypotheses, controlled or observational mode, one named variable, control/variant definitions, verified linked-video assignments, comparable observation windows, and immutable result snapshots. Small samples remain `insufficient_evidence`; visible directions are associations, never causal winners.
 - Gemini generation allows at most one quality-repair request. Empty, rejected, or quota-exhausted provider responses stop immediately and use the clearly labelled local fallback.
-- Creator rendering and behavior are owned by `pages/creator.js`; the temporary Creator compatibility renderer and window bridge were removed from `app.js`.
-- 960 automated backend tests, 61 deterministic Chromium browser tests for the classic dashboard, 262 Vitest tests and 70 Playwright checks for the React interface; browser tooling stays outside production Docker.
+- 964 automated backend tests, plus 299 Vitest tests and 78 Playwright checks for the interface; browser tooling stays outside production Docker.
 
 Planned but not yet complete:
 
@@ -187,9 +186,7 @@ FastAPI application (local static shell + API)
       +-- Redis research cache
 ```
 
-The default `/`, `/app`, and `/dashboard_view` routes serve the classic dashboard from `win_engine/api/static/index.html`. Its CSS and native ES modules are served from the same FastAPI process at `/static/*`, and it loads nothing from other hosts. `pages/creator.js` owns Creator state, requests, rendering, comparison, selection, checklist, copy, and export.
-
-The React interface is served at `/next` from the committed production build in `win_engine/api/static/app/`; its source is in `frontend/`. It loads its typefaces from Google Fonts. Neither interface needs Node or a second server at runtime.
+The interface is a React app served at `/` and on each page path (`/creator`, `/history`, `/settings`, …) from the committed production build in `win_engine/api/static/app/`; its source is in `frontend/`. Old addresses (`/next/*`, `/app`, `/dashboard_view`, and classic bookmarks such as `/#history`) open the same page. It loads its typefaces from Google Fonts, and needs no Node or second server at runtime.
 
 ## Requirements
 
@@ -297,8 +294,7 @@ docker compose ps
 
 Open:
 
-- Dashboard: [http://127.0.0.1:8000](http://127.0.0.1:8000)
-- React interface: [http://127.0.0.1:8000/next](http://127.0.0.1:8000/next)
+- Interface: [http://127.0.0.1:8000](http://127.0.0.1:8000)
 - Health check: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
 - API schema: [http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)
 
@@ -342,12 +338,11 @@ When Redis is unavailable, the research cache falls back to its supported local 
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/` | Dashboard application. |
+| `GET` | `/` | The interface (also served on each page path, such as `/creator`). |
 | `GET` | `/health` | Process and database health. |
 | `GET` | `/ready` | Protected readiness details in production. |
 | `GET` | `/meta` | Application name, version, and environment. |
 | `POST` | `/diagnostics` | Live YouTube (one 1-unit call) and Gemini configuration check. |
-| `GET` | `/next` | React interface. |
 | `POST` | `/analyze` | Research content and generate/save an SEO package. |
 | `GET` | `/youtube/channel/status` | Connected-channel and latest-sync status. |
 | `GET` | `/youtube/channel/connect` | Start Google OAuth connection. |
@@ -409,7 +404,7 @@ Example analysis request:
 - Migrated pre-Phase-1 links must be ownership-verified again before they can affect learning, and their legacy snapshots remain display/history data only.
 - The official APIs do not provide vidIQ's proprietary monthly keyword-search estimates.
 - Public competitor metadata can show correlations and possible outliers but cannot reveal private competitor retention or prove causation.
-- The React interface loads its typefaces from Google Fonts; the classic dashboard loads nothing from other hosts.
+- The interface loads its typefaces from Google Fonts; without internet access it falls back to system fonts.
 - Deleting a saved package also deletes its linked video's collected snapshots, audits, and experiment assignments.
 - Creator package selection is persisted in History; checklist acknowledgments remain browser-session state and never claim that YouTube was changed.
 - Phase 5 opening and pacing scores are deterministic pre-publish heuristics, not measured retention or performance predictions. Detailed retention curves and drop timestamps are unavailable through the current data source.
@@ -433,7 +428,7 @@ docker run --rm -v "$PWD:/app" -w /app python:3.11.16-slim sh -c "pip install -q
 
 Frontend checks run from `frontend/`: `npm ci`, then `npx tsc -b --noEmit`, `npx vitest run`, and `npm run build`. The Playwright suite (`npx playwright test`) drives a running app at `127.0.0.1:8000` and intercepts every request that could change data.
 
-The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full run has 960 backend tests, plus 61 browser tests that are skipped when optional Playwright/Chromium tooling is unavailable. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
+The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full run has 964 backend tests. The interface has its own Vitest and Playwright suites in `frontend/`, and no browser tooling is installed in production Docker.
 
 ## Repository structure
 
@@ -446,11 +441,10 @@ Seo-YT/
 ├── runtime/                     # Local data, backups, secrets, and generated artifacts
 ├── frontend/                    # React interface source (Vite); its build is in win_engine/api/static/app/
 ├── scripts/                     # Quality-probe script (spends quota; run by hand)
-├── tests/
-│   └── browser/                 # Optional Chromium workflow tests
+├── tests/                       # Backend test suite (pytest)
 ├── win_engine/                  # Application package
 │   ├── analysis/                # Content understanding and SEO research
-│   ├── api/                     # FastAPI app, routes, classic dashboard, and the React build
+│   ├── api/                     # FastAPI app, routes, and the interface build
 │   ├── core/                    # Configuration, schemas, logging, and rate limiting
 │   ├── feedback/                # History, sync, analytics, and learning
 │   ├── generation/              # Package generation and quality refinement

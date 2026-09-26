@@ -2,7 +2,6 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   CornerDownLeft,
-  ExternalLink,
   Moon,
   Search,
   Sparkles,
@@ -75,14 +74,6 @@ export function CommandPalette({
         hint: "Appearance",
         icon: resolvedTheme === "dark" ? Sun : Moon,
         run: () => setTheme(resolvedTheme === "dark" ? "light" : "dark"),
-      },
-      {
-        id: "action-legacy",
-        group: "Actions",
-        label: "Open the classic dashboard",
-        hint: "The static dashboard at /app, in a new tab",
-        icon: ExternalLink,
-        run: () => window.open("/app", "_blank", "noopener"),
       },
     ],
     [navigate, resolvedTheme, setTheme],

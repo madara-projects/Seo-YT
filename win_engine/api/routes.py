@@ -36,10 +36,12 @@ logger = logging.getLogger(__name__)
 
 _APP_START = time.time()
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+# The interface's pages. The browser resolves each one; the server returns the
+# same document for every one, so a reload or a bookmark opens that page.
+_APP_PAGES = ("dashboard", "creator", "history", "channel", "ideas", "demand", "watchlist", "audits", "experiments", "settings")
 # Pages the YouTube OAuth callback may return the browser to. Anything else
-# falls back to the legacy dashboard root, so the value can never become an
-# open redirect.
-_OAUTH_RETURN_PATHS = frozenset({"/", "/next/settings", "/next/channel"})
+# falls back to the root, so the value can never become an open redirect.
+_OAUTH_RETURN_PATHS = frozenset({"/", "/settings", "/channel"})
 _OAUTH_RETURN_COOKIE = "win_engine_oauth_return"
 _OAUTH_REASON = re.compile(r"[a-z_]{1,40}")
 
@@ -60,34 +62,44 @@ def _gemini_budget(route):
 
 
 @router.get("/", response_class=HTMLResponse)
-@router.get("/app", response_class=HTMLResponse)
-@router.get("/dashboard_view", response_class=HTMLResponse)
-def dashboard():
-    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
-
-
-@router.get("/next", response_class=HTMLResponse)
-@router.get("/next/{spa_path:path}", response_class=HTMLResponse)
-def react_app(spa_path: str = ""):
-    """Serve the React frontend build.
-
-    Mounted beside the existing dashboard rather than over it: `/`, `/app`, and
-    `/dashboard_view` keep serving the current interface until the React app
-    reaches feature parity. Every path under `/next` returns the same document
-    so client-side routing survives a reload or a deep link.
+def app_home():
+    """The interface: the React build, which routes each page in the browser.
 
     Built with `npm run build` in `frontend/`. The production bundle is kept in
     the repository because the Python-only Docker image does not run Node; a
     missing bundle is still reported as a clear 404 rather than a 500.
     """
-    del spa_path  # Routing is resolved in the browser.
     index = _STATIC_DIR / "app" / "index.html"
     if not index.is_file():
         raise HTTPException(
             status_code=404,
-            detail="The React frontend has not been built. Run 'npm run build' in frontend/.",
+            detail="The frontend has not been built. Run 'npm run build' in frontend/.",
         )
     return FileResponse(index, media_type="text/html")
+
+
+# One route per page rather than a catch-all, which could answer for an API
+# path and turn its 404 into a web page.
+for _page in _APP_PAGES:
+    router.add_api_route(f"/{_page}", app_home, methods=["GET"], response_class=HTMLResponse, include_in_schema=False)
+
+
+@router.get("/next", include_in_schema=False)
+@router.get("/next/{path:path}", include_in_schema=False)
+@router.get("/app", include_in_schema=False)
+@router.get("/dashboard_view", include_in_schema=False)
+def moved_interface(request: Request, path: str = ""):
+    """Old addresses: the interface lived under /next, and the classic dashboard at /app.
+
+    Only a known page is kept, so a crafted path such as /next//evil.example
+    cannot turn this into an open redirect. The query string travels along,
+    so a sign-in that started before the move still reports its result.
+    """
+    page = path.split("/", 1)[0]
+    target = f"/{page}" if page in _APP_PAGES else "/"
+    if request.url.query:
+        target += f"?{request.url.query}"
+    return RedirectResponse(target, status_code=308)
 
 
 def _database_status(database_path: str) -> dict[str, object]:

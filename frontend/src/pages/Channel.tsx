@@ -400,7 +400,7 @@ export default function ChannelPage() {
           <ChannelSetupNeeded message={data.setup_message} />
         ) : !connected ? (
           <>
-            <ConnectChannelCard returnTo="/next/channel" />
+            <ConnectChannelCard returnTo="/channel" />
             <ConnectedPreview />
           </>
         ) : !syncData ? (

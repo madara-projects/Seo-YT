@@ -85,7 +85,7 @@ test.describe("Demand", () => {
     const calls = { research: [] as unknown[], generate: 0 };
     await mockDemand(page, calls);
 
-    await page.goto("/next/demand");
+    await page.goto("/demand");
     await expect(page.getByRole("heading", { name: "Demand", level: 1 })).toBeVisible();
     await expect(page.getByTestId("demand-snapshot")).toHaveCount(1);
 
@@ -96,7 +96,7 @@ test.describe("Demand", () => {
     await page.getByRole("option", { name: "Tamil Nadu" }).click();
     await page.getByRole("button", { name: "Research demand" }).click();
 
-    await expect(page).toHaveURL(/\/next\/demand\?snapshot=8$/);
+    await expect(page).toHaveURL(/\/demand\?snapshot=8$/);
     const detail = page.getByTestId("demand-detail");
     await expect(detail.getByRole("heading", { name: "heartbreak quotes" })).toBeVisible();
     await expect(detail).toContainText("Emerging signal");
@@ -107,7 +107,7 @@ test.describe("Demand", () => {
     ]);
 
     await detail.getByRole("button", { name: "Generate package" }).click();
-    await expect(detail.getByRole("link", { name: /Open in History/ })).toHaveAttribute("href", "/next/history?run=42");
+    await expect(detail.getByRole("link", { name: /Open in History/ })).toHaveAttribute("href", "/history?run=42");
     expect(calls.generate).toBe(1);
 
     expect(errors).toEqual([]);
@@ -115,7 +115,7 @@ test.describe("Demand", () => {
 
   test("keeps the sidebar entry current, without the legacy tag", async ({ page }) => {
     await page.setViewportSize(VIEWPORTS.desktop);
-    await page.goto("/next/demand");
+    await page.goto("/demand");
     const link = page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Demand" });
     await expect(link).toHaveAttribute("aria-current", "page");
     await expect(link).not.toContainText("Legacy");
@@ -125,7 +125,7 @@ test.describe("Demand", () => {
     test(`lays out without horizontal overflow at ${name}`, async ({ page }) => {
       await mockDemand(page, { research: [], generate: 0 });
       await page.setViewportSize(viewport);
-      await page.goto("/next/demand?snapshot=7");
+      await page.goto("/demand?snapshot=7");
       await expect(page.getByTestId("demand-detail")).toBeVisible();
 
       await expectNoHorizontalOverflow(page);

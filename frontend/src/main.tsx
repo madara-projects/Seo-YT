@@ -9,8 +9,8 @@ if (!container) throw new Error("Root container #root was not found.");
 
 createRoot(container).render(
   <StrictMode>
-    {/* FastAPI serves the SPA under /next while the classic dashboard keeps /app. */}
-    <BrowserRouter basename="/next">
+    {/* FastAPI serves the app at the root and on each page path (routes.py). */}
+    <BrowserRouter>
       <App />
     </BrowserRouter>
   </StrictMode>,

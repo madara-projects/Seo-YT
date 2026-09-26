@@ -1,1 +1,0 @@
-"""Optional Playwright browser tests."""

@@ -64,7 +64,7 @@ export function ConnectChannelCard({
   returnTo,
   compact = false,
 }: {
-  returnTo: "/next/settings" | "/next/channel";
+  returnTo: "/settings" | "/channel";
   compact?: boolean;
 }) {
   return (

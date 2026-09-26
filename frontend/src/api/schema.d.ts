@@ -4,40 +4,6 @@
  */
 
 export interface paths {
-    "/dashboard_view": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Dashboard */
-        get: operations["dashboard_dashboard_view_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/app": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Dashboard */
-        get: operations["dashboard_app_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/": {
         parameters: {
             query?: never;
@@ -45,66 +11,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Dashboard */
-        get: operations["dashboard__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/next/{spa_path}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /**
-         * React App
-         * @description Serve the React frontend build.
-         *
-         *     Mounted beside the existing dashboard rather than over it: `/`, `/app`, and
-         *     `/dashboard_view` keep serving the current interface until the React app
-         *     reaches feature parity. Every path under `/next` returns the same document
-         *     so client-side routing survives a reload or a deep link.
+         * App Home
+         * @description The interface: the React build, which routes each page in the browser.
          *
          *     Built with `npm run build` in `frontend/`. The production bundle is kept in
          *     the repository because the Python-only Docker image does not run Node; a
          *     missing bundle is still reported as a clear 404 rather than a 500.
          */
-        get: operations["react_app_next__spa_path__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/next": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * React App
-         * @description Serve the React frontend build.
-         *
-         *     Mounted beside the existing dashboard rather than over it: `/`, `/app`, and
-         *     `/dashboard_view` keep serving the current interface until the React app
-         *     reaches feature parity. Every path under `/next` returns the same document
-         *     so client-side routing survives a reload or a deep link.
-         *
-         *     Built with `npm run build` in `frontend/`. The production bundle is kept in
-         *     the repository because the Python-only Docker image does not run Node; a
-         *     missing bundle is still reported as a clear 404 rather than a 500.
-         */
-        get: operations["react_app_next_get"];
+        get: operations["app_home__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1615,7 +1530,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    dashboard_dashboard_view_get: {
+    app_home__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1631,108 +1546,6 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
-                };
-            };
-        };
-    };
-    dashboard_app_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
-    dashboard__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
-    react_app_next__spa_path__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                spa_path: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    react_app_next_get: {
-        parameters: {
-            query?: {
-                spa_path?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

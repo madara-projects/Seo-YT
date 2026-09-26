@@ -21,7 +21,7 @@ test.beforeEach(async ({ page }) => {
 test.describe("Dashboard", () => {
   test("renders against live data with no console errors", async ({ page }) => {
     const errors = collectErrors(page);
-    await page.goto("/next/dashboard");
+    await page.goto("/dashboard");
 
     await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
     await expect(page.getByText("Avg opportunity score")).toBeVisible();
@@ -42,7 +42,7 @@ test.describe("Dashboard", () => {
         },
       }),
     );
-    await page.goto("/next/dashboard");
+    await page.goto("/dashboard");
     await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
     await expect(page.getByText("Connect and refresh your channel in Settings.")).toBeVisible();
 
@@ -71,7 +71,7 @@ test.describe("Dashboard", () => {
         },
       }),
     );
-    await page.goto("/next/dashboard");
+    await page.goto("/dashboard");
 
     const card = page.locator('[data-stat="Estimated watch time"]');
     await expect(card).toContainText("2.2 hrs");
@@ -103,7 +103,7 @@ test.describe("Dashboard", () => {
       }),
     );
 
-    await page.goto("/next/dashboard");
+    await page.goto("/dashboard");
     const chart = page.locator(".recharts-wrapper");
     await expect(chart).toBeVisible();
     await expect(chart.getByText("8.1", { exact: true })).toBeVisible();
@@ -119,7 +119,7 @@ test.describe("Dashboard", () => {
       return route.abort();
     });
 
-    await page.goto("/next/dashboard");
+    await page.goto("/dashboard");
     await page.getByRole("button", { name: "Quote short" }).click();
     await page.getByRole("button", { name: "Open in Creator" }).click();
 
@@ -131,7 +131,7 @@ test.describe("Dashboard", () => {
   for (const [name, viewport] of Object.entries(VIEWPORTS)) {
     test(`lays out without horizontal overflow at ${name}`, async ({ page }) => {
       await page.setViewportSize(viewport);
-      await page.goto("/next/dashboard");
+      await page.goto("/dashboard");
       await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
 
       // Wait for the loaded state rather than the skeletons, so the check (and
@@ -159,7 +159,7 @@ async function savedRowCount(page: Page): Promise<number> {
 test.describe("History", () => {
   test("lists saved packages with no console errors", async ({ page }) => {
     const errors = collectErrors(page);
-    await page.goto("/next/history");
+    await page.goto("/history");
 
     await expect(page.getByRole("heading", { name: "Package library", level: 1 })).toBeVisible();
     await expect(page.getByLabel("Search saved packages")).toBeVisible();
@@ -169,7 +169,7 @@ test.describe("History", () => {
 
   test("opens a saved package and offers the whole bundle for reuse", async ({ page }) => {
     await mockHistoryRuns(page);
-    await page.goto("/next/history");
+    await page.goto("/history");
     await expect(page.getByRole("heading", { name: "Package library", level: 1 })).toBeVisible();
     expect(await savedRowCount(page)).toBe(2);
 
@@ -190,7 +190,7 @@ test.describe("History", () => {
       return route.fulfill({ json: { status: "deleted", run_id: 0, cloud_sync: { state: "disabled" } } });
     });
 
-    await page.goto("/next/history");
+    await page.goto("/history");
     expect(await savedRowCount(page)).toBe(2);
 
     await page.getByTestId("history-row").first().getByRole("button", { name: /^Delete/ }).click();
@@ -208,7 +208,7 @@ test.describe("History", () => {
 
   test("filters the list from the search box", async ({ page }) => {
     await mockHistoryRuns(page);
-    await page.goto("/next/history");
+    await page.goto("/history");
     expect(await savedRowCount(page)).toBe(2);
 
     await page.getByLabel("Search saved packages").fill("zzzz-no-match-zzzz");
@@ -218,7 +218,7 @@ test.describe("History", () => {
 
   test("shows an unmeasured opportunity as unavailable, never as 0", async ({ page }) => {
     await mockHistoryRuns(page);
-    await page.goto("/next/history");
+    await page.goto("/history");
 
     const row = page.getByTestId("history-row").filter({ hasText: "Top AI Tools" });
     await expect(row.getByRole("group", { name: "Package scores" })).toContainText("Unavailable");
@@ -228,7 +228,7 @@ test.describe("History", () => {
   for (const [name, viewport] of Object.entries(VIEWPORTS)) {
     test(`lays out without horizontal overflow at ${name}`, async ({ page }) => {
       await page.setViewportSize(viewport);
-      await page.goto("/next/history");
+      await page.goto("/history");
       await expect(page.getByRole("heading", { name: "Package library", level: 1 })).toBeVisible();
       await savedRowCount(page);
 

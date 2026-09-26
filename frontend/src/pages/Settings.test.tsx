@@ -193,7 +193,7 @@ describe("SettingsPage", () => {
     const connect = await screen.findByRole("link", { name: /Connect YouTube channel/ });
     expect(connect).toHaveAttribute(
       "href",
-      "/youtube/channel/connect?return_to=%2Fnext%2Fsettings",
+      "/youtube/channel/connect?return_to=%2Fsettings",
     );
     expect(screen.getByText("youtube.readonly")).toBeInTheDocument();
     expect(screen.getByText("yt-analytics.readonly")).toBeInTheDocument();

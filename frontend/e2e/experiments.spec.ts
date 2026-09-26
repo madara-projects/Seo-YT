@@ -98,7 +98,7 @@ test.describe("Experiments", () => {
     await mockChannel(page, true, CHANNEL_ID);
     await mockExperiments(page, calls);
 
-    await page.goto("/next/experiments");
+    await page.goto("/experiments");
     await page.getByRole("button", { name: "New experiment" }).click();
     const form = page.getByTestId("experiment-form");
     await form.getByLabel("Name").fill("Hook in the first second");
@@ -109,7 +109,7 @@ test.describe("Experiments", () => {
     await choose(page, "Comparable window", "7 days");
     await form.getByRole("button", { name: "Create comparison" }).click();
 
-    await expect(page).toHaveURL(/\/next\/experiments\?experiment=4$/);
+    await expect(page).toHaveURL(/\/experiments\?experiment=4$/);
     expect(calls.created).toEqual([
       {
         name: "Hook in the first second",
@@ -158,7 +158,7 @@ test.describe("Experiments", () => {
         }),
       ]);
       await page.setViewportSize(viewport);
-      await page.goto("/next/experiments?experiment=3");
+      await page.goto("/experiments?experiment=3");
       await expect(page.getByTestId("experiment-result")).toBeVisible();
 
       await expectNoHorizontalOverflow(page);
