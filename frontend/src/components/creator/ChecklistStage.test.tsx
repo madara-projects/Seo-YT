@@ -40,7 +40,7 @@ describe("ChecklistStage", () => {
         onExport={vi.fn()}
       />,
     );
-    expect(screen.getByText("No package selected")).toBeInTheDocument();
+    expect(screen.getByText("No package chosen yet")).toBeInTheDocument();
   });
 
   it("reports progress and blocks completion until every item is confirmed", () => {

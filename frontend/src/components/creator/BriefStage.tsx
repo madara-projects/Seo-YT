@@ -5,7 +5,6 @@ import { EmptyState } from "@/components/common/States";
 import { PROVENANCE_FIELDS } from "@/lib/creatorConstants";
 import { asObject, cn } from "@/lib/utils";
 import type { CreatorBrief } from "@/api/types";
-import type { CreatorFormValues } from "@/schemas/creator";
 
 /**
  * Shows, field by field, whether a brief value came from the creator or was
@@ -17,14 +16,15 @@ export function BriefStage({
   submitted,
 }: {
   brief: CreatorBrief | null;
-  submitted: CreatorFormValues | null;
+  /** The inputs as sent, including the `video_format` derived from the format choice. */
+  submitted: Record<string, unknown> | null;
 }) {
   if (!brief) {
     return (
       <EmptyState
         icon={ScrollText}
         title="No creator brief yet"
-        description="Run Analyze to see which brief values you supplied and which the engine inferred."
+        description="Generate a package to see which brief values you supplied and which the engine inferred."
       />
     );
   }
@@ -32,9 +32,7 @@ export function BriefStage({
   const provenance = asObject(brief.field_provenance);
 
   const rows = PROVENANCE_FIELDS.map(([field, label]) => {
-    const submittedValue = String(
-      (submitted as Record<string, unknown> | null)?.[field] ?? "",
-    ).trim();
+    const submittedValue = String(submitted?.[field] ?? "").trim();
     const value = String((brief as Record<string, unknown>)[field] ?? submittedValue).trim();
     const rawSource = String(
       asObject(provenance[field]).source ??

@@ -28,8 +28,8 @@ export function DecisionStage({
         title="No decision to review yet"
         description={
           data
-            ? "Select a package in Packaging or Compare first. Nothing counts as your decision until you choose one."
-            : "Run Analyze and select a package before reviewing the final decision."
+            ? "Choose a package on the Package or Compare options tab first. Nothing counts as your decision until you choose one."
+            : "Generate a package and choose one before reviewing the final decision."
         }
       />
     );

@@ -472,34 +472,45 @@ export function IdeaDetail({
           <Field label="Published video">{idea.published_video_link_id ? "Linked in History" : "Not linked"}</Field>
         </dl>
 
-        <section className="space-y-3">
-          <SectionTitle icon={Compass} aside={<EvidenceChip tone="ok">Creator-entered</EvidenceChip>}>
-            Angles
-          </SectionTitle>
-          <TextList
-            items={[
-              ["Search angle", idea.search_angle],
-              ["Browse angle", idea.browse_angle],
-              ["Existing audience angle", idea.audience_angle],
-            ]}
-          />
-        </section>
+        {/*
+          From 2xl, the creator's own angles, plan and demand check sit in the
+          left column and the dated research, the tallest part, in the right, so
+          neither column is left half empty. Reading order is unchanged below 2xl.
+        */}
+        <div className="grid gap-6 2xl:grid-cols-2 2xl:grid-rows-[auto_auto_1fr]">
+          <section className="space-y-3 2xl:col-start-1">
+            <SectionTitle icon={Compass} aside={<EvidenceChip tone="ok">Creator-entered</EvidenceChip>}>
+              Angles
+            </SectionTitle>
+            <TextList
+              items={[
+                ["Search angle", idea.search_angle],
+                ["Browse angle", idea.browse_angle],
+                ["Existing audience angle", idea.audience_angle],
+              ]}
+            />
+          </section>
 
-        <section className="space-y-3">
-          <SectionTitle icon={Clapperboard} aside={<EvidenceChip tone="ok">Creator-entered</EvidenceChip>}>
-            Production plan
-          </SectionTitle>
-          <TextList
-            items={[
-              ["Visual or background", idea.visual_or_background],
-              ["On-screen text", idea.on_screen_text],
-              ["Emotion or intent", idea.emotion_or_intent],
-            ]}
-          />
-        </section>
+          <section className="space-y-3 2xl:col-start-1">
+            <SectionTitle icon={Clapperboard} aside={<EvidenceChip tone="ok">Creator-entered</EvidenceChip>}>
+              Production plan
+            </SectionTitle>
+            <TextList
+              items={[
+                ["Visual or background", idea.visual_or_background],
+                ["On-screen text", idea.on_screen_text],
+                ["Emotion or intent", idea.emotion_or_intent],
+              ]}
+            />
+          </section>
 
-        <ResearchSection idea={idea} />
-        <DemandSection idea={idea} />
+          <div className="min-w-0 2xl:col-start-2 2xl:row-span-3 2xl:row-start-1">
+            <ResearchSection idea={idea} />
+          </div>
+          <div className="min-w-0 2xl:col-start-1">
+            <DemandSection idea={idea} />
+          </div>
+        </div>
         <IdeaActionBar key={idea.id} idea={idea} />
       </div>
     </Panel>

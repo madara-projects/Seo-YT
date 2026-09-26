@@ -69,7 +69,7 @@ export default function DashboardPage() {
   const titleDelta = toFiniteNumber(scorecard.title_score_delta_vs_previous_window);
 
   return (
-    <div className="mx-auto w-full max-w-page space-y-6 animate-fade-up">
+    <div className="mx-auto w-full max-w-page space-y-5 animate-fade-up">
       <DashboardHero totalRuns={typeof totalRuns === "number" ? totalRuns : undefined} />
 
       {summary.isError ? (
@@ -83,7 +83,7 @@ export default function DashboardPage() {
       {summary.isPending ? (
         <GridSkeleton cards={4} />
       ) : failed ? null : (
-        <section aria-label="Key numbers" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section aria-label="Key numbers" className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Views (28 days)"
             icon={Eye}
@@ -153,10 +153,15 @@ export default function DashboardPage() {
         </section>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-5">
-        <QuickLaunch className="lg:col-span-3" />
+      {/*
+        Three rows of cards on one 1.25rem spacing scale. Up to 2xl a 3:2 split;
+        from 2xl three equal columns, with the two short panels (learning and
+        retention) side by side under one column pair instead of stacked.
+      */}
+      <div className="grid gap-5 lg:grid-cols-5 2xl:grid-cols-3">
+        <QuickLaunch className="lg:col-span-3 2xl:col-span-2" />
         <ChannelSnapshot
-          className="lg:col-span-2"
+          className="lg:col-span-2 2xl:col-span-1"
           owned={owned}
           channelTitle={channelTitle}
           isConnected={isConnected}
@@ -166,9 +171,9 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-5">
+      <div className="grid gap-5 lg:grid-cols-5 2xl:grid-cols-3">
         <Panel
-          className="lg:col-span-3"
+          className="lg:col-span-3 2xl:col-span-1"
           icon={BarChart3}
           title="Title quality by content angle"
           aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}
@@ -181,42 +186,39 @@ export default function DashboardPage() {
             <AngleChart data={angles} />
           )}
         </Panel>
-        <LearningPanel
-          className="lg:col-span-2"
-          title="Learning confidence"
-          description="Learning from results starts only once enough comparable videos have matured."
-          sampleLabel="Comparable videos"
-          data={cohorts.data}
-          isPending={cohorts.isPending}
-          isError={cohorts.isError}
-        />
+        {/* Stacked beside the chart up to 2xl; side by side across two columns from 2xl. */}
+        <div className="grid gap-5 lg:col-span-2 2xl:grid-cols-2">
+          <LearningPanel
+            title="Learning confidence"
+            description="Learning from results starts only once enough comparable videos have matured."
+            sampleLabel="Comparable videos"
+            data={cohorts.data}
+            isPending={cohorts.isPending}
+            isError={cohorts.isError}
+          />
+          <RetentionSpread rows={retention} isPending={summary.isPending} isError={failed} />
+        </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-5">
+      <div className="grid gap-5 lg:grid-cols-5 2xl:grid-cols-3">
         <RecentPackages
-          className="lg:col-span-3"
+          className="lg:col-span-3 2xl:col-span-2"
           runs={recentRuns}
           isPending={summary.isPending}
           isError={failed}
         />
-        <RetentionSpread
-          className="lg:col-span-2"
-          rows={retention}
+        <TopTitles
+          className="lg:col-span-2 2xl:col-span-1"
+          titles={winningTitles}
+          scoreTrend={
+            typeof scorecard.score_trend === "string" && scorecard.score_trend
+              ? scorecard.score_trend
+              : undefined
+          }
           isPending={summary.isPending}
           isError={failed}
         />
       </div>
-
-      <TopTitles
-        titles={winningTitles}
-        scoreTrend={
-          typeof scorecard.score_trend === "string" && scorecard.score_trend
-            ? scorecard.score_trend
-            : undefined
-        }
-        isPending={summary.isPending}
-        isError={failed}
-      />
     </div>
   );
 }

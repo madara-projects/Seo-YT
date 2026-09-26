@@ -1,17 +1,29 @@
-/** Workflow constants ported verbatim from the legacy Creator module. */
+/** Creator workflow constants: the result tabs, format choices and form options. */
 
-export const STAGES = [
-  { key: "idea", label: "Idea", step: 1, hint: "Start with the script, topic, or raw video idea." },
-  { key: "brief", label: "Creator Brief", step: 2, hint: "Confirm the audience, promise, angle, format, and thumbnail direction." },
-  { key: "research", label: "Research", step: 3, hint: "Review returned public observations, local heuristics, and unavailable evidence." },
-  { key: "angle", label: "Recommended Angle", step: 4, hint: "Review the suggested angle and the limited evidence behind it." },
-  { key: "packaging", label: "Packaging", step: 5, hint: "Review and copy the generated metadata package." },
-  { key: "compare", label: "Compare", step: 6, hint: "Compare title and thumbnail approaches, then choose one locally." },
-  { key: "decision", label: "Decision", step: 7, hint: "Confirm what you selected, why it was suggested, and what remains unknown." },
-  { key: "checklist", label: "Checklist", step: 8, hint: "Complete manual checks before publishing outside this tool." },
+/**
+ * The results screen's tabs, in order. The tab lives in the URL (`?tab=`), so
+ * a reload or a shared link opens the same view.
+ */
+export const RESULT_TABS = [
+  { key: "package", label: "Package" },
+  { key: "compare", label: "Compare options" },
+  { key: "research", label: "Research and insights" },
+  { key: "publish", label: "Before you publish" },
 ] as const;
 
-export type StageKey = (typeof STAGES)[number]["key"];
+export type ResultTab = (typeof RESULT_TABS)[number]["key"];
+
+/** Where each stage of the old eight-step flow now lives, for old `?stage=` links. */
+export const STAGE_TO_TAB: Record<string, ResultTab | "setup"> = {
+  idea: "setup",
+  brief: "research",
+  research: "research",
+  angle: "research",
+  packaging: "package",
+  compare: "compare",
+  decision: "publish",
+  checklist: "publish",
+};
 
 export const PROVENANCE_FIELDS: [string, string][] = [
   ["target_audience", "Target audience"],
@@ -94,19 +106,46 @@ export const TITLE_STYLE_OPTIONS = [
 
 export const VOICE_OVER_OPTIONS = [
   { value: "", label: "Not specified" },
-  { value: "present", label: "Present" },
-  { value: "none", label: "None" },
-  { value: "unknown", label: "Unknown" },
+  { value: "present", label: "Yes, someone speaks" },
+  { value: "none", label: "No voice-over" },
+  { value: "unknown", label: "Not decided" },
 ];
 
-export const FORMAT_OPTIONS = [
-  { value: "", label: "Not specified" },
-  // The backend's canonical Shorts key: brief inference, Ideas, Demand and
-  // cohorts all group on it, so a differently spelled value would split them.
-  { value: "youtube_shorts", label: "Short" },
+/** What the creator is making. "auto" sends no format and lets the backend detect it. */
+export type FormatChoice = "short" | "long" | "auto";
+
+export const FORMAT_CHOICES: { value: FormatChoice; label: string; detail: string; consequence: string }[] = [
+  {
+    value: "short",
+    label: "Short",
+    detail: "Vertical, up to 3 minutes. Quotes, quick tips, one idea.",
+    consequence: "#shorts in the title, a focused tag set, no chapters.",
+  },
+  {
+    value: "long",
+    label: "Long video",
+    detail: "A regular video, over 3 minutes.",
+    consequence: "No #shorts; chapters only from your own timestamps.",
+  },
+  {
+    value: "auto",
+    label: "Not sure — detect it for me",
+    detail: "Read from your script and details.",
+    consequence: "The format is inferred from your script and labelled as inferred.",
+  },
+];
+
+/**
+ * Kinds of long video, as the backend spells them: each is one of its known
+ * long-form formats, so choosing one also settles the length. "Other" (and
+ * no choice) sends "long_form", which says long without naming a kind.
+ */
+export const LONG_TYPES = [
   { value: "tutorial", label: "Tutorial" },
   { value: "vlog", label: "Vlog" },
   { value: "review", label: "Review" },
   { value: "story", label: "Story" },
   { value: "challenge", label: "Challenge" },
-];
+  { value: "talking_head", label: "Talking head" },
+  { value: "other", label: "Other" },
+] as const;

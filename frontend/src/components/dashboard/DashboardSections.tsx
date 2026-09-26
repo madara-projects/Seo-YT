@@ -435,7 +435,7 @@ export function TopTitles({
                 >
                   {index + 1}
                 </span>
-                <p className="min-w-0 flex-1 text-sm text-foreground">{item.title}</p>
+                <p className="min-w-0 max-w-none flex-1 text-sm text-foreground">{item.title}</p>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="numeric text-xs font-semibold text-foreground">
                     {titleScoreText(item.title_score)}

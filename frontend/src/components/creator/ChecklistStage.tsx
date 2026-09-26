@@ -55,8 +55,8 @@ export function ChecklistStage({
     return (
       <EmptyState
         icon={ClipboardCheck}
-        title="No package selected"
-        description="Run Analyze and select a package before completing manual upload checks."
+        title="No package chosen yet"
+        description="Choose a package on the Package or Compare options tab, then complete these checks before you upload."
       />
     );
   }

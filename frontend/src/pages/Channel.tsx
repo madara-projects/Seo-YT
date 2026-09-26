@@ -420,7 +420,7 @@ export default function ChannelPage() {
             <ChannelBanner data={syncData} syncedAt={syncedAt} />
 
             {analyticsAvailable ? (
-              <section aria-label="Last 28 days" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <section aria-label="Last 28 days" className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
                 {kpis.map((kpi) => {
                   const item = metric(kpi.key);
                   return (
@@ -462,9 +462,9 @@ export default function ChannelPage() {
               </UnavailableNote>
             )}
 
-            <div className="grid gap-5 lg:grid-cols-5">
+            <div className="grid gap-5 lg:grid-cols-5 2xl:grid-cols-3">
               <Panel
-                className="lg:col-span-3"
+                className="lg:col-span-3 2xl:col-span-2"
                 icon={BarChart3}
                 title="Recent uploads"
                 aside={<EvidenceChip tone="info">YouTube data</EvidenceChip>}
@@ -472,7 +472,7 @@ export default function ChannelPage() {
                 {failed.has("uploads") ? uploadsFailed : <UploadsChart videos={videos} />}
               </Panel>
               <Panel
-                className="lg:col-span-2"
+                className="lg:col-span-2 2xl:col-span-1"
                 icon={GitCompareArrows}
                 title="This period vs the last"
                 description="Last 28 processed days against the 28 before."
@@ -485,27 +485,35 @@ export default function ChannelPage() {
               </Panel>
             </div>
 
-            <Panel
-              icon={ListVideo}
-              title="All uploads"
-              description={
-                failed.has("uploads") ? "Not read in the last sync." : `${videos.length.toLocaleString()} uploads in the last sync.`
-              }
-              aside={<EvidenceChip tone="info">Public counts</EvidenceChip>}
-            >
-              {failed.has("uploads") ? uploadsFailed : <UploadsTable videos={videos} />}
-            </Panel>
+            {/*
+              The uploads table is full width up to 2xl; from 2xl it takes two of
+              three columns and the learning and linked-package panels stack
+              beside it, so the table's numbers don't spread across the screen.
+            */}
+            <div className="grid gap-5 2xl:grid-cols-3">
+              <Panel
+                className="2xl:col-span-2"
+                icon={ListVideo}
+                title="All uploads"
+                description={
+                  failed.has("uploads") ? "Not read in the last sync." : `${videos.length.toLocaleString()} uploads in the last sync.`
+                }
+                aside={<EvidenceChip tone="info">Public counts</EvidenceChip>}
+              >
+                {failed.has("uploads") ? uploadsFailed : <UploadsTable videos={videos} />}
+              </Panel>
 
-            <div className="grid gap-5 lg:grid-cols-2">
-              <div className="space-y-5">
-                <ChannelLearning />
-                {asArray<LearningVideo>(syncData.video_learning?.best_videos).length ? (
-                  <Panel icon={GraduationCap} title="Leading comparable videos" headingLevel={3}>
-                    <BestVideos videos={asArray<LearningVideo>(syncData.video_learning?.best_videos)} />
-                  </Panel>
-                ) : null}
+              <div className="grid content-start gap-5 lg:grid-cols-2 2xl:grid-cols-1">
+                <div className="space-y-5">
+                  <ChannelLearning />
+                  {asArray<LearningVideo>(syncData.video_learning?.best_videos).length ? (
+                    <Panel icon={GraduationCap} title="Leading comparable videos" headingLevel={3}>
+                      <BestVideos videos={asArray<LearningVideo>(syncData.video_learning?.best_videos)} />
+                    </Panel>
+                  ) : null}
+                </div>
+                <LinkedPackages />
               </div>
-              <LinkedPackages />
             </div>
           </>
         )}

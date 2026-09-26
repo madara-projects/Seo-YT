@@ -65,7 +65,9 @@ export function HistoryRow({
       data-history-run={run.id}
       data-testid="history-row"
       className={cn(
-        "group relative flex flex-col gap-4 border-b border-border px-4 py-4 transition-colors last:border-b-0 sm:px-5 lg:flex-row lg:items-center lg:gap-6",
+        // From lg a grid with fixed score and action columns, so every row's
+        // scores and buttons line up under the ones above.
+        "group relative flex flex-col gap-4 border-b border-border px-4 py-4 transition-colors last:border-b-0 sm:px-5 lg:grid lg:grid-cols-[minmax(0,1fr)_13.25rem_21rem] lg:items-center lg:gap-6",
         selected ? "bg-brand-soft/40" : "hover:bg-accent/40",
         isOpen && "bg-accent/60",
       )}
@@ -119,7 +121,7 @@ export function HistoryRow({
         <Score label="Title quality" value={roundTitleScore(run.title_score)} suffix="/10" max={10} />
       </div>
 
-      <div className="flex shrink-0 flex-wrap gap-1.5 pl-[4.35rem] lg:pl-0">
+      <div className="flex shrink-0 flex-wrap gap-1.5 pl-[4.35rem] lg:justify-end lg:pl-0">
         <Button size="sm" onClick={onOpen}>
           <Eye aria-hidden="true" />
           View package

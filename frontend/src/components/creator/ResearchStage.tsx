@@ -62,14 +62,14 @@ function Summary({
 
 const STATUS_COPY: Record<ResearchStatus, string> = {
   loading:
-    "The Analyze request is running. Opening this stage never starts a separate research request.",
+    "The package is being generated. Opening this tab never starts a separate research request.",
   available:
     "Research returned by the analysis pipeline, shown with its source and limitations.",
   "no-research":
-    "Run Analyze first. Stage navigation never calls YouTube, Gemini, OAuth, or another research endpoint.",
+    "Generate a package first. Switching tabs never calls YouTube, Gemini, OAuth, or another research endpoint.",
   unavailable:
     "The analysis completed, but no research evidence was returned. No substitute score or competitor claim is shown.",
-  error: "The Analyze request failed; research is unavailable for this run.",
+  error: "Generating the package failed; research is unavailable for this run.",
 };
 
 /** A date YouTube sent in a form that doesn't parse is shown as sent rather than dropped. */

@@ -226,7 +226,7 @@ export default function HistoryPage() {
       />
 
       <div className="space-y-5">
-        <section aria-label="Library summary" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <section aria-label="Library summary" className="grid grid-cols-2 gap-5 lg:grid-cols-4">
           <LibraryStat icon={Package} label="Total packages" value={countText(total)} pending={runsQuery.isPending} />
           <LibraryStat icon={BadgeCheck} label="With a recorded choice" value={countText(withSelection)} pending={runsQuery.isPending} />
           <LibraryStat icon={Link2} label="Linked to YouTube" value={countText(linked)} pending={runsQuery.isPending} />

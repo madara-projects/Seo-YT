@@ -167,7 +167,7 @@ function WatchActions({ kind, item }: { kind: WatchKind; item: WatchChannel | Wa
     }, FAILURES.update!);
 
   return (
-    <div className="space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="watch-actions">
+    <div className="detail-span space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="watch-actions">
       <div className="grid gap-2 sm:flex sm:flex-wrap">
         <Button variant="outline" onClick={() => void onRefresh()} disabled={busy}>
           {pendingAction === "research" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
@@ -201,9 +201,9 @@ function WatchActions({ kind, item }: { kind: WatchKind; item: WatchChannel | Wa
 
 function Notes({ notes }: { notes?: string | null }) {
   return notes ? (
-    <p className="whitespace-pre-line break-words text-sm leading-relaxed text-foreground">{notes}</p>
+    <p className="detail-span whitespace-pre-line break-words text-sm leading-relaxed text-foreground">{notes}</p>
   ) : (
-    <p className="text-sm text-muted-foreground">No notes.</p>
+    <p className="detail-span text-sm text-muted-foreground">No notes.</p>
   );
 }
 
@@ -222,8 +222,9 @@ function VideoInspector({ video }: { video: WatchVideo }) {
       description={`${video.channel_title || "Channel unavailable"} · published ${shortDate(video.published_at)}`}
       aside={<EvidenceChip tone={state.tone}>{state.label}</EvidenceChip>}
     >
-      <div className="space-y-6">
-        <div className="grid items-center gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
+      {/* Two balanced columns on very wide screens; see detail-flow. */}
+      <div className="detail-flow">
+        <div className="detail-span grid items-center gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
           <VideoThumb videoId={video.video_id} className="w-full" />
           <div className="space-y-2">
             <dl className="grid grid-cols-3 gap-2">
@@ -241,7 +242,7 @@ function VideoInspector({ video }: { video: WatchVideo }) {
 
         <Notes notes={video.notes} />
 
-        <dl className="grid grid-cols-2 gap-4 rounded-2xl border border-border bg-elevated p-4 md:grid-cols-3">
+        <dl className="detail-span grid grid-cols-2 gap-4 rounded-2xl border border-border bg-elevated p-4 md:grid-cols-3">
           <Field label="Video">
             <ExternalLink href={`https://www.youtube.com/watch?v=${encodeURIComponent(video.video_id)}`}>
               <span className="numeric">{video.video_id}</span>
@@ -330,8 +331,9 @@ function ChannelInspector({
       description={`Public channel · added ${shortDate(channel.created_at)}`}
       aside={<EvidenceChip tone={state.tone}>{state.label}</EvidenceChip>}
     >
-      <div className="space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      {/* Two balanced columns on very wide screens; see detail-flow. */}
+      <div className="detail-flow">
+        <div className="detail-span flex flex-col gap-4 sm:flex-row sm:items-center">
           <span className="grid size-16 shrink-0 place-items-center rounded-full bg-brand-gradient p-0.75" aria-hidden="true">
             <span className="grid size-full place-items-center rounded-full bg-card font-display text-2xl font-semibold text-foreground">
               {initialOf(channel.title || channel.channel_id)}
@@ -351,7 +353,7 @@ function ChannelInspector({
 
         <Notes notes={channel.notes} />
 
-        <dl className="grid grid-cols-2 gap-4 rounded-2xl border border-border bg-elevated p-4 md:grid-cols-3">
+        <dl className="detail-span grid grid-cols-2 gap-4 rounded-2xl border border-border bg-elevated p-4 md:grid-cols-3">
           <Field label="Channel" className="col-span-2 md:col-span-1">
             <ExternalLink href={`https://www.youtube.com/channel/${encodeURIComponent(channel.channel_id)}`}>
               <span className="numeric break-all">{channel.channel_id}</span>
@@ -423,7 +425,7 @@ function ChannelInspector({
 
 function Footnote() {
   return (
-    <p className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
+    <p className="detail-span flex gap-2 text-xs leading-relaxed text-muted-foreground">
       <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
       Public observations and local heuristics don't establish why a video performed, and don't predict how
       yours will.

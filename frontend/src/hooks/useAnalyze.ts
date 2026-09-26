@@ -48,7 +48,7 @@ export function useAnalyze() {
       } else if (warnings.length) {
         toast.warning(`Package generated with ${warnings.length} research warning(s) to review.`, { action: review });
       } else {
-        toast.success("Package generated. Review each stage before manual publishing.", { action: review });
+        toast.success("Package generated. Review it before you publish.", { action: review });
       }
     },
     onError: (error) => {

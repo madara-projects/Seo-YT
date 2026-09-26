@@ -72,7 +72,7 @@ export function CompareStage({
       <EmptyState
         icon={Layers}
         title="Nothing to compare yet"
-        description="Run Analyze to create comparable package options."
+        description="Generate a package to create options to compare."
       />
     );
   }

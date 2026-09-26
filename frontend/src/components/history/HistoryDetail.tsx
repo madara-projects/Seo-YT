@@ -489,7 +489,8 @@ export function HistoryDetail({
 
   return (
     <Sheet open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
-      <SheetContent data-testid="history-detail">
+      {/* Wider on wide screens, where the package's two-column sections have room. */}
+      <SheetContent data-testid="history-detail" className="xl:max-w-3xl 2xl:max-w-4xl">
         <div className="relative overflow-hidden border-b border-border px-5 py-5 sm:px-7">
           <div
             className="pointer-events-none absolute -right-16 -top-24 size-64 rounded-full bg-brand-gradient opacity-15 blur-3xl"

@@ -233,8 +233,13 @@
   --radius-2xl: calc(var(--radius) + 0.25rem);
   --radius-3xl: calc(var(--radius) + 0.625rem);
 
-  /* The widest a page's content grows. */
-  --container-page: 75rem;
+  /*
+   * Pages are fluid: they fill the main area inside its gutters and stop
+   * growing only on very wide screens. 120rem is 1536px at the desktop 80%
+   * scale, so a 1920px screen keeps comfortable margins while 1280–1680px
+   * screens use their full width. Long text keeps its own measure (max-w-prose).
+   */
+  --container-page: 120rem;
 }
 
 @theme {
@@ -245,6 +250,8 @@
   --animate-dialog-in: dialog-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-sheet-in: sheet-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-drawer-in: drawer-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* Sidebar labels come back once the rail has mostly widened. */
+  --animate-label-in: label-in 0.16s ease-out 0.1s both;
 
   @keyframes shimmer {
     0% { transform: translateX(-100%); }
@@ -276,6 +283,42 @@
     from { transform: translateX(-100%); }
     to { transform: translateX(0); }
   }
+  @keyframes label-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+
+/*
+ * Switching themes (lib/theme.tsx). The whole page changes as one:
+ *  - with View Transitions, the old and new pages cross-fade for 250 ms while
+ *    `theme-snap` stops every element's own colour transition underneath, so
+ *    nothing (a button, a nav link) animates on its own timing;
+ *  - without them, `theme-transition` gives every element the same 250 ms
+ *    colour transition for the length of the switch, replacing their own.
+ * Neither runs with reduced motion: the theme then changes at once.
+ */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 250ms;
+  animation-timing-function: ease-out;
+}
+
+.theme-snap,
+.theme-snap *,
+.theme-snap *::before,
+.theme-snap *::after {
+  transition: none !important;
+}
+
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition-property: background-color, color, border-color, outline-color, fill, stroke, box-shadow, text-decoration-color !important;
+  transition-duration: 250ms !important;
+  transition-timing-function: ease-out !important;
+  transition-delay: 0s !important;
 }
 
 @layer base {
@@ -316,6 +359,14 @@
      title truncates inside its card instead of widening the page on phones. */
   .grid > * {
     min-width: 0;
+  }
+
+  /* Long text keeps a readable measure however wide its card grows, so a
+     paragraph never runs edge to edge on a wide screen. A paragraph drawn as
+     a box (rounded or bordered) keeps its box's width; a max-w-* utility on
+     the element (max-w-none for a flex row that must span) overrides this. */
+  main p:not([class*="rounded"]):not([class*="border"]) {
+    max-width: 80ch;
   }
 
   /* Visible focus for keyboard users only; pointer focus stays quiet. */
@@ -379,6 +430,40 @@
   background:
     linear-gradient(var(--card), var(--card)) padding-box,
     linear-gradient(135deg, var(--grad-1), var(--grad-2) 58%, var(--grad-3)) border-box;
+}
+
+/*
+ * A detail panel's stack of sections. One column up to 2xl; from 2xl the
+ * sections flow down two balanced columns in reading order, so a wide panel
+ * is filled instead of stretched. Children marked `detail-span` (a header
+ * or an action bar) run across both columns.
+ */
+@utility detail-flow {
+  & > * + * {
+    margin-top: 1.5rem;
+  }
+  @media (width >= 96rem) {
+    column-count: 2;
+    column-gap: 2rem;
+    & > * {
+      break-inside: avoid;
+      margin-bottom: 1.5rem;
+    }
+    & > * + * {
+      margin-top: 0;
+    }
+    & > *:last-child {
+      margin-bottom: 0;
+    }
+    & > .detail-span {
+      column-span: all;
+      /* The columns above truncate their last margin at the break. */
+      margin-top: 1.5rem;
+    }
+    & > .detail-span:first-child {
+      margin-top: 0;
+    }
+  }
 }
 
 @utility bg-dots {

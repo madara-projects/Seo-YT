@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LONG_TYPES, type FormatChoice } from "@/lib/creatorConstants";
 
 /**
  * Creator form contract.
@@ -11,7 +12,8 @@ import { z } from "zod";
  * Note: the API also accepts `on_screen_text` and `audience_type`, but the
  * legacy form never wired them up. They are left out here to keep strict
  * parity with the interface being replaced; wiring them in is a deliberate
- * product decision, not a migration detail.
+ * product decision, not a migration detail. `format_choice` and `long_type`
+ * are this form's own: they are turned into `video_format`, never sent.
  */
 export const creatorFormSchema = z.object({
   script: z
@@ -26,7 +28,10 @@ export const creatorFormSchema = z.object({
   viewer_promise: z.string().trim().max(300, "Limited to 300 characters.").default(""),
   unique_angle: z.string().trim().max(300, "Limited to 300 characters.").default(""),
   proof: z.string().trim().max(300, "Limited to 300 characters.").default(""),
-  video_format: z.string().trim().max(80, "Limited to 80 characters.").default(""),
+  // What is being made, chosen up front; `video_format` is derived from these
+  // two when the request is built (see `videoFormatFor`).
+  format_choice: z.enum(["short", "long", "auto"]).default("short"),
+  long_type: z.string().max(20).default(""),
   title_style: z.string().trim().max(80).default("balanced"),
   thumbnail_idea: z.string().trim().max(200, "Limited to 200 characters.").default(""),
   duration_seconds: z
@@ -61,7 +66,8 @@ export const creatorFormDefaults: CreatorFormValues = {
   viewer_promise: "",
   unique_angle: "",
   proof: "",
-  video_format: "",
+  format_choice: "short",
+  long_type: "",
   title_style: "balanced",
   thumbnail_idea: "",
   duration_seconds: "",
@@ -80,7 +86,6 @@ const OPTIONAL_PAYLOAD_FIELDS = [
   "viewer_promise",
   "unique_angle",
   "proof",
-  "video_format",
   "title_style",
   "thumbnail_idea",
   "duration_seconds",
@@ -93,6 +98,23 @@ const OPTIONAL_PAYLOAD_FIELDS = [
   "content_constraints",
 ] as const;
 
+const LONG_TYPE_VALUES = new Set<string>(LONG_TYPES.map((type) => type.value));
+
+/**
+ * The `video_format` the backend receives. A Short is "youtube_shorts"; a long
+ * video is its kind ("tutorial"…), or "long_form" for "Other" or no kind, all
+ * of which the backend reads as long; "auto" sends nothing so it infers one.
+ */
+export function videoFormatFor(values: Pick<CreatorFormValues, "format_choice" | "long_type">): string {
+  if (values.format_choice === "short") return "youtube_shorts";
+  if (values.format_choice !== "long") return "";
+  return LONG_TYPE_VALUES.has(values.long_type) && values.long_type !== "other" ? values.long_type : "long_form";
+}
+
+export function isFormatChoice(value: unknown): value is FormatChoice {
+  return value === "short" || value === "long" || value === "auto";
+}
+
 export function toAnalyzePayload(values: CreatorFormValues): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     script: values.script,
@@ -100,6 +122,8 @@ export function toAnalyzePayload(values: CreatorFormValues): Record<string, unkn
     language: values.language || "english",
     region: values.region || "global",
   };
+  const videoFormat = videoFormatFor(values);
+  if (videoFormat) payload.video_format = videoFormat;
 
   for (const field of OPTIONAL_PAYLOAD_FIELDS) {
     const value = values[field];

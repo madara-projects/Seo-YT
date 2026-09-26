@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 
 type Theme = "light" | "dark" | "system";
 
@@ -23,6 +24,57 @@ function readStoredTheme(): Theme {
   return "system";
 }
 
+/** How long a theme switch takes; the CSS in styles/index.css uses the same. */
+export const THEME_TRANSITION_MS = 250;
+
+type ViewTransition = { finished: Promise<void>; ready: Promise<void> };
+type TransitionDocument = Document & { startViewTransition?: (update: () => void) => ViewTransition };
+
+let switching = 0;
+let fallbackTimer: number | undefined;
+
+/**
+ * Changes the theme as one smooth step instead of letting each element with
+ * its own colour transition animate on its own timing while the rest snaps,
+ * which read as a stutter. Where the browser has View Transitions the old
+ * and new pages cross-fade, with element transitions held off underneath;
+ * elsewhere every element shares one 250 ms colour transition for the
+ * switch. With reduced motion the theme changes at once. `apply` runs inside
+ * `flushSync`, so the DOM has changed by the time the new page is captured.
+ */
+export function transitionTheme(apply: () => void): void {
+  const root = document.documentElement;
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    flushSync(apply);
+    return;
+  }
+
+  const doc = document as TransitionDocument;
+  if (typeof doc.startViewTransition === "function") {
+    switching += 1;
+    root.classList.add("theme-snap");
+    const done = () => {
+      switching -= 1;
+      if (switching <= 0) root.classList.remove("theme-snap");
+    };
+    try {
+      const transition = doc.startViewTransition(() => flushSync(apply));
+      // A switch cut short by the next one rejects `ready`; that is expected.
+      transition.ready.catch(() => undefined);
+      transition.finished.then(done, done);
+    } catch {
+      flushSync(apply);
+      done();
+    }
+    return;
+  }
+
+  root.classList.add("theme-transition");
+  flushSync(apply);
+  window.clearTimeout(fallbackTimer);
+  fallbackTimer = window.setTimeout(() => root.classList.remove("theme-transition"), THEME_TRANSITION_MS);
+}
+
 function systemPrefersDark(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
@@ -33,7 +85,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const listener = (event: MediaQueryListEvent) => setSystemDark(event.matches);
+    const listener = (event: MediaQueryListEvent) => transitionTheme(() => setSystemDark(event.matches));
     media.addEventListener("change", listener);
     return () => media.removeEventListener("change", listener);
   }, []);
@@ -41,14 +93,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const resolvedTheme: "light" | "dark" =
     theme === "system" ? (systemDark ? "dark" : "light") : theme;
 
-  useEffect(() => {
+  // A layout effect, so the class changes within the commit a switch flushes.
+  useLayoutEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("dark", resolvedTheme === "dark");
     root.style.colorScheme = resolvedTheme;
   }, [resolvedTheme]);
 
   const setTheme = useCallback((next: Theme) => {
-    setThemeState(next);
+    transitionTheme(() => setThemeState(next));
     try {
       localStorage.setItem(STORAGE_KEY, next);
     } catch {

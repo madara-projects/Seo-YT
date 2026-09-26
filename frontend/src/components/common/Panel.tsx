@@ -44,7 +44,7 @@ export function Panel({
               {title}
             </Heading>
             {description ? (
-              <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">{description}</p>
+              <p className="max-w-prose text-[0.8125rem] leading-relaxed text-muted-foreground">{description}</p>
             ) : null}
           </div>
         </div>

@@ -42,6 +42,14 @@ Security Policy can forbid inline scripts. The pre-paint theme switch is
 `public/theme-init.js`, served at `/app-assets/theme-init.js` when built and at
 `/next/theme-init.js` by the dev server.
 
+Switching themes is one step (`transitionTheme` in `src/lib/theme.tsx`): a
+250 ms View Transition cross-fade where the browser has one, otherwise a shared
+250 ms colour transition on every element for the length of the switch, and an
+instant change with reduced motion. Elements' own colour transitions are held
+off meanwhile, so nothing animates on its own timing. The desktop sidebar folds
+to an icon rail (the button in its header, or Ctrl/⌘ B), remembered in
+`localStorage`.
+
 ## API types
 
 `src/api/schema.d.ts` is generated from the live FastAPI OpenAPI document and
@@ -68,6 +76,20 @@ three minutes and spends real YouTube quota plus several Gemini calls, so the
 mutation never retries and has no client-side timeout. `AnalysisProgress` shows
 elapsed time and the expected range rather than a synthetic percentage, because
 the backend emits no progress events.
+
+**Pages are fluid.** Page content fills the main area inside its gutters
+(2.5rem from `lg`, 3.5rem from `2xl`) and stops growing at `--container-page`,
+120rem: 1536px at the desktop 80% scale, so 1280–1680px screens use their full
+width and a 1920px screen keeps even margins. The top bar uses the same gutters
+and cap, so its edges line up with the page. Grids are balanced per breakpoint
+rather than stretched: a 3:2 split up to `2xl` and three columns from `2xl` on
+the Dashboard and Channel, two-up Settings cards from `2xl`, and detail panels
+that flow their sections down two columns from `2xl` (the `detail-flow`
+utility; `detail-span` runs a block across both). Cards sit on one 1.25rem
+spacing scale. Long text keeps an 80-character measure however wide its card
+(`main p` in `styles/index.css`; a boxed paragraph keeps its box's width). The
+Creator's setup puts the form beside a sticky "Your package" panel from `xl`;
+narrower, it is one column with Generate in a bottom bar.
 
 ## Design system
 
@@ -142,8 +164,11 @@ on colour alone.
 
 ## Status
 
-Migrated: the application shell and design system, the eight-stage **Creator**
-workflow, the **Dashboard**, **History** (list, search, tri-state bulk
+Migrated: the application shell and design system, the **Creator** (a setup
+screen that asks first whether it is a Short or a long video, then a results
+screen with Package, Compare options, Research and insights, and Before you
+publish tabs; `?tab=` keeps the tab, and old `?stage=` links open the tab that
+now holds that stage), the **Dashboard**, **History** (list, search, tri-state bulk
 selection, delete with confirmation, video linking, and a package detail panel
 that opens from a shareable `?run=` link), **Channel** (28-day analytics against
 the previous period, an uploads chart and table, learning, and linked packages),

@@ -64,31 +64,23 @@ describe("App shell", () => {
 
     expect(await screen.findByRole("heading", { name: "Creator", level: 1 })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: /workflow stages/i })).toBeInTheDocument();
   });
 
-  it("starts on the idea stage with the script field required", async () => {
+  it("starts on the setup screen, asking what is being made and for the script", async () => {
     renderApp();
 
-    expect(await screen.findByLabelText("Script")).toBeInTheDocument();
-    expect(screen.getByText(/Stage 1 \/ 8/)).toBeInTheDocument();
+    expect(await screen.findByRole("group", { name: "What are you making?" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Script")).toBeInTheDocument();
+    // No result yet, so there are no result tabs to open.
+    expect(screen.queryByRole("tablist", { name: "Package results" })).not.toBeInTheDocument();
   });
 
-  it("locks later stages until an analysis exists", async () => {
+  it("keeps Generate disabled until there is a script, without calling the API", async () => {
     renderApp();
 
-    const compare = await screen.findByRole("button", { name: /Compare/ });
-    expect(compare).toBeDisabled();
-    expect(compare).toHaveAttribute("title", expect.stringContaining("Run Analyze"));
-  });
-
-  it("validates an empty script instead of calling the API", async () => {
-    const user = userEvent.setup();
-    renderApp();
-
-    await user.click(await screen.findByRole("button", { name: /Generate SEO package/i }));
-
-    expect(await screen.findByText("Enter a script or video idea first.")).toBeInTheDocument();
+    const generate = await screen.findByRole("button", { name: "Generate package" });
+    expect(generate).toBeDisabled();
+    expect(screen.getByText("Add your script or idea to generate a package.")).toBeInTheDocument();
     // Only the health probe may have fired; /analyze must not have been called.
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls.every(([url]) => !String(url).includes("/analyze"))).toBe(true);

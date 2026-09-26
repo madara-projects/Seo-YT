@@ -174,7 +174,7 @@ function AssignForm({
   };
 
   return (
-    <section className="space-y-3">
+    <section className="detail-span space-y-3">
       <SectionTitle icon={Plus}>Assign a video</SectionTitle>
       {blocker ? (
         <UnavailableNote className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -276,7 +276,11 @@ function ResultSection({ experiment, versionCount }: { experiment: Experiment; v
   );
 
   return (
-    <section className="space-y-3" data-testid="experiment-result">
+    // Across the panel; from 2xl its parts flow down two columns under the title.
+    <section
+      className="detail-span space-y-3 2xl:columns-2 2xl:gap-8 2xl:[&>*]:break-inside-avoid 2xl:[&>:first-child]:[column-span:all]"
+      data-testid="experiment-result"
+    >
       <SectionTitle icon={GitCompareArrows} aside={<EvidenceChip tone={state.tone}>{state.label}</EvidenceChip>}>
         Result
       </SectionTitle>
@@ -397,7 +401,7 @@ function ExperimentActions({ experiment, connected }: { experiment: Experiment; 
   };
 
   return (
-    <div className="space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="experiment-actions">
+    <div className="detail-span space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="experiment-actions">
       <div className="grid gap-2 sm:flex sm:flex-wrap">
         {closed ? null : (
           <Button variant="gradient" onClick={() => void onCompare()} disabled={busy || connected === false}>
@@ -526,18 +530,19 @@ export function ExperimentDetail({
       description={`${kind.label} · created ${historyDate(experiment.created_at)}`}
       aside={<EvidenceChip tone={status.tone}>{status.label}</EvidenceChip>}
     >
-      <div className="space-y-6">
-        <blockquote className="border-l-2 border-brand-border pl-3.5 text-sm italic leading-relaxed text-foreground">
+      {/* Two balanced columns on very wide screens; see detail-flow. */}
+      <div className="detail-flow">
+        <blockquote className="detail-span border-l-2 border-brand-border pl-3.5 text-sm italic leading-relaxed text-foreground">
           {experiment.hypothesis}
         </blockquote>
-        <p className="flex items-start gap-2 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-2.5 text-[0.8125rem] font-medium text-foreground">
+        <p className="detail-span flex max-w-none items-start gap-2 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-2.5 text-[0.8125rem] font-medium text-foreground">
           <ShieldAlert className="mt-0.5 size-4 shrink-0 text-tone-warn" aria-hidden="true" />
           {observational
             ? "Observational comparison: the videos weren't assigned before publishing, so this is not a controlled experiment."
             : "A planned comparison gives directional evidence, never causal proof."}
         </p>
 
-        <dl className="grid grid-cols-2 gap-4 rounded-2xl border border-border bg-elevated p-4 md:grid-cols-4">
+        <dl className="detail-span grid grid-cols-2 gap-4 rounded-2xl border border-border bg-elevated p-4 md:grid-cols-4">
           <Field label="What changes">{variableLabel(experiment.variable)}</Field>
           <Field label="Primary metric">
             {metricLabel(experiment.success_metric)}
@@ -551,7 +556,7 @@ export function ExperimentDetail({
           <Field label="Needed per side">{minimumPerGroup(experiment.minimum_sample_size)} videos</Field>
         </dl>
 
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="detail-span grid gap-3 md:grid-cols-2">
           <GroupCard
             experimentId={experiment.id}
             closed={closed}
@@ -568,13 +573,15 @@ export function ExperimentDetail({
           />
         </div>
         {observational ? (
-          <GroupCard
-            experimentId={experiment.id}
-            closed={closed}
-            title="References"
-            definition="Kept for context; references are not counted on either side."
-            assignments={assignments.filter((item) => item.role === "observational_reference")}
-          />
+          <div className="detail-span">
+            <GroupCard
+              experimentId={experiment.id}
+              closed={closed}
+              title="References"
+              definition="Kept for context; references are not counted on either side."
+              assignments={assignments.filter((item) => item.role === "observational_reference")}
+            />
+          </div>
         ) : null}
 
         <AssignForm key={`assign:${experiment.id}`} experiment={experiment} candidates={candidates} channelId={channelId} connected={connected} />

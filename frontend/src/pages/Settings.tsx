@@ -766,7 +766,7 @@ function AppearanceSection() {
               onClick={() => setTheme(value)}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={cn(
-                "group overflow-hidden rounded-2xl border text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "group overflow-hidden rounded-2xl border text-left transition-[border-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 checked ? "border-brand-border ring-2 ring-brand/30" : "border-border hover:border-foreground/20",
               )}
             >
@@ -891,17 +891,22 @@ export default function SettingsPage() {
         description="Connections, sync and system health in one place. Secret values such as keys and tokens are never shown here."
       />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[13.125rem_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[13.125rem_minmax(0,1fr)]">
         <SectionNav active={active} />
         <div className="min-w-0 space-y-5">
           <OAuthNoticeBanner notice={notice} onDismiss={dismiss} />
-          <ChannelSection />
-          <CloudSyncSection />
-          <ProvidersSection />
-          <DatabaseSection />
-          <CollectorSection />
-          <AppearanceSection />
-          <AboutSection />
+          {/* Two up from 2xl, in pairs of similar weight; the providers span both. */}
+          <div className="grid gap-5 2xl:grid-cols-2">
+            <ChannelSection />
+            <CloudSyncSection />
+            <div className="2xl:col-span-2">
+              <ProvidersSection />
+            </div>
+            <DatabaseSection />
+            <CollectorSection />
+            <AppearanceSection />
+            <AboutSection />
+          </div>
         </div>
       </div>
     </div>

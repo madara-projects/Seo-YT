@@ -178,7 +178,7 @@ function AuditBody({ audit, videoId, versions }: { audit: Audit; videoId?: strin
 
   return (
     <>
-      <div className="grid items-center gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
+      <div className="detail-span grid items-center gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
         <VideoThumb videoId={videoId} className="w-full" />
         <div className="space-y-2">
           <dl className="grid grid-cols-2 gap-2 xl:grid-cols-4">
@@ -195,7 +195,7 @@ function AuditBody({ audit, videoId, versions }: { audit: Audit; videoId?: strin
         </div>
       </div>
 
-      <div className="space-y-2">
+      <div className="detail-span space-y-2">
         <StepFlow label="What this audit compared" steps={auditSteps(audit)} />
         <p className="text-xs leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">{auditStateLabel(audit.summary?.state).label}:</span>{" "}
@@ -409,7 +409,7 @@ function NotRun({ candidate, videoId }: { candidate?: AuditCandidate; videoId?: 
   const evidence = evidenceStateLabel(candidate?.evidence_state);
   return (
     <>
-      <div className="grid items-center gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
+      <div className="detail-span grid items-center gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
         <VideoThumb videoId={videoId} className="w-full" />
         <dl className="grid grid-cols-2 gap-4">
           <Field label="Published">{historyDate(candidate?.published_at)}</Field>
@@ -475,7 +475,7 @@ function RefreshAction({ linkId, hasAudit, connected }: { linkId: number; hasAud
   };
 
   return (
-    <div className="space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="audit-actions">
+    <div className="detail-span space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="audit-actions">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 space-y-0.5">
           <p className="text-sm font-semibold text-foreground">{hasAudit ? "Refresh this audit" : "Run the first audit"}</p>
@@ -580,7 +580,8 @@ export function AuditDetail({
         </EvidenceChip>
       }
     >
-      <div className="space-y-6">
+      {/* Two balanced columns on very wide screens; see detail-flow. */}
+      <div className="detail-flow">
         {audit ? <AuditBody audit={audit} videoId={videoId} versions={versions} /> : <NotRun candidate={candidate} videoId={videoId} />}
         <RefreshAction key={linkId} linkId={linkId} hasAudit={Boolean(audit)} connected={connected} />
       </div>

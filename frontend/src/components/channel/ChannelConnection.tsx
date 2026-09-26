@@ -51,7 +51,7 @@ export function OAuthNoticeBanner({
       ) : (
         <TriangleAlert className="mt-0.5 size-4 shrink-0 text-tone-bad" aria-hidden="true" />
       )}
-      <p className="flex-1 text-[0.8125rem] font-medium text-foreground">{notice.message}</p>
+      <p className="max-w-none flex-1 text-[0.8125rem] font-medium text-foreground">{notice.message}</p>
       <Button variant="ghost" size="icon-sm" onClick={onDismiss} aria-label="Dismiss message" className="-my-1">
         <X aria-hidden="true" />
       </Button>

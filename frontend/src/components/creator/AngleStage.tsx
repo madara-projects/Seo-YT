@@ -74,7 +74,7 @@ export function AngleStage({
       <EmptyState
         icon={Compass}
         title="No angle yet"
-        description="Run Analyze to review the recommended angle and the evidence behind it."
+        description="Generate a package to review the recommended angle and the evidence behind it."
       />
     );
   }
@@ -258,7 +258,7 @@ export function AngleStage({
                 caption={
                   selected
                     ? `Status: ${words(alignment?.status)} · similarity ${words(alignment?.opening_similarity).toLowerCase()}. Text alignment, not viewer behaviour.`
-                    : "Select a package to see how its opening lines up with the script."
+                    : "Choose a package to see how its opening lines up with the script."
                 }
                 tone="warn"
                 toneLabel="Heuristic"

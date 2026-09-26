@@ -3,24 +3,20 @@ import { useLocation } from "react-router-dom";
 import { useMutationState, type MutationStatus } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/PageHeader";
-import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { ErrorState } from "@/components/common/States";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AnalysisProgress } from "@/components/creator/AnalysisProgress";
-import { AngleStage } from "@/components/creator/AngleStage";
-import { BriefStage } from "@/components/creator/BriefStage";
 import { ChecklistStage } from "@/components/creator/ChecklistStage";
 import { CompareStage } from "@/components/creator/CompareStage";
 import { DecisionStage } from "@/components/creator/DecisionStage";
-import { IdeaStage } from "@/components/creator/IdeaStage";
+import { InsightsTab } from "@/components/creator/InsightsTab";
 import { PackagingStage } from "@/components/creator/PackagingStage";
-import { ResearchStage } from "@/components/creator/ResearchStage";
-import { StageNav } from "@/components/creator/StageNav";
+import { ResultsHeader } from "@/components/creator/ResultsHeader";
+import { SetupScreen } from "@/components/creator/SetupScreen";
 import { useAnalyze, useSelectPackage } from "@/hooks/useAnalyze";
 import { useElapsedSeconds } from "@/hooks/useElapsed";
 import { useHistoryRun } from "@/hooks/useHistory";
@@ -29,19 +25,23 @@ import { useUrlState } from "@/hooks/useUrlState";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { buildPackageOptions, researchHasEvidence } from "@/lib/packages";
 import {
-  STAGES,
+  RESULT_TABS,
+  STAGE_TO_TAB,
   freshChecklist,
   type ChecklistKey,
   type ChecklistState,
-  type StageKey,
+  type ResultTab,
 } from "@/lib/creatorConstants";
+import { formatLabel, outputLanguageLabel, readRememberedFormat, regionLabel } from "@/lib/creatorFormat";
 import { asArray, asObject } from "@/lib/utils";
 import {
   creatorFormDefaults,
   creatorFormSchema,
+  videoFormatFor,
   type CreatorFormValues,
 } from "@/schemas/creator";
-import type { AnalyzeResponse, CreatorBrief, ResearchStatus, SelectionStatus } from "@/api/types";
+import type { AnalyzeResponse, ResearchStatus, SelectionStatus } from "@/api/types";
+import type { EvidenceTone } from "@/components/common/EvidenceChip";
 
 interface AnalyzeRun {
   status: MutationStatus;
@@ -74,10 +74,21 @@ function useLatestAnalyzeRun(): AnalyzeRun | null {
   );
 }
 
-const STAGE_KEYS = new Set<string>(STAGES.map((item) => item.key));
+const TAB_KEYS = new Set<string>(RESULT_TABS.map((item) => item.key));
 
-function isStageKey(value: string): value is StageKey {
-  return STAGE_KEYS.has(value);
+function isResultTab(value: string): value is ResultTab {
+  return TAB_KEYS.has(value);
+}
+
+const LONG_FORMATS = new Set(["long_form", "talking_head", "tutorial", "vlog", "review", "story", "challenge"]);
+
+/** The header's format chip: the creator's choice, or what the backend detected when asked to. */
+function formatChip(submitted: CreatorFormValues, brief: Record<string, unknown>): { text: string; tone: EvidenceTone } {
+  if (submitted.format_choice !== "auto") return { text: formatLabel(submitted), tone: "ok" };
+  const detected = String(brief.video_format ?? "").trim();
+  if (detected === "youtube_shorts") return { text: "Short · detected", tone: "warn" };
+  if (LONG_FORMATS.has(detected)) return { text: "Long video · detected", tone: "warn" };
+  return { text: "Format not detected", tone: "neutral" };
 }
 
 /** The creator's choice for one run. Keyed by run, so a new run starts with none. */
@@ -94,17 +105,28 @@ interface Checks {
   state: ChecklistState;
 }
 
+/**
+ * The Creator: a setup screen that asks what is being made and for the
+ * script, then a results screen with the package and everything behind it in
+ * four tabs. Which screen and tab are showing live in the URL (`?edit=1`,
+ * `?tab=`); links to the old eight stages (`?stage=`) land on the tab that now
+ * holds that stage.
+ */
 export default function CreatorPage() {
   const latest = useLatestAnalyzeRun();
   const analyze = useAnalyze();
   const selectPackage = useSelectPackage();
   const saveSelection = selectPackage.mutateAsync;
   const url = useUrlState();
+  const setUrl = url.set;
 
   const form = useForm<CreatorFormValues>({
     resolver: zodResolver(creatorFormSchema),
-    // Back on the page during or after a run, the form shows that run's input.
-    defaultValues: latest?.variables ? { ...creatorFormDefaults, ...latest.variables } : creatorFormDefaults,
+    // Back on the page during or after a run, the form shows that run's input;
+    // otherwise it starts from the last format chosen.
+    defaultValues: latest?.variables
+      ? { ...creatorFormDefaults, ...latest.variables }
+      : { ...creatorFormDefaults, ...readRememberedFormat() },
     mode: "onBlur",
   });
 
@@ -120,17 +142,17 @@ export default function CreatorPage() {
   // quota. It prefills only; submitting stays an explicit action here.
   const location = useLocation();
   const handoff = location.state as Partial<CreatorFormValues> | null;
-  const setUrl = url.set;
 
   useEffect(() => {
     if (!handoff?.script) return;
     form.reset({
       ...creatorFormDefaults,
+      ...readRememberedFormat(),
       ...handoff,
       script: handoff.script,
     });
-    // The draft is edited on the Idea stage, even when an earlier result is still shown.
-    setUrl({ stage: "idea" });
+    // The draft is edited on the setup screen, even when an earlier result exists.
+    setUrl({ edit: "1", tab: null, stage: null });
   }, [form, setUrl, handoff?.script, handoff?.language, handoff?.region]);
 
   const options = useMemo(
@@ -151,7 +173,6 @@ export default function CreatorPage() {
   // Only an explicit choice is "selected"; until then the primary is a preview.
   const chosen = current ? (options.find((option) => option.id === current.optionId) ?? null) : restored;
   const selectionStatus: SelectionStatus = current?.status ?? (restored ? "saved" : "unrecorded");
-  const preview = chosen ?? options[0] ?? null;
   const checklist =
     checks && chosen && checks.run === runKey && checks.optionId === chosen.id ? checks.state : freshChecklist();
 
@@ -166,8 +187,8 @@ export default function CreatorPage() {
         : "no-research";
 
   const handleSubmit = form.handleSubmit((values) => {
-    // A new run opens on Packaging once it completes.
-    setUrl({ stage: null });
+    // A new run opens on its Package tab once it completes.
+    setUrl({ edit: null, tab: null, stage: null });
     analyze.mutate(values);
   });
 
@@ -211,7 +232,7 @@ export default function CreatorPage() {
 
   const handleExport = useCallback(() => {
     if (!data || !chosen) {
-      toast.error("Run Analyze and select a package before exporting.");
+      toast.error("Choose a package with \"Use\" before exporting.");
       return;
     }
 
@@ -256,31 +277,30 @@ export default function CreatorPage() {
     [runKey, chosen],
   );
 
-  // The stage lives in the URL; later stages open only once there is a result.
-  const unlocked = Boolean(data);
-  const requested = url.get("stage");
-  const stage: StageKey = !unlocked ? "idea" : isStageKey(requested) ? requested : "packaging";
-  const setStage = (next: StageKey) => setUrl({ stage: next });
+  // Which screen and tab: the results once there is a result, unless the
+  // creator went back to edit; an old `?stage=` link picks the matching tab.
+  const legacyStage = STAGE_TO_TAB[url.get("stage")];
+  const editing = url.get("edit") === "1" || legacyStage === "setup";
+  const showResults = Boolean(data) && !editing;
+  const requestedTab = url.get("tab");
+  const tab: ResultTab = isResultTab(requestedTab)
+    ? requestedTab
+    : legacyStage && legacyStage !== "setup"
+      ? legacyStage
+      : "package";
+  const setTab = (next: string) => setUrl({ tab: next === "package" ? null : next, stage: null });
 
-  // A new stage starts at the top of the page, not wherever the last one ended.
+  // A new screen starts at the top of the page, not wherever the last one ended.
   useEffect(() => {
     if (window.scrollY <= 120) return;
     const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
-  }, [stage]);
+  }, [showResults]);
 
-  const stageIndex = STAGES.findIndex((item) => item.key === stage);
-  const currentStage = STAGES[stageIndex] ?? STAGES[0];
-
-  const move = (offset: number) => {
-    const nextIndex = Math.max(0, Math.min(STAGES.length - 1, stageIndex + offset));
-    const next = STAGES[nextIndex];
-    if (next) setStage(next.key);
-  };
-
-  const warningCount = asArray<string>(data?.research_warnings).length;
-  const previousStage = STAGES[stageIndex - 1];
-  const nextStage = STAGES[stageIndex + 1];
+  const warnings = asArray<string>(data?.research_warnings);
+  const brief = asObject(data?.creator_brief);
+  const sent: Record<string, unknown> | null = submitted ? { ...submitted, video_format: videoFormatFor(submitted) } : null;
+  const chip = submitted ? formatChip(submitted, brief) : { text: "Format unknown", tone: "neutral" as EvidenceTone };
 
   return (
     <div className="mx-auto w-full max-w-page animate-fade-up">
@@ -288,157 +308,97 @@ export default function CreatorPage() {
         eyebrow="Studio"
         icon={Sparkles}
         title="Creator"
-        description="Turn a script or idea into a reviewed, comparable SEO package. Nothing here uploads, publishes, or changes a YouTube video."
-        actions={
-          data ? (
-            <>
-              {/* Gemini's writing is generated, like the fallback's; neither is an observation. */}
-              <EvidenceChip tone="warn">
-                {data.generation_source === "gemini" ? "Written with Gemini" : "Local fallback"}
-              </EvidenceChip>
-              <EvidenceChip tone={warningCount ? "warn" : "neutral"}>
-                {warningCount
-                  ? `${warningCount} research ${warningCount === 1 ? "warning" : "warnings"}`
-                  : "No research warnings"}
-              </EvidenceChip>
-            </>
-          ) : undefined
-        }
+        description="Turn a script or idea into a ready-to-upload title, description and tags. Nothing here uploads, publishes, or changes a YouTube video."
       />
 
-      <div className="space-y-5">
-        <Card className="p-2 sm:p-2.5">
-          <StageNav current={stage} unlocked={unlocked} onSelect={setStage} />
-
-          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-3 border-t border-border px-2 pt-2.5 sm:px-2.5">
-            <p className="min-w-0 text-[0.8125rem] text-muted-foreground">
-              <span className="font-semibold text-foreground">
-                Stage {currentStage.step} / {STAGES.length} · {currentStage.label}
-              </span>{" "}
-              <span className="hidden sm:inline">— {currentStage.hint}</span>
-            </p>
-            <div className="flex gap-1.5">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => move(-1)}
-                disabled={stageIndex <= 0}
-              >
-                <ChevronLeft aria-hidden="true" />
-                Back
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => move(1)}
-                disabled={stageIndex >= STAGES.length - 1 || !unlocked}
-              >
-                Next
-                <ChevronRight aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-        </Card>
-
-        {isPending ? <AnalysisProgress elapsed={elapsed} /> : null}
-
-        {failure ? (
-          <ErrorState
-            message={apiErrorMessage(failure, "Analysis failed.")}
-            requestId={apiRequestId(failure)}
-            onRetry={() => handleSubmit()}
+      {showResults && data ? (
+        <div className="space-y-5">
+          <ResultsHeader
+            script={String(submitted?.script ?? "")}
+            formatText={chip.text}
+            formatTone={chip.tone}
+            languageText={
+              submitted ? `${outputLanguageLabel(submitted.language)} · ${regionLabel(submitted.region)}` : "Language unknown"
+            }
+            writtenWithGemini={data.generation_source === "gemini"}
+            warnings={warnings}
+            onEdit={() => setUrl({ edit: "1", stage: null })}
+            onNew={() => {
+              form.reset({ ...creatorFormDefaults, ...readRememberedFormat() });
+              setUrl({ edit: "1", tab: null, stage: null });
+            }}
+            onOpenResearch={() => setTab("research")}
           />
-        ) : null}
 
-        {/* The input stage stays mounted so a refined run can be submitted from
-            any later stage without losing what was typed. */}
-        <div className={stage === "idea" ? "" : "hidden"}>
-          <IdeaStage form={form} onSubmit={handleSubmit} isPending={isPending} />
+          <Tabs value={tab} onValueChange={setTab}>
+            <div className="-mx-4 overflow-x-auto px-4 pb-1 scrollbar-none sm:mx-0 sm:px-0">
+              <TabsList aria-label="Package results">
+                {RESULT_TABS.map((item) => (
+                  <TabsTrigger key={item.key} value={item.key}>
+                    {item.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </div>
+
+            <TabsContent value="package">
+              <PackagingStage
+                data={data}
+                options={options}
+                chosen={chosen}
+                selectionStatus={selectionStatus}
+                onSelect={handleSelect}
+                durationSeconds={submitted?.duration_seconds}
+              />
+            </TabsContent>
+            <TabsContent value="compare">
+              <CompareStage
+                options={options}
+                chosenId={chosen?.id ?? null}
+                selectionStatus={selectionStatus}
+                onSelect={handleSelect}
+              />
+            </TabsContent>
+            <TabsContent value="research">
+              <InsightsTab
+                data={data}
+                researchStatus={researchStatus}
+                errorMessage={failure ? formatApiError(failure, "Analysis failed.") : undefined}
+                selected={chosen}
+                submitted={sent}
+              />
+            </TabsContent>
+            <TabsContent value="publish">
+              <div className="space-y-5">
+                <DecisionStage data={data} selected={chosen} selectionStatus={selectionStatus} onExport={handleExport} />
+                <ChecklistStage
+                  selected={chosen}
+                  checklist={checklist}
+                  onToggle={handleToggleChecklist}
+                  onExport={handleExport}
+                />
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
-
-        <div key={stage} className="animate-fade-up">
-          {stage === "brief" ? (
-            <BriefStage
-              brief={data ? (asObject(data.creator_brief) as CreatorBrief) : null}
-              submitted={submitted}
+      ) : (
+        <div className="space-y-5">
+          {isPending ? <AnalysisProgress elapsed={elapsed} /> : null}
+          {failure ? (
+            <ErrorState
+              message={apiErrorMessage(failure, "Analysis failed.")}
+              requestId={apiRequestId(failure)}
+              onRetry={() => handleSubmit()}
             />
           ) : null}
-
-          {stage === "research" ? (
-            <ResearchStage
-              data={data}
-              status={researchStatus}
-              errorMessage={failure ? formatApiError(failure, "Analysis failed.") : undefined}
-            />
-          ) : null}
-
-          {stage === "angle" ? <AngleStage data={data} selected={chosen} /> : null}
-
-          {stage === "packaging" ? (
-            <PackagingStage
-              data={data}
-              options={options}
-              preview={preview}
-              chosen={chosen}
-              selectionStatus={selectionStatus}
-              onSelect={handleSelect}
-              durationSeconds={submitted?.duration_seconds}
-            />
-          ) : null}
-
-          {stage === "compare" ? (
-            <CompareStage
-              options={options}
-              chosenId={chosen?.id ?? null}
-              selectionStatus={selectionStatus}
-              onSelect={handleSelect}
-            />
-          ) : null}
-
-          {stage === "decision" ? (
-            <DecisionStage
-              data={data}
-              selected={chosen}
-              selectionStatus={selectionStatus}
-              onExport={handleExport}
-            />
-          ) : null}
-
-          {stage === "checklist" ? (
-            <ChecklistStage
-              selected={chosen}
-              checklist={checklist}
-              onToggle={handleToggleChecklist}
-              onExport={handleExport}
-            />
-          ) : null}
+          <SetupScreen
+            form={form}
+            onSubmit={handleSubmit}
+            isPending={isPending}
+            onBackToResults={data ? () => setUrl({ edit: null, stage: null }) : undefined}
+          />
         </div>
-
-        {stage !== "idea" && unlocked ? (
-          <nav
-            aria-label="Stage pages"
-            className="grid grid-cols-2 items-center gap-3 border-t border-border pt-5"
-          >
-            {previousStage ? (
-              <Button variant="ghost" onClick={() => move(-1)} className="min-w-0 justify-self-start">
-                <ChevronLeft aria-hidden="true" />
-                <span className="truncate">{previousStage.label}</span>
-              </Button>
-            ) : (
-              <span />
-            )}
-            {nextStage ? (
-              <Button variant="outline" onClick={() => move(1)} className="min-w-0 max-w-full justify-self-end">
-                <span className="truncate">
-                  <span className="hidden sm:inline">Continue to </span>
-                  {nextStage.label}
-                </span>
-                <ChevronRight aria-hidden="true" />
-              </Button>
-            ) : null}
-          </nav>
-        ) : null}
-      </div>
+      )}
     </div>
   );
 }

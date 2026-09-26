@@ -100,7 +100,7 @@ function GenerateAction({ snapshot }: { snapshot: DemandSnapshot }) {
   };
 
   return (
-    <div className="space-y-3 rounded-2xl border border-border bg-elevated p-4">
+    <div className="detail-span space-y-3 rounded-2xl border border-border bg-elevated p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 space-y-0.5">
           <p className="text-sm font-semibold text-foreground">Turn this topic into a package</p>
@@ -196,8 +196,9 @@ export function SnapshotDetail({
       description={`Snapshot captured ${historyDate(snapshot.captured_at)}. It never changes; research again to see how interest has moved.`}
       aside={<EvidenceChip tone={classification.tone}>{classification.label}</EvidenceChip>}
     >
-      <div className="space-y-6">
-        <div className="flex flex-wrap gap-1.5">
+      {/* Two balanced columns on very wide screens; see detail-flow. */}
+      <div className="detail-flow">
+        <div className="detail-span flex flex-wrap gap-1.5">
           {[languageLabel(snapshot.language), formatLabel(snapshot.format), regionLabel(snapshot.region)].map(
             (label) => (
               <span
@@ -215,22 +216,24 @@ export function SnapshotDetail({
           ) : null}
         </div>
 
-        <StepFlow
-          label="How this snapshot was classified"
-          steps={[
-            { label: "Topic", value: snapshot.topic || "Untitled topic" },
-            {
-              label: "Public signals",
-              value:
-                typeof sampled === "number"
-                  ? `${formatNumber(sampled)} sampled ${sampled === 1 ? "result" : "results"}`
-                  : "Unavailable",
-            },
-            { label: "Classification", value: classification.label },
-          ]}
-        />
+        <div className="detail-span">
+          <StepFlow
+            label="How this snapshot was classified"
+            steps={[
+              { label: "Topic", value: snapshot.topic || "Untitled topic" },
+              {
+                label: "Public signals",
+                value:
+                  typeof sampled === "number"
+                    ? `${formatNumber(sampled)} sampled ${sampled === 1 ? "result" : "results"}`
+                    : "Unavailable",
+              },
+              { label: "Classification", value: classification.label },
+            ]}
+          />
+        </div>
 
-        <div className="rounded-2xl border border-brand-border bg-brand-soft/50 p-4">
+        <div className="detail-span rounded-2xl border border-brand-border bg-brand-soft/50 p-4">
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-brand">
             What “{classification.label}” means
           </p>

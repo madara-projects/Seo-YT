@@ -20,8 +20,9 @@ test.describe("React shell", () => {
     await page.goto("/next/creator");
 
     await expect(page.getByRole("heading", { name: "Creator", level: 1 })).toBeVisible();
+    await expect(page.getByRole("group", { name: "What are you making?" })).toBeVisible();
     await expect(page.getByLabel("Script")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Generate SEO package/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Generate package" })).toBeVisible();
 
     expect(errors).toEqual([]);
   });
@@ -118,22 +119,54 @@ test.describe("React shell", () => {
       .toBe(!startedDark);
   });
 
-  test("expands the collapsible creator brief", async ({ page }) => {
+  test("expands the optional details", async ({ page }) => {
     await page.goto("/next/creator");
 
-    const trigger = page.getByRole("button", { name: /Creator brief \(optional\)/ });
+    const trigger = page.getByRole("button", { name: /More details \(optional\)/ });
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
 
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByLabel("Target audience")).toBeVisible();
+    await expect(page.getByLabel("Who is it for?")).toBeVisible();
   });
 
-  test("blocks an empty submission in the field, not at the API", async ({ page }) => {
+  test("keeps Generate disabled, with the reason, until there is a script", async ({ page }) => {
     await page.goto("/next/creator");
 
-    await page.getByRole("button", { name: /Generate SEO package/i }).click();
-    await expect(page.getByText("Enter a script or video idea first.")).toBeVisible();
+    const generate = page.getByRole("button", { name: "Generate package" });
+    await expect(generate).toBeDisabled();
+    await expect(page.getByText("Add your script or idea to generate a package.")).toBeVisible();
+
+    await page.getByLabel("Script").fill("Silence says everything.");
+    await expect(generate).toBeEnabled();
+  });
+
+  test("keeps the Generate bar in view while the form scrolls", async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS.mobile);
+    await page.goto("/next/creator");
+
+    await page.getByRole("button", { name: /More details \(optional\)/ }).click();
+    await page.mouse.wheel(0, 400);
+    await expect(page.getByRole("button", { name: "Generate package" })).toBeInViewport();
+  });
+
+  test("folds the desktop sidebar to an icon rail and remembers it", async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS.desktop);
+    await page.goto("/next/creator");
+    const sidebar = page.locator("#app-sidebar");
+    const wide = (await sidebar.boundingBox())?.width ?? 0;
+
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expect(sidebar).toHaveAttribute("data-collapsed", "true");
+    await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 0).toBeLessThan(wide / 2);
+    // Icons only, but every link keeps its name.
+    await expect(page.getByRole("link", { name: "History" })).toBeVisible();
+    await page.screenshot({ path: "screenshots/creator-sidebar-rail.png" });
+
+    await page.reload();
+    await expect(sidebar).toHaveAttribute("data-collapsed", "true");
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await expect(sidebar).toHaveAttribute("data-collapsed", "false");
   });
 
   test("reaches the primary action by keyboard alone", async ({ page }) => {

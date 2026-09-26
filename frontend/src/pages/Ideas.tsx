@@ -63,7 +63,7 @@ export default function IdeasPage() {
         }
       />
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[23rem_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[23rem_minmax(0,1fr)] 2xl:grid-cols-[26rem_minmax(0,1fr)]">
         <IdeaList
           ideas={ideas}
           total={total}
