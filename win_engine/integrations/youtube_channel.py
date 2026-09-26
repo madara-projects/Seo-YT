@@ -4,30 +4,115 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import secrets
+import threading
 import time
+import urllib.error
+import urllib.request
+from collections.abc import Collection
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet, InvalidToken
+from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from googleapiclient.errors import Error as ApiClientError
 from googleapiclient.errors import HttpError
+from httplib2 import HttpLib2Error
 
 from win_engine.core.config import Settings
 from win_engine.feedback.channel_learning import learning_summary, save_video_snapshots
+from win_engine.feedback.history_store import ANALYTICS_ZONE, SNAPSHOT_WINDOWS, reportable_window
 from win_engine.feedback.migrations import connect_managed
+
+# Google's consent screen lets a creator untick one permission. oauthlib would
+# then refuse the whole token; with this set, complete_authorization checks
+# the granted scopes itself and says which permission is missing.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 _SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
     "https://www.googleapis.com/auth/youtube.readonly",
 ]
-_PENDING_STATES: dict[str, float] = {}
+_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+_TOKEN_URI = "https://oauth2.googleapis.com/token"
+_CHANNEL_METRICS = "views,estimatedMinutesWatched,averageViewDuration,subscribersGained,likes,comments"
+_VIDEO_METRICS = (
+    "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
+)
+# YouTube Analytics reports whole days in Pacific time.
+_ANALYTICS_ZONE = ANALYTICS_ZONE
+_WINDOWS = SNAPSHOT_WINDOWS
 _OAUTH_STATE_TTL_SECONDS = 600
+_MAX_PENDING_STATES = 20
+# Only the newest sync is read; a few older ones are kept for troubleshooting.
+_SYNCS_KEPT = 30
+_NOT_FOUND = "That video could not be found on YouTube. Check the link, and that the video is public or unlisted."
+# A YouTube call that failed on the way or was refused. A revoked grant
+# (RefreshError) is not one of these: the routes ask for a reconnect instead.
+_UPSTREAM_ERRORS = (ApiClientError, TransportError, OSError, HttpLib2Error)
+# state → (expiry, PKCE code verifier). Several connect attempts may be in
+# flight (two tabs, a retry); each keeps its own entry until used or expired.
+_PENDING_STATES: dict[str, tuple[float, str]] = {}
+_PENDING_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
+
+
+class YouTubeUnavailable(RuntimeError):
+    """YouTube could not be reached or refused the request.
+
+    The message is safe to show: it never carries request URLs, which for the
+    Data API include the API key.
+    """
+
+    def __init__(self, message: str, *, status_code: int = 502) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class ChannelConnectError(ValueError):
+    """A connect attempt that cannot finish; `reason` is a short code the UI explains."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+class LinkUnavailable(ValueError):
+    """A linked video is gone, private or on another channel: collecting it again cannot help."""
+
+
+def _describe(exc: BaseException) -> str:
+    """An exception for the log: its type and HTTP status only, never its text."""
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    return f"{type(exc).__name__} (HTTP {status})" if status else type(exc).__name__
+
+
+def _unavailable(exc: BaseException) -> YouTubeUnavailable:
+    if not isinstance(exc, HttpError):
+        return YouTubeUnavailable("YouTube could not be reached. Check the connection and try again.", status_code=503)
+    status = int(getattr(exc.resp, "status", 0) or 0)
+    text = f"{getattr(exc, 'reason', '')} {getattr(exc, 'error_details', '')}".lower().replace(" ", "")
+    # quotaExceeded, dailyLimitExceeded, rateLimitExceeded, userRateLimitExceeded.
+    if status == 429 or "quota" in text or "limitexceeded" in text:
+        return YouTubeUnavailable("YouTube's API quota or rate limit was reached. Try again later.", status_code=429)
+    if "accessnotconfigured" in text or "service_disabled" in text or "hasnotbeenused" in text:
+        return YouTubeUnavailable(
+            "A YouTube API is not enabled for this Google Cloud project. Enable it, wait a few minutes, then try again."
+        )
+    return YouTubeUnavailable(f"YouTube returned an error (HTTP {status or 'unknown'}). Try again shortly.")
+
+
+def _outage(exc: BaseException) -> bool:
+    """Whether a failed call is YouTube's or the network's (a 5xx, the quota, no answer), not the request's."""
+    status = int(getattr(getattr(exc, "resp", None), "status", 0) or 0)
+    return status >= 500 or _unavailable(exc).status_code in {429, 503}
 
 
 class YouTubeChannelService:
@@ -40,45 +125,77 @@ class YouTubeChannelService:
     def status(self) -> dict[str, Any]:
         record = self._connection()
         configured = self._is_configured()
-        latest = self._latest_sync()
         return {
             "configured": configured,
             "connected": bool(record),
             "channel": {"id": record[1], "title": record[2], "connected_at": record[3]} if record else None,
-            "latest_sync": latest,
+            "latest_sync": self._history_store().latest_channel_sync(str(record[1] or "")) if record else None,
             "setup_message": None if configured else "Add YouTube OAuth client credentials and an encryption key to .env to connect your channel.",
         }
+
+    def connected_channel_id(self) -> str | None:
+        """The connected channel, or None when none is connected or it is not identified yet."""
+        record = self._connection()
+        return str(record[1]) if record and record[1] else None
 
     def authorization_url(self) -> str:
         self._require_configured()
         state = secrets.token_urlsafe(32)
-        _PENDING_STATES.clear()
-        _PENDING_STATES[state] = time.time() + _OAUTH_STATE_TTL_SECONDS
-        flow = self._flow(state=state)
-        url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
+        # PKCE: the code Google returns is useless without this verifier.
+        verifier = secrets.token_urlsafe(64)
+        now = time.time()
+        with _PENDING_LOCK:
+            for expired in [key for key, (expires, _) in _PENDING_STATES.items() if expires < now]:
+                del _PENDING_STATES[expired]
+            while len(_PENDING_STATES) >= _MAX_PENDING_STATES:
+                del _PENDING_STATES[min(_PENDING_STATES, key=lambda key: _PENDING_STATES[key][0])]
+            _PENDING_STATES[state] = (now + _OAUTH_STATE_TTL_SECONDS, verifier)
+        url, _ = self._flow(state=state, code_verifier=verifier).authorization_url(
+            access_type="offline", include_granted_scopes="true", prompt="consent"
+        )
         return url
 
     def complete_authorization(self, *, code: str, state: str) -> dict[str, Any]:
-        self._require_configured()
-        expires_at = _PENDING_STATES.pop(state, None)
-        if not expires_at or time.time() > expires_at:
-            raise ValueError("The connection request expired. Start the connection again.")
-        flow = self._flow(state=state)
+        if not self._is_configured():
+            raise ChannelConnectError("not_configured", "YouTube OAuth is not configured. Check the local .env setup instructions.")
+        with _PENDING_LOCK:
+            pending = _PENDING_STATES.pop(state, None)
+        if not pending or time.time() > pending[0]:
+            raise ChannelConnectError("expired_state", "The connection request expired. Start the connection again.")
+        flow = self._flow(state=state, code_verifier=pending[1])
         flow.fetch_token(code=code)
         credentials = flow.credentials
         if not credentials.refresh_token:
-            raise ValueError("Google did not return a refresh token. Disconnect this app in Google Account permissions and connect again.")
-        data = build("youtube", "v3", credentials=credentials, cache_discovery=False).channels().list(
-            part="snippet", mine=True, maxResults=1
-        ).execute()
-        item = (data.get("items") or [{}])[0]
+            raise ChannelConnectError(
+                "no_refresh_token",
+                "Google did not return a refresh token. Remove Win-Engine in Google Account permissions and connect again.",
+            )
+        granted = _granted_scopes(credentials, flow)
+        if granted is not None and not set(_SCOPES) <= granted:
+            raise ChannelConnectError(
+                "missing_scopes",
+                "Both YouTube permissions are needed. Connect again and allow access to your channel and its analytics.",
+            )
+        try:
+            items = build("youtube", "v3", credentials=credentials, cache_discovery=False).channels().list(
+                part="snippet", mine=True, maxResults=1
+            ).execute().get("items") or []
+        except _UPSTREAM_ERRORS as exc:
+            # Authorization itself succeeded, so keep the token rather than make
+            # the creator authorize again; the first refresh fills in the channel.
+            logger.warning("Channel lookup after authorization failed: %s", _describe(exc))
+            self._save_connection(credentials.refresh_token, "", "")
+            return {"connected": True, "sync_pending": True, "sync_error": str(_unavailable(exc))}
+        if not items:
+            raise ChannelConnectError(
+                "no_channel", "This Google account has no YouTube channel. Connect with the account that owns your channel."
+            )
+        item = items[0]
         self._save_connection(credentials.refresh_token, str(item.get("id") or ""), str((item.get("snippet") or {}).get("title") or ""))
         try:
             return self.refresh()
-        except HttpError as exc:
-            # OAuth is already complete and the encrypted token is safely stored.
-            # API enablement can take a few minutes, so do not turn that into a
-            # failed connection or force the creator to authorize again.
+        except YouTubeUnavailable as exc:
+            # API enablement can take a few minutes; the connection stands.
             return {"connected": True, "sync_pending": True, "sync_error": str(exc)}
 
     def disconnect(self) -> None:
@@ -86,72 +203,77 @@ class YouTubeChannelService:
             connection.execute("DELETE FROM youtube_channel_connection WHERE id = 1")
 
     def refresh(self) -> dict[str, Any]:
-        credentials = self._credentials()
-        credentials.refresh(Request())
-        youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
-        analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
-        
-        channel_items = (youtube.channels().list(part="snippet,statistics,contentDetails", mine=True, maxResults=1).execute().get("items") or [{}])
+        credentials = self._fresh_credentials()
+        try:
+            youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+            analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
+            channel_items = youtube.channels().list(
+                part="snippet,statistics,contentDetails", mine=True, maxResults=1
+            ).execute().get("items") or []
+        except _UPSTREAM_ERRORS as exc:
+            logger.warning("Channel refresh failed: %s", _describe(exc))
+            raise _unavailable(exc) from exc
+        if not channel_items:
+            raise ValueError("The connected Google account no longer has a YouTube channel.")
         channel_item = channel_items[0]
         snippet = channel_item.get("snippet") or {}
         statistics = channel_item.get("statistics") or {}
         content_details = channel_item.get("contentDetails") or {}
+        # Parts that fail are named, not hidden, so no view shows a gap as data.
+        partial_failures: list[str] = []
 
-        real_total_views = _optional_int(statistics.get("viewCount")) or 0
-        subscribers = _optional_int(statistics.get("subscriberCount")) or 0
-        video_count = _optional_int(statistics.get("videoCount")) or 0
-
-        # Fetch all recent uploads directly from YouTube Data API (bypasses 3-day Analytics report lag!)
+        # The newest 50 uploads, read directly (Analytics reports lag by days).
         uploads_playlist_id = (content_details.get("relatedPlaylists") or {}).get("uploads")
         uploaded_video_rows: list[dict[str, Any]] = []
         if uploads_playlist_id:
             try:
                 playlist_items = youtube.playlistItems().list(
-                    playlistId=uploads_playlist_id,
-                    part="snippet,contentDetails",
-                    maxResults=50
+                    playlistId=uploads_playlist_id, part="snippet,contentDetails", maxResults=50
                 ).execute().get("items", [])
-                
-                v_ids = [item.get("snippet", {}).get("resourceId", {}).get("videoId") for item in playlist_items if item.get("snippet", {}).get("resourceId", {}).get("videoId")]
-                if v_ids:
-                    details = youtube.videos().list(
-                        part="snippet,statistics",
-                        id=",".join(v_ids[:50])
-                    ).execute().get("items", [])
+                video_ids = [
+                    video_id
+                    for item in playlist_items
+                    if (video_id := (item.get("snippet", {}).get("resourceId") or {}).get("videoId"))
+                ]
+                if video_ids:
+                    details = youtube.videos().list(part="snippet,statistics", id=",".join(video_ids[:50])).execute().get("items", [])
                     uploaded_video_rows = _ordered_upload_rows(playlist_items, details)
-            except Exception as exc:
-                logger.warning("Failed to fetch channel uploads: %s", exc)
+            except _UPSTREAM_ERRORS as exc:
+                logger.warning("Channel uploads could not be read: %s", _describe(exc))
+                partial_failures.append("uploads")
 
-        today = date.today()
+        today = datetime.now(_ANALYTICS_ZONE).date()
         start = today - timedelta(days=28)
         previous_start = today - timedelta(days=56)
-        metrics = "views,estimatedMinutesWatched,averageViewDuration,subscribersGained,likes,comments"
-        
         current: dict[str, Any] = {}
         previous: dict[str, Any] = {}
         try:
-            current = self._query(analytics, start, today - timedelta(days=1), metrics)
-            previous = self._query(analytics, previous_start, start - timedelta(days=1), metrics)
-        except Exception as exc:
-            logger.warning("YouTube Analytics query fallback: %s", exc)
+            current = self._query(analytics, start, today - timedelta(days=1), _CHANNEL_METRICS)
+            previous = self._query(analytics, previous_start, start - timedelta(days=1), _CHANNEL_METRICS)
+        except _UPSTREAM_ERRORS as exc:
+            logger.warning("Channel analytics could not be read: %s", _describe(exc))
+            partial_failures.append("analytics")
 
+        channel_id = str(channel_item.get("id") or "")
         if uploaded_video_rows:
-            save_video_snapshots(self.settings.database_path, uploaded_video_rows)
+            save_video_snapshots(self.settings.database_path, uploaded_video_rows, channel_id=channel_id)
 
+        self._update_connection_channel(channel_id, str(snippet.get("title") or ""))
         payload = {
             "channel": {
-                "id": channel_item.get("id"),
+                "id": channel_id,
                 "title": snippet.get("title"),
-                "subscribers": subscribers,
-                "video_count": video_count,
-                "real_total_views": real_total_views,
+                # A channel can hide its subscriber count: unknown, not zero.
+                "subscribers": None if statistics.get("hiddenSubscriberCount") else _optional_int(statistics.get("subscriberCount")),
+                "video_count": _optional_int(statistics.get("videoCount")),
+                "real_total_views": _optional_int(statistics.get("viewCount")),
             },
             "period": {"start": start.isoformat(), "end": (today - timedelta(days=1)).isoformat()},
             "current_28_days": current,
             "previous_28_days": previous,
             "recent_videos": {"sort": "published_at_desc", "rows": uploaded_video_rows},
-            "top_videos": {"sort": "published_at_desc", "rows": uploaded_video_rows},
             "video_learning": learning_summary(self.settings.database_path),
+            "partial_failures": partial_failures,
         }
         self._save_sync(payload)
         return payload
@@ -161,21 +283,18 @@ class YouTubeChannelService:
         channel = self._connection()
         if not channel or not channel[1]:
             raise ValueError("Connect the YouTube channel that owns this video before linking it.")
+        credentials = self._fresh_credentials()
         try:
-            credentials = self._credentials()
-            credentials.refresh(Request())
-            youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
-            items = youtube.videos().list(
+            items = build("youtube", "v3", credentials=credentials, cache_discovery=False).videos().list(
                 part="snippet,statistics,contentDetails,status",
                 id=youtube_video_id,
                 maxResults=1,
             ).execute().get("items", [])
-        except ValueError:
-            raise
-        except Exception as exc:
-            logger.warning("OAuth ownership verification failed: %s", type(exc).__name__)
-            raise ValueError(
-                "YouTube ownership could not be verified. Nothing was linked; retry when the connection is available."
+        except _UPSTREAM_ERRORS as exc:
+            logger.warning("OAuth ownership verification failed: %s", _describe(exc))
+            raise YouTubeUnavailable(
+                "YouTube ownership could not be verified, so nothing was linked. Try again when YouTube is reachable.",
+                status_code=_unavailable(exc).status_code,
             ) from exc
 
         if not items:
@@ -187,60 +306,79 @@ class YouTubeChannelService:
         return metadata
 
     def verify_public_video(self, youtube_video_id: str) -> dict[str, Any]:
-        """Verify video existence on YouTube using public API / oEmbed metadata."""
-        # 1. Try YouTube Data API key if available
-        if self.settings.youtube_api_key_pool:
+        """Look a public video up with an API key, falling back to oEmbed.
+
+        A lookup that answers "no such video" is refused. Only when YouTube
+        cannot confirm it either way is the bare id accepted, marked unverified
+        and without any made-up title or date.
+        """
+        for index, api_key in enumerate(self.settings.youtube_api_key_pool, start=1):
             try:
-                for api_key in self.settings.youtube_api_key_pool:
-                    youtube = build("youtube", "v3", developerKey=api_key, cache_discovery=False)
-                    items = youtube.videos().list(
-                        part="snippet,statistics,contentDetails,status",
-                        id=youtube_video_id,
-                        maxResults=1,
-                    ).execute().get("items", [])
-                    if items:
-                        return _video_metadata(items[0], youtube_video_id, ownership_verified=False)
-            except Exception as exc:
-                logger.warning("YouTube Data API lookup failed: %s", exc)
+                items = build("youtube", "v3", developerKey=api_key, cache_discovery=False).videos().list(
+                    part="snippet,statistics,contentDetails,status",
+                    id=youtube_video_id,
+                    maxResults=1,
+                ).execute().get("items", [])
+            except _UPSTREAM_ERRORS as exc:
+                # The exception text holds the request URL, and with it the key.
+                logger.warning("YouTube Data API lookup with key %d failed: %s", index, _describe(exc))
+                continue
+            if items:
+                return _video_metadata(items[0], youtube_video_id, ownership_verified=False)
+            raise ValueError(_NOT_FOUND)
 
-        # 2. Try public oEmbed endpoint fallback
+        url = "https://www.youtube.com/oembed?" + urlencode(
+            {"url": f"https://www.youtube.com/watch?v={youtube_video_id}", "format": "json"}
+        )
         try:
-            import urllib.request
-            url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={youtube_video_id}&format=json"
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    return {
-                        "video_id": youtube_video_id,
-                        "title": str(data.get("title") or "YouTube Video"),
-                        "description": "",
-                        "tags": [],
-                        "published_at": None,
-                        "ownership_verified": False,
-                        "metadata_source": "oembed",
-                    }
-        except Exception as exc:
-            logger.warning("oEmbed lookup failed: %s", exc)
-
-        # 3. Final fallback for valid 11-char YouTube ID
-        if len(youtube_video_id) == 11 and re.fullmatch(r"[A-Za-z0-9_-]{11}", youtube_video_id):
+            request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                data = json.loads(response.read().decode("utf-8"))
             return {
                 "video_id": youtube_video_id,
-                "title": "YouTube Video",
-                "description": "",
-                "tags": [],
+                "title": str(data.get("title") or "") or None,
+                "channel_title": str(data.get("author_name") or "") or None,
+                # oEmbed carries no description, tags or date: unknown, not empty.
+                "description": None,
+                "tags": None,
+                "published_at": None,
+                "ownership_verified": False,
+                "metadata_source": "oembed",
+            }
+        except urllib.error.HTTPError as exc:
+            if exc.code in {400, 404}:
+                raise ValueError(_NOT_FOUND) from exc
+            # 401/403 mean private or not embeddable: the id may still be real.
+            logger.warning("oEmbed lookup failed: HTTP %s", exc.code)
+        except (OSError, ValueError) as exc:
+            logger.warning("oEmbed lookup failed: %s", _describe(exc))
+
+        if re.fullmatch(r"[A-Za-z0-9_-]{11}", youtube_video_id):
+            return {
+                "video_id": youtube_video_id,
+                "title": None,
+                "description": None,
+                "tags": None,
                 "published_at": None,
                 "ownership_verified": False,
                 "metadata_source": "unverified_id",
             }
+        raise ValueError(_NOT_FOUND)
 
-        raise ValueError("That video could not be found on YouTube.")
+    def refresh_linked_video_performance(
+        self,
+        link: dict[str, Any],
+        *,
+        force: bool = False,
+        collect_current: bool = True,
+        windows: Collection[str] | None = None,
+    ) -> dict[str, Any]:
+        """Capture due 24-hour, 7-day and 28-day analytics snapshots, and current counts.
 
-    def refresh_linked_video_performance(self, link: dict[str, Any], *, force: bool = False, collect_current: bool = True) -> dict[str, Any]:
-        """Capture only due 24-hour, 7-day, and 28-day analytics snapshots.
-
-        This is intentionally manual: a laptop cannot collect data while it is off.
+        Runs on request and from the snapshot collector: a laptop cannot collect
+        data while it is off, so each run catches up on whatever is due. The
+        collector passes the `windows` it planned, so a window still cooling
+        down after a failure is not retried early.
         """
         video_id = str(link.get("youtube_video_id") or "")
         if not video_id:
@@ -252,11 +390,16 @@ class YouTubeChannelService:
         store = self._history_store()
         now = datetime.now(timezone.utc)
         age_hours = max(0.0, (now - published_at).total_seconds() / 3600)
-        windows = (("24h", 24.0), ("7d", 24.0 * 7), ("28d", 24.0 * 28))
+        # Analytics reports whole Pacific days, up to yesterday. A window is
+        # due only once YouTube has reported every day in it (reportable_window,
+        # which the collector plans with too).
+        first_day = published_at.astimezone(_ANALYTICS_ZONE).date()
+        analytics_end = now.astimezone(_ANALYTICS_ZONE).date() - timedelta(days=1)
         due = [
-            (label, hours)
-            for label, hours in windows
-            if age_hours >= hours
+            (label, hours, days)
+            for label, hours in _WINDOWS
+            if (windows is None or label in windows)
+            and (days := reportable_window(published_at, hours, now))
             and not store.has_snapshot_window(video_id, label)
             and (force or store.snapshot_retry_allowed(video_id, label))
         ]
@@ -266,59 +409,69 @@ class YouTubeChannelService:
                 "video_id": video_id,
                 "age_hours": round(age_hours, 1),
                 "captured": [],
-                "window_states": [store.snapshot_window_state(video_id, label) for label, _ in windows],
-                "current": store.latest_performance_snapshot(video_id) or None,
+                "window_states": [store.snapshot_window_state(video_id, label) for label, _ in _WINDOWS],
+                "current": store.current_performance_snapshot(video_id),
                 "youtube": None,
                 "message": "No scheduled snapshot window is due; no YouTube API call was made.",
             }
 
-        credentials = self._credentials()
-        credentials.refresh(Request())
-        youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
-        items = youtube.videos().list(
-            part="snippet,statistics,contentDetails,status",
-            id=video_id,
-            maxResults=1,
-        ).execute().get("items", [])
-        if not items:
-            raise ValueError("The linked video is no longer available to the connected YouTube account.")
-        metadata = _video_metadata(items[0], video_id, ownership_verified=True)
         connected = self._connection()
-        if connected and connected[1] and metadata.get("channel_id") != str(connected[1]):
-            raise ValueError("This video does not belong to the connected YouTube channel.")
-        store.update_linked_video_metadata(int(link.get("id") or 0), metadata)
-        store.mark_link_ownership_verified(
-            int(link.get("id") or 0),
-            str(metadata.get("channel_id") or ""),
-        )
+        if not connected or not connected[1]:
+            # Without the channel id, ownership cannot be checked, so nothing is verified.
+            raise ValueError("The connected channel is not identified yet. Refresh the channel, then try again.")
+        verified_for = str(link.get("verified_channel_id") or "")
+        if verified_for and verified_for != str(connected[1]):
+            # Verified for another channel, for example on another device: it
+            # is neither gone nor foreign, so its ownership stays as it is.
+            raise LinkUnavailable(
+                "This video is verified for another YouTube channel. Connect that channel to refresh its analytics."
+            )
+        credentials = self._fresh_credentials()
+        try:
+            youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+            analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
+            items = youtube.videos().list(
+                part="snippet,statistics,contentDetails,status",
+                id=video_id,
+                maxResults=1,
+            ).execute().get("items", [])
+        except _UPSTREAM_ERRORS as exc:
+            logger.warning("Linked-video refresh failed: %s", _describe(exc))
+            raise _unavailable(exc) from exc
+        link_id = int(link.get("id") or 0)
+        if not items:
+            # Deleted or private: stop collecting it instead of retrying it on every run.
+            store.mark_link_ownership_failed(link_id)
+            raise LinkUnavailable("The linked video is no longer available to the connected YouTube account.")
+        metadata = _video_metadata(items[0], video_id, ownership_verified=True)
+        if metadata.get("channel_id") != str(connected[1]):
+            store.mark_link_ownership_failed(link_id)
+            raise LinkUnavailable("This video does not belong to the connected YouTube channel.")
+        store.update_linked_video_metadata(link_id, metadata)
+        store.mark_link_ownership_verified(link_id, str(metadata.get("channel_id") or ""))
 
-        analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
         analytics_current: dict[str, Any] = {}
-        analytics_end = now.date() - timedelta(days=1)
-        if collect_current and analytics_end >= published_at.date():
+        if collect_current and analytics_end >= first_day:
             try:
-                metrics = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
                 analytics_current = self._query(
-                    analytics,
-                    published_at.date(),
-                    analytics_end,
-                    metrics,
-                    filters=f"video=={video_id}",
+                    analytics, first_day, analytics_end, _VIDEO_METRICS, filters=f"video=={video_id}"
                 )
-            except Exception as exc:
-                logger.warning("Linked-video Analytics data is not ready yet: %s", exc)
+            except _UPSTREAM_ERRORS as exc:
+                logger.warning("Linked-video analytics are not ready yet: %s", _describe(exc))
 
         captured: list[dict[str, Any]] = []
-        for label, hours in due:
-            end = min(now.date() - timedelta(days=1), (published_at + timedelta(hours=hours)).date())
-            start = published_at.date()
-            if end < start:
-                continue
-            metrics = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
+        for label, hours, (start, end) in due:
             try:
-                data = self._query(analytics, start, end, metrics, filters=f"video=={video_id}")
-            except Exception as exc:
-                logger.warning("Linked-video %s snapshot remains retryable: %s", label, type(exc).__name__)
+                data = self._query(analytics, start, end, _VIDEO_METRICS, filters=f"video=={video_id}")
+            except _UPSTREAM_ERRORS as exc:
+                logger.warning("Linked-video %s snapshot remains retryable: %s", label, _describe(exc))
+                if _outage(exc):
+                    # YouTube or the network failed, not this request: trying
+                    # again later must not use up the window's attempts.
+                    store.postpone_snapshot_window(
+                        video_id, label, failure_reason="analytics_request_failed", age_hours=age_hours
+                    )
+                    continue
                 store.record_snapshot_attempt(
                     video_id,
                     label,
@@ -374,13 +527,12 @@ class YouTubeChannelService:
                 snapshot_window="current",
                 replace_window=True,
             )
-        current_snapshot = store.latest_performance_snapshot(video_id) or {}
         return {
             "video_id": video_id,
             "age_hours": round(age_hours, 1),
             "captured": captured,
-            "window_states": [store.snapshot_window_state(video_id, label) for label, _ in windows],
-            "current": current_snapshot,
+            "window_states": [store.snapshot_window_state(video_id, label) for label, _ in _WINDOWS],
+            "current": store.current_performance_snapshot(video_id) or {},
             "youtube": metadata,
             "message": "Current YouTube metadata and available analytics were refreshed.",
         }
@@ -393,7 +545,9 @@ class YouTubeChannelService:
             raise ValueError("Published-video link is missing its YouTube video ID.")
         metadata = self.verify_public_video(video_id)
         if metadata.get("metadata_source") == "unverified_id":
-            raise ValueError("Public YouTube metadata is temporarily unavailable. The saved link is unchanged.")
+            raise YouTubeUnavailable(
+                "Public YouTube metadata is temporarily unavailable. The saved link is unchanged.", status_code=503
+            )
         store = self._history_store()
         store.update_linked_video_metadata(int(link.get("id") or 0), metadata)
         published_at = _parse_timestamp(str(link.get("published_at") or metadata.get("published_at") or ""))
@@ -407,7 +561,7 @@ class YouTubeChannelService:
             )
         return {
             "video_id": video_id, "age_hours": round(age_hours, 1), "captured": [],
-            "current": store.latest_performance_snapshot(video_id) or None, "youtube": metadata,
+            "current": store.current_performance_snapshot(video_id), "youtube": metadata,
             "data_scope": "public_metadata", "ownership_verified": bool(link.get("ownership_verified")),
             "private_analytics_available": False,
             "message": (
@@ -420,38 +574,78 @@ class YouTubeChannelService:
         response = analytics.reports().query(ids="channel==MINE", startDate=start.isoformat(), endDate=end.isoformat(), metrics=metrics, **kwargs).execute()
         headers = [item.get("name") for item in response.get("columnHeaders", [])]
         rows = response.get("rows", [])
-        if kwargs.get("dimensions"):
-            return {"rows": [dict(zip(headers, row)) for row in rows]}
-        return dict(zip(headers, rows[0])) if rows else {}
+        return dict(zip(headers, rows[0], strict=False)) if rows else {}
 
-    def _flow(self, state: str) -> Flow:
-        return Flow.from_client_config({"web": {"client_id": self.settings.youtube_oauth_client_id, "client_secret": self.settings.youtube_oauth_client_secret, "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token", "redirect_uris": [self.settings.youtube_oauth_redirect_uri]}}, scopes=_SCOPES, redirect_uri=self.settings.youtube_oauth_redirect_uri, state=state)
+    def _flow(self, *, state: str, code_verifier: str) -> Flow:
+        client_config = {
+            "web": {
+                "client_id": self.settings.youtube_oauth_client_id,
+                "client_secret": self.settings.youtube_oauth_client_secret,
+                "auth_uri": _AUTH_URI,
+                "token_uri": _TOKEN_URI,
+                "redirect_uris": [self.settings.youtube_oauth_redirect_uri],
+            }
+        }
+        return Flow.from_client_config(
+            client_config,
+            scopes=_SCOPES,
+            redirect_uri=self.settings.youtube_oauth_redirect_uri,
+            state=state,
+            code_verifier=code_verifier,
+        )
+
+    def _decrypt(self, encrypted: str) -> str:
+        try:
+            return Fernet(self.settings.oauth_token_encryption_key.encode()).decrypt(encrypted.encode()).decode()
+        except (InvalidToken, AttributeError) as exc:
+            raise ValueError("Saved channel token cannot be read. Disconnect and connect again.") from exc
 
     def _credentials(self) -> Credentials:
         record = self._connection()
         if not record:
             raise ValueError("No YouTube channel is connected.")
+        return Credentials(token=None, refresh_token=self._decrypt(record[0]), token_uri=_TOKEN_URI, client_id=self.settings.youtube_oauth_client_id, client_secret=self.settings.youtube_oauth_client_secret, scopes=_SCOPES)
+
+    def _fresh_credentials(self) -> Credentials:
+        """Credentials with a new access token. A revoked grant raises RefreshError."""
+        credentials = self._credentials()
         try:
-            refresh_token = Fernet(self.settings.oauth_token_encryption_key.encode()).decrypt(record[0].encode()).decode()
-        except (InvalidToken, AttributeError) as exc:
-            raise ValueError("Saved channel token cannot be read. Disconnect and connect again.") from exc
-        return Credentials(token=None, refresh_token=refresh_token, token_uri="https://oauth2.googleapis.com/token", client_id=self.settings.youtube_oauth_client_id, client_secret=self.settings.youtube_oauth_client_secret, scopes=_SCOPES)
+            credentials.refresh(Request())
+        except RefreshError as exc:
+            if not getattr(exc, "retryable", False):
+                raise
+            logger.warning("Google's token service failed: %s", _describe(exc))
+            raise YouTubeUnavailable("Google's sign-in service is not responding. Try again shortly.", status_code=503) from exc
+        except TransportError as exc:
+            logger.warning("Google's token service could not be reached: %s", _describe(exc))
+            raise _unavailable(exc) from exc
+        return credentials
 
     def _save_connection(self, refresh_token: str, channel_id: str, title: str) -> None:
         encrypted = Fernet(self.settings.oauth_token_encryption_key.encode()).encrypt(refresh_token.encode()).decode()
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
             connection.execute("INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET encrypted_refresh_token=excluded.encrypted_refresh_token, channel_id=excluded.channel_id, channel_title=excluded.channel_title, updated_at=excluded.updated_at", (encrypted, channel_id, title, now, now))
 
+    def _update_connection_channel(self, channel_id: str, title: str) -> None:
+        """Fill in the channel of a token-only connection, and keep its title current."""
+        if not channel_id:
+            return
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE youtube_channel_connection SET channel_id = ?, channel_title = ?, updated_at = ? "
+                "WHERE id = 1 AND (channel_id = '' OR channel_id = ?)",
+                (channel_id, title, datetime.now(timezone.utc).isoformat(), channel_id),
+            )
+
     def _save_sync(self, payload: dict[str, Any]) -> None:
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
             connection.execute("INSERT INTO youtube_channel_syncs (synced_at, payload_json) VALUES (?, ?)", (now, json.dumps(payload)))
-
-    def _latest_sync(self) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute("SELECT synced_at, payload_json FROM youtube_channel_syncs ORDER BY id DESC LIMIT 1").fetchone()
-        return {"synced_at": row[0], "data": json.loads(row[1])} if row else None
+            connection.execute(
+                "DELETE FROM youtube_channel_syncs WHERE id NOT IN (SELECT id FROM youtube_channel_syncs ORDER BY id DESC LIMIT ?)",
+                (_SYNCS_KEPT,),
+            )
 
     def _connection(self):
         with self._connect() as connection:
@@ -470,12 +664,20 @@ class YouTubeChannelService:
         try:
             Fernet(self.settings.oauth_token_encryption_key.encode())
             return True
-        except Exception:
+        except (ValueError, TypeError):
             return False
 
     def _require_configured(self) -> None:
         if not self._is_configured():
             raise ValueError("YouTube OAuth is not configured. Check the local .env setup instructions.")
+
+
+def _granted_scopes(credentials: Credentials, flow: Flow) -> set[str] | None:
+    """The scopes Google actually granted, or None when the response doesn't say."""
+    granted = getattr(credentials, "granted_scopes", None) or (flow.oauth2session.token or {}).get("scope")
+    if not granted:
+        return None
+    return set(granted.split() if isinstance(granted, str) else granted)
 
 
 def _ordered_upload_rows(
@@ -493,6 +695,8 @@ def _ordered_upload_rows(
             or (playlist_snippet.get("resourceId") or {}).get("videoId")
             or ""
         )
+        if not video_id:
+            continue
         detail = details_by_id.get(video_id) or {}
         snippet = detail.get("snippet") or playlist_snippet
         statistics = detail.get("statistics") or {}
@@ -502,16 +706,15 @@ def _ordered_upload_rows(
             or playlist_snippet.get("publishedAt")
             or ""
         )
-        if not video_id:
-            continue
         rows.append({
-            "video": video_id,
             "video_id": video_id,
-            "title": str(snippet.get("title") or playlist_snippet.get("title") or "YouTube Upload"),
+            "title": str(snippet.get("title") or playlist_snippet.get("title") or ""),
             "published_at": published_at,
-            "views": _optional_int(statistics.get("viewCount")) or 0,
-            "likes": _optional_int(statistics.get("likeCount")) or 0,
-            "comments": _optional_int(statistics.get("commentCount")) or 0,
+            # Missing statistics (hidden likes, a failed details call) stay unknown.
+            "views": _optional_int(statistics.get("viewCount")),
+            "likes": _optional_int(statistics.get("likeCount")),
+            "comments": _optional_int(statistics.get("commentCount")),
+            # The uploads API carries no retention; only Analytics reports it.
             "averageViewPercentage": None,
         })
     rows.sort(key=lambda row: (str(row.get("published_at") or ""), str(row.get("video_id") or "")), reverse=True)
@@ -558,7 +761,8 @@ def _video_metadata(item: dict[str, Any], video_id: str, *, ownership_verified: 
         "description": str(snippet.get("description") or ""),
         "tags": [str(tag) for tag in (snippet.get("tags") or [])],
         "category_id": str(snippet.get("categoryId") or ""),
-        "published_at": str(snippet.get("publishedAt") or datetime.now(timezone.utc).isoformat()),
+        # Unknown stays unknown: "now" would shift every 24h/7d/28d window.
+        "published_at": str(snippet.get("publishedAt") or "") or None,
         "duration": str(content_details.get("duration") or ""),
         "privacy_status": str(status.get("privacyStatus") or ""),
         "thumbnail_url": thumbnail,

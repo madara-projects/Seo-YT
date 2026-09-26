@@ -7,7 +7,12 @@ export const frontendState = {
   historySummaryCache: null,
   historySummaryFetchedAt: 0,
   historySummaryRequest: null,
+  // Bumped by every invalidation; a request started before one is stale.
+  historySummaryGeneration: 0,
+  // Kept across cache invalidation so channel cards never flash empty.
+  latestOwnedPerformance: null,
   latestChannelStatus: null,
+  channelStatusFailed: false,
   analyticsRefreshRequest: null,
   analyticsAutoRefreshAttempted: false,
   oauthRedirectHandled: false,
@@ -19,7 +24,6 @@ export const frontendState = {
     submittedFormValues: null,
     inferredBrief: null,
     analysis: null,
-    generatedPackage: null,
     packageOptions: [],
     selectedPackageId: null,
     selectionStatus: "unrecorded",
@@ -34,19 +38,16 @@ export const frontendState = {
       claims: false,
       manualPublish: false,
     },
-    generationStatus: "idle",
     researchStatus: "no-research",
     researchError: null,
-    error: null,
     requestSequence: 0,
-    activeRequestSequence: 0,
-    initialized: false,
   },
 };
 
 export const creatorState = frontendState.creator;
 
 export function invalidateHistorySummary() {
+  frontendState.historySummaryGeneration += 1;
   frontendState.historySummaryCache = null;
   frontendState.historySummaryFetchedAt = 0;
   frontendState.historySummaryRequest = null;

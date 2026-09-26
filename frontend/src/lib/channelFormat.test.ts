@@ -55,6 +55,15 @@ describe("sortVideos", () => {
     expect(sortVideos(videos, "engagement")[0]?.title).toBe("Newest");
   });
 
+  it("puts uploads with unknown engagement after a measured zero", () => {
+    const rows: ChannelVideo[] = [
+      { video_id: "hidden00001", title: "Hidden counts", views: 500, likes: null, comments: null },
+      { video_id: "zero0000001", title: "No reactions", views: 500, likes: 0, comments: 0 },
+      { video_id: "liked000001", title: "Liked", views: 500, likes: 50, comments: 5 },
+    ];
+    expect(sortVideos(rows, "engagement").map((video) => video.title)).toEqual(["Liked", "No reactions", "Hidden counts"]);
+  });
+
   it("does not reorder the caller's array", () => {
     const copy = [...videos];
     sortVideos(videos, "views");

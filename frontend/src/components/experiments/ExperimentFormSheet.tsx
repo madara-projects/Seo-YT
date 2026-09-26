@@ -44,17 +44,19 @@ export function ExperimentFormSheet({
   const create = useCreateExperiment();
   const errors = form.formState.errors;
 
-  const submit = form.handleSubmit(async (values) => {
-    try {
-      const data = await create.mutateAsync(experimentPayload(values));
-      toast.success("Comparison created as a draft.");
-      form.reset(experimentFormDefaults);
-      create.reset();
-      onOpenChange(false);
-      if (data.experiment) onCreated(data.experiment);
-    } catch {
-      /* Shown above the buttons with its request ID. */
-    }
+  // A failure is shown above the buttons with its request ID.
+  const submit = form.handleSubmit((values) => {
+    // Per-call callbacks don't run once the sheet has unmounted, so a save that
+    // finishes after the creator has left never pulls them back to this page.
+    create.mutate(experimentPayload(values), {
+      onSuccess: (data) => {
+        toast.success("Comparison created as a draft.");
+        form.reset(experimentFormDefaults);
+        create.reset();
+        onOpenChange(false);
+        if (data.experiment) onCreated(data.experiment);
+      },
+    });
   });
 
   const select = (name: SelectName, label: string, options: LabelledOption[], hint?: string) => (

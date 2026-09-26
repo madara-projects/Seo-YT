@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from urllib.parse import urlparse
@@ -66,12 +67,47 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.assertFalse(self.page_errors, "uncaught page errors: " + repr(self.page_errors))
         unexpected = [error for error in self.console_errors if not any(expected in error for expected in allow_console_errors)]
         self.assertFalse(unexpected, "console errors: " + repr(unexpected))
-        allowed_intercepted_hosts = {"fonts.googleapis.com", "fonts.gstatic.com"}
-        unexpected_external = [
-            url for url in self.router.external_requests
-            if urlparse(url).hostname not in allowed_intercepted_hosts
-        ]
+        # The classic dashboard contacts no other host; it no longer loads Google Fonts.
+        unexpected_external = list(self.router.external_requests)
         self.assertFalse(unexpected_external, "unexpected external requests: " + repr(unexpected_external))
+
+    def answer_dialogs(self, prompt_text: str = "", *, confirm: bool = True) -> list[tuple[str, str]]:
+        """Answer every prompt with prompt_text and every confirm with `confirm`; return (type, message) pairs."""
+        seen: list[tuple[str, str]] = []
+
+        def handle(dialog):
+            seen.append((dialog.type, dialog.message))
+            if dialog.type == "prompt":
+                dialog.accept(prompt_text)
+            elif dialog.type == "confirm" and not confirm:
+                dialog.dismiss()
+            else:
+                dialog.accept()
+
+        self.page.on("dialog", handle)
+        return seen
+
+    def toast_text(self) -> str:
+        return self.page.locator("#toastNotification").text_content() or ""
+
+    def wait_for_toast(self, text: str):
+        # Not wait_for_function: its polling calls eval, which the page's CSP (no 'unsafe-eval') refuses.
+        self.page.wait_for_selector("#toastNotification:has-text(" + json.dumps(text) + ")", state="attached")
+
+    def wait_until(self, expression: str, timeout_ms: int = 5000):
+        """Poll a page expression from Python; page.evaluate is not subject to the page's CSP."""
+        waited = 0
+        while not self.page.evaluate(expression) and waited < timeout_ms:
+            self.page.wait_for_timeout(50)
+            waited += 50
+        self.assertTrue(self.page.evaluate(expression), "timed out waiting for: " + expression)
+
+    def wait_for_request_count(self, method: str, path: str, count: int, timeout_ms: int = 5000):
+        waited = 0
+        while self.router.count(method, path) < count and waited < timeout_ms:
+            self.page.wait_for_timeout(50)
+            waited += 50
+        self.assertGreaterEqual(self.router.count(method, path), count, f"{method} {path} was not requested {count} time(s)")
 
     def test_navigation_direct_routes_and_sidebar(self):
         for hash_name, nav_id, view_id in (
@@ -133,14 +169,16 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.assertGreater(self.page.locator("#appSidebar").evaluate("el => el.getBoundingClientRect().width"), 200)
         self.assert_clean_browser()
 
-    def test_extracted_assets_and_legacy_rollback_route(self):
+    def test_extracted_assets_and_no_external_fonts(self):
         self.open("#dashboard")
         self.assertEqual(self.page.locator("link[href='/static/css/app.css']").count(), 1)
         self.assertEqual(self.page.locator("script[type='module'][src='/static/js/app.js']").count(), 1)
         self.assertEqual(self.page.evaluate("fetch('/static/js/api.js').then(r => r.status)"), 200)
-        self.page.goto(self.base_url + "/dashboard_legacy", wait_until="domcontentloaded")
-        self.page.wait_for_selector("#view-dashboard")
-        self.assertTrue(self.page.locator("#view-dashboard").count())
+        # The classic page uses the system font stack: nothing comes from Google Fonts.
+        stylesheet = self.page.evaluate("fetch('/static/css/app.css').then(r => r.text())")
+        self.assertNotIn("fonts.googleapis.com", stylesheet)
+        font_hosts = {"fonts.googleapis.com", "fonts.gstatic.com"}
+        self.assertFalse([url for url in self.router.external_requests if urlparse(url).hostname in font_hosts])
         self.assert_clean_browser()
 
     def test_active_frontend_has_no_mojibake_markers(self):
@@ -187,6 +225,10 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.assertIn("Published rainy highway title", text)
         self.assertIn("NOT ESTABLISHED", text)
         self.assertIn("Enough observation time is available for comparison.", text)
+        # Title, description and tags changed on YouTube; hashtags match exactly.
+        self.assertIn("differences found", text.lower())
+        self.assertIn("differ from the saved generated package in: title, description, tags.", text.lower())
+        self.assertEqual(self.page.locator("#auditDetail .audit-comparison-table .chip-ok").count(), 1)
         self.assertEqual(self.router.count("POST", "/api/audits/9/refresh"), 1)
         self.assert_clean_browser()
 
@@ -210,11 +252,12 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         text = self.page.locator("#experimentDetail").inner_text()
         self.assertIn("PLANNED EXPERIMENT", text)
         self.assertIn("NOT CAUSAL PROOF", text)
+        self.assertEqual(self.page.locator("#experimentAssignVideo option[value='9']").count(), 0)
         self.assertEqual(self.router.count("POST", "/api/experiment-center/experiments"), 1)
         self.assert_clean_browser()
 
     def test_experiment_assignment_comparison_and_insufficient_evidence(self):
-        self.replace_router(include_link=True)
+        self.replace_router(include_link=True, oauth_state="connected")
         self.open("#experiments")
         self.open_experiment_form()
         self.page.locator("#experimentName").fill("Opening test")
@@ -550,7 +593,7 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.page.wait_for_selector("text=The Truth About Letting Go 💔 #shorts")
         self.page.locator("[data-testid='creator-stage-decision']").click()
         self.page.get_by_role("button", name="Copy selected upload package").click()
-        self.page.wait_for_function("window.__copiedPackage && window.__copiedPackage.includes('DESCRIPTION')")
+        self.wait_until("Boolean(window.__copiedPackage && window.__copiedPackage.includes('DESCRIPTION'))")
         copied = self.page.evaluate("window.__copiedPackage")
         self.assertIn("The Truth About Letting Go 💔 #shorts", copied)
         with self.page.expect_download() as download_info:
@@ -591,13 +634,27 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
     def test_dashboard_uses_neutral_initial_metrics_and_truthful_labels(self):
         self.open("#dashboard")
         self.page.wait_for_selector("text=Saved records")
-        self.assertEqual(self.page.locator("#dashMetricOpp").inner_text(), "Not available / 100")
+        self.page.wait_for_selector("#dashLearningStatus >> text=Not enough mature evidence")
+        # A missing average is one "Not available", never "Not available / 100".
+        self.assertEqual(self.page.locator("#dashMetricOpp").inner_text(), "Not available")
         body_text = self.page.locator("body").inner_text()
         for misleading in ("8.8", "61.4", "High CTR", "Viral Hashtags", "Winning Patterns Engine", "Live Sync"):
             self.assertNotIn(misleading, body_text)
         body_lower = body_text.lower()
         self.assertIn("public research trends", body_lower)
         self.assertIn("not enough mature evidence", body_lower)
+        self.assert_clean_browser()
+
+    def test_linked_watch_time_names_only_the_videos_it_adds_up(self):
+        self.replace_router(linked_watch_time={
+            "estimated_watch_minutes": 132, "linked_videos_count": 19, "linked_videos_with_watch_time": 3})
+        self.open("#dashboard")
+        self.page.wait_for_selector("#dashMetricWatchSub >> text=at each video's highest snapshot")
+        # The summary adds each video's highest snapshot, and only 3 of the 19 have watch time.
+        self.assertEqual(
+            self.page.locator("#dashMetricWatchSub").inner_text(),
+            "Across 3 of your 19 linked videos, at each video's highest snapshot, not a 28-day channel total.",
+        )
         self.assert_clean_browser()
 
     def test_analytics_distinguishes_current_data_from_mature_evidence(self):
@@ -627,6 +684,10 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.replace_router(include_link=True)
         self.open("#history")
         self.page.get_by_role("button", name="View package").click()
+        # The fixture's link was last synced long ago, so opening it refreshes it once in
+        # the background and redraws the detail; read the detail after that redraw.
+        self.wait_for_request_count("POST", "/api/published-videos/9/refresh", 1)
+        self.wait_for_request_count("GET", "/api/history/runs/1", 2)
         self.page.wait_for_selector("#historyDetail >> text=Retention evidence")
         detail = self.page.locator("#historyDetail").inner_text()
         self.assertIn("0 of 5 comparable videos", detail)
@@ -651,6 +712,11 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.page.wait_for_selector("text=Status: disabled")
         self.assertEqual(self.router.count("GET", "/youtube/channel/status"), 1)
         self.assertEqual(self.router.count("GET", "/api/snapshot-collector/status"), 1)
+        self.assertEqual(self.router.count("POST", "/diagnostics"), 0)
+        self.page.locator("#runDiagBtn").click()
+        self.page.wait_for_selector("#settDiagOut >> text=fixture")
+        self.assertEqual(self.router.count("POST", "/diagnostics"), 1)
+        self.assertEqual(self.router.count("GET", "/diagnostics"), 0)
         self.assert_clean_browser()
 
     def test_settings_connected_oauth_state_is_truthful_and_non_mutating(self):
@@ -716,6 +782,335 @@ class CriticalDashboardBrowserTests(unittest.TestCase):
         self.page.wait_for_timeout(150)
         self.assertEqual(self.router.count("POST", "/api/published-videos/9/refresh"), 1)
         self.assert_clean_browser()
+
+    def test_history_bulk_delete_sends_batches_of_at_most_100(self):
+        self.replace_router(history_run_count=150)
+        self.open("#history")
+        self.page.wait_for_selector('#historyRunCount >> text="150 saved packages"')
+        dialogs = self.answer_dialogs()
+        self.page.locator("#historySelectAll").check()
+        self.assertEqual(self.page.locator("#historySelectedCount").inner_text(), "150 selected")
+        self.page.locator("#historyBulkDeleteBtn").click()
+        self.page.wait_for_selector('#historyRunCount >> text="0 saved packages"')
+        # The server refuses more than 100 IDs a request, so 150 go as 100 + 50.
+        bodies = self.router.bodies("DELETE", "/api/history/runs")
+        self.assertEqual([len(body["run_ids"]) for body in bodies], [100, 50])
+        self.assertEqual(sorted(run_id for body in bodies for run_id in body["run_ids"]), list(range(1, 151)))
+        self.assertEqual(dialogs[0][0], "confirm")
+        self.assertIn("Delete 150 selected packages?", dialogs[0][1])
+        self.assertIn("150 packages deleted.", self.toast_text())
+        self.assertEqual(self.page.locator("#historySelectedCount").inner_text(), "0 selected")
+        self.assert_clean_browser()
+
+    def test_history_bulk_delete_reports_a_failed_batch_accurately(self):
+        self.replace_router(history_run_count=150)
+        self.open("#history")
+        self.page.wait_for_selector('#historyRunCount >> text="150 saved packages"')
+        self.answer_dialogs()
+        self.page.locator("#historySelectAll").check()
+        # Another device deleted package 120 after this list loaded, so the first
+        # batch (150..51) is refused as a whole; the second (50..1) still goes through.
+        self.router.deleted_run_ids.add(120)
+        self.page.locator("#historyBulkDeleteBtn").click()
+        self.page.wait_for_selector('#historyRunCount >> text="99 saved packages"')
+        toast = self.toast_text()
+        self.assertIn("Deleted 50 of 150 packages.", toast)
+        self.assertIn("The rest were not deleted: One or more saved packages were not found; nothing was deleted.", toast)
+        self.assertNotIn("150 packages deleted", toast)
+        self.assertEqual(len(self.router.bodies("DELETE", "/api/history/runs")), 2)
+        # The packages that were not deleted stay selected for a retry.
+        self.assertEqual(self.page.locator("#historySelectedCount").inner_text(), "99 selected")
+        self.assert_clean_browser(allow_console_errors=("404 (Not Found)",))
+
+    def test_history_delete_toast_reports_what_cloud_sync_was_asked_to_do(self):
+        cases = (
+            ({"state": "disabled", "enabled": False, "configured": False, "run_requested": False, "counts": {}},
+             "Cloud sync is off; deleted on this device only."),
+            # The server answers at once: a background run was requested, nothing is synced yet.
+            ({"state": "healthy/idle", "enabled": True, "configured": True, "run_requested": True},
+             "Cloud deletion requested"),
+            ({"state": "unconfigured", "enabled": True, "configured": False, "run_requested": True},
+             "Cloud sync is not configured; deleted on this device only."),
+            ({"state": "waiting", "enabled": True, "configured": True, "run_requested": False},
+             "will be sent when cloud sync next runs"),
+        )
+        for cloud_sync, expected in cases:
+            with self.subTest(state=cloud_sync["state"], run_requested=cloud_sync["run_requested"]):
+                self.replace_router(delete_cloud_sync=cloud_sync)
+                self.open("#history")
+                self.page.wait_for_selector("#historyPageBody >> text=Rainy Highway Reflection")
+                self.answer_dialogs()
+                self.page.locator("#historyPageBody [data-action='delete-run']").click()
+                self.page.wait_for_selector('#historyRunCount >> text="0 saved packages"')
+                toast = self.toast_text()
+                self.assertIn("Saved package deleted.", toast)
+                self.assertIn(expected, toast)
+                self.assertNotIn("synced to cloud", toast)
+                self.assertEqual(self.router.count("DELETE", "/api/history/runs/1"), 1)
+                self.assert_clean_browser()
+
+    def test_history_delete_says_what_a_linked_video_loses(self):
+        for linked, expected in ((frozenset({1}), "Its linked video's collected snapshots, audits and experiment assignments are deleted with it."),
+                                 (frozenset(), None)):
+            with self.subTest(linked=bool(linked)):
+                self.replace_router(linked_run_ids=linked)
+                self.open("#history")
+                self.page.wait_for_selector("#historyPageBody >> text=Rainy Highway Reflection")
+                dialogs = self.answer_dialogs(confirm=False)
+                self.page.locator("#historyPageBody [data-action='delete-run']").click()
+                self.page.wait_for_timeout(200)
+                self.assertEqual(len(dialogs), 1)
+                message = dialogs[0][1]
+                self.assertIn("marked deleted for your synced devices", message)
+                if expected:
+                    self.assertIn(expected, message)
+                else:
+                    self.assertNotIn("collected snapshots", message)
+                # Dismissed, so nothing was deleted.
+                self.assertEqual(self.router.count("DELETE", "/api/history/runs/1"), 0)
+                self.assert_clean_browser()
+
+    def test_relink_asks_before_deleting_evidence_and_resends_with_consent(self):
+        self.replace_router(link_conflict=True)
+        self.open("#history")
+        self.page.wait_for_selector("#historyPageBody >> text=Rainy Highway Reflection")
+        dialogs = self.answer_dialogs("new-video-123")
+        self.page.locator("#historyPageBody [data-action='link-video']").click()
+        self.wait_for_toast("Ownership verified")
+        self.assertEqual(self.router.bodies("POST", "/api/history/runs/1/link-video"), [
+            {"youtube_video_id": "new-video-123"},
+            {"youtube_video_id": "new-video-123", "replace_existing_evidence": True},
+        ])
+        self.assertEqual([kind for kind, _ in dialogs], ["prompt", "confirm"])
+        self.assertIn("3 performance snapshots", dialogs[1][1])
+        self.assertIn("1 published video audits", dialogs[1][1])
+        self.assertIn("Replace the link and delete this evidence?", dialogs[1][1])
+        self.assert_clean_browser(allow_console_errors=("409 (Conflict)",))
+
+    def test_relink_cancel_keeps_the_current_link_and_sends_nothing_more(self):
+        self.replace_router(link_conflict=True)
+        self.open("#history")
+        self.page.wait_for_selector("#historyPageBody >> text=Rainy Highway Reflection")
+        self.answer_dialogs("new-video-123", confirm=False)
+        self.page.locator("#historyPageBody [data-action='link-video']").click()
+        self.wait_for_toast("Link unchanged")
+        self.assertEqual(self.router.bodies("POST", "/api/history/runs/1/link-video"), [{"youtube_video_id": "new-video-123"}])
+        self.assert_clean_browser(allow_console_errors=("409 (Conflict)",))
+
+    def test_link_video_shows_the_refresh_warning(self):
+        warning = "The package was linked, but live analytics could not be refreshed yet: YouTube quota is exhausted for today."
+        self.replace_router(link_refresh_warning=warning)
+        self.open("#history")
+        self.page.wait_for_selector("#historyPageBody >> text=Rainy Highway Reflection")
+        self.answer_dialogs("new-video-123")
+        self.page.locator("#historyPageBody [data-action='link-video']").click()
+        self.wait_for_toast("could not be refreshed yet")
+        toast = self.toast_text()
+        self.assertIn("Ownership verified against the connected YouTube channel.", toast)
+        self.assertIn(warning, toast)
+        self.assertEqual(len(self.router.bodies("POST", "/api/history/runs/1/link-video")), 1)
+        self.assert_clean_browser()
+
+    def test_oauth_return_shows_only_known_or_well_formed_reasons(self):
+        cases = (
+            # Arbitrary text someone put in a link is never shown.
+            ("Call%20support%20at%20evil.example%20now", "YouTube connection failed. Nothing was changed; try connecting again."),
+            ("access_denied%3Cb%3E", "YouTube connection failed. Nothing was changed; try connecting again."),
+            ("server_error", "YouTube connection failed (server_error). Nothing was changed; try connecting again."),
+            ("access_denied", "Access was declined on the Google consent screen, so nothing was connected."),
+        )
+        for reason, expected in cases:
+            with self.subTest(reason=reason):
+                self.page.goto(self.base_url + "/?youtube=error&reason=" + reason, wait_until="domcontentloaded")
+                self.page.wait_for_selector("#settOAuthNotice.alert-err")
+                self.assertEqual(self.page.locator("#settOAuthNotice").inner_text(), expected)
+                self.assertEqual(self.toast_text(), expected)
+                self.assertEqual(self.page.locator(".page-view.active").get_attribute("id"), "view-settings")
+                self.assertNotIn("reason=", self.page.url)
+        self.assert_clean_browser()
+
+    def test_cloud_sync_run_button_posts_once(self):
+        self.open("#settings")
+        self.page.wait_for_selector("#settCloudSyncStatus >> text=Status: disabled")
+        self.page.locator("#settCloudSyncBtn").click()
+        self.wait_for_toast("Sync disabled.")
+        self.assertEqual(self.router.count("POST", "/api/cloud-sync/run"), 1)
+        self.assert_clean_browser()
+
+    def test_inherited_object_keys_in_the_hash_open_the_dashboard(self):
+        for hash_name in ("#constructor", "#toString", "#__proto__", "#hasOwnProperty"):
+            with self.subTest(hash=hash_name):
+                self.open(hash_name)
+                self.assertEqual(self.page.locator(".page-view.active").get_attribute("id"), "view-dashboard")
+                self.assertEqual(self.page.locator("#topTitle").inner_text(), "Dashboard Overview")
+        self.assert_clean_browser()
+
+    def test_history_keeps_loaded_pages_when_a_later_page_fails(self):
+        self.replace_router(history_run_count=150, history_page_error_offset=100)
+        self.open("#history")
+        self.page.wait_for_selector("#historyResultSummary >> text=incomplete")
+        self.assertEqual(self.page.locator("#historyPageBody [data-history-run]").count(), 100)
+        summary = self.page.locator("#historyResultSummary").inner_text()
+        self.assertIn("100 of 150 packages loaded", summary)
+        self.assertIn("Too many requests", summary)
+        self.assertEqual(self.page.locator("#historyRunCount").inner_text(), "150 saved packages")
+        self.assert_clean_browser(allow_console_errors=("429 (Too Many Requests)",))
+
+    def test_history_checkbox_updates_its_row_without_redrawing_the_list(self):
+        self.replace_router(history_run_count=3)
+        self.open("#history")
+        self.page.wait_for_selector('#historyRunCount >> text="3 saved packages"')
+        self.page.evaluate("document.querySelector('#historyPageBody [data-history-run=\"2\"]').dataset.marker = 'kept'")
+        box = self.page.locator("#historyPageBody [data-history-run='2'] input[data-action='select-run']")
+        box.focus()
+        self.page.keyboard.press("Space")
+        self.assertTrue(box.is_checked())
+        state = self.page.evaluate("""() => {
+            const row = document.querySelector('#historyPageBody [data-history-run="2"]');
+            return {marker: row.dataset.marker || '', selected: row.classList.contains('is-selected'),
+                    focused: document.activeElement === row.querySelector('input[data-action="select-run"]')};
+        }""")
+        self.assertEqual(state, {"marker": "kept", "selected": True, "focused": True})
+        self.assertEqual(self.page.locator("#historySelectedCount").inner_text(), "1 selected")
+        self.assertTrue(self.page.locator("#historySelectAll").evaluate("el => el.indeterminate"))
+        self.assertTrue(self.page.locator("#historyBulkDeleteBtn").is_enabled())
+        self.assert_clean_browser()
+
+    def test_diagnostics_reports_success_only_for_an_ok_probe(self):
+        for status, expected, absent in (
+            ("missing_api_key", "No YouTube Data API key is configured, so no request was made.", "succeeded"),
+            ("ok", "Request succeeded: a configured key answered a 1-unit region-list check.", "no request"),
+        ):
+            with self.subTest(status=status):
+                self.replace_router(diagnostics_status=status)
+                self.open("#settings")
+                self.page.locator("#runDiagBtn").click()
+                self.page.wait_for_selector("#settDiagOut .kv-list")
+                text = self.page.locator("#settDiagOut").inner_text()
+                self.assertIn(expected, text)
+                self.assertNotIn(absent, text.lower())
+                self.assertEqual(self.router.count("POST", "/diagnostics"), 1)
+                self.assert_clean_browser()
+
+    def test_settings_channel_buttons_work_when_status_fails(self):
+        self.replace_router(channel_status_error=True)
+        self.open("#settings")
+        self.page.wait_for_selector("#settChannelStatus >> text=Channel status unavailable in fixture.")
+        dialogs = self.answer_dialogs()
+        for button_id, path in (("settRefreshBtn", "/youtube/channel/refresh"), ("settDisconnectBtn", "/youtube/channel/disconnect")):
+            with self.page.expect_request(lambda request, path=path: request.method == "POST" and urlparse(request.url).path == path):
+                self.page.locator("#" + button_id).click()
+        self.assertEqual([kind for kind, _ in dialogs], ["confirm"])
+        with self.page.expect_request(lambda request: urlparse(request.url).path == "/youtube/channel/connect") as connect:
+            self.page.locator("#settConnectBtn").click()
+        self.assertEqual(connect.value.method, "GET")
+        self.assert_clean_browser(allow_console_errors=("503 (Service Unavailable)",))
+
+    def test_settings_channel_status_error_color_clears_after_success(self):
+        self.replace_router(channel_status_error=True)
+        self.open("#settings")
+        self.page.wait_for_selector("#settChannelStatus >> text=Channel status unavailable in fixture.")
+        self.assertNotEqual(self.page.locator("#settChannelStatus").evaluate("el => el.style.color"), "")
+        self.router.channel_status_error = False
+        self.page.locator("#settRefreshBtn").click()
+        self.page.wait_for_selector("#settChannelStatus >> text=Fixture OAuth is disconnected.")
+        self.assertEqual(self.page.locator("#settChannelStatus").evaluate("el => el.style.color"), "")
+        self.assert_clean_browser(allow_console_errors=("503 (Service Unavailable)",))
+
+    def test_dashboard_template_chips_are_buttons_that_fill_only_the_dashboard_box(self):
+        self.open("#creator")
+        self.page.locator("#scriptInput").fill("My own creator draft.")
+        self.page.locator("#nav-dashboard").click()
+        chip = self.page.locator(".template-chip[data-template='quote']")
+        self.assertEqual(chip.evaluate("el => el.tagName"), "BUTTON")
+        chip.focus()
+        self.page.keyboard.press("Enter")
+        self.assertIn("The biggest betrayal", self.page.locator("#dashQuickScript").input_value())
+        self.assertEqual(self.page.locator("#scriptInput").input_value(), "My own creator draft.")
+        self.assert_clean_browser()
+
+    def test_audit_names_missing_and_unknown_fields_apart_from_differences(self):
+        self.replace_router(include_link=True)
+        self.open("#audits")
+        self.page.locator("[data-audit-link='9']").click()
+        self.page.wait_for_selector("#auditDetail >> text=Audit not run")
+        self.page.locator("#auditDetail [data-audit-action='refresh']").click()
+        self.page.wait_for_selector("#auditDetail >> text=PUBLISHED VIDEO AUDIT")
+        states = {item["field"]: item for item in self.router.audits[9]["comparisons"]}
+        states["tags"]["generated_to_published"] = "missing"
+        states["hashtags"]["generated_to_published"] = "unknown"
+        self.page.locator("[data-audit-link='9']").click()
+        self.page.wait_for_selector("#auditDetail >> text=Could not be compared: hashtags.")
+        text = self.page.locator("#auditDetail").inner_text()
+        self.assertIn("differ from the saved generated package in: title, description.", text)
+        self.assertIn("Empty on one side: tags.", text)
+        states["title"]["generated_to_published"] = "exact_match"
+        states["description"]["generated_to_published"] = "exact_match"
+        self.page.locator("[data-audit-link='9']").click()
+        self.page.wait_for_selector("#auditDetail >> text=NO DIFFERENCES FOUND")
+        text = self.page.locator("#auditDetail").inner_text()
+        self.assertNotIn("differ from the saved generated package in", text)
+        self.assertIn("Empty on one side: tags. Could not be compared: hashtags.", text)
+        self.assert_clean_browser()
+
+    def test_unknown_counts_read_not_available_instead_of_zero(self):
+        self.replace_router(history_summary_error=True, database_unhealthy=True)
+        self.open("#analytics")
+        self.page.wait_for_selector("#anaTotalRuns >> text=Not available")
+        self.open("#settings")
+        self.page.wait_for_selector("#settDatabaseCounts >> text=Not available")
+        self.assertEqual(self.page.locator("#settDatabaseCounts").inner_text(), "Not available")
+        status = self.page.locator("#settDatabaseStatus").inner_text()
+        self.assertIn("schema version not available", status)
+        self.assertIn("size not available", status)
+        self.assertNotIn("0 B", status)
+        self.assertNotIn("vNot available", status)
+        self.assert_clean_browser(allow_console_errors=("503 (Service Unavailable)",))
+
+    def test_history_detail_distinguishes_empty_lists_from_missing_ones(self):
+        self.open("#history")
+        self.page.get_by_role("button", name="View package").click()
+        self.page.wait_for_selector("#historyDetail >> text=Original video content / script")
+        # The fixture package saved an empty chapter list: nothing was generated, it is not an older record.
+        self.page.locator("#historyDetail summary", has_text="Chapters").click()
+        chapters = self.page.locator("#historyDetail details", has_text="Chapters").inner_text()
+        self.assertIn("None generated.", chapters)
+        self.assertNotIn("Not stored in this older record.", chapters)
+        self.assert_clean_browser()
+
+    def test_closed_experiment_offers_no_assign_remove_or_compare_and_shows_refusals(self):
+        self.replace_router(include_link=True, oauth_state="connected")
+        self.open("#experiments")
+        self.open_experiment_form()
+        self.page.locator("#experimentName").fill("Closed comparison")
+        self.page.locator("#experimentHypothesis").fill("A direct opening may be associated with stronger average viewing.")
+        self.page.locator("#experimentControl").fill("Normal opening")
+        self.page.locator("#experimentVariant").fill("Direct opening")
+        self.page.locator("#experimentCreateBtn").click()
+        self.page.wait_for_selector("#experimentAssignVideo")
+        self.page.locator("#experimentAssignVideo").select_option("9")
+        self.page.locator("[data-experiment-action='assign']").click()
+        self.page.wait_for_selector("#experimentDetail [data-remove-assignment]")
+        # Closed in another tab: this page still shows the controls, and the server refuses with its reason.
+        self.router.structured_experiments[1]["status"] = "completed"
+        self.page.locator("[data-experiment-action='compare']").click()
+        self.page.wait_for_selector("#experimentActionStatus >> text=no new comparison is saved")
+        self.assertEqual(self.page.locator("#experimentActionStatus").evaluate("el => el.style.color"), "var(--bad)")
+        self.page.locator("#experimentDetail [data-remove-assignment]").first.click()
+        self.page.wait_for_selector("#experimentActionStatus >> text=keep the videos they were compared on")
+        # Reopened, a closed comparison offers none of those controls and says why.
+        for status in ("completed", "cancelled", "inconclusive"):
+            with self.subTest(status=status):
+                self.router.structured_experiments[1]["status"] = status
+                self.page.locator("#experimentList [data-experiment-id='1']").click()
+                self.page.wait_for_selector(f"#experimentDetail >> text=This comparison is {status}")
+                for selector in ("#experimentAssignVideo", "[data-experiment-action='assign']",
+                                 "[data-experiment-action='compare']", "[data-remove-assignment]", "[data-experiment-action='status']"):
+                    self.assertEqual(self.page.locator("#experimentDetail " + selector).count(), 0, selector)
+                self.assertIn("Published rainy highway title", self.page.locator("#experimentDetail").inner_text())
+        self.assertEqual(self.router.count("POST", "/api/experiment-center/experiments/1/compare"), 1)
+        self.assertEqual(len(self.router.structured_experiments[1]["assignments"]), 1)
+        self.assert_clean_browser(allow_console_errors=("422 (Unprocessable Entity)",))
 
 
 if __name__ == "__main__":

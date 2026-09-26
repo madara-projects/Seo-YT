@@ -8,13 +8,12 @@ from unittest.mock import MagicMock, patch
 from win_engine.analysis.creator_brief import build_creator_brief, creator_topic
 from win_engine.analysis.content_auditor import audit_content_package
 from win_engine.analysis.research_planner import plan_research_queries
-from win_engine.analysis.topic_lock import force_hashtags, force_topic_in_tags
+from win_engine.analysis.topic_lock import force_hashtags
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.channel_learning import learning_summary as channel_learning_summary
 from win_engine.analysis.gap_engine import _opportunity_score
 from win_engine.analysis.pacing_engine import analyze_script_pacing
 from win_engine.analysis.strategy_layer import build_upload_timing
-from win_engine.api.dashboard_html import DASHBOARD_HTML
 from win_engine.feedback.learning_engine import _ctr_prediction
 from win_engine.generation.strategy_engine import _content_specific_fallback, _deterministic_score, build_seo_package
 from win_engine.generation.seo_generator import format_upload_ready_description, generate_seo_suggestions
@@ -49,7 +48,7 @@ class TestEngineStages(unittest.TestCase):
         service = ResearchService(
             Settings(database_path=self.db_path, youtube_api_keys="pool-key-1,pool-key-2")
         )
-        with patch.object(service._youtube, "search_videos", return_value=[]):
+        with patch.object(service._youtube, "ping", return_value=None):
             diagnostics = service.diagnostics()
 
         self.assertEqual(diagnostics["youtube"]["status"], "ok")
@@ -260,15 +259,6 @@ class TestEngineStages(unittest.TestCase):
         self.assertIn("#shorts", package["hashtags"])
         self.assertTrue({"youtube shorts", "viral shorts"}.isdisjoint(tags))
 
-    def test_only_useful_shorts_format_tag_survives_a_full_tag_list(self):
-        incoming = [f"topic tag {index}" for index in range(12)] + [
-            "shorts", "yt", "youtube shorts", "viral shorts"
-        ]
-        tags = force_topic_in_tags(incoming, "specific video topic", "general", max_tags=12)
-        self.assertEqual(len(tags), 12)
-        self.assertIn("shorts", tags)
-        self.assertTrue({"yt", "youtube shorts", "viral shorts"}.isdisjoint(tags))
-
     def test_quote_length_hashtag_is_rejected_in_favor_of_compact_topic_or_category_tags(self):
         hashtags = force_hashtags(
             ["#shorts", "#quotes", "#InTheEndIWasntAbandonedIWasErased"],
@@ -351,15 +341,6 @@ class TestEngineStages(unittest.TestCase):
 
         self.assertEqual(saved["query"], script)
 
-    def test_long_inferred_topic_does_not_create_an_invalid_tag(self):
-        tags = force_topic_in_tags(
-            ["missing people", "heart vs mind", "shorts", "yt", "youtube shorts", "viral shorts"],
-            "heart has a strange habit of missing people the mind",
-            "youtube_shorts",
-        )
-        self.assertEqual(tags[0], "heart has a strange habit of missing people")
-        self.assertTrue(all(len(tag.split()) <= 8 for tag in tags))
-
     def test_local_fallback_changes_with_the_video_topic(self):
         food = _content_specific_fallback("Chennai street food", [], {"video_format": "youtube_shorts"})
         coding = _content_specific_fallback("Python automation", [], {"video_format": "tutorial"})
@@ -369,11 +350,15 @@ class TestEngineStages(unittest.TestCase):
 
     def test_owned_performance_keeps_lifetime_and_28_day_views_separate(self):
         payload = {
-            "channel": {"real_total_views": 9999, "subscribers": 321, "video_count": 7},
+            "channel": {"id": "UC-owned", "real_total_views": 9999, "subscribers": 321, "video_count": 7},
             "period": {"start": "2026-07-13", "end": "2026-08-09"},
             "current_28_days": {"views": 456, "likes": 12, "estimatedMinutesWatched": 789},
         }
         with self.store._connect() as conn:
+            conn.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', 'UC-owned', 'Owned', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')"
+            )
             conn.execute(
                 "INSERT INTO youtube_channel_syncs (synced_at, payload_json) VALUES (?, ?)",
                 ("2026-08-10T12:00:00Z", json.dumps(payload)),
@@ -386,7 +371,7 @@ class TestEngineStages(unittest.TestCase):
 
     def test_owned_performance_preserves_optional_timing_evidence_without_inventing_it(self):
         payload = {
-            "channel": {"real_total_views": 100, "timezone": "Asia/Kolkata"},
+            "channel": {"id": "UC-owned", "real_total_views": 100, "timezone": "Asia/Kolkata"},
             "current_28_days": {"views": 20},
             "audience_activity": {
                 "reliable": True,
@@ -395,6 +380,10 @@ class TestEngineStages(unittest.TestCase):
             },
         }
         with self.store._connect() as conn:
+            conn.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', 'UC-owned', 'Owned', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')"
+            )
             conn.execute(
                 "INSERT INTO youtube_channel_syncs (synced_at, payload_json) VALUES (?, ?)",
                 ("2026-08-10T12:00:00Z", json.dumps(payload)),
@@ -427,7 +416,10 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(topic, "some sunsets look beautiful because they're endings")
         self.assertTrue(package["title"].startswith("Some sunsets look beautiful because they're endings "))
         self.assertTrue(package["title"].endswith("#shorts"))
-        self.assertIn("A beach scene", package["description"])
+        # "Background visual is beach scene" is prose, not a "Background:" label,
+        # so no visual requirement is inferred and none is described.
+        self.assertEqual(brief["visual_requirements"], "")
+        self.assertNotIn("beach scene", package["description"])
         self.assertNotIn("Gemini was unavailable", package["description"])
         self.assertNotIn("feeling of being forgotten", package["description"].casefold())
         self.assertIn("some sunsets look beautiful because they're endings", package["tags"])
@@ -451,14 +443,6 @@ class TestEngineStages(unittest.TestCase):
             visual_requirements="Road with clouds in the evening.",
         )
         self.assertEqual(creator_topic(brief), "in the end i wasn't abandonded i was erased")
-        tags = force_topic_in_tags(
-            _content_specific_fallback(creator_topic(brief), [], brief)["tags"],
-            creator_topic(brief),
-            "quotes",
-            context=[brief["content"], quote],
-        )
-        self.assertIn("wasn't abandonded i was erased", tags)
-        self.assertTrue(all(len(tag.split()) <= 8 for tag in tags))
 
     def test_quote_fallback_title_drops_only_an_introductory_lead_in(self):
         quote = "In the end, I wasn't abandoned. I was erased."
@@ -471,7 +455,8 @@ class TestEngineStages(unittest.TestCase):
         package = _content_specific_fallback(creator_topic(brief), [], brief)
         self.assertTrue(package["title"].startswith("I wasn't abandoned. I was erased"))
         self.assertIn("“In the end, I wasn't abandoned. I was erased.”", package["description"])
-        self.assertIn("exact words shown on screen", package["description"])
+        # The description is for viewers; how it was assembled is not their business.
+        self.assertNotIn("exact words shown on screen", package["description"])
 
     def test_grief_quote_fallback_complements_quote_and_drops_coping_target(self):
         quote = "Grief teaches you the weight of silence and the shape of absence."
@@ -482,23 +467,13 @@ class TestEngineStages(unittest.TestCase):
         )
         brief["seo_research_targets"] = ["coping with grief", "silence in grief", "absence in grief"]
         package = _content_specific_fallback("coping with grief", [], brief)
-        self.assertTrue(package["title"].startswith("When Grief Makes Silence Feel Heavy "))
+        # The title and the reflective line name validated research targets,
+        # not lines written for this test quote ("When Grief Makes Silence Feel Heavy").
+        self.assertTrue(package["title"].startswith("Silence in grief "))
         self.assertTrue(package["title"].endswith("#shorts"))
         self.assertNotIn("coping", " ".join(package["tags"]).casefold())
-        self.assertIn("grief can make silence feel heavy", package["description"].casefold())
-
-    def test_malformed_contraction_tag_is_removed_but_real_contraction_survives(self):
-        tags = force_topic_in_tags(
-            [
-                "part always wonder didn least deserve bare minimum them",
-                "didn't i deserve the bare minimum",
-                "emotional neglect",
-            ],
-            "bare minimum quote",
-            "quotes",
-        )
-        self.assertNotIn("part always wonder didn least deserve bare minimum them", tags)
-        self.assertIn("didn't i deserve the bare minimum", tags)
+        self.assertIn("silence in grief", package["description"].casefold())
+        self.assertNotIn("grief can make silence feel heavy", package["description"].casefold())
 
     def test_quote_research_queries_use_the_message_not_production_directions(self):
         script = (
@@ -531,7 +506,6 @@ class TestEngineStages(unittest.TestCase):
             "When you realize you meant less to them",
             "worst heartbreak realizing meant less",
             "unrequited love",
-            "Emotion",
             video_format="YouTube Short emotional quote video",
         )
         self.assertEqual(audit["hook_audit"]["hook_strength"], "HIGH")
@@ -561,7 +535,6 @@ class TestEngineStages(unittest.TestCase):
             "When you realize you meant less to them",
             "worst heartbreak realizing meant less",
             "unrequited love",
-            "Emotion",
             video_format="YouTube Short emotional quote video",
         )
         self.assertTrue(audit["hook_audit"]["stakes_present"])
@@ -574,7 +547,6 @@ class TestEngineStages(unittest.TestCase):
             "The painful truth about unrequited love...",
             "worst heartbreak realizing meant less",
             "emotional distance",
-            "Emotion",
             video_format="YouTube Short emotional quote video",
             context_text="Viewers experiencing unrequited love and heartbreak",
         )
@@ -626,15 +598,6 @@ class TestEngineStages(unittest.TestCase):
             category="general",
         )
         self.assertTrue(description.startswith("A concise professional summary"))
-
-    def test_dashboard_title_quality_meter_uses_title_quality_score(self):
-        self.assertIn('meter(ctr.title_quality_score, 10, "ok")', DASHBOARD_HTML)
-        self.assertNotIn("meter(ctr.predicted_ctr_percent", DASHBOARD_HTML)
-
-    def test_dashboard_distinguishes_result_backed_tags_from_search_volume(self):
-        self.assertIn("resultBackedTagCount", DASHBOARD_HTML)
-        self.assertIn("Search volume: unavailable.", DASHBOARD_HTML)
-        self.assertIn("no matching sampled result", DASHBOARD_HTML)
 
     def test_upload_timing_reports_evidence_instead_of_claiming_a_best_time(self):
         timing = build_upload_timing(
@@ -802,7 +765,7 @@ class TestGeminiGeneration(unittest.TestCase):
             self.assertEqual(gemini_client.generate("test"), "")
         self.assertEqual(mocked_post.call_count, 2)
 
-    @patch("win_engine.llm.seo_writer._generate_one")
+    @patch("win_engine.llm.seo_writer.generate_one")
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
     def test_selected_language_uses_one_generation_call(self, _mocked_available, mocked_generate):
         mocked_generate.return_value = {

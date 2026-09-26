@@ -15,8 +15,18 @@ services:
     volumes:
       - ./runtime/data:/app/runtime/data
       - ./runtime/secrets/aiven-ca.pem:/run/secrets/aiven-ca.pem:ro
+    # The app writes only to runtime/data (mounted above) and /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # The snapshot collector waits up to 15 s for a YouTube call in progress.
+    stop_grace_period: 30s
     restart: unless-stopped
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine
     container_name: youtube-win-engine-redis
     restart: unless-stopped

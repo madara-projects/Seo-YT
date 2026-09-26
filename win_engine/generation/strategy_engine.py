@@ -18,26 +18,19 @@ from win_engine.analysis.generation_quality import (
     is_short_content,
     source_requires_noninstructional_framing,
 )
-from win_engine.analysis.package_builder import build_title_thumbnail_packages
+from win_engine.analysis.package_builder import build_title_thumbnail_packages, title_gate_status
 from win_engine.analysis.gap_engine import analyze_opportunity_gaps
 from win_engine.analysis.language_engine import build_language_strategy
 from win_engine.analysis.keyword_research import select_final_tags
-from win_engine.analysis.topic_lock import source_lead_phrase, strip_lead_in
+from win_engine.analysis.topic_lock import hashtag_from_phrase, source_lead_phrase, strip_lead_in
 from win_engine.analysis.pacing_engine import analyze_script_pacing
-from win_engine.analysis.strategy_layer import (
-    build_channel_intelligence,
-    build_content_graph_strategy,
-)
+from win_engine.analysis.source_cues import source_quote
+from win_engine.analysis.strategy_layer import build_channel_intelligence
+from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.thumbnail_classifier import build_thumbnail_strategy
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.channel_learning import learning_summary as channel_performance_learning
-from win_engine.feedback.learning_engine import build_feedback_package
-from win_engine.generation.automation_engine import build_automation_workflow
-from win_engine.generation.expansion_engine import (
-    build_binge_bridge,
-    build_chapters,
-    build_session_expansion,
-)
+from win_engine.generation.expansion_engine import build_chapters
 from win_engine.llm.seo_writer import last_generation_diagnostics, write_multilang_packages_with_source
 
 
@@ -91,11 +84,7 @@ def build_seo_package(
 
     region = str(language_context.get("region", "global"))
     audience_type = str(language_context.get("audience_type", "general"))
-    selected_language = str(language_context.get("language") or "english").strip().lower()
-    if selected_language == "auto":
-        selected_language = str(language_context.get("video_language") or "english").strip().lower()
-    if selected_language not in {"english", "tamil", "tanglish", "hindi"}:
-        selected_language = "english"
+    selected_language = resolve_output_language(language_context)
 
     try:
         channel_learning = channel_performance_learning(
@@ -107,8 +96,9 @@ def build_seo_package(
     except Exception as exc:
         logger.warning("Channel performance learning is unavailable: %s", type(exc).__name__)
         channel_learning = {}
-    channel_learning["recent_titles"] = history_store.recent_generated_titles(limit=10)
-    channel_learning["published_titles"] = history_store.recent_published_titles(limit=10)
+    channel_learning["recent_titles"], channel_learning["published_titles"] = _titles_of_other_videos(
+        history_store, script,
+    )
     channel_learning["cohort"] = history_store.cohort_analytics(
         format_filter=str((creator_brief or {}).get("video_format") or "").strip() or None,
         language_filter=selected_language,
@@ -336,19 +326,20 @@ def build_seo_package(
         for item in research.get("youtube_results", [])
         if isinstance(item, dict) and item.get("title")
     ]
-    title_context = " ".join(
-        str((creator_brief or {}).get(field) or "")
-        for field in ("content", "target_audience", "viewer_promise", "unique_angle")
-    )
+    # Kept with the package so titles changed after this stage are scored
+    # against the same topic and context as the ones scored here.
+    title_scoring = {
+        "topic": primary_topic,
+        "context_text": " ".join(
+            str((creator_brief or {}).get(field) or "")
+            for field in ("content", "target_audience", "viewer_promise", "unique_angle")
+        ),
+        "competitor_titles": competitor_titles,
+    }
     title_variants_data = []
     accepted_by_title = {item["title"]: item for item in quality_gate.get("accepted_candidates", [])}
     for index, variant in enumerate(variant_titles[:5]):
-        quality_score = _deterministic_score(
-            variant,
-            primary_topic,
-            context_text=title_context,
-            competitor_titles=competitor_titles,
-        )
+        quality_score = title_quality_score(variant, title_scoring)
         mechanism = str((accepted_by_title.get(variant) or {}).get("mechanism") or candidate_mechanism(variant))
         title_variants_data.append({
             "title": variant,
@@ -362,7 +353,7 @@ def build_seo_package(
             "discovery_surface": package_intents[index] if index < len(package_intents) else "Alternative",
             "evidence_used": personalization,
             "tradeoffs": ["Generated suggestion, not observed performance evidence.", "No reach or CTR outcome is guaranteed."],
-            "quality_gate": {"status": "pass", "source": "phase4_local_gate"},
+            "quality_gate": title_gate_status(variant, quality_gate, source="writer_quality_gate"),
         })
 
     title_optimization = {
@@ -390,7 +381,6 @@ def build_seo_package(
         title,
         primary_topic,
         secondary_topic,
-        angle,
         video_format="youtube_shorts" if short_form else str((creator_brief or {}).get("video_format") or ""),
         context_text=" ".join(
             str((creator_brief or {}).get(field) or "")
@@ -408,23 +398,13 @@ def build_seo_package(
     )
     pacing_analysis = analyze_script_pacing(
         script,
-        video_format=str((creator_brief or {}).get("video_format") or ""),
+        video_format="youtube_shorts" if short_form else str((creator_brief or {}).get("video_format") or ""),
+        exact_quote=str((creator_brief or {}).get("exact_quote") or ""),
     )
     channel_intelligence = build_channel_intelligence(research.get("youtube_results", []))
-    # Series and follow-up suggestions come from the package's validated tags;
-    # the post-processor rebuilds them once the final tags and title are locked.
-    related_phrases = [tag for tag in tags if tag not in {"yt", "shorts"}]
-    content_graph_strategy = build_content_graph_strategy(
-        primary_topic=primary_topic,
-        secondary_topic=secondary_topic,
-        angle=angle,
-        keyword_signals=keyword_signals,
-        related_phrases=related_phrases,
-        short_form=short_form,
-    )
-    chapters = build_chapters(script, keyword_signals, creator_brief)
-    session_expansion = build_session_expansion(title, keyword_signals, related_phrases=related_phrases, short_form=short_form)
-    binge_bridge = build_binge_bridge(title, angle, related_phrases=related_phrases, short_form=short_form)
+    # The content graph, follow-ups, publishing checklist and feedback are built
+    # once, by the post-processor, from the final title and tags.
+    chapters = build_chapters(script, creator_brief)
     thumbnail_strategy = build_thumbnail_strategy(
         thumbnail_intelligence=research.get("thumbnail_intelligence", {}),
         title=title,
@@ -432,25 +412,11 @@ def build_seo_package(
         quote_short=quote_short,
         video_format=str((creator_brief or {}).get("video_format") or ""),
     )
-    automation_workflow = build_automation_workflow(
-        title=title,
-        hashtags=hashtags,
-        chapters=chapters,
-        content_graph_strategy=content_graph_strategy,
-        short_form=short_form,
-    )
 
-    feedback_package = build_feedback_package(
-        seo_package={
-            "title": title,
-            "content_angle": angle,
-            "title_optimization": title_optimization,
-            "opportunity_gap_analysis": opportunity_gap_analysis,
-        },
-        research=research,
-        learning_summary=history_store.learning_summary(),
-        internal_scorecard=history_store.internal_scorecard(),
-    )
+    # Read before this run is recorded, and returned so the post-processor
+    # builds the feedback for its final titles from the history before this run.
+    learning_summary = history_store.learning_summary()
+    internal_scorecard = history_store.internal_scorecard()
 
     history_run_id = history_store.record_analysis_run(
         query=script,
@@ -472,10 +438,8 @@ def build_seo_package(
             "title_variants": title_variants_data, "title_thumbnail_packages": title_thumbnail_packages,
             "content_audit": content_audit, "opportunity_gap_analysis": opportunity_gap_analysis,
             "language_strategy": language_strategy, "pacing_analysis": pacing_analysis,
-            "channel_intelligence": channel_intelligence, "content_graph_strategy": content_graph_strategy,
+            "channel_intelligence": channel_intelligence,
             "thumbnail_strategy": thumbnail_strategy, "chapters": chapters,
-            "session_expansion": session_expansion, "binge_bridge": binge_bridge,
-            "automation_workflow": automation_workflow, "feedback_package": feedback_package,
             "multilang": multilang, "generation_source": effective_generation_source,
             "creator_brief": creator_brief, "generation_quality": quality_gate,
             "personalization": personalization, "generation_trace": generation_trace,
@@ -497,13 +461,8 @@ def build_seo_package(
         "language_strategy": language_strategy,
         "pacing_analysis": pacing_analysis,
         "channel_intelligence": channel_intelligence,
-        "content_graph_strategy": content_graph_strategy,
         "thumbnail_strategy": thumbnail_strategy,
         "chapters": chapters,
-        "session_expansion": session_expansion,
-        "binge_bridge": binge_bridge,
-        "automation_workflow": automation_workflow,
-        "feedback_package": feedback_package,
         "multilang": multilang,
         "fallback_languages": fallback_languages,
         "generation_source": effective_generation_source,
@@ -513,7 +472,79 @@ def build_seo_package(
         "keyword_research": keyword_research,
         "creator_brief": creator_brief,
         "history_run_id": history_run_id,
+        # Inputs the post-processor needs to judge and score its final titles
+        # the way this stage did. The title history predates this run's record.
+        "channel_learning": channel_learning,
+        "title_scoring": title_scoring,
+        "learning_summary": learning_summary,
+        "internal_scorecard": internal_scorecard,
     }
+
+
+_OUTPUT_LANGUAGES = {"english", "tamil", "tanglish", "hindi"}
+
+
+def resolve_output_language(context: dict[str, Any] | None) -> str:
+    """The language a package is written in; "auto" is the video's spoken language.
+
+    Anything unsupported is written in English. The React UI resolves "auto"
+    the same way to choose the package it shows.
+    """
+
+    context = context or {}
+    language = str(context.get("language") or "english").strip().lower()
+    if language == "auto":
+        language = str(context.get("video_language") or "english").strip().lower()
+    return language if language in _OUTPUT_LANGUAGES else "english"
+
+
+def _script_key(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _titles_of_other_videos(
+    history_store: HistoryStore, script: str, limit: int = 10,
+) -> tuple[list[str], list[str]]:
+    """Recent generated and published titles, leaving out runs of this same script.
+
+    A re-run drafts the same video again, so its earlier titles are not a
+    repetition across the channel. Counting them turned the third run of one
+    script RED ("no_acceptable_title") while it shipped the same title.
+    """
+
+    key = _script_key(script)
+    runs = history_store.history_runs(limit=50)
+    same_video = {run["id"] for run in runs if _script_key(run.get("query")) == key}
+    recent = [
+        str(run.get("title") or "").strip() for run in runs
+        if run["id"] not in same_video and str(run.get("title") or "").strip()
+    ][:limit]
+    # The video an earlier run of this script was published as.
+    own_published: set[str] = set()
+    for run in runs:
+        if run["id"] in same_video and run.get("linked_video_link_id") is not None:
+            link = history_store.published_video_link_by_run(int(run["id"])) or {}
+            metadata = link.get("youtube_metadata")
+            title = (metadata.get("title") if isinstance(metadata, dict) else None) or link.get("selected_title")
+            if str(title or "").strip():
+                own_published.add(str(title).strip().casefold())
+    published = [
+        title for title in history_store.recent_published_titles(limit=limit + len(own_published))
+        if title.casefold() not in own_published
+    ][:limit]
+    return recent, published
+
+
+def title_quality_score(title: str, scoring: dict[str, Any] | None) -> float:
+    """Pre-publication title score against a stored scoring context (see build_seo_package)."""
+
+    context = scoring or {}
+    return _deterministic_score(
+        title,
+        str(context.get("topic") or ""),
+        context_text=str(context.get("context_text") or ""),
+        competitor_titles=[str(item) for item in context.get("competitor_titles") or []],
+    )
 
 
 def _topic_from_signals(
@@ -564,9 +595,10 @@ _SCORE_HOOK_TERMS = {
 
 
 def _score_tokens(text: str) -> list[str]:
-    """Unicode-aware tokens. An ASCII-only pattern returns nothing for Tamil or Hindi."""
+    """Words of every script. ``\\w+`` split Tamil and Hindi at each vowel sign,
+    so a Tamil title had no scoring terms and an unrelated one outscored it."""
 
-    return re.findall(r"\w+", (text or "").casefold(), flags=re.UNICODE)
+    return unicode_words(text, min_length=1)
 
 
 def _score_terms(text: str) -> set[str]:
@@ -629,14 +661,15 @@ def _deterministic_score(
 
     # Coverage of the topic, not purity of the title. The old ratio divided by the
     # title's own terms, so a verbatim copy scored perfectly and any original word
-    # was a penalty.
+    # was a penalty. Numerator and denominator are both topic terms: counting
+    # context words over the topic's size gave a title with no topic word 7.5.
     if _scripts_differ(title_terms, source_terms):
         # Unmeasurable rather than irrelevant: award neutral credit so a non-English
         # title is not ranked last purely for being non-English.
         score += 2.0
     else:
-        coverage = len(title_terms & source_terms) / len(topic_terms) if topic_terms else 0.0
-        score += min(coverage, 1.0) * 3.0
+        coverage = len(title_terms & topic_terms) / len(topic_terms) if topic_terms else 0.0
+        score += coverage * 3.0
 
     if _reproduces_source(title_terms, source_terms):
         score -= 1.5
@@ -655,11 +688,6 @@ def _deterministic_score(
     return round(min(max(score, 0.0), 10.0), 1)
 
 
-def _quoted_text(content: str) -> str:
-    match = re.search(r'["“”]([^"“”]{6,})["“”]', content or "")
-    return re.sub(r"\s+", " ", match.group(1)).strip(" .") if match else ""
-
-
 def _fit_title(body: str, suffix: str = "", max_chars: int = 70) -> str:
     clean = re.sub(r"\s+", " ", body).strip(" .:-")
     available = max_chars - len(suffix)
@@ -667,6 +695,33 @@ def _fit_title(body: str, suffix: str = "", max_chars: int = 70) -> str:
         shortened = clean[: max(1, available - 1)].rsplit(" ", 1)[0].rstrip(" .,:;-")
         clean = (shortened or clean[: max(1, available - 1)]).rstrip() + "…"
     return clean + suffix
+
+
+# Words that turn a quote; the idea after the last one is what a title keeps.
+_QUOTE_TURN_RE = re.compile(r"\b(?:but|yet|however|instead|now)\b", re.IGNORECASE)
+
+
+def _fit_quote_title(body: str, suffix: str, max_chars: int = 70) -> str:
+    """A quote as a title, cut at a word boundary to fit.
+
+    Cutting the end can drop the idea after the quote's turn ("... and yet it
+    taught me to stay"), which the title must keep; the setup is cut
+    instead, so the title stays a span of the creator's words.
+    """
+
+    title = _fit_title(body, suffix, max_chars)
+    clean = re.sub(r"\s+", " ", body).strip(" .:-")
+    turns = list(_QUOTE_TURN_RE.finditer(clean))
+    kept = title[: len(title) - len(suffix)].rstrip("…")
+    if not turns or turns[-1].end() <= len(kept):
+        return title
+    words: list[str] = []
+    for word in reversed(clean.split()):
+        if len(" ".join([word, *words])) + len(suffix) > max_chars:
+            break
+        words.insert(0, word)
+    tail = " ".join(words).lstrip(" ,;:-")
+    return _fit_title(tail[:1].upper() + tail[1:], suffix, max_chars) if tail else title
 
 
 def _quote_title_focus(quote: str) -> str:
@@ -702,84 +757,47 @@ def _semantic_emoji(text: str) -> str:
     return ""
 
 
+def _is_source_span(phrase: str, text: str) -> bool:
+    """True when the phrase appears in the text word after word (hyphens allowed)."""
+
+    words = [re.escape(word) for word in str(phrase or "").split()]
+    pattern = r"(?<!\w)" + r"[\s-]+".join(words) + r"(?!\w)"
+    return bool(words) and re.search(pattern, str(text or ""), re.IGNORECASE) is not None
+
+
 def _topic_hashtag(value: str) -> str:
     words = re.findall(r"[A-Za-z0-9]+", value or "")[:3]
     return "#" + "".join(word.capitalize() for word in words) if words else ""
 
 
 def _visual_hashtag(value: str) -> str:
-    """Return one compact, human-readable hashtag for a supplied visual."""
+    """One hashtag in the creator's own visual words, or none when they do not fit one.
 
-    lowered = (value or "").casefold()
-    if "road" in lowered and "traffic" in lowered:
-        return "#RoadTraffic"
-    if "road" in lowered:
-        return "#EveningRoad" if "evening" in lowered else "#RoadScene"
-    if "rain" in lowered:
-        return "#RainyMood"
-    if "moon" in lowered or "night sky" in lowered:
-        return "#NightSky"
-    return _topic_hashtag(value)
+    Fixed labels ("#RoadScene", "#RainyMood") added words the creator never used.
+    """
+
+    return hashtag_from_phrase(value)
 
 
 def _fallback_quote_variants(quote: str, topic: str, suffix: str, *, semantic_validated: bool = False) -> list[str]:
-    """Produce conservative, readable quote titles without template filler."""
+    """Produce conservative, readable quote titles from the creator's own words.
 
-    lowered = quote.casefold()
-    if "misunderstood" in lowered and "genuine" in lowered:
-        bodies = ["Being Genuine Can Feel Misunderstood"]
-    elif "bare minimum" in lowered:
-        bodies = ["Did I Deserve the Bare Minimum?"]
-    elif "need" in lowered and "choose" in lowered:
-        bodies = ["Needed, But Never Chosen"]
-    elif "keep going" in lowered:
-        bodies = ["Keep Going"]
-    elif "friendship" in lowered and "heart and soul" in lowered and "boundar" in lowered:
-        bodies = [
-            "When Heart and Soul Meet Friendship Boundaries",
-            "Setting Boundaries After Giving Heart and Soul",
-            "Heart and Soul, Now With Friendship Boundaries",
-            "From Giving Heart and Soul to Setting Boundaries",
-            "The Friend Setting Boundaries After Giving So Much",
-        ]
-    elif (
-        "deserve" in lowered
-        and re.search(r"\bhard\s+(?:it\s+is\s+)?to\s+find\b", lowered)
-        and re.search(r"\b(?:somebody|someone)\s+like\s+you\b", lowered)
+    Titles written for particular test quotes ("Needed, But Never Chosen",
+    "The Thoughts I Only Share With Silence") were given to any quote that
+    shared a word with them, whatever it meant.
+    """
+
+    # ``topic`` comes from the validated semantic layer. Prefer that natural
+    # interpretation over copying/truncating the on-screen quote, when it names
+    # enough to be a title: the gate rejects a two-word one as too vague.
+    semantic_topic = re.sub(r"\s+", " ", topic or "").strip(" .:-")
+    quote_focus = _quote_title_focus(quote)
+    if (
+        semantic_validated and len(semantic_topic.split()) >= 3
+        and semantic_topic.casefold() not in {"video topic", quote_focus.casefold()}
     ):
-        bodies = [
-            "Know Your Worth—You're Hard to Replace",
-            "The Right Person Will Recognize Your Worth",
-            "You're Rarer Than You Realize",
-            "Someone Should See How Rare You Are",
-            "You Deserve to Be Truly Valued",
-        ]
-    elif "silence" in lowered and any(term in lowered for term in ("knows", "everything", "only me")):
-        bodies = [
-            "Some Things Only Silence Knows",
-            "When Silence Is the Only One Who Knows",
-            "At the End, It's Just Me and the Silence",
-            "The Thoughts I Only Share With Silence",
-            "What the Silence Knows About Me",
-        ]
-    elif all(term in lowered for term in ("grief", "silence", "absence")):
-        bodies = [
-            "When Grief Makes Silence Feel Heavy",
-            "The Shape Absence Leaves in Silence",
-            "Why Absence Can Feel So Heavy",
-            "Grief Has a Silence of Its Own",
-            "When Absence Becomes Almost Visible",
-        ]
-    else:
-        # ``topic`` comes from the validated semantic layer. Prefer that
-        # natural interpretation over copying/truncating the on-screen quote.
-        semantic_topic = re.sub(r"\s+", " ", topic or "").strip(" .:-")
-        quote_focus = _quote_title_focus(quote)
-        if semantic_validated and semantic_topic and semantic_topic.casefold() not in {"video topic", quote_focus.casefold()}:
-            bodies = [semantic_topic[:1].upper() + semantic_topic[1:]]
-        else:
-            bodies = [quote_focus or "A Quiet Reflection"]
-    return list(dict.fromkeys(_fit_title(body, suffix) for body in bodies if body))
+        return [_fit_title(semantic_topic[:1].upper() + semantic_topic[1:], suffix)]
+    return [_fit_quote_title(quote_focus, suffix) if quote_focus else _fit_title("A Quiet Reflection", suffix)]
 
 
 def _fallback_topic_variants(topic: str, suffix: str, instructional: bool) -> list[str]:
@@ -911,43 +929,6 @@ def _named_entity(text: str) -> str:
     return max(runs, key=len, default="")
 
 
-def _quote_search_concepts(quote: str) -> list[str]:
-    """Return only small, defensible concepts—not chopped quote fragments."""
-
-    lowered = quote.casefold()
-    concepts: list[str] = []
-    if "misunderstood" in lowered:
-        concepts.append("being misunderstood")
-    if "genuine" in lowered:
-        concepts.append("being genuine")
-    if "value" in lowered:
-        concepts.append("feeling valued")
-    if "chosen" in lowered:
-        concepts.append("feeling chosen")
-    if "give up" in lowered or "enough" in lowered:
-        concepts.extend(["knowing when to let go", "emotional exhaustion"])
-    if "walks away" in lowered or "how to stay" in lowered:
-        concepts.append("relationships fading without closure")
-    if "crueller" in lowered or "apology" in lowered:
-        concepts.extend(["self forgiveness", "self criticism"])
-    if "silence" in lowered:
-        concepts.extend(["inner silence", "silence quotes"])
-    if "only me" in lowered or "alone" in lowered:
-        concepts.append("solitude")
-    if "thought" in lowered or ("silence" in lowered and "knows" in lowered):
-        concepts.append("inner thoughts")
-    if (
-        "deserve" in lowered
-        and re.search(r"\bhard\s+(?:it\s+is\s+)?to\s+find\b", lowered)
-        and re.search(r"\b(?:somebody|someone)\s+like\s+you\b", lowered)
-    ):
-        concepts.extend([
-            "know your worth", "being valued", "hard to replace",
-            "rare person quotes", "genuine appreciation",
-        ])
-    return concepts
-
-
 def _quality_trace_summary(gate: dict[str, Any]) -> dict[str, Any]:
     """Keep bounded final-gate reasons without storing prompts or provider text."""
 
@@ -1024,7 +1005,7 @@ def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | No
 
     brief = creator_brief or {}
     content = str(brief.get("content") or primary_topic or "").strip()
-    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip() or _quoted_text(content)
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip() or source_quote(content, brief)
     is_shorts = is_short_content(content or primary_topic, brief)
     emoji = _semantic_emoji(" ".join([content, str(brief.get("visual_requirements") or "")]))
     suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
@@ -1032,7 +1013,11 @@ def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | No
         safe_topic = "" if has_unsupported_instructional_framing(primary_topic) else primary_topic
         variants = _fallback_quote_variants(quote, safe_topic, suffix, semantic_validated=bool(safe_topic))
         body = variants[0][:-len(suffix)] if suffix and variants[0].endswith(suffix) else variants[0]
-        description = f'“{quote}”\n\nA short reflection built only from the words supplied by the creator.'
+        # The viewer gets the quote and the scene, never a note on how the
+        # description was assembled ("built only from the words supplied...").
+        description = "\n\n".join(
+            part for part in (f"“{quote}”", _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))) if part
+        )
     else:
         body = re.sub(r"\s+", " ", primary_topic or content).strip(" .") or "The Video Topic"
         excerpt = re.sub(r"\s+", " ", content).strip(" .")
@@ -1059,9 +1044,8 @@ def _content_specific_fallback(
     # do not collapse into near-duplicates after the upload-length limit is
     # applied.  Keep the full ``topic`` for descriptions/tags.
     title_topic = " ".join(topic.split()[:5]) or "the video topic"
-    pretty = title_topic.title()
     content = str(brief.get("content") or "").strip()
-    quote = str(brief.get("exact_quote") or "").strip() or _quoted_text(content)
+    quote = str(brief.get("exact_quote") or "").strip() or source_quote(content, brief)
     seo_targets = [
         re.sub(r"\s+", " ", str(item or "")).strip(" .:-")
         for item in brief.get("seo_research_targets") or []
@@ -1069,9 +1053,6 @@ def _content_specific_fallback(
     ][:8]
     is_shorts = is_short_content(content or topic, brief)
     promise = str(brief.get("viewer_promise") or "").strip()
-    audience = str(brief.get("target_audience") or "").strip()
-    unique_angle = str(brief.get("unique_angle") or "").strip()
-    proof = str(brief.get("proof") or "").strip()
     video_format = str(brief.get("video_format") or "").strip().casefold()
 
     emoji = _semantic_emoji(" ".join([topic, content, quote, str(brief.get("visual_requirements") or "")]))
@@ -1080,29 +1061,19 @@ def _content_specific_fallback(
         fallback_title_topic = seo_targets[0] if seo_targets else topic
         variants = _fallback_quote_variants(quote, fallback_title_topic, suffix, semantic_validated=bool(seo_targets))
         visual_line = _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))
-        quote_lowered = quote.casefold()
-        if all(term in quote_lowered for term in ("grief", "silence", "absence")):
-            reflective_line = "A reflection on how grief can make silence feel heavy and absence feel almost visible."
-        elif "friendship" in quote_lowered and "heart and soul" in quote_lowered and "boundar" in quote_lowered:
-            reflective_line = "The surprise is not the boundary—it is who finally decided to set it."
-        elif "silence" in quote_lowered:
-            reflective_line = "A reflective moment centered on the silence described by the words on screen."
-        elif "deserve" in quote_lowered and "hard" in quote_lowered and "find" in quote_lowered:
-            reflective_line = "A reflective moment about knowing your worth and being genuinely valued for who you are."
+        # Only themes research validated against the source are named; lines
+        # written for particular test quotes ("knowing your worth", "the silence
+        # described by the words on screen") read meaning into any quote.
+        supported_themes = [item for item in seo_targets if item.casefold() != topic.casefold()][:3]
+        if supported_themes:
+            reflective_line = "A reflective moment about " + ", ".join(supported_themes) + "."
+        elif seo_targets and topic and topic.casefold() != "video topic":
+            reflective_line = f"A reflective moment about {topic}."
         else:
-            supported_themes = [item for item in seo_targets if item.casefold() != topic.casefold()][:3]
-            if supported_themes:
-                reflective_line = "A reflective moment about " + ", ".join(supported_themes) + "."
-            elif seo_targets and topic and topic.casefold() != "video topic":
-                reflective_line = f"A reflective moment about {topic}."
-            else:
-                reflective_line = "A reflective Short built around the exact words shown on screen."
-        description = (
-            f'“{quote}”\n\n'
-            + visual_line
-            + ("\n\n" if visual_line else "")
-            + reflective_line
-        )
+            # No supported theme to name. "A reflective Short built around the
+            # exact words shown on screen" told viewers how the copy was made.
+            reflective_line = ""
+        description = "\n\n".join(part for part in (f"“{quote}”", visual_line, reflective_line) if part)
     else:
         instructional = not source_requires_noninstructional_framing(content or topic, brief)
         title_topic = _fallback_title_topic(topic, content, video_format, instructional)
@@ -1131,10 +1102,8 @@ def _content_specific_fallback(
 
     tags: list[str] = []
     seen: set[str] = set()
-    candidates = (
-        [topic, *seo_targets, *_quote_search_concepts(quote), *[str(item.get("keyword") or "") for item in keyword_signals or []]]
-        if quote else [topic, *[str(item.get("keyword") or "") for item in keyword_signals or []]]
-    )
+    signals = [str(item.get("keyword") or "") for item in keyword_signals or []]
+    candidates = [topic, *(seo_targets if quote else []), *signals]
     for field in ("viewer_promise", "unique_angle"):
         value = " ".join(str(brief.get(field) or "").strip().lower().split()[:6])
         if value:
@@ -1147,13 +1116,9 @@ def _content_specific_fallback(
             seen.add(cleaned)
             tags.append(cleaned)
 
-    quote_lowered = quote.casefold()
-    if quote and "silence" in quote_lowered:
-        hashtags = ["#DeepThoughts", "#Solitude"]
-    elif quote and "deserve" in quote_lowered and "hard" in quote_lowered and "find" in quote_lowered:
-        hashtags = ["#KnowYourWorth", "#SelfWorth"]
-    else:
-        hashtags = [] if quote else [_topic_hashtag(topic)]
+    # A quote's hashtags come from its validated tags later; "#DeepThoughts
+    # #Solitude" for any quote with "silence" in it named a theme no one chose.
+    hashtags = [] if quote else [_topic_hashtag(topic)]
     if is_shorts:
         hashtags.insert(0, "#shorts")
     if not quote:
@@ -1161,11 +1126,17 @@ def _content_specific_fallback(
         if visual_hashtag:
             hashtags.append(visual_hashtag)
     hashtags = list(dict.fromkeys(item for item in hashtags if item))[:3]
+    # A keyword signal is offered only as the creator wrote it: word pairs
+    # joined across a sentence break or a dropped word ("rain. On-screen" gave
+    # "rain screen", "window of the train" gave "window train") are not
+    # phrases anyone wrote or searches.
+    joined = {signal.strip().lower() for signal in signals if not _is_source_span(signal, content or topic)}
+    joined -= {value.strip().lower() for value in (topic, *seo_targets)}
 
     return {
         "title": variants[0],
         "variants": variants,
         "description": description,
-        "tags": tags[:8],
+        "tags": [tag for tag in tags[:8] if tag not in joined],
         "hashtags": hashtags,
     }

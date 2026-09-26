@@ -1,4 +1,5 @@
-import { History } from "lucide-react";
+import { ChevronLeft, ChevronRight, History } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { SelectableItem } from "@/components/common/SelectableItem";
 import { ListPanel, RecordList } from "@/components/research/ListPanel";
@@ -9,6 +10,10 @@ import type { DemandSnapshot } from "@/api/researchTypes";
 
 export function SnapshotList({
   snapshots,
+  total,
+  offset,
+  pageSize,
+  onOffsetChange,
   isPending,
   error,
   isFetching,
@@ -17,6 +22,11 @@ export function SnapshotList({
   onRefresh,
 }: {
   snapshots: DemandSnapshot[];
+  /** Every saved snapshot; the list shows one page of them. */
+  total: number;
+  offset: number;
+  pageSize: number;
+  onOffsetChange: (offset: number) => void;
   isPending: boolean;
   error: unknown;
   isFetching: boolean;
@@ -24,6 +34,9 @@ export function SnapshotList({
   onSelect: (id: number) => void;
   onRefresh: () => void;
 }) {
+  const first = snapshots.length ? offset + 1 : 0;
+  const last = offset + snapshots.length;
+
   return (
     <ListPanel
       icon={History}
@@ -39,6 +52,33 @@ export function SnapshotList({
         isEmpty: !snapshots.length,
         empty: "No demand snapshots yet. Research a topic above and its dated evidence will appear here.",
       }}
+      footer={
+        total > pageSize ? (
+          <div className="mt-2 flex items-center justify-between gap-2 border-t border-border px-2 pt-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onOffsetChange(Math.max(0, offset - pageSize))}
+              disabled={offset <= 0 || isFetching}
+            >
+              <ChevronLeft aria-hidden="true" />
+              Previous
+            </Button>
+            <p className="numeric text-xs text-muted-foreground" aria-live="polite">
+              {first}–{last} of {total}
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onOffsetChange(offset + pageSize)}
+              disabled={offset + pageSize >= total || isFetching}
+            >
+              Next
+              <ChevronRight aria-hidden="true" />
+            </Button>
+          </div>
+        ) : null
+      }
     >
       <RecordList label="Demand snapshots">
         {snapshots.map((snapshot) => {

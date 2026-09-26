@@ -1,28 +1,56 @@
+# Only the app is needed in the image. Patterns without **/ match at the
+# repository root only, so every "anywhere" pattern below starts with **/.
+
+# Version control, editors, local tooling
 .git
 .gitignore
-.venv
-.venv-browser
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-*.db
-*.db-*
-runtime/data/*.db
-runtime/data/*.db-*
-runtime/artifacts/
-runtime/secrets/
-*.sqlite
-*.sqlite3
-*.sqlite-shm
-*.sqlite-wal
-*.sqlite3-shm
-*.sqlite3-wal
-backups/
-.env
-.tmp
-*.md
+.dockerignore
+.claude/
+.vscode/
+.idea/
+.venv/
+.venv-browser/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/*.log
+**/.DS_Store
+**/Thumbs.db
 
-# Node frontend source. Only the built output under
-# win_engine/api/static/app/ is needed in the image.
+# Secrets and credentials: never baked into an image layer.
+.env
+.env.*
+**/credentials.json
+**/client_secret*.json
+**/token*.json
+**/*.pem
+**/*.key
+**/secrets/
+
+# Local data: databases, their backups and journals, artifacts. The
+# database is bind-mounted at runtime (compose.yaml).
+runtime/
+**/backups/
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite3
+**/*.sqlite-*
+**/*.sqlite3-*
+
+# Development-only material. The React build under
+# win_engine/api/static/app/ is committed and is what the image serves.
 frontend/
+tests/
+scripts/
+docs/
+**/*.md
+requirements-dev.txt
+requirements-browser.txt
+compose.yaml
+Dockerfile
+**/test-results/
+**/playwright-report/
+**/node_modules/

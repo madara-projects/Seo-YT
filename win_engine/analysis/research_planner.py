@@ -5,7 +5,11 @@ from __future__ import annotations
 import re
 from typing import Any
 from win_engine.analysis.semantic_research import usable_research_topic
-from win_engine.analysis.generation_quality import source_requires_noninstructional_framing, has_unsupported_instructional_framing
+from win_engine.analysis.generation_quality import (
+    has_unsupported_instructional_framing,
+    is_short_content,
+    source_requires_noninstructional_framing,
+)
 
 
 _QUERY_STOPWORDS = {
@@ -29,22 +33,24 @@ def plan_research_queries(
     """Turn a creator brief into distinct searches, keeping API use predictable."""
 
     brief = creator_brief or {}
-    content = _short(brief.get("content") or script)
     semantic = semantic_analysis or {}
-    quote_concepts = _quote_concepts(str(brief.get("exact_quote") or brief.get("on_screen_text") or ""))
     semantic_primary = str(semantic.get("primary_topic") or "")
     if _is_visual_semantic(semantic_primary, semantic):
         semantic_primary = ""
     structured_topic = _keyword_phrase(str(brief.get("topic") or ""), 8)
     proven_semantic_topic = _search_phrase(semantic_primary, 6) if semantic.get("concept_evidence_validated") is True else ""
-    topic = next((value for value in [proven_semantic_topic, *(quote_concepts[:1]),
+    # Without a validated semantic topic the searches use the creator's own
+    # words (the brief's topic, taken from the quote or main phrase). A table of
+    # stock "quote concepts" searched "knowing when to let go" for "I can't get
+    # enough of you": the opposite meaning, at 100 quota units a query.
+    topic = next((value for value in [proven_semantic_topic,
         _search_phrase(semantic_primary, 6), structured_topic,
         *(semantic.get("secondary_topics") or [])] if usable_research_topic(value)), "")
     audience_problem = _keyword_phrase(
         " ".join(str(value or "") for value in (brief.get("target_audience"), brief.get("viewer_promise"))),
         6,
     )
-    video_format = _format_phrase(str(brief.get("video_format") or ""))
+    video_format = _format_phrase(script, brief)
     secondary = [
         _search_phrase(value, 6) for value in (semantic.get("secondary_topics") or [])
         if not _is_visual_semantic(str(value), semantic)
@@ -75,8 +81,6 @@ def plan_research_queries(
     candidates.extend((f"intent:{semantic.get('viewer_intent') or 'viewer'}", concept) for concept in intents if concept)
     candidates.extend(("related_concept", concept) for concept in related if concept)
     candidates.extend(("secondary_topic", concept) for concept in secondary if concept and concept != topic)
-    if not secondary and not intents and not related:
-        candidates.extend(("quote_concept", concept) for concept in quote_concepts)
     if not intents and audience_problem:
         candidates.append(("viewer_problem", audience_problem))
     entities = [
@@ -180,8 +184,12 @@ def brief_research_text(script: str, creator_brief: dict[str, Any] | None = None
         brief.get("viewer_promise"),
         brief.get("unique_angle"),
         brief.get("proof"),
-        brief.get("video_format"),
     ]
+    # A format guessed from the script says nothing new about it, and for a
+    # script with no words the guess ("talking_head") became the topic and title.
+    format_source = ((brief.get("field_provenance") or {}).get("video_format") or {}).get("source")
+    if format_source != "inferred":
+        values.append(brief.get("video_format"))
     return " ".join(str(value).strip() for value in values if str(value or "").strip())
 
 
@@ -203,42 +211,6 @@ def _join(*parts: str) -> str:
     return " ".join(part for part in parts if part and part != "unspecified")
 
 
-def _extract_quote(text: str) -> str:
-    matches = re.findall(r'["\u201c\u201d\']([^"\u201c\u201d\']{12,})["\u201c\u201d\']', text)
-    if not matches:
-        return ""
-    return max(matches, key=len).strip()
-
-
-def _quote_concepts(quote: str) -> list[str]:
-    """Return natural search concepts for common quote meanings, never chopped prose."""
-
-    lowered = quote.casefold()
-    concepts: list[str] = []
-    if "give up" in lowered or "enough" in lowered:
-        concepts.extend(["knowing when to let go", "emotional exhaustion"])
-    if "walks away" in lowered or "how to stay" in lowered:
-        concepts.append("relationships fading without closure")
-    if "misunderstood" in lowered or "genuine" in lowered:
-        concepts.extend(["being misunderstood", "being genuine"])
-    if "apology" in lowered or "crueller" in lowered:
-        concepts.extend(["self forgiveness", "self criticism"])
-    if "keep going" in lowered:
-        concepts.append("keep going motivation")
-    if (
-        "deserve" in lowered
-        and re.search(r"\bhard\s+(?:it\s+is\s+)?to\s+find\b", lowered)
-        and re.search(r"\b(?:somebody|someone)\s+like\s+you\b", lowered)
-    ):
-        concepts.extend([
-            "knowing your worth quotes",
-            "being valued for who you are",
-            "hard to replace quotes",
-            "genuine appreciation quotes",
-        ])
-    return list(dict.fromkeys(concepts))
-
-
 def _keyword_phrase(text: str, words: int = 6) -> str:
     useful: list[str] = []
     for word in re.findall(r"[A-Za-z][A-Za-z'-]*", text.lower()):
@@ -251,11 +223,11 @@ def _keyword_phrase(text: str, words: int = 6) -> str:
     return " ".join(useful)
 
 
-def _format_phrase(value: str) -> str:
-    lowered = value.lower()
-    if any(term in lowered for term in ("short", "reel", "quote")):
-        return "quote shorts"
-    return _keyword_phrase(value, 3)
+def _format_phrase(script: str, brief: dict[str, Any]) -> str:
+    # A "short ribs" tutorial is not a Short; one resolver decides for every module.
+    if is_short_content(script, brief):
+        return "quote shorts" if brief.get("exact_quote") or brief.get("on_screen_text") else "shorts"
+    return _keyword_phrase(str(brief.get("video_format") or ""), 3)
 
 
 def _quote_search_variant(topic: str) -> str:

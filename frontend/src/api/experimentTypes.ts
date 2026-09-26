@@ -35,11 +35,21 @@ export interface ExperimentMetricResult {
   observed_direction?: "variant" | "control" | "even" | string;
 }
 
+/** An assigned video left out of the comparison, and why. */
+export interface MissingMetric {
+  link_id?: number | null;
+  role?: ExperimentRole | string;
+  reason?: string;
+}
+
 export interface ExperimentResult {
   id?: number;
   captured_at?: string | null;
+  /** Includes "inconclusive": an observational run under 5% apart, or a primary metric without values. */
   state?: string;
   mode?: string;
+  /** The backend's one-line framing, e.g. "PLANNED EXPERIMENT — DIRECTIONAL, NOT CAUSAL PROOF". */
+  label?: string;
   sample?: {
     assigned_control?: number;
     assigned_variant?: number;
@@ -47,6 +57,7 @@ export interface ExperimentResult {
     eligible_variant?: number;
     observational_references?: number;
     minimum_per_group?: number;
+    missing_metrics?: MissingMetric[];
   };
   metrics?: ExperimentMetricResult[];
   interpretation?: string;
@@ -54,6 +65,7 @@ export interface ExperimentResult {
   learning_candidate?: {
     variable?: string;
     evidence_state?: string;
+    /** The primary metric's control count plus variant count. */
     sample_size?: number;
     interpretation?: string;
   } | null;

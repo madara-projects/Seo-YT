@@ -3,11 +3,13 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { Meter } from "@/components/common/Meter";
-import { cn, displayValue } from "@/lib/utils";
-import { initialOf, toFiniteNumber } from "@/lib/format";
+import { cn, UNAVAILABLE } from "@/lib/utils";
+import { initialOf } from "@/lib/format";
+import { roundOpportunity, roundTitleScore } from "@/lib/dashboardFormat";
 import { historyDate, runTitle } from "@/lib/historyFormat";
 import type { HistoryRun } from "@/api/historyTypes";
 
+/** Rounded as the Dashboard rounds it; an unmeasured score says so instead of "0". */
 function Score({
   label,
   value,
@@ -15,21 +17,24 @@ function Score({
   max,
 }: {
   label: string;
-  value: unknown;
+  value: number | null;
   suffix: string;
   max: number;
 }) {
-  const number = toFiniteNumber(value);
   return (
     <div className="w-24 space-y-1.5">
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-[0.6875rem] text-muted-foreground">{label}</p>
       </div>
-      <p className="numeric text-sm font-semibold text-foreground">
-        {displayValue(value, "Unavailable")}
-        {value === null || value === undefined || value === "" ? "" : suffix}
+      <p
+        className={cn(
+          "text-sm",
+          value === null ? "text-muted-foreground" : "numeric font-semibold text-foreground",
+        )}
+      >
+        {value === null ? UNAVAILABLE : `${value}${suffix}`}
       </p>
-      <Meter value={number} max={max} label={`${label} score`} size="sm" />
+      <Meter value={value} max={max} label={`${label} score`} size="sm" />
     </div>
   );
 }
@@ -110,8 +115,8 @@ export function HistoryRow({
         aria-label="Package scores"
         className="flex gap-5 pl-[4.35rem] lg:pl-0"
       >
-        <Score label="Opportunity" value={run.opportunity_score} suffix="/100" max={100} />
-        <Score label="Title quality" value={run.title_score} suffix="/10" max={10} />
+        <Score label="Opportunity" value={roundOpportunity(run.opportunity_score)} suffix="/100" max={100} />
+        <Score label="Title quality" value={roundTitleScore(run.title_score)} suffix="/10" max={10} />
       </div>
 
       <div className="flex shrink-0 flex-wrap gap-1.5 pl-[4.35rem] lg:pl-0">

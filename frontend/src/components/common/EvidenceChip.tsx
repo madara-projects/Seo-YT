@@ -7,8 +7,9 @@ import { cn } from "@/lib/utils";
  * The product's core promise is that it never presents a guess as a
  * measurement, so every value on screen is paired with where it came from.
  * The tone is the meaning, not styling: `ok` is creator-supplied fact, `info`
- * is a public observation, `warn` is a heuristic or inference, and `bad` is a
- * failure. Keep them distinguishable by text as well as colour.
+ * is a public observation, `warn` is a heuristic, an inference or generated
+ * text, `neutral` is unavailable, and `bad` is a failure. Keep them
+ * distinguishable by text as well as colour.
  */
 const chipVariants = cva(
   "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium leading-4",
@@ -43,19 +44,25 @@ export function EvidenceChip({ children, tone, className, title }: EvidenceChipP
   );
 }
 
-/** Maps the backend's provenance vocabulary onto a tone and a readable label. */
-export function provenanceLabel(source: string): { label: string; tone: EvidenceTone } {
+/**
+ * Maps the backend's provenance vocabulary onto a tone and a readable label.
+ * Only an inference is a warning; a value nobody supplied is unavailable.
+ */
+export function provenanceLabel(source: unknown): { label: string; tone: EvidenceTone } {
   switch (source) {
     case "creator_supplied":
       return { label: "Creator-entered", tone: "ok" };
     case "inferred":
       return { label: "Inferred", tone: "warn" };
     case "unavailable":
-      return { label: "Unavailable", tone: "warn" };
+      return { label: "Unavailable", tone: "neutral" };
     case "unknown":
-      return { label: "Unknown", tone: "warn" };
+    case undefined:
+    case null:
+    case "":
+      return { label: "Unknown", tone: "neutral" };
     default:
-      return { label: source || "Unknown", tone: "warn" };
+      return { label: String(source), tone: "warn" };
   }
 }
 

@@ -25,7 +25,7 @@ class QualityTargetTests(unittest.TestCase):
                             ((99, 89, 99), False), ((99, 99, 89), False),
                             ((99, 99, None), False)]:
             with self.subTest(scores=scores):
-                quality = dict(zip(("title_score", "description_score", "tag_score"), scores))
+                quality = dict(zip(("title_score", "description_score", "tag_score"), scores, strict=True))
                 original = {"verdict": "GREEN", "final_seo_quality": {**quality, "verdict": "GREEN"}}
                 result = enforce_quality_target(original)
                 self.assertEqual(result["quality_target"]["met"], met)
@@ -38,7 +38,7 @@ class QualityTargetTests(unittest.TestCase):
         gate = {"verdict": "RED", "final_seo_quality": {"verdict": "RED"}}
         self.assertEqual(enforce_quality_target(gate)["verdict"], "RED")
 
-    @patch("win_engine.generation.quality_refinement._generate_one")
+    @patch("win_engine.generation.quality_refinement.generate_one")
     @patch("win_engine.generation.quality_refinement.gemini_client.is_available", return_value=True)
     @patch("win_engine.generation.quality_refinement.evaluate_package_quality")
     def test_failed_repair_keeps_valid_package_and_research_tags(self, evaluate, available, generate):

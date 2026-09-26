@@ -4,10 +4,10 @@ import sys
 import urllib.request
 
 for quote in sys.argv[1:]:
-    payload = dict(script=quote, exact_quote=quote, on_screen_text=quote,
-                   video_format="youtube_shorts", language="english",
-                   video_language="english", region="global", title_style="balanced",
-                   visual_requirements="A person walking along a quiet path at dusk. The quote is on screen.")
+    payload = {"script": quote, "exact_quote": quote, "on_screen_text": quote,
+               "video_format": "youtube_shorts", "language": "english",
+               "video_language": "english", "region": "global", "title_style": "balanced",
+               "visual_requirements": "A person walking along a quiet path at dusk. The quote is on screen."}
     request = urllib.request.Request("http://127.0.0.1:8000/analyze",
         data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=240) as response:

@@ -1,10 +1,16 @@
 """Deterministic, provenance-rich topic-demand evidence classification."""
 from __future__ import annotations
 import hashlib
-import re
 from datetime import datetime, timezone, timedelta
 from statistics import median
 from typing import Any
+
+from win_engine.analysis.numbers import optional_number
+from win_engine.analysis.text_tokens import unicode_words
+
+# Words that say nothing about a subject: "how to make masala tea" matched
+# "How I built a gaming PC" on "how" alone.
+_MATCH_STOPWORDS={"about","and","are","best","for","from","get","guide","how","into","made","make","making","new","short","shorts","that","the","this","tips","top","tutorial","video","videos","was","what","when","why","with","you","your"}
 
 
 def idea_fingerprint(idea:dict[str,Any])->str:
@@ -20,15 +26,17 @@ def analyze_demand(topic:str,research:dict[str,Any],watch_videos:list[dict[str,A
         channels.add(str(result.get('channel_id') or result.get('channel_title') or 'unknown'))
         published=_date(result.get('published_at'))
         if published and now-published<=timedelta(days=90): recent+=1
-        view=_number(result.get('view_count'))
+        view=optional_number(result.get('view_count'))
         if view is not None: views.append(view)
-        likes=_number(result.get('like_count')); comments=_number(result.get('comment_count'))
+        likes=optional_number(result.get('like_count')); comments=optional_number(result.get('comment_count'))
         if view and (likes is not None or comments is not None): engagements.append(((likes or 0)+(comments or 0))/view)
-    topic_tokens={t for t in re.findall(r"[a-z0-9]+",topic.casefold()) if len(t)>2}
+    # Words from every script (a Tamil topic had no ASCII tokens, so it never
+    # matched), and two shared words unless the topic has only one.
+    topic_tokens=_match_tokens(topic); needed=min(2,len(topic_tokens))
     matching=[]
     for video in watch_videos:
-        title_tokens=set(re.findall(r"[a-z0-9]+",str(video.get('title') or '').casefold()))
-        if topic_tokens and topic_tokens & title_tokens:
+        title_tokens=_match_tokens(video.get('title'))
+        if topic_tokens and len(topic_tokens & title_tokens)>=needed:
             outlier=video.get('outlier') or {}
             matching.append({"watchlist_video_id":video.get('id'),"video_id":video.get('video_id'),"title":video.get('title'),"outlier_status":outlier.get('status') or 'not_analyzed',"relative_multiplier":outlier.get('relative_multiplier'),"captured_at":(video.get('latest_snapshot') or {}).get('captured_at'),"provenance":"public_observation"})
     outliers=sum(1 for item in matching if item['outlier_status']=='possible_outlier')
@@ -60,10 +68,9 @@ def analyze_demand(topic:str,research:dict[str,Any],watch_videos:list[dict[str,A
     }
     return classification,evidence
 
+def _match_tokens(value:Any)->set[str]:
+    return {t for t in unicode_words(value) if len(t)>2 and t not in _MATCH_STOPWORDS}
 def _date(value:Any):
     try:
         parsed=datetime.fromisoformat(str(value).replace('Z','+00:00'));return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
-    except (ValueError,TypeError):return None
-def _number(value:Any):
-    try:return float(value) if value is not None else None
     except (ValueError,TypeError):return None

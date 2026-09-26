@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
+import { useMutationState, type MutationStatus } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
@@ -22,39 +23,104 @@ import { ResearchStage } from "@/components/creator/ResearchStage";
 import { StageNav } from "@/components/creator/StageNav";
 import { useAnalyze, useSelectPackage } from "@/hooks/useAnalyze";
 import { useElapsedSeconds } from "@/hooks/useElapsed";
+import { useHistoryRun } from "@/hooks/useHistory";
+import { mutationKeys } from "@/hooks/queryKeys";
+import { useUrlState } from "@/hooks/useUrlState";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { buildPackageOptions, researchHasEvidence } from "@/lib/packages";
-import { STAGES, freshChecklist, type ChecklistKey, type StageKey } from "@/lib/creatorConstants";
+import {
+  STAGES,
+  freshChecklist,
+  type ChecklistKey,
+  type ChecklistState,
+  type StageKey,
+} from "@/lib/creatorConstants";
 import { asArray, asObject } from "@/lib/utils";
 import {
   creatorFormDefaults,
   creatorFormSchema,
   type CreatorFormValues,
 } from "@/schemas/creator";
-import type { CreatorBrief, ResearchStatus, SelectionStatus } from "@/api/types";
+import type { AnalyzeResponse, CreatorBrief, ResearchStatus, SelectionStatus } from "@/api/types";
+
+interface AnalyzeRun {
+  status: MutationStatus;
+  data: AnalyzeResponse | undefined;
+  error: unknown;
+  variables: CreatorFormValues | undefined;
+  submittedAt: number;
+}
+
+/**
+ * The newest `/analyze` run, read from the mutation cache rather than from
+ * this page's own state. A run started before the creator left the page is
+ * still found when they return: its progress while it runs (so Generate
+ * stays disabled and quota is not spent twice), then its result.
+ */
+function useLatestAnalyzeRun(): AnalyzeRun | null {
+  const runs = useMutationState({
+    filters: { mutationKey: mutationKeys.analyze },
+    select: (mutation): AnalyzeRun => ({
+      status: mutation.state.status,
+      data: mutation.state.data as AnalyzeResponse | undefined,
+      error: mutation.state.error,
+      variables: mutation.state.variables as CreatorFormValues | undefined,
+      submittedAt: mutation.state.submittedAt,
+    }),
+  });
+  return runs.reduce<AnalyzeRun | null>(
+    (newest, run) => (run.status !== "idle" && (!newest || run.submittedAt >= newest.submittedAt) ? run : newest),
+    null,
+  );
+}
+
+const STAGE_KEYS = new Set<string>(STAGES.map((item) => item.key));
+
+function isStageKey(value: string): value is StageKey {
+  return STAGE_KEYS.has(value);
+}
+
+/** The creator's choice for one run. Keyed by run, so a new run starts with none. */
+interface Choice {
+  run: number;
+  optionId: string;
+  status: SelectionStatus;
+}
+
+/** Checklist answers for one package of one run: choosing another package starts afresh. */
+interface Checks {
+  run: number;
+  optionId: string;
+  state: ChecklistState;
+}
 
 export default function CreatorPage() {
-  const [stage, setStage] = useState<StageKey>("idea");
-  const [submitted, setSubmitted] = useState<CreatorFormValues | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectionStatus, setSelectionStatus] = useState<SelectionStatus>("unrecorded");
-  const [checklist, setChecklist] = useState(freshChecklist);
+  const latest = useLatestAnalyzeRun();
+  const analyze = useAnalyze();
+  const selectPackage = useSelectPackage();
+  const saveSelection = selectPackage.mutateAsync;
+  const url = useUrlState();
 
   const form = useForm<CreatorFormValues>({
     resolver: zodResolver(creatorFormSchema),
-    defaultValues: creatorFormDefaults,
+    // Back on the page during or after a run, the form shows that run's input.
+    defaultValues: latest?.variables ? { ...creatorFormDefaults, ...latest.variables } : creatorFormDefaults,
     mode: "onBlur",
   });
 
-  const analyze = useAnalyze();
-  const selectPackage = useSelectPackage();
-  const elapsed = useElapsedSeconds(analyze.isPending);
+  const isPending = latest?.status === "pending";
+  const data = latest?.status === "success" ? (latest.data ?? null) : null;
+  const failure = latest?.status === "error" ? latest.error : null;
+  const submitted = latest?.variables ?? null;
+  const runKey = data ? (latest?.submittedAt ?? null) : null;
+  const elapsed = useElapsedSeconds(isPending, latest?.submittedAt);
 
   // The Dashboard's quick launcher hands a draft over through router state
   // rather than running its own analysis, so there is one place that spends
   // quota. It prefills only; submitting stays an explicit action here.
   const location = useLocation();
   const handoff = location.state as Partial<CreatorFormValues> | null;
+  const setUrl = url.set;
 
   useEffect(() => {
     if (!handoff?.script) return;
@@ -63,46 +129,35 @@ export default function CreatorPage() {
       ...handoff,
       script: handoff.script,
     });
-    // `form` is stable across renders; re-running on it would clobber edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handoff?.script, handoff?.language, handoff?.region]);
-
-  const data = analyze.data ?? null;
+    // The draft is edited on the Idea stage, even when an earlier result is still shown.
+    setUrl({ stage: "idea" });
+  }, [form, setUrl, handoff?.script, handoff?.language, handoff?.region]);
 
   const options = useMemo(
     () => (data ? buildPackageOptions(data, submitted ?? {}) : []),
     [data, submitted],
   );
 
-  const selected = useMemo(
-    () => options.find((option) => option.id === selectedId) ?? options[0] ?? null,
-    [options, selectedId],
-  );
+  const [choice, setChoice] = useState<Choice | null>(null);
+  const [checks, setChecks] = useState<Checks | null>(null);
+  const current = choice && choice.run === runKey ? choice : null;
 
-  // Land on Packaging as soon as a run completes: it is the first stage with
-  // something actionable in it.
-  useEffect(() => {
-    if (!analyze.isSuccess || !data) return;
-    setSelectedId(options[0]?.id ?? null);
-    setSelectionStatus("unrecorded");
-    setChecklist(freshChecklist());
-    setStage("packaging");
+  // A choice recorded before the creator left the page is still on the server.
+  const runId = typeof data?.history_run_id === "number" ? data.history_run_id : null;
+  const savedRun = useHistoryRun(data && !current ? runId : null);
+  const recorded = savedRun.data?.selected_package?.generated_package_id ?? null;
+  const restored = !current && recorded ? (options.find((option) => option.packageId === recorded) ?? null) : null;
 
-    const warnings = asArray<string>(data.research_warnings);
-    if (data.generation_source === "fallback") {
-      toast.warning("Gemini was unavailable; review the local fallback carefully before publishing.");
-    } else if (warnings.length) {
-      toast.warning(`Package generated with ${warnings.length} research warning(s) to review.`);
-    } else {
-      toast.success("Package generated. Review each stage before manual publishing.");
-    }
-    // `options` is derived from `data`; re-running on its identity would loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analyze.isSuccess, data]);
+  // Only an explicit choice is "selected"; until then the primary is a preview.
+  const chosen = current ? (options.find((option) => option.id === current.optionId) ?? null) : restored;
+  const selectionStatus: SelectionStatus = current?.status ?? (restored ? "saved" : "unrecorded");
+  const preview = chosen ?? options[0] ?? null;
+  const checklist =
+    checks && chosen && checks.run === runKey && checks.optionId === chosen.id ? checks.state : freshChecklist();
 
-  const researchStatus: ResearchStatus = analyze.isPending
+  const researchStatus: ResearchStatus = isPending
     ? "loading"
-    : analyze.isError
+    : failure
       ? "error"
       : data
         ? researchHasEvidence(data)
@@ -111,41 +166,51 @@ export default function CreatorPage() {
         : "no-research";
 
   const handleSubmit = form.handleSubmit((values) => {
-    setSubmitted(values);
-    setSelectedId(null);
-    setSelectionStatus("unrecorded");
-    setChecklist(freshChecklist());
+    // A new run opens on Packaging once it completes.
+    setUrl({ stage: null });
     analyze.mutate(values);
   });
 
+  // Saves run one after another, so the last click is also the last write;
+  // only the newest click reports its outcome.
+  const saveChain = useRef<Promise<unknown>>(Promise.resolve());
+  const saveSeq = useRef(0);
+
   const handleSelect = useCallback(
-    async (packageId: string) => {
-      if (!options.some((option) => option.id === packageId)) return;
-      if (packageId !== selectedId) setChecklist(freshChecklist());
+    (optionId: string) => {
+      const option = options.find((item) => item.id === optionId);
+      // A title-only alternative has no server package to record.
+      if (!option?.packageId || runKey === null) return;
+      const packageId = option.packageId;
+      const seq = ++saveSeq.current;
 
-      setSelectedId(packageId);
-      setSelectionStatus("saving");
-
-      const runId = Number(data?.history_run_id ?? 0);
       if (!runId) {
-        setSelectionStatus("error");
+        setChoice({ run: runKey, optionId, status: "error" });
         toast.error("The saved analysis ID is unavailable; selection was not recorded.");
         return;
       }
 
-      try {
-        await selectPackage.mutateAsync({ runId, packageId });
-        setSelectionStatus("saved");
-      } catch (error) {
-        setSelectionStatus("error");
-        toast.error(formatApiError(error, "Package selection could not be saved."));
-      }
+      setChoice({ run: runKey, optionId, status: "saving" });
+      const save = saveChain.current
+        .catch(() => undefined)
+        .then(() => saveSelection({ runId, packageId }));
+      saveChain.current = save;
+      save.then(
+        () => {
+          if (seq === saveSeq.current) setChoice({ run: runKey, optionId, status: "saved" });
+        },
+        (error: unknown) => {
+          if (seq !== saveSeq.current) return;
+          setChoice({ run: runKey, optionId, status: "error" });
+          toast.error(formatApiError(error, "Package selection could not be saved."));
+        },
+      );
     },
-    [options, selectedId, data, selectPackage],
+    [options, runKey, runId, saveSelection],
   );
 
   const handleExport = useCallback(() => {
-    if (!data || !selected) {
+    if (!data || !chosen) {
       toast.error("Run Analyze and select a package before exporting.");
       return;
     }
@@ -153,8 +218,8 @@ export default function CreatorPage() {
     const payload = {
       ...data,
       creator_workflow_local: {
-        selected_package_id: selected.id,
-        selected_package: { ...selected },
+        selected_package_id: chosen.packageId,
+        selected_package: { ...chosen },
         checklist: { ...checklist },
         persistence:
           selectionStatus === "saved"
@@ -165,20 +230,37 @@ export default function CreatorPage() {
     };
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
+    const href = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    anchor.href = url;
+    anchor.href = href;
     anchor.download = `seo-analysis-${Date.now()}.json`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    window.setTimeout(() => URL.revokeObjectURL(href), 0);
     toast.success("Full analysis and local decision exported.");
-  }, [data, selected, checklist, selectionStatus]);
+  }, [data, chosen, checklist, selectionStatus]);
 
-  const handleToggleChecklist = useCallback((key: ChecklistKey, checked: boolean) => {
-    setChecklist((current) => ({ ...current, [key]: checked }));
-  }, []);
+  const handleToggleChecklist = useCallback(
+    (key: ChecklistKey, checked: boolean) => {
+      if (runKey === null || !chosen) return;
+      setChecks((prior) => ({
+        run: runKey,
+        optionId: chosen.id,
+        state: {
+          ...(prior && prior.run === runKey && prior.optionId === chosen.id ? prior.state : freshChecklist()),
+          [key]: checked,
+        },
+      }));
+    },
+    [runKey, chosen],
+  );
+
+  // The stage lives in the URL; later stages open only once there is a result.
+  const unlocked = Boolean(data);
+  const requested = url.get("stage");
+  const stage: StageKey = !unlocked ? "idea" : isStageKey(requested) ? requested : "packaging";
+  const setStage = (next: StageKey) => setUrl({ stage: next });
 
   // A new stage starts at the top of the page, not wherever the last one ended.
   useEffect(() => {
@@ -189,7 +271,6 @@ export default function CreatorPage() {
 
   const stageIndex = STAGES.findIndex((item) => item.key === stage);
   const currentStage = STAGES[stageIndex] ?? STAGES[0];
-  const unlocked = Boolean(data);
 
   const move = (offset: number) => {
     const nextIndex = Math.max(0, Math.min(STAGES.length - 1, stageIndex + offset));
@@ -211,10 +292,11 @@ export default function CreatorPage() {
         actions={
           data ? (
             <>
-              <EvidenceChip tone={data.generation_source === "gemini" ? "info" : "warn"}>
+              {/* Gemini's writing is generated, like the fallback's; neither is an observation. */}
+              <EvidenceChip tone="warn">
                 {data.generation_source === "gemini" ? "Written with Gemini" : "Local fallback"}
               </EvidenceChip>
-              <EvidenceChip tone={warningCount ? "warn" : "ok"}>
+              <EvidenceChip tone={warningCount ? "warn" : "neutral"}>
                 {warningCount
                   ? `${warningCount} research ${warningCount === 1 ? "warning" : "warnings"}`
                   : "No research warnings"}
@@ -258,12 +340,12 @@ export default function CreatorPage() {
           </div>
         </Card>
 
-        {analyze.isPending ? <AnalysisProgress elapsed={elapsed} /> : null}
+        {isPending ? <AnalysisProgress elapsed={elapsed} /> : null}
 
-        {analyze.isError ? (
+        {failure ? (
           <ErrorState
-            message={apiErrorMessage(analyze.error, "Analysis failed.")}
-            requestId={apiRequestId(analyze.error)}
+            message={apiErrorMessage(failure, "Analysis failed.")}
+            requestId={apiRequestId(failure)}
             onRetry={() => handleSubmit()}
           />
         ) : null}
@@ -271,13 +353,13 @@ export default function CreatorPage() {
         {/* The input stage stays mounted so a refined run can be submitted from
             any later stage without losing what was typed. */}
         <div className={stage === "idea" ? "" : "hidden"}>
-          <IdeaStage form={form} onSubmit={handleSubmit} isPending={analyze.isPending} />
+          <IdeaStage form={form} onSubmit={handleSubmit} isPending={isPending} />
         </div>
 
         <div key={stage} className="animate-fade-up">
           {stage === "brief" ? (
             <BriefStage
-              brief={(asObject(data?.creator_brief) as CreatorBrief) ?? null}
+              brief={data ? (asObject(data.creator_brief) as CreatorBrief) : null}
               submitted={submitted}
             />
           ) : null}
@@ -286,21 +368,18 @@ export default function CreatorPage() {
             <ResearchStage
               data={data}
               status={researchStatus}
-              errorMessage={
-                analyze.isError ? formatApiError(analyze.error, "Analysis failed.") : undefined
-              }
+              errorMessage={failure ? formatApiError(failure, "Analysis failed.") : undefined}
             />
           ) : null}
 
-          {stage === "angle" ? (
-            <AngleStage data={data} submitted={submitted} selected={selected} />
-          ) : null}
+          {stage === "angle" ? <AngleStage data={data} selected={chosen} /> : null}
 
           {stage === "packaging" ? (
             <PackagingStage
               data={data}
               options={options}
-              selected={selected}
+              preview={preview}
+              chosen={chosen}
               selectionStatus={selectionStatus}
               onSelect={handleSelect}
               durationSeconds={submitted?.duration_seconds}
@@ -310,7 +389,7 @@ export default function CreatorPage() {
           {stage === "compare" ? (
             <CompareStage
               options={options}
-              selectedId={selected?.id ?? null}
+              chosenId={chosen?.id ?? null}
               selectionStatus={selectionStatus}
               onSelect={handleSelect}
             />
@@ -319,7 +398,7 @@ export default function CreatorPage() {
           {stage === "decision" ? (
             <DecisionStage
               data={data}
-              selected={selected}
+              selected={chosen}
               selectionStatus={selectionStatus}
               onExport={handleExport}
             />
@@ -327,7 +406,7 @@ export default function CreatorPage() {
 
           {stage === "checklist" ? (
             <ChecklistStage
-              selected={selected}
+              selected={chosen}
               checklist={checklist}
               onToggle={handleToggleChecklist}
               onExport={handleExport}

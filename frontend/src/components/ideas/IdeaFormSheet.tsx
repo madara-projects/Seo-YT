@@ -20,6 +20,7 @@ import {
   ideaPayload,
   type IdeaFormValues,
 } from "@/schemas/idea";
+import type { LabelledOption } from "@/lib/labels";
 import type { Idea } from "@/api/ideaTypes";
 
 /**
@@ -44,17 +45,19 @@ export function IdeaFormSheet({
   const create = useCreateIdea();
   const errors = form.formState.errors;
 
-  const submit = form.handleSubmit(async (values) => {
-    try {
-      const data = await create.mutateAsync(ideaPayload(values));
-      toast.success("Idea saved to your backlog.");
-      form.reset(ideaFormDefaults);
-      create.reset();
-      onOpenChange(false);
-      if (data.idea) onCreated(data.idea);
-    } catch {
-      /* Shown above the buttons with its request ID. */
-    }
+  // A failure is shown above the buttons with its request ID.
+  const submit = form.handleSubmit((values) => {
+    // Per-call callbacks don't run once the sheet has unmounted, so a save that
+    // finishes after the creator has left never pulls them back to this page.
+    create.mutate(ideaPayload(values), {
+      onSuccess: (data) => {
+        toast.success("Idea saved to your backlog.");
+        form.reset(ideaFormDefaults);
+        create.reset();
+        onOpenChange(false);
+        if (data.idea) onCreated(data.idea);
+      },
+    });
   });
 
   const text = (name: keyof IdeaFormValues, max: number, placeholder?: string) => (
@@ -68,7 +71,7 @@ export function IdeaFormSheet({
     />
   );
 
-  const select = (name: "format" | "language" | "region", label: string, options = IDEA_FORMAT_OPTIONS) => (
+  const select = (name: "format" | "language" | "region", label: string, options: readonly LabelledOption[]) => (
     <FormField id={`idea-${name}`} label={label}>
       <Controller
         control={form.control}

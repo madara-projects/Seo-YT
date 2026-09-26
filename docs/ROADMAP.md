@@ -940,7 +940,7 @@ Keep normal personal operation free or below the creator's one-dollar monthly ta
 
 - Same-origin static HTML/CSS/native-module frontend is the default route.
 - Shared API/error handling, explicit frontend state, navigation metadata, and page lifecycle seams are extracted.
-- `/dashboard_legacy` preserves the embedded dashboard for route-only rollback.
+- `/dashboard_legacy` preserved the embedded dashboard for route-only rollback until 2026-09-25, when it was removed: the classic dashboard at `/` and the React interface at `/next` cover every page.
 - 27 deterministic Chromium tests and 92 full local tests pass after the completed Phase 3D workflow.
 - The rebuilt Docker application is healthy on `127.0.0.1:8000`; same-origin assets and `/dashboard_legacy` return HTTP 200, and production excludes Playwright, Chromium, Node, and Ollama.
 

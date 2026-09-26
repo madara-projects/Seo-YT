@@ -99,3 +99,13 @@ export function Inset({
     </div>
   );
 }
+
+/** A small headline number inside an inspector; place it in a `<dl>`. */
+export function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <Inset className="space-y-1">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="font-display text-xl font-semibold leading-none tracking-tight text-foreground">{value}</dd>
+    </Inset>
+  );
+}

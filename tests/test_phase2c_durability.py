@@ -253,7 +253,7 @@ class Phase2CDurabilityTests(unittest.TestCase):
         result = prepare_database(self.path)
         self.assertEqual(result.new_version, CURRENT_SCHEMA_VERSION)
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 9)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], CURRENT_SCHEMA_VERSION)
             self.assertIsNotNone(connection.execute("SELECT 1 FROM analysis_runs WHERE id=?", (run_id,)).fetchone())
             self.assertIsNotNone(connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_sync_conflicts'").fetchone())
 

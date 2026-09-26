@@ -11,14 +11,7 @@ import {
   Youtube,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { channelConnectUrl } from "@/hooks/useSystem";
 import type { OAuthNotice } from "@/hooks/useOAuthReturn";
@@ -195,31 +188,17 @@ export function DisconnectChannelDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <span
-            className="mb-1 grid size-11 place-items-center rounded-2xl bg-tone-bad-bg text-tone-bad ring-1 ring-inset ring-tone-bad-border"
-            aria-hidden="true"
-          >
-            <Youtube className="size-5" />
-          </span>
-          <DialogTitle>Disconnect {channelTitle || "YouTube channel"}?</DialogTitle>
-          <DialogDescription>
-            This deletes the stored read-only token from the local database, so channel numbers stop
-            refreshing. Saved packages, video links and past syncs are kept. To revoke access on
-            Google&apos;s side as well, remove Win-Engine from your Google Account permissions.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
-            Cancel
-          </Button>
-          <Button variant="destructive" onClick={onConfirm} disabled={pending}>
-            {pending ? "Disconnecting…" : "Disconnect"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      icon={Youtube}
+      title={`Disconnect ${channelTitle || "YouTube channel"}?`}
+      description="This deletes the stored read-only token from the local database, so channel numbers stop refreshing. Saved packages, video links and past syncs are kept. To revoke access on Google's side as well, remove Win-Engine from your Google Account permissions."
+      confirmLabel="Disconnect"
+      pendingLabel="Disconnecting…"
+      pending={pending}
+      destructive
+      onConfirm={onConfirm}
+    />
   );
 }

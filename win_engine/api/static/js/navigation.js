@@ -12,7 +12,12 @@ export const pages = {
   settings: { title: "Settings & Integrations", sub: "Inspect YouTube OAuth, AI configuration, and live API diagnostics.", navId: "nav-settings", viewId: "view-settings" },
 };
 
+// Own keys only: "#constructor" or "#toString" would otherwise find Object.prototype members.
+export function isPageKey(key) {
+  return Object.prototype.hasOwnProperty.call(pages, key);
+}
+
 export function normalizePageKey(hash = "") {
   const key = String(hash || "").replace(/^#/, "");
-  return pages[key] ? key : "dashboard";
+  return isPageKey(key) ? key : "dashboard";
 }

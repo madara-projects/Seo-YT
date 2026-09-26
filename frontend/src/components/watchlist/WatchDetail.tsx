@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -16,12 +15,13 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
-import { Field, Inset, Panel } from "@/components/common/Panel";
+import { Field, Inset, Panel, Stat } from "@/components/common/Panel";
 import { SectionTitle } from "@/components/common/SectionTitle";
 import { SelectableItem } from "@/components/common/SelectableItem";
 import { CardSkeleton, EmptyState, ErrorState, UnavailableNote } from "@/components/common/States";
 import { VideoThumb } from "@/components/common/VideoThumb";
-import { apiErrorMessage, apiRequestId } from "@/api/client";
+import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
+import { useRecordActivity } from "@/hooks/useRecordActivity";
 import {
   useAnalyzeOutlier,
   useResearchWatchItem,
@@ -33,10 +33,13 @@ import { historyDate, shortDate } from "@/lib/historyFormat";
 import { asArray, formatNumber } from "@/lib/utils";
 import {
   OUTLIER_MINIMUM_PEERS,
+  OUTLIER_PEER_WINDOW_DAYS,
   OUTLIER_THRESHOLD,
   channelCounts,
+  formatMultiplier,
   languageName,
   outlierLabel,
+  watchFormatBasis,
   watchFormatLabel,
   watchStateLabel,
 } from "@/lib/watchlistFormat";
@@ -50,14 +53,11 @@ import type {
 
 const SNAPSHOTS_SHOWN = 10;
 
-function Stat({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <Inset className="space-y-1">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="font-display text-xl font-semibold leading-none tracking-tight text-foreground">{value}</dd>
-    </Inset>
-  );
-}
+const FAILURES: Record<string, string> = {
+  research: "The refresh failed; no snapshot was saved.",
+  outlier: "The outlier check failed.",
+  update: "The change could not be saved.",
+};
 
 function ExternalLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
@@ -110,35 +110,41 @@ function SnapshotRows({
 }
 
 /**
- * Refresh, outlier check and archive. Keyed by record, so switching records
- * starts from a clean slate instead of showing another record's error.
+ * Refresh, outlier check and archive. Keyed by record, and their state is
+ * read from the mutation cache for this record: opening another record and
+ * coming back still shows a request in flight (with the buttons disabled, so
+ * quota isn't spent twice) or the error it ended with.
  */
 function WatchActions({ kind, item }: { kind: WatchKind; item: WatchChannel | WatchVideo }) {
-  const research = useResearchWatchItem();
-  const analyze = useAnalyzeOutlier();
-  const update = useUpdateWatchItem();
-  const [failure, setFailure] = useState<{ error: unknown; fallback: string } | null>(null);
-  const busy = research.isPending || analyze.isPending || update.isPending;
+  const research = useResearchWatchItem(kind, item.id);
+  const analyze = useAnalyzeOutlier(item.id);
+  const update = useUpdateWatchItem(kind, item.id);
+  const activity = useRecordActivity(`watch-${kind}`, item.id);
+  const pendingAction = activity.pending?.action ?? null;
+  const busy = pendingAction !== null;
+  const lastRun = activity.latest;
+  const failure = lastRun?.status === "error" ? lastRun : null;
   const archived = item.state === "archived";
 
   const run = async (action: () => Promise<void>, fallback: string) => {
-    setFailure(null);
     try {
       await action();
     } catch (error) {
-      setFailure({ error, fallback });
+      // Also shown below; the toast reaches the creator if they've opened another record.
+      toast.error(formatApiError(error, fallback));
     }
   };
 
   const onRefresh = () =>
     run(async () => {
       const data = await research.mutateAsync({ kind, id: item.id });
+      const observed = data.observed_videos;
       toast.success(
-        kind === "channel"
-          ? `Snapshot saved. ${data.observed_videos ?? 0} recent uploads are now in your watchlist.`
+        kind === "channel" && typeof observed === "number"
+          ? `Snapshot saved. ${observed} recent ${observed === 1 ? "upload is" : "uploads are"} now in your watchlist.`
           : "Snapshot saved.",
       );
-    }, "The refresh failed; no snapshot was saved.");
+    }, FAILURES.research!);
 
   const onAnalyze = () =>
     run(async () => {
@@ -149,27 +155,28 @@ function WatchActions({ kind, item }: { kind: WatchKind; item: WatchChannel | Wa
           ? "Flagged as a possible outlier for its channel."
           : status === "observed_normal"
             ? "Within its channel's normal range."
-            : "Not enough watched videos from this channel to compare yet.",
+            : // Several things can stop the check; the backend names the one that did.
+              data.analysis?.explanation || "Not enough evidence to compare this video yet.",
       );
-    }, "The outlier check failed.");
+    }, FAILURES.outlier!);
 
   const onToggle = () =>
     run(async () => {
       await update.mutateAsync({ kind, id: item.id, changes: { state: archived ? "active" : "archived" } });
       toast.success(archived ? "Restored to your watchlist." : "Archived. Its snapshots are kept.");
-    }, "The change could not be saved.");
+    }, FAILURES.update!);
 
   return (
     <div className="space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="watch-actions">
       <div className="grid gap-2 sm:flex sm:flex-wrap">
         <Button variant="outline" onClick={() => void onRefresh()} disabled={busy}>
-          {research.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
-          {research.isPending ? "Refreshing…" : "Refresh snapshot"}
+          {pendingAction === "research" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+          {pendingAction === "research" ? "Refreshing…" : "Refresh snapshot"}
         </Button>
         {kind === "video" ? (
           <Button variant="outline" onClick={() => void onAnalyze()} disabled={busy}>
-            {analyze.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
-            {analyze.isPending ? "Checking…" : (item as WatchVideo).outlier ? "Check again" : "Run outlier check"}
+            {pendingAction === "outlier" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
+            {pendingAction === "outlier" ? "Checking…" : (item as WatchVideo).outlier ? "Check again" : "Run outlier check"}
           </Button>
         ) : null}
         <Button variant="ghost" onClick={() => void onToggle()} disabled={busy}>
@@ -179,11 +186,14 @@ function WatchActions({ kind, item }: { kind: WatchKind; item: WatchChannel | Wa
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">
         {kind === "channel"
-          ? "Refreshing reads the channel's public numbers and its 20 most recent uploads, which costs about 100 YouTube quota units."
+          ? "Refreshing reads the channel's public numbers and its 20 most recent uploads from its uploads playlist: about 3 YouTube quota units."
           : "Refreshing reads the video's public counts (one YouTube quota unit). The outlier check runs locally and is free."}
       </p>
       {failure ? (
-        <ErrorState message={apiErrorMessage(failure.error, failure.fallback)} requestId={apiRequestId(failure.error)} />
+        <ErrorState
+          message={apiErrorMessage(failure.error, FAILURES[failure.action] ?? "The request failed.")}
+          requestId={apiRequestId(failure.error)}
+        />
       ) : null}
     </div>
   );
@@ -214,7 +224,7 @@ function VideoInspector({ video }: { video: WatchVideo }) {
     >
       <div className="space-y-6">
         <div className="grid items-center gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
-          <VideoThumb videoId={video.video_id} title={video.title ?? undefined} className="w-full" />
+          <VideoThumb videoId={video.video_id} className="w-full" />
           <div className="space-y-2">
             <dl className="grid grid-cols-3 gap-2">
               <Stat label="Views" value={formatCompact(latest?.view_count)} />
@@ -237,7 +247,12 @@ function VideoInspector({ video }: { video: WatchVideo }) {
               <span className="numeric">{video.video_id}</span>
             </ExternalLink>
           </Field>
-          <Field label="Format">{watchFormatLabel(video.format)}</Field>
+          <Field label="Format">
+            {watchFormatLabel(video.format)}
+            {watchFormatBasis(video.format) ? (
+              <span className="block text-xs font-normal text-muted-foreground">{watchFormatBasis(video.format)}</span>
+            ) : null}
+          </Field>
           <Field label="Language">{languageName(video.language)}</Field>
           <Field label="Duration">{formatSeconds(video.duration_seconds)}</Field>
           <Field label="Published">{historyDate(video.published_at)}</Field>
@@ -259,8 +274,8 @@ function VideoInspector({ video }: { video: WatchVideo }) {
             </div>
             {outlier && typeof outlier.relative_multiplier === "number" ? (
               <dl className="grid grid-cols-3 gap-2">
-                <Stat label="Multiplier" value={`${outlier.relative_multiplier.toFixed(1)}×`} />
-                <Stat label="Peer median" value={formatCompact(outlier.baseline_median_views)} />
+                <Stat label="Multiplier" value={formatMultiplier(outlier.relative_multiplier)} />
+                <Stat label="Peer median at this age" value={formatCompact(outlier.baseline_median_views)} />
                 <Stat label="Peers compared" value={formatNumber(outlier.sample_size)} />
               </dl>
             ) : null}
@@ -268,9 +283,9 @@ function VideoInspector({ video }: { video: WatchVideo }) {
               {outlier?.explanation || "Not checked yet."}
             </p>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              The check compares this video's latest views with the median of at least {OUTLIER_MINIMUM_PEERS} other
-              watched videos from the same channel, and flags {OUTLIER_THRESHOLD}× or more. It shows unusual reach,
-              not why it happened.
+              The check compares this video's views per day at a similar age with at least {OUTLIER_MINIMUM_PEERS} other
+              watched videos from the same channel, published within {OUTLIER_PEER_WINDOW_DAYS} days of this one, and
+              flags {OUTLIER_THRESHOLD}× their median or more. It shows unusual reach, not why it happened.
             </p>
           </Inset>
         </section>
@@ -301,10 +316,11 @@ function ChannelInspector({
   const snapshots = asArray<WatchChannelSnapshot>(channel.snapshots);
   const latest = snapshots[0] ?? null;
   const state = watchStateLabel(channel.state);
-  const everything = useWatchVideos("", "");
-  const uploads = asArray<WatchVideo>(everything.data?.videos).filter(
-    (video) => video.watchlist_channel_id === channel.id,
-  );
+  // The outlier check's own peer pool: active watched videos with this
+  // channel's YouTube id, however they were added (the same list query the
+  // Videos tab uses, so it is shared rather than fetched twice).
+  const active = useWatchVideos("active", "");
+  const uploads = asArray<WatchVideo>(active.data?.videos).filter((video) => video.channel_id === channel.channel_id);
 
   return (
     <Panel
@@ -348,13 +364,20 @@ function ChannelInspector({
         </dl>
 
         <section className="space-y-3">
-          <SectionTitle icon={Youtube}>Watched uploads ({uploads.length})</SectionTitle>
-          {uploads.length ? (
+          <SectionTitle icon={Youtube}>
+            Watched uploads{active.isSuccess ? ` (${uploads.length})` : ""}
+          </SectionTitle>
+          {active.isPending ? (
+            <CardSkeleton rows={2} />
+          ) : active.isError ? (
+            // Unknown is not "none": suggesting a quota-spending refresh here would be wrong.
+            <UnavailableNote>Watched uploads couldn't be loaded right now.</UnavailableNote>
+          ) : uploads.length ? (
             <ul className="grid gap-1 sm:grid-cols-2">
               {uploads.slice(0, 6).map((video) => (
                 <li key={video.id}>
                   <SelectableItem selected={false} onSelect={() => onSelectVideo(video.id)} className="flex items-center gap-3 p-2">
-                    <VideoThumb videoId={video.video_id} title={video.title ?? undefined} className="w-20" />
+                    <VideoThumb videoId={video.video_id} className="w-20" />
                     <span className="min-w-0 flex-1">
                       <span className="line-clamp-2 text-xs font-medium leading-snug text-foreground">
                         {video.title || video.video_id}
@@ -371,11 +394,11 @@ function ChannelInspector({
             </ul>
           ) : (
             <UnavailableNote>
-              Refresh this channel to add its 20 most recent uploads to your watchlist. They become the peers its
-              videos are compared with in outlier checks.
+              No active watched videos from this channel yet. Refresh it to add its 20 most recent uploads; they
+              become the peers its videos are compared with in outlier checks.
             </UnavailableNote>
           )}
-          {uploads.length > 6 ? (
+          {active.isSuccess && uploads.length > 6 ? (
             <p className="text-xs text-muted-foreground">
               Showing 6 of {uploads.length}; the rest are in the Videos list.
             </p>

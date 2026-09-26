@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { VIEWPORTS, collectErrors, expectNoHorizontalOverflow, stubThumbnails } from "./helpers";
+import { VIEWPORTS, blockWrites, collectErrors, expectNoHorizontalOverflow, stubThumbnails } from "./helpers";
 
 /**
  * The watchlist against the running backend. Every watchlist call is
@@ -83,6 +83,11 @@ async function mockWatchlist(page: Page, calls: { added: unknown[]; analyzed: nu
   await stubThumbnails(page);
 }
 
+/** Nothing a test does may change saved data: writes are answered by its own routes or aborted. */
+test.beforeEach(async ({ page }) => {
+  await blockWrites(page);
+});
+
 test.describe("Watchlist", () => {
   test("adds a video from a link and runs the free outlier check", async ({ page }) => {
     const errors = collectErrors(page);
@@ -102,7 +107,7 @@ test.describe("Watchlist", () => {
     await expect(detail).toContainText("No snapshot yet");
 
     await detail.getByRole("button", { name: "Run outlier check" }).click();
-    await expect(detail.getByText("Not enough peers")).toBeVisible();
+    await expect(detail.getByText("Not enough evidence")).toBeVisible();
     expect(calls.analyzed).toBe(1);
 
     expect(errors).toEqual([]);
@@ -119,7 +124,9 @@ test.describe("Watchlist", () => {
 
     await page.getByRole("tab", { name: /Channels/ }).click();
     await page.getByTestId("watch-channel").click();
-    await expect(page).toHaveURL(/\/next\/watchlist\?channel=3$/);
+    // The search stays in the URL beside the open channel.
+    await expect(page).toHaveURL(/\/next\/watchlist\?(.*&)?channel=3(&|$)/);
+    await expect(page).toHaveURL(/[?&]q=wrap(&|$)/);
     await expect(page.getByTestId("watch-detail")).toContainText("Watched uploads (1)");
   });
 

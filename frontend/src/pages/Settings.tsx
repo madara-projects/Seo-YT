@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Activity,
@@ -23,6 +23,7 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useIsMutating } from "@tanstack/react-query";
 
 import { PageHeader } from "@/components/common/PageHeader";
 import { EvidenceChip, type EvidenceTone } from "@/components/common/EvidenceChip";
@@ -46,11 +47,13 @@ import {
   useSettingsStatus,
 } from "@/hooks/useSystem";
 import { useOAuthReturnNotice } from "@/hooks/useOAuthReturn";
+import { mutationKeys } from "@/hooks/queryKeys";
+import { useRemPx } from "@/hooks/useRemPx";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { cn, formatNumber } from "@/lib/utils";
-import { formatBytes, formatUptime, initialOf, relativeTime } from "@/lib/format";
+import { formatBytes, formatUptime, initialOf, relativeTime, scheduledTime } from "@/lib/format";
 import { historyDate } from "@/lib/historyFormat";
-import { cloudSyncState, collectorState } from "@/lib/systemFormat";
+import { cloudSyncRunOutcome, cloudSyncState, collectorState, geminiFailureLabel } from "@/lib/systemFormat";
 import { useTheme } from "@/lib/theme";
 
 const SECTIONS = [
@@ -65,13 +68,26 @@ const SECTIONS = [
 
 type SectionId = (typeof SECTIONS)[number]["id"];
 
-/** When a stamp is set, both the absolute IST time and how long ago. */
-function When({ value, empty = "Not run yet" }: { value?: string | null; empty?: string }) {
+/**
+ * When a stamp is set, both the absolute IST time and how long ago. A
+ * `scheduled` time already passed reads "Due now", not "4 min ago".
+ */
+function When({
+  value,
+  empty = "Not run yet",
+  scheduled = false,
+}: {
+  value?: string | null;
+  empty?: string;
+  scheduled?: boolean;
+}) {
   if (!value) return <span className="text-muted-foreground">{empty}</span>;
   return (
     <span>
       {historyDate(value)}
-      <span className="block text-xs font-normal text-muted-foreground">{relativeTime(value)}</span>
+      <span className="block text-xs font-normal text-muted-foreground">
+        {scheduled ? scheduledTime(value) : relativeTime(value)}
+      </span>
     </span>
   );
 }
@@ -110,6 +126,8 @@ function SectionNav({ active }: { active: SectionId }) {
 function ChannelSection() {
   const status = useChannelStatus();
   const refresh = useRefreshChannel();
+  // A refresh the Channel page started counts too: both share one mutation key.
+  const refreshing = useIsMutating({ mutationKey: mutationKeys.channelRefresh }) > 0;
   const disconnect = useDisconnectChannel();
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -196,9 +214,9 @@ function ChannelSection() {
             </Inset>
           </dl>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={onRefresh} disabled={refresh.isPending}>
-              <RefreshCw className={cn(refresh.isPending && "animate-spin")} aria-hidden="true" />
-              {refresh.isPending ? "Refreshing…" : "Refresh analytics"}
+            <Button onClick={onRefresh} disabled={refreshing}>
+              <RefreshCw className={cn(refreshing && "animate-spin")} aria-hidden="true" />
+              {refreshing ? "Refreshing…" : "Refresh analytics"}
             </Button>
             <Button variant="outline" asChild>
               <Link to="/channel">
@@ -235,8 +253,11 @@ function CloudSyncSection() {
   const onRun = async () => {
     try {
       const result = await run.mutateAsync();
-      const outcome = cloudSyncState(result?.state);
-      toast.success(`Sync ${outcome.label.toLowerCase()}.`);
+      // The run answers 200 even when it couldn't reach the cloud; only a healthy run succeeded.
+      const outcome = cloudSyncRunOutcome(result?.state);
+      if (outcome.kind === "success") toast.success(outcome.message);
+      else if (outcome.kind === "warning") toast.warning(outcome.message);
+      else toast.info(outcome.message);
     } catch (error) {
       toast.error(formatApiError(error, "Cloud sync failed; local packages are unchanged."));
     }
@@ -302,15 +323,23 @@ function CloudSyncSection() {
             </Inset>
             <Inset>
               <Field label="Next check">
-                <When value={data.next_run_at} empty="Not scheduled" />
+                <When value={data.next_run_at} empty="Not scheduled" scheduled />
               </Field>
             </Inset>
           </dl>
-          <p className="text-xs text-muted-foreground">
-            Last run uploaded {formatNumber(counts.pushed ?? 0)} and downloaded{" "}
-            {formatNumber(counts.pulled ?? 0)} package changes
-            {counts.failed ? `, with ${formatNumber(counts.failed)} failed` : ""}.
-          </p>
+          {data.last_finished_at ? (
+            <p className="text-xs text-muted-foreground">
+              Last run uploaded {formatNumber(counts.pushed)} and downloaded {formatNumber(counts.pulled)} package
+              changes
+              {counts.failed ? `, with ${formatNumber(counts.failed)} failed` : ""}
+              {counts.skipped
+                ? `; ${formatNumber(counts.skipped)} cloud ${counts.skipped === 1 ? "change was" : "changes were"} skipped because this version can't apply ${counts.skipped === 1 ? "it" : "them"}`
+                : ""}
+              .
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">No sync has finished yet.</p>
+          )}
           {data.last_error ? (
             <div className="space-y-1 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-3 text-[0.8125rem] leading-relaxed text-foreground">
               <p>
@@ -375,6 +404,7 @@ function ProvidersSection() {
   const providers = settings.data?.providers ?? {};
   const gemini = providers.gemini ?? {};
   const providerHealth = gemini.provider_health ?? {};
+  const researchHealth = gemini.research_provider_health;
   const youtube = providers.youtube_data_api ?? {};
   const redisConfigured = Boolean(providers.redis?.configured);
   const cacheOk = health.data?.cache_ok;
@@ -424,8 +454,19 @@ function ProvidersSection() {
                       ? ` · ${providerHealth.transient_failure_count} recent transient failure(s)`
                       : " · no recent failures"}
                     {providerHealth.last_failure_category
-                      ? ` · last: ${providerHealth.last_failure_category}`
+                      ? ` · last: ${geminiFailureLabel(providerHealth.last_failure_category)}`
                       : ""}
+                    {researchHealth?.cooldown_active || researchHealth?.transient_failure_count ? (
+                      <span className="block">
+                        Research calls:{" "}
+                        {researchHealth.cooldown_active
+                          ? `paused for ${Math.ceil(researchHealth.cooldown_remaining_seconds ?? 0)}s`
+                          : `${researchHealth.transient_failure_count} recent transient failure(s)`}
+                        {researchHealth.last_failure_category
+                          ? ` · last: ${geminiFailureLabel(researchHealth.last_failure_category)}`
+                          : ""}
+                      </span>
+                    ) : null}
                   </>
                 ) : (
                   "Packages are written by the local fallback until a Gemini key is configured."
@@ -476,7 +517,7 @@ function ProvidersSection() {
               <div className="space-y-0.5">
                 <p className="text-[0.8125rem] font-semibold text-foreground">Live YouTube check</p>
                 <p className="text-xs text-muted-foreground">
-                  Runs one real YouTube search to prove the key works (about 100 quota units).
+                  Makes one small YouTube request to prove the key works (1 quota unit).
                 </p>
               </div>
               <Button
@@ -525,6 +566,8 @@ function DatabaseSection() {
   const settings = useSettingsStatus();
   const database = settings.data?.database ?? {};
   const counts = database.counts ?? {};
+  // The server now reports the database's real state; a missing value is unknown, not healthy.
+  const healthy = typeof database.healthy === "boolean" ? database.healthy : null;
 
   return (
     <Panel
@@ -535,8 +578,8 @@ function DatabaseSection() {
       description="Everything you generate is saved here first."
       aside={
         settings.isSuccess ? (
-          <EvidenceChip tone={database.healthy ? "ok" : "bad"}>
-            {database.healthy ? "Healthy" : "Error"}
+          <EvidenceChip tone={healthy === null ? "neutral" : healthy ? "ok" : "bad"}>
+            {healthy === null ? "Unavailable" : healthy ? "Healthy" : "Error"}
           </EvidenceChip>
         ) : null
       }
@@ -547,6 +590,18 @@ function DatabaseSection() {
         <UnavailableNote>Database status unavailable.</UnavailableNote>
       ) : (
         <div className="space-y-4">
+          {healthy === false ? (
+            <p className="rounded-xl border border-tone-bad-border bg-tone-bad-bg px-3.5 py-3 text-[0.8125rem] leading-relaxed text-foreground">
+              The database could not be opened
+              {database.error ? (
+                <>
+                  {" "}
+                  (<code className="numeric text-xs">{database.error}</code>)
+                </>
+              ) : null}
+              , so its counts are unavailable. Saving and loading packages fail until it can be read again.
+            </p>
+          ) : null}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {[
               ["Packages", counts.packages],
@@ -570,7 +625,8 @@ function DatabaseSection() {
             </Inset>
             <Inset>
               <Field label="Schema · size" mono>
-                v{formatNumber(database.schema_version)} · {formatBytes(database.size_bytes)}
+                {typeof database.schema_version === "number" ? `v${database.schema_version}` : "Schema unavailable"} ·{" "}
+                {formatBytes(database.size_bytes)}
               </Field>
             </Inset>
             <Inset>
@@ -591,11 +647,16 @@ function CollectorSection() {
   const state = collectorState(collector.state);
   const counts = collector.last_counts ?? {};
 
+  // Counts mean something only once a check has finished. The backend always
+  // sends `last_counts`, as zeros before the first run, so only the finish
+  // time tells a real zero from "not run yet".
+  const ran = Boolean(collector.last_finished_at);
+  const count = (value: number | undefined) => (ran ? formatNumber(value) : "Not run yet");
   const explanation =
     collector.state === "disabled"
       ? "Automatic collection is disabled by configuration."
       : collector.state === "unconfigured"
-        ? "Collector is not configured; no collection has run."
+        ? "No YouTube channel is connected, so the collector has nothing it may read: it only collects videos verified for your channel. Connect it above."
         : collector.dry_run
           ? "Dry run: it plans which linked videos are due for a snapshot but makes no YouTube or Gemini calls and writes nothing."
           : collector.state === "error"
@@ -621,9 +682,9 @@ function CollectorSection() {
           <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {([
               ["Mode", collector.enabled ? (collector.dry_run ? "Dry run" : "Live") : "Off"],
-              ["Linked videos due", formatNumber(counts.links ?? 0)],
-              ["Due windows", formatNumber(counts.windows ?? 0)],
-              ["Captured · failed", `${formatNumber(counts.captured ?? 0)} · ${formatNumber(counts.failed ?? 0)}`],
+              ["Linked videos due", count(counts.links)],
+              ["Due windows", count(counts.windows)],
+              ["Captured · failed", ran ? `${formatNumber(counts.captured)} · ${formatNumber(counts.failed)}` : "Not run yet"],
             ] satisfies [string, string][]).map(([label, value]) => (
               <Inset key={label}>
                 <Field label={label} mono={label !== "Mode"}>
@@ -640,7 +701,7 @@ function CollectorSection() {
             </Inset>
             <Inset>
               <Field label="Next check">
-                <When value={collector.next_run_at} empty="Not scheduled" />
+                <When value={collector.next_run_at} empty="Not scheduled" scheduled />
               </Field>
             </Inset>
           </dl>
@@ -658,6 +719,28 @@ const THEMES = [
 
 function AppearanceSection() {
   const { theme, setTheme } = useTheme();
+  const radios = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // A radio group is one tab stop; the arrow keys move and select within it.
+  const onKeyDown = (event: React.KeyboardEvent, index: number) => {
+    const last = THEMES.length - 1;
+    const next =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? index === last ? 0 : index + 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? index === 0 ? last : index - 1
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? last
+              : null;
+    if (next === null) return;
+    event.preventDefault();
+    const target = THEMES[next];
+    if (!target) return;
+    setTheme(target.value);
+    radios.current[next]?.focus();
+  };
 
   return (
     <Panel
@@ -668,15 +751,20 @@ function AppearanceSection() {
       description="Saved in this browser only."
     >
       <div role="radiogroup" aria-label="Theme" className="grid gap-3 sm:grid-cols-3">
-        {THEMES.map(({ value, label, icon: Icon }) => {
+        {THEMES.map(({ value, label, icon: Icon }, index) => {
           const checked = theme === value;
           return (
             <button
               key={value}
+              ref={(node) => {
+                radios.current[index] = node;
+              }}
               type="button"
               role="radio"
               aria-checked={checked}
+              tabIndex={checked ? 0 : -1}
               onClick={() => setTheme(value)}
+              onKeyDown={(event) => onKeyDown(event, index)}
               className={cn(
                 "group overflow-hidden rounded-2xl border text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 checked ? "border-brand-border ring-2 ring-brand/30" : "border-border hover:border-foreground/20",
@@ -755,9 +843,10 @@ function AboutSection() {
         </dl>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" asChild>
-            <a href="/dashboard_legacy" target="_blank" rel="noreferrer">
+            <a href="/app" target="_blank" rel="noreferrer">
               Open the classic dashboard
               <ArrowUpRight aria-hidden="true" />
+              <span className="sr-only">(opens in a new tab)</span>
             </a>
           </Button>
         </div>
@@ -769,6 +858,8 @@ function AboutSection() {
 export default function SettingsPage() {
   const { notice, dismiss } = useOAuthReturnNotice();
   const [active, setActive] = useState<SectionId>("channel");
+  // The sticky header's height in rem, so the offset follows the 80% desktop scale.
+  const headerOffset = useRemPx()(6);
 
   // Highlight the section in view. Skipped where IntersectionObserver is absent.
   useEffect(() => {
@@ -781,14 +872,15 @@ export default function SettingsPage() {
         const id = visible?.target.id.replace("settings-", "") as SectionId | undefined;
         if (id) setActive(id);
       },
-      { rootMargin: "-96px 0px -55% 0px" },
+      // IntersectionObserver takes only px or %.
+      { rootMargin: `-${headerOffset}px 0px -55% 0px` },
     );
     for (const { id } of SECTIONS) {
       const node = document.getElementById(`settings-${id}`);
       if (node) observer.observe(node);
     }
     return () => observer.disconnect();
-  }, []);
+  }, [headerOffset]);
 
   return (
     <div className="mx-auto w-full max-w-page animate-fade-up">

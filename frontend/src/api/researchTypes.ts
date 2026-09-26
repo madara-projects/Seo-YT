@@ -19,13 +19,20 @@ export interface DemandSignal {
   limitation?: string;
 }
 
-export interface DemandPublicResult {
-  video_id?: string;
-  title?: string;
-  channel_title?: string;
-  published_at?: string;
+/**
+ * A public YouTube video as research snapshots store it, with the counts it
+ * had at capture. Idea research and demand research both save this shape.
+ */
+export interface PublicVideoResult {
+  video_id?: string | null;
+  title?: string | null;
+  channel_title?: string | null;
+  published_at?: string | null;
   // YouTube returns counts as strings; they are stored as received.
   view_count?: number | string | null;
+}
+
+export interface DemandPublicResult extends PublicVideoResult {
   like_count?: number | string | null;
   comment_count?: number | string | null;
 }
@@ -87,4 +94,6 @@ export interface DemandGenerateResponse {
   status?: string;
   analysis?: { history_run_id?: number; title?: string };
   demand_research_id?: number;
+  /** Present when the snapshot belongs to an idea, which now carries the package. */
+  idea?: { id: number; status?: string } | null;
 }

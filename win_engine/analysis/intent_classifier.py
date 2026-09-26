@@ -9,7 +9,9 @@ IntentLabel = Literal["SEARCH", "BROWSE", "SUGGESTED"]
 def classify_intent(script: str) -> IntentLabel:
     """Basic heuristic intent classifier.
 
-    Uses deterministic keyword signals and a conservative fallback.
+    Uses deterministic keyword signals and a conservative fallback. SUGGESTED
+    is the fallback, so curiosity phrasing ("shocking", "secret") needs no
+    marker list of its own.
     """
 
     lower = script.lower()
@@ -36,23 +38,11 @@ def classify_intent(script: str) -> IntentLabel:
         "review",
         "what happened",
     ]
-    suggested_markers = [
-        "nobody talks about",
-        "truth nobody",
-        "shocking",
-        "viral",
-        "secret",
-        "mistakes",
-        "overhyped",
-    ]
 
     if any(token in lower for token in search_markers):
         return "SEARCH"
 
     if any(token in lower for token in browse_markers):
         return "BROWSE"
-
-    if any(token in lower for token in suggested_markers):
-        return "SUGGESTED"
 
     return "SUGGESTED"

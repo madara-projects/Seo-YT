@@ -8,7 +8,9 @@ import {
   YAxis,
 } from "recharts";
 import { UnavailableNote } from "@/components/common/States";
+import { useRemPx } from "@/hooks/useRemPx";
 import { formatCompact, toFiniteNumber } from "@/lib/format";
+import { UNAVAILABLE } from "@/lib/utils";
 import { shortDate } from "@/lib/historyFormat";
 import { recentUploadsSeries } from "@/lib/channelFormat";
 import type { ChannelVideo } from "@/api/systemTypes";
@@ -48,6 +50,7 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: { paylo
  * caption says so rather than letting the shape imply a decline.
  */
 export function UploadsChart({ videos }: { videos: ChannelVideo[] }) {
+  const rem = useRemPx();
   const points: Point[] = recentUploadsSeries(videos, 12)
     .filter((video) => toFiniteNumber(video.views) !== null)
     .map((video, index) => ({
@@ -60,7 +63,7 @@ export function UploadsChart({ videos }: { videos: ChannelVideo[] }) {
             day: "numeric",
             month: "short",
           })
-        : "—",
+        : UNAVAILABLE,
       views: Number(video.views),
       likes: toFiniteNumber(video.likes),
       comments: toFiniteNumber(video.comments),
@@ -80,7 +83,11 @@ export function UploadsChart({ videos }: { videos: ChannelVideo[] }) {
     <>
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={points} margin={{ top: 8, right: 4, bottom: 0, left: -12 }} barCategoryGap="22%">
+          <BarChart
+            data={points}
+            margin={{ top: rem(0.5), right: rem(0.25), bottom: 0, left: rem(-0.75) }}
+            barCategoryGap="22%"
+          >
             <defs>
               <linearGradient id="uploads-bar" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0" stopColor="var(--chart-1)" stopOpacity={1} />
@@ -100,7 +107,7 @@ export function UploadsChart({ videos }: { videos: ChannelVideo[] }) {
               tick={{ fill: "var(--chart-axis)", fontSize: CHART_TEXT }}
               tickLine={false}
               axisLine={false}
-              width={48}
+              width={rem(3)}
             />
             <Tooltip content={<ChartTooltip />} cursor={{ fill: "var(--chart-grid)", fillOpacity: 0.35 }} />
             <Bar dataKey="views" fill="url(#uploads-bar)" radius={[8, 8, 2, 2]} isAnimationActive={false} />

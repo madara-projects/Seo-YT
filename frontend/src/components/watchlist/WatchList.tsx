@@ -6,7 +6,7 @@ import { OptionSelect } from "@/components/common/OptionSelect";
 import { SelectableItem } from "@/components/common/SelectableItem";
 import { VideoThumb } from "@/components/common/VideoThumb";
 import { ListBody, ListPanel, RecordList } from "@/components/research/ListPanel";
-import { formatCompact, initialOf, relativeTime } from "@/lib/format";
+import { initialOf, relativeTime, viewsAsOf } from "@/lib/format";
 import { channelCounts, outlierLabel } from "@/lib/watchlistFormat";
 import { WATCH_STATE_FILTERS } from "@/schemas/watchlist";
 import type { WatchChannel, WatchVideo } from "@/api/watchlistTypes";
@@ -121,7 +121,7 @@ export function WatchList({
             <RecordList label="Watched videos">
               {videos.items.map((video) => {
                 const outlier = outlierLabel(video.outlier?.status);
-                const views = video.latest_snapshot?.view_count;
+                const latest = video.latest_snapshot;
                 return (
                   <li key={video.id}>
                     <SelectableItem
@@ -130,7 +130,7 @@ export function WatchList({
                       data-testid="watch-video"
                       className="flex items-center gap-3"
                     >
-                      <VideoThumb videoId={video.video_id} title={video.title ?? undefined} className="w-20" />
+                      <VideoThumb videoId={video.video_id} className="w-20" />
                       <span className="min-w-0 flex-1">
                         <span className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
                           {video.title || video.video_id}
@@ -140,7 +140,9 @@ export function WatchList({
                         </span>
                         <span className="mt-1 flex flex-wrap items-center gap-1.5">
                           <span className="numeric text-[0.6875rem] text-muted-foreground">
-                            {typeof views === "number" ? `${formatCompact(views)} views` : "No snapshot yet"}
+                            {typeof latest?.view_count === "number"
+                              ? viewsAsOf(latest.view_count, latest.captured_at)
+                              : "No snapshot yet"}
                           </span>
                           {video.outlier ? (
                             <EvidenceChip tone={outlier.tone}>{outlier.label}</EvidenceChip>

@@ -1,6 +1,5 @@
 from __future__ import annotations
 import os, sqlite3, tempfile, unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,7 +7,7 @@ from fastapi import HTTPException
 from win_engine.analysis.demand_explorer import analyze_demand, idea_fingerprint
 from win_engine.api import routes
 from win_engine.core.config import Settings
-from win_engine.core.schemas import CreateWatchChannelRequest, CreateWatchVideoRequest, DemandResearchRequest
+from win_engine.core.schemas import CreateWatchChannelRequest
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.intelligence_store import IntelligenceStore, duration_seconds
 from win_engine.feedback.migrations import CURRENT_SCHEMA_VERSION, prepare_database

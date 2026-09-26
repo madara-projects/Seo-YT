@@ -7,12 +7,17 @@ import json
 from statistics import mean, median
 from typing import Any
 
-from win_engine.feedback.evidence_policy import confidence_payload, mature_snapshot
+from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES, confidence_payload, mature_snapshot
 
 
 AUDIT_RULE_VERSION = "phase8-audit-v1"
 EXPERIMENT_RULE_VERSION = "phase8-experiment-v1"
 SUPPORTED_METRICS = {"views", "average_view_percentage", "likes", "comments", "engagement_rate"}
+# The audit cohort is filtered on these; every other candidate variable goes
+# uncompared in it.
+_COHORT_VARIABLES = {"format", "language"}
+# A relative difference below this is noise, not a direction.
+_DIRECTION_THRESHOLD_PERCENT = 5
 
 
 def _text(value: Any) -> str:
@@ -143,20 +148,35 @@ def build_published_audit(context: dict[str, Any]) -> dict[str, Any]:
     else:
         finding("mature_observation_available", "info", "performance", f"{len(mature)} completed observation window(s) are available.", "verified completed YouTube Analytics snapshots", "mature_observation", "The observations support comparison, not causality.")
 
+    # The store hands over a peer cohort: the audited video is not counted
+    # toward its own comparison.
     cohort = context.get("cohort") or {}
+    comparable = context.get("comparable") or {}
+    peer_count = int(cohort.get("sample_size") or 0)
     learning_allowed = bool(cohort.get("learning_allowed"))
     brief = package.get("creator_brief") if isinstance(package.get("creator_brief"), dict) else {}
     candidate_state = "mature_comparable_evidence" if learning_allowed and mature else "hypothesis_only" if mature else "insufficient_evidence"
     candidates = []
     for variable, value in (
-        ("format", (context.get("comparable") or {}).get("format") or link.get("format")),
-        ("language", (context.get("comparable") or {}).get("language") or link.get("language")),
+        ("format", comparable.get("format") or link.get("format")),
+        ("language", comparable.get("language") or link.get("language")),
         ("topic", brief.get("topic") or run.get("query")),
         ("title_mechanism", selected.get("mechanism") if selection else None),
         ("discovery_surface", selected.get("surface") if selection else None),
     ):
-        if value:
-            candidates.append({"variable": variable, "value": value, "evidence_state": candidate_state, "sample_size": int(cohort.get("sample_size") or 0), "interpretation": "Observed association candidate; never causal proof.", "provenance": "saved_package_and_shared_evidence_policy"})
+        if not value:
+            continue
+        # The cohort is matched on format and language only. It never compares
+        # topic, title mechanism or discovery surface, so it cannot back a
+        # candidate about them.
+        compared = variable in _COHORT_VARIABLES
+        candidates.append({
+            "variable": variable, "value": value,
+            "evidence_state": candidate_state if compared else "hypothesis_only" if mature else "insufficient_evidence",
+            "sample_size": peer_count if compared else 0,
+            "interpretation": "Observed association candidate; never causal proof." if compared else "Not compared across videos; a hypothesis to test, never causal proof.",
+            "provenance": "saved_package_and_shared_evidence_policy",
+        })
 
     if not published_available:
         summary_state = "not_enough_data"
@@ -191,9 +211,11 @@ def _metric_value(snapshot: dict[str, Any], metric: str) -> float | None:
     key = "avg_view_percentage" if metric == "average_view_percentage" else metric
     if metric == "engagement_rate":
         views = snapshot.get("views")
-        if not views:
+        parts = [snapshot.get(k) for k in ("likes", "comments", "shares")]
+        # A missing count would read as zero engagement and drag the rate down.
+        if not views or any(part is None for part in parts):
             return None
-        return 100.0 * sum(float(snapshot.get(k) or 0) for k in ("likes", "comments", "shares")) / float(views)
+        return 100.0 * sum(float(part) for part in parts) / float(views)
     value = snapshot.get(key)
     return float(value) if value is not None else None
 
@@ -215,6 +237,7 @@ def compare_experiment(experiment: dict[str, Any], assignments: list[dict[str, A
         elif role in groups:
             missing_metrics.append({"link_id": item.get("published_video_link_id"), "role": role, "reason": "completed comparable window unavailable"})
 
+    minimum = max(EARLY_SIGNAL_MIN_SAMPLES, int(experiment.get("minimum_sample_size") or EARLY_SIGNAL_MIN_SAMPLES))
     metric_results = []
     directions = []
     for metric in metrics:
@@ -224,32 +247,42 @@ def compare_experiment(experiment: dict[str, Any], assignments: list[dict[str, A
         difference = (vm - cm) if cm is not None and vm is not None else None
         relative = (difference / abs(cm) * 100.0) if difference is not None and cm else None
         direction = "variant" if difference is not None and difference > 0 else "control" if difference is not None and difference < 0 else "even"
-        if relative is not None and abs(relative) >= 5:
+        # A metric only counts toward mixed results when each group has enough
+        # values of its own; mature snapshots can still lack the metric.
+        if min(len(control), len(variant)) >= minimum and relative is not None and abs(relative) >= _DIRECTION_THRESHOLD_PERCENT:
             directions.append(direction)
         metric_results.append({"metric": metric, "control": {"sample_size": len(control), "median": cm, "mean": mean(control) if control else None}, "variant": {"sample_size": len(variant), "median": vm, "mean": mean(variant) if variant else None}, "difference": difference, "relative_difference_percent": round(relative, 2) if relative is not None else None, "observed_direction": direction, "provenance": "verified_completed_youtube_analytics_snapshot"})
 
     assigned_control = sum(item.get("role") == "control" for item in assignments)
     assigned_variant = sum(item.get("role") == "variant" for item in assignments)
-    minimum = max(5, int(experiment.get("minimum_sample_size") or 5))
-    enough = len(groups["control"]) >= minimum and len(groups["variant"]) >= minimum
+    primary = metric_results[0] if metric_results else {}
+    # The conclusion rests on the primary metric, so its own per-group counts
+    # decide: ten mature videos with one primary value each used to read as
+    # a direction with moderate evidence.
+    primary_counts = (int((primary.get("control") or {}).get("sample_size") or 0), int((primary.get("variant") or {}).get("sample_size") or 0))
+    enough = min(primary_counts) >= minimum
+    relative = primary.get("relative_difference_percent")
+    has_direction = relative is not None and abs(relative) >= _DIRECTION_THRESHOLD_PERCENT
     if not enough:
         state = "insufficient_evidence"
     elif experiment.get("mode") == "observational":
-        state = "observational_pattern"
+        # Identical groups used to report "a historical association is visible".
+        state = "observational_pattern" if has_direction else "inconclusive"
     elif "control" in directions and "variant" in directions:
         state = "mixed_results"
+    elif not has_direction:
+        state = "inconclusive"
     else:
-        primary = metric_results[0] if metric_results else {}
-        relative = primary.get("relative_difference_percent")
-        if relative is None or abs(relative) < 5:
-            state = "inconclusive"
-        else:
-            state = "directional_variant" if relative > 0 else "directional_control"
+        state = "directional_variant" if relative > 0 else "directional_control"
 
-    policy = confidence_payload(len(groups["control"]) + len(groups["variant"]))
+    # Confidence follows the smaller group: five controls and no variants are
+    # not an early signal, and nothing is learnable below the minimum.
+    policy = confidence_payload(min(primary_counts))
+    if not enough:
+        policy = {**policy, "learning_allowed": False}
     learning = None
     if enough and state not in {"insufficient_evidence", "inconclusive"}:
-        learning = {"variable": experiment.get("variable"), "observation": state, "evidence_state": "observed_association" if experiment.get("mode") == "observational" else "directional", "sample_size": len(groups["control"]) + len(groups["variant"]), "source_experiment": experiment.get("id"), "future_generation_allowed": bool(policy["learning_allowed"]), "interpretation": "Associated with the observed result in this sample; not causal proof."}
+        learning = {"variable": experiment.get("variable"), "observation": state, "evidence_state": "observed_association" if experiment.get("mode") == "observational" else "directional", "sample_size": sum(primary_counts), "source_experiment": experiment.get("id"), "future_generation_allowed": bool(policy["learning_allowed"]), "interpretation": "Associated with the observed result in this sample; not causal proof."}
     label = "OBSERVATIONAL — NOT A CONTROLLED EXPERIMENT" if experiment.get("mode") == "observational" else "PLANNED EXPERIMENT — DIRECTIONAL, NOT CAUSAL PROOF"
     return {"rule_version": EXPERIMENT_RULE_VERSION, "state": state, "mode": experiment.get("mode"), "label": label, "sample": {"assigned_control": assigned_control, "assigned_variant": assigned_variant, "eligible_control": len(groups["control"]), "eligible_variant": len(groups["variant"]), "mature_control": len(groups["control"]), "mature_variant": len(groups["variant"]), "observational_references": reference_count, "minimum_per_group": minimum, "missing_metrics": missing_metrics}, "metrics": metric_results, "evidence": {**policy, "observation_window": experiment.get("observation_window"), "status": "directional_evidence" if enough else "insufficient_evidence"}, "interpretation": _experiment_interpretation(state), "limitations": ["Assignment records intent but does not eliminate distribution, topic, audience, timing, or content confounders.", "No fake statistical significance or causal claim is calculated.", "Only verified completed snapshots in the selected window are eligible."], "learning_candidate": learning, "next_recommendation": "Collect more eligible control and variant videos." if not enough else "Treat this as a candidate explanation and repeat the comparison before changing generation policy."}
 

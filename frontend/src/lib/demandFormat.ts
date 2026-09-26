@@ -69,8 +69,6 @@ export function sourceLabel(source: unknown): { label: string; tone: EvidenceTon
       return { label: "Public observation", tone: "info" };
     case "heuristic":
       return { label: "Local heuristic", tone: "warn" };
-    case "post_publish_evidence":
-      return { label: "Your published videos", tone: "ok" };
     default:
       return { label: "Unavailable", tone: "neutral" };
   }
@@ -89,7 +87,8 @@ const REGION_ALIASES = new Map([
 ]);
 const FORMAT_ALIASES = new Map([["unknown", ""]]);
 
-export const languageLabel = (value: unknown) => optionLabel(DEMAND_LANGUAGE_OPTIONS, value, "Any language");
+// A snapshot saved with no language was researched in English.
+export const languageLabel = (value: unknown) => optionLabel(DEMAND_LANGUAGE_OPTIONS, value, "English (default)");
 export const formatLabel = (value: unknown) =>
   optionLabel(DEMAND_FORMAT_OPTIONS, value, "Any format", FORMAT_ALIASES);
 export const regionLabel = (value: unknown) =>

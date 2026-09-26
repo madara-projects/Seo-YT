@@ -32,14 +32,15 @@ Implemented and available now:
 - Versioned SQLite migrations, verified backup-before-migration, enforced foreign keys, and transactional deletion.
 - Local rate limiting, request IDs, security headers, encrypted OAuth refresh-token storage, Redis research caching, and SQLite WAL mode.
 - Docker health check and localhost-only application binding.
-- Production Compose verification completed on 16 August 2026: `redis` and `win-engine` are healthy/running, static and rollback routes return HTTP 200, and the application image contains no Playwright, Chromium, Node, or Ollama.
+- Production Compose verification completed on 16 August 2026: `redis` and `win-engine` are healthy/running, the static routes return HTTP 200, and the application image contains no Playwright, Chromium, Node, or Ollama.
 - Truthful loading, unavailable, and evidence-provenance states across the dashboard, plus one shared frontend API/error layer that preserves request IDs.
 - Advanced Creator brief values persist through accordion collapse and are submitted in the single intentional Analyze request.
 - Collector status clearly distinguishes disabled, dry-run, and unavailable/error states; collector remains disabled by default.
-- Phase 3C local static frontend extraction: FastAPI serves same-origin HTML/CSS/native ES modules, with shared API/error/state/navigation modules and a `/dashboard_legacy` rollback route.
+- Phase 3C local static frontend extraction: FastAPI serves same-origin HTML/CSS/native ES modules, with shared API/error/state/navigation modules.
+- A React interface at `/next` covers every page (Dashboard, Creator, History, Channel, Ideas, Demand, Watchlist, Audits, Experiments, Settings) beside the classic dashboard at `/`.
 - Complete Phase 3D Creator decision workflow: Idea, Brief, Research, Angle, Packaging, Compare, Decision, and Checklist.
 - Deterministic local package comparison, evidence-aware decision summaries, manual pre-publish acknowledgments, safe copy, and full JSON export. Explicit package selection is saved to History; checklist state remains local, and neither action publishes or changes YouTube.
-- Phase 4 generation quality gate checks quote fidelity, unsupported claims, title repetition/diversity, template leakage, description/tag contamination, hashtags, required Shorts tags, contradictions, and Unicode-aware Tamil/Tanglish behavior.
+- Phase 4 generation quality gate checks quote fidelity, unsupported claims, title repetition/diversity, template leakage, description/tag contamination, hashtags, the Shorts title hashtag, contradictions, and Unicode-aware Tamil/Tanglish behavior.
 - Phase 5 deterministic hook, first-frame, pacing, quote-presentation, package-alignment, and retention-risk guidance is integrated into the existing Creator workflow. It distinguishes creator facts, local inference, heuristics, unavailable data, and mature post-publish evidence.
 - Retention learning uses only verified, comparable, completed-window videos with real average-view-percentage data. Fewer than five eligible videos remains `insufficient_evidence`; observed associations are never presented as causation.
 - Stage G1 Ideas Workspace saves original topics and creator fields in SQLite, supports status filtering and pagination, preserves immutable dated research snapshots, generates through the existing Creator engine, and automatically links the idea lifecycle to its History run and verified published-video record.
@@ -51,7 +52,7 @@ Implemented and available now:
 - Phase 8 Experiment Center records explicit hypotheses, controlled or observational mode, one named variable, control/variant definitions, verified linked-video assignments, comparable observation windows, and immutable result snapshots. Small samples remain `insufficient_evidence`; visible directions are associations, never causal winners.
 - Gemini generation allows at most one quality-repair request. Empty, rejected, or quota-exhausted provider responses stop immediately and use the clearly labelled local fallback.
 - Creator rendering and behavior are owned by `pages/creator.js`; the temporary Creator compatibility renderer and window bridge were removed from `app.js`.
-- 179 automated backend tests and 38 deterministic Chromium browser tests (217 tests in the full local discovery run; browser tooling stays outside production Docker).
+- 960 automated backend tests, 61 deterministic Chromium browser tests for the classic dashboard, 262 Vitest tests and 70 Playwright checks for the React interface; browser tooling stays outside production Docker.
 
 Planned but not yet complete:
 
@@ -102,7 +103,7 @@ The creator always decides what to publish or change. SEO YT does not automatica
 
 | Page | Current purpose |
 |---|---|
-| Dashboard | Channel summary, recent activity, diagnostics, and shortcuts. |
+| Dashboard | Channel summary, recent activity, and shortcuts. |
 | Creator Studio | Move from idea and brief through research, angle, packaging, local comparison/selection, final decision, and a manual pre-publish checklist. |
 | Ideas | Save original ideas, refresh dated research, inspect evidence, open Demand research, and generate through the existing Creator engine. |
 | Demand | Research a topic from dated public and eligible personal signals, inspect limitations/provenance, and generate through the existing engine. |
@@ -111,7 +112,7 @@ The creator always decides what to publish or change. SEO YT does not automatica
 | Experiments | Create planned or observational comparisons, explicitly assign verified linked videos, and compare mature metrics without fake significance or causal claims. |
 | Analytics | View connected-channel metrics, owned videos, linked-video snapshots, and cohort-learning status. |
 | History | Open complete saved packages, copy their contents, link an owned published video, and review actual metadata and performance. |
-| Settings | Inspect YouTube OAuth, AI configuration, collector state, and local application diagnostics. |
+| Settings | Inspect YouTube OAuth, AI configuration, collector and cloud-sync state, and local application health. Live diagnostics (one small YouTube and Gemini check) run only when requested. |
 
 ## Generated package
 
@@ -186,7 +187,9 @@ FastAPI application (local static shell + API)
       +-- Redis research cache
 ```
 
-The default `/`, `/app`, and `/dashboard_view` routes serve the extracted local shell from `win_engine/api/static/index.html`. CSS and native ES modules are served from the same FastAPI process at `/static/*`; no CDN, Node toolchain, or second frontend server is required. `pages/creator.js` owns Creator state, requests, rendering, comparison, selection, checklist, copy, and export. The original embedded dashboard remains available at `/dashboard_legacy` for rollback.
+The default `/`, `/app`, and `/dashboard_view` routes serve the classic dashboard from `win_engine/api/static/index.html`. Its CSS and native ES modules are served from the same FastAPI process at `/static/*`, and it loads nothing from other hosts. `pages/creator.js` owns Creator state, requests, rendering, comparison, selection, checklist, copy, and export.
+
+The React interface is served at `/next` from the committed production build in `win_engine/api/static/app/`; its source is in `frontend/`. It loads its typefaces from Google Fonts. Neither interface needs Node or a second server at runtime.
 
 ## Requirements
 
@@ -235,7 +238,15 @@ Important variables:
 | `WIN_ENGINE_CACHE_TTL_EVERGREEN_SECONDS` | Evergreen research cache lifetime. | Default `604800` |
 | `WIN_ENGINE_ADMIN_API_TOKEN` | Required header value for protected operational endpoints in production. | Recommended |
 | `WIN_ENGINE_RATE_LIMIT_WINDOW_SECONDS` | In-memory request-rate window. | Default `60` |
-| `WIN_ENGINE_RATE_LIMIT_MAX_REQUESTS` | General requests allowed per client/path/window. | Default `60` |
+| `WIN_ENGINE_RATE_LIMIT_MAX_REQUESTS` | General requests allowed per client, route and window. | Default `60` |
+| `WIN_ENGINE_ANALYZE_RATE_LIMIT_MAX_REQUESTS` | Requests per route and window that spend YouTube quota or Gemini calls (analyze, research, generate, refresh, link, sync). | Default `8` |
+| `WIN_ENGINE_ALLOWED_HOSTS` | Host names the server answers to; any other `Host` header is refused. | Default `127.0.0.1,localhost,::1` |
+| `WIN_ENGINE_MAX_REQUEST_BYTES` | Largest request body accepted. | Default `1048576` |
+| `WIN_ENGINE_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, in any case. Libraries that could print tokens or keys stay at `WARNING`. | Default `INFO` |
+| `WIN_ENGINE_SNAPSHOT_COLLECTOR_ENABLED` | Scheduled 24h/7d/28d snapshots of linked videos. | Default `false` |
+| `WIN_ENGINE_CLOUD_SYNC_ENABLED` | Optional History sync through MySQL; see `.env.example`. | Default `false` |
+
+`.env.example` lists every setting, including the Gemini retry, cooldown and per-request budget limits.
 
 Generate the OAuth encryption key once:
 
@@ -266,13 +277,12 @@ The application requests read-only YouTube and YouTube Analytics scopes. It cann
 
 ## Run with Docker
 
-Create the SQLite file once if it does not already exist. This ensures Docker bind-mounts a file rather than creating a directory.
+Create the data directory once. Compose mounts it into the container, and the application creates the database and its backups inside it.
 
 PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force runtime/data | Out-Null
-if (-not (Test-Path runtime/data/win_engine.db)) { New-Item -ItemType File runtime/data/win_engine.db }
 docker compose up -d --build
 docker compose ps
 ```
@@ -281,7 +291,6 @@ Bash:
 
 ```bash
 mkdir -p runtime/data
-touch runtime/data/win_engine.db
 docker compose up -d --build
 docker compose ps
 ```
@@ -289,12 +298,13 @@ docker compose ps
 Open:
 
 - Dashboard: [http://127.0.0.1:8000](http://127.0.0.1:8000)
-- API documentation: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- React interface: [http://127.0.0.1:8000/next](http://127.0.0.1:8000/next)
 - Health check: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
+- API schema: [http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)
 
 Docker publishes the application only on `127.0.0.1:8000`. Redis is available only to the Compose network and has no host port.
 
-The application container runs as an unprivileged user (UID 10001). Docker Desktop, the supported setup, lets it write the bind-mounted `runtime/data` directory as it is. On a plain Linux Docker host, give that UID write access once with `sudo chown -R 10001:10001 runtime/data`.
+The application container runs as an unprivileged user (UID 10001) on a read-only root filesystem, with every Linux capability dropped and privilege escalation disabled; only `runtime/data` and `/tmp` are writable. Docker Desktop, the supported setup, lets it write the bind-mounted `runtime/data` directory as it is. On a plain Linux Docker host, give that UID write access once with `sudo chown -R 10001:10001 runtime/data`.
 
 Requests that change data (anything other than GET, HEAD and OPTIONS) are refused when a browser marks them as coming from another website, so a page open in the same browser cannot disconnect the channel or delete packages. Scripts and `curl` calls, which send no such marking, are unaffected.
 
@@ -335,18 +345,19 @@ When Redis is unavailable, the research cache falls back to its supported local 
 | `GET` | `/` | Dashboard application. |
 | `GET` | `/health` | Process and database health. |
 | `GET` | `/ready` | Protected readiness details in production. |
-| `GET` | `/meta` | Application metadata and capability summary. |
-| `GET` | `/diagnostics` | Sanitized YouTube research and Gemini configuration diagnostics. |
+| `GET` | `/meta` | Application name, version, and environment. |
+| `POST` | `/diagnostics` | Live YouTube (one 1-unit call) and Gemini configuration check. |
+| `GET` | `/next` | React interface. |
 | `POST` | `/analyze` | Research content and generate/save an SEO package. |
 | `GET` | `/youtube/channel/status` | Connected-channel and latest-sync status. |
 | `GET` | `/youtube/channel/connect` | Start Google OAuth connection. |
 | `POST` | `/youtube/channel/refresh` | Refresh connected-channel data. |
-| `POST` | `/youtube/channel/disconnect` | Remove the locally stored OAuth connection. |
+| `POST` | `/youtube/channel/disconnect` | Remove the locally stored OAuth connection. Google keeps the grant until it is removed in Google Account permissions. |
 | `GET` | `/api/history` | Learning, scorecard, owned-performance, and database summary. |
 | `GET` | `/api/history/runs` | Paginated saved-package list. |
 | `GET` | `/api/history/runs/{run_id}` | Complete package and linked-video report. |
-| `DELETE` | `/api/history/runs/{run_id}` | Delete one saved package. |
-| `POST` | `/api/history/runs/{run_id}/link-video` | Verify and link an owned YouTube video. |
+| `DELETE` | `/api/history/runs/{run_id}` | Delete one saved package, with its linked video's collected evidence. |
+| `POST` | `/api/history/runs/{run_id}/link-video` | Verify and link a YouTube video. Replacing a linked video that has collected evidence returns `409` until the request confirms it with `replace_existing_evidence`. |
 | `GET` | `/api/published-videos` | Linked published videos and latest performance. |
 | `GET` | `/api/published-videos/{link_id}/snapshots` | Stored performance timeline. |
 | `POST` | `/api/published-videos/{link_id}/refresh` | Refresh actual metadata and available performance. |
@@ -356,7 +367,7 @@ When Redis is unavailable, the research cache falls back to its supported local 
 | `GET` | `/api/experiments/{youtube_video_id}` | Retrieve experiments for one video. |
 | `POST` | `/api/reset-database` | Protected destructive history reset. |
 
-In `production`, protected endpoints require the configured value in the `X-Admin-Token` request header. The dashboard handles its supported local workflows; use the interactive API documentation carefully for destructive operations.
+In `production`, the protected endpoints (`/ready`, `/api/reset-database`) require the configured value in the `X-Admin-Token` request header. The reset is refused while cloud sync is on, because the next sync would restore the packages. The interactive `/docs` page is off because its assets come from a CDN the Content Security Policy blocks; `/openapi.json` describes every endpoint.
 
 Example analysis request:
 
@@ -381,9 +392,11 @@ Example analysis request:
 
 - `.env`, SQLite databases, WAL files, and local virtual environments are ignored by Git.
 - OAuth refresh tokens are encrypted before local storage when a valid encryption key is configured.
-- API responses use request IDs and sanitized error messages.
+- API responses use request IDs and one sanitized error envelope; YouTube API keys travel in a header, never in URLs or logs.
 - Security headers disable framing and browser camera, microphone, and geolocation access.
-- The current product is designed for one trusted user on one laptop.
+- The server answers only to its configured host names (a DNS-rebinding page is refused), refuses writes that a browser marks as sent by another website, caps request bodies, and rate-limits each route, with a stricter budget for requests that spend quota.
+- The OAuth flow uses PKCE and checks that both read-only permissions were granted; the server access log is off, so the returned authorization code is never logged.
+- The current product is designed for one trusted user on one laptop; most local API routes rely on that local boundary rather than a login.
 - Do not expose the Docker port to the LAN or internet without authentication, TLS, and a separately approved Android/security architecture.
 - Do not place secret values in screenshots, issues, commits, exported package data, or logs.
 
@@ -396,7 +409,8 @@ Example analysis request:
 - Migrated pre-Phase-1 links must be ownership-verified again before they can affect learning, and their legacy snapshots remain display/history data only.
 - The official APIs do not provide vidIQ's proprietary monthly keyword-search estimates.
 - Public competitor metadata can show correlations and possible outliers but cannot reveal private competitor retention or prove causation.
-- The experiment persistence API exists, but the complete Experiment Center UI is not finished.
+- The React interface loads its typefaces from Google Fonts; the classic dashboard loads nothing from other hosts.
+- Deleting a saved package also deletes its linked video's collected snapshots, audits, and experiment assignments.
 - Creator package selection is persisted in History; checklist acknowledgments remain browser-session state and never claim that YouTube was changed.
 - Phase 5 opening and pacing scores are deterministic pre-publish heuristics, not measured retention or performance predictions. Detailed retention curves and drop timestamps are unavailable through the current data source.
 - Idea research depends on the configured YouTube Data API quota. An empty or unavailable research response is saved honestly and does not become a demand estimate. Editing creator idea fields marks the current evidence stale while retaining older dated snapshots.
@@ -404,19 +418,22 @@ Example analysis request:
 
 ## Testing
 
-Run the backend suite locally:
+Run the backend suite with pytest (`tests/conftest.py` makes every run hermetic: it ignores `.env` and all `WIN_ENGINE_*` variables, uses a throwaway database, and refuses any network connection other than to the local machine):
 
 ```powershell
-python -m unittest discover -s tests
+pip install -r requirements-dev.txt
+python -m pytest tests
 ```
 
-Or inside the running Docker service:
+The production image contains no test tooling. To run the suite in Docker without installing Python locally:
 
 ```bash
-docker compose exec -T win-engine python -m unittest discover -s tests
+docker run --rm -v "$PWD:/app" -w /app python:3.11.16-slim sh -c "pip install -q -r requirements-dev.txt && python -m pytest -p no:cacheprovider tests"
 ```
 
-The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full discovery run contains 540 tests, with 40 browser tests skipped when optional Playwright/Chromium tooling is unavailable. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
+Frontend checks run from `frontend/`: `npm ci`, then `npx tsc -b --noEmit`, `npx vitest run`, and `npm run build`. The Playwright suite (`npx playwright test`) drives a running app at `127.0.0.1:8000` and intercepts every request that could change data.
+
+The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full run has 960 backend tests, plus 61 browser tests that are skipped when optional Playwright/Chromium tooling is unavailable. Browser tooling is installed only through `requirements-browser.txt` and is excluded from production Docker.
 
 ## Repository structure
 
@@ -427,21 +444,22 @@ Seo-YT/
 ├── Dockerfile                   # Production image and health check
 ├── docs/                        # User, release, quality, and phase documentation
 ├── runtime/                     # Local data, backups, secrets, and generated artifacts
-├── scripts/                     # Supported utility and quality-probe scripts
-│   └── dev/                     # Manual development and diagnostic scripts
+├── frontend/                    # React interface source (Vite); its build is in win_engine/api/static/app/
+├── scripts/                     # Quality-probe script (spends quota; run by hand)
 ├── tests/
 │   └── browser/                 # Optional Chromium workflow tests
 ├── win_engine/                  # Application package
 │   ├── analysis/                # Content understanding and SEO research
-│   ├── api/                     # FastAPI routes and static dashboard
-│   ├── core/                    # Configuration, schemas, and middleware
+│   ├── api/                     # FastAPI app, routes, classic dashboard, and the React build
+│   ├── core/                    # Configuration, schemas, logging, and rate limiting
 │   ├── feedback/                # History, sync, analytics, and learning
 │   ├── generation/              # Package generation and quality refinement
 │   ├── ingestion/               # YouTube research and caching
 │   ├── integrations/            # YouTube OAuth and Analytics integration
 │   ├── llm/                     # Gemini client and prompts
 │   └── scoring/                 # Opportunity and outlier scoring
-└── requirements.txt             # Production Python dependencies
+├── requirements.txt             # Production Python dependencies
+└── requirements-dev.txt         # Test runner (pytest)
 ```
 
 ## Product direction

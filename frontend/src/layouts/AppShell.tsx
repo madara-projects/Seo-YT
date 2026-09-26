@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ChevronRight, Menu, Moon, Plus, Search, Sun, X, Youtube } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import { relativeTime, initialOf } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import { DialogOverlay } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BrandMark } from "@/components/common/BrandMark";
 import { HealthIndicator } from "@/components/common/HealthIndicator";
@@ -44,6 +46,9 @@ function ThemeToggle() {
 /** The connected channel at the foot of the sidebar, or the way to connect one. */
 function SidebarChannel({ onNavigate }: { onNavigate?: () => void }) {
   const { data, isPending, isError } = useChannelStatus();
+  // A failed status request says nothing about the connection, so it must not
+  // read as "not connected".
+  const unknown = isError && !data;
 
   if (isPending) {
     return (
@@ -72,11 +77,15 @@ function SidebarChannel({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <Link
-      to={connected || data?.configured !== false ? "/channel" : "/settings"}
+      to={!unknown && (connected || data?.configured !== false) ? "/channel" : "/settings"}
       onClick={onNavigate}
       className="group flex items-center gap-3 rounded-xl border border-sidebar-border bg-white/[0.03] p-2.5 transition-colors hover:border-white/15 hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-brand"
     >
-      {connected ? (
+      {unknown ? (
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-sidebar-accent text-sidebar-muted" aria-hidden="true">
+          <Youtube className="size-4" />
+        </span>
+      ) : connected ? (
         <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-gradient p-0.5" aria-hidden="true">
           <span className="grid size-full place-items-center rounded-full bg-sidebar font-display text-[0.8125rem] font-semibold text-sidebar-foreground">
             {initialOf(title)}
@@ -89,7 +98,7 @@ function SidebarChannel({ onNavigate }: { onNavigate?: () => void }) {
       )}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[0.8125rem] font-medium text-sidebar-foreground">
-          {connected ? title : "Connect your channel"}
+          {unknown ? "Channel status unavailable" : connected ? title : "Connect your channel"}
         </span>
         <span className="block truncate text-[0.6875rem] text-sidebar-muted">{subtitle}</span>
       </span>
@@ -209,35 +218,31 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const location = useLocation();
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
-  const wasOpen = useRef(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   // Close the drawer on navigation so a tap never leaves it covering content.
   useEffect(() => setMobileOpen(false), [location.pathname]);
 
-  // Escape closes the drawer; focus moves into it and returns to the menu button.
+  // Past the lg breakpoint the drawer is hidden but would still be modal,
+  // leaving the whole page inert behind nothing; close it instead.
   useEffect(() => {
-    if (!mobileOpen) {
-      if (wasOpen.current) menuButtonRef.current?.focus();
-      wasOpen.current = false;
-      return;
-    }
-    wasOpen.current = true;
-    drawerCloseRef.current?.focus();
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileOpen(false);
+    const wide = window.matchMedia?.("(min-width: 64rem)");
+    if (!wide) return;
+    const onChange = (event: MediaQueryListEvent) => {
+      if (event.matches) setMobileOpen(false);
     };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [mobileOpen]);
+    wide.addEventListener?.("change", onChange);
+    return () => wide.removeEventListener?.("change", onChange);
+  }, []);
 
-  // Ctrl/⌘ K opens the command palette from anywhere.
+  // Each page names the browser tab, so history and tabs tell pages apart.
+  useEffect(() => {
+    const located = locateNav(location.pathname);
+    document.title = located ? `${located.item.label} · Win-Engine` : "Win-Engine · Creator Intelligence";
+  }, [location.pathname]);
+
+  // Ctrl/⌘ K opens the command palette from anywhere, and closes it again.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
@@ -266,36 +271,40 @@ export function AppShell() {
         <SidebarContent />
       </aside>
 
-      {/* Mobile drawer */}
-      {mobileOpen ? (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <button
-            type="button"
-            aria-label="Close navigation"
-            tabIndex={-1}
-            className="absolute inset-0 bg-[oklch(0.12_0.025_286/0.6)] backdrop-blur-[2px] animate-overlay-in"
-            onClick={closeDrawer}
-          />
-          <aside
-            role="dialog"
-            aria-modal="true"
-            aria-label="Navigation"
-            className="absolute inset-y-0 left-0 flex w-[18rem] max-w-[85vw] animate-drawer-in shadow-elevated"
+      {/* Mobile drawer. A Radix dialog, so focus is trapped inside it, the page
+          behind is inert and Escape closes it. It opens from state, with no
+          Dialog.Trigger, so focus is sent back to the menu button explicitly. */}
+      <DialogPrimitive.Root open={mobileOpen} onOpenChange={setMobileOpen}>
+        <DialogPrimitive.Portal>
+          <DialogOverlay className="lg:hidden" />
+          <DialogPrimitive.Content
+            aria-describedby={undefined}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              drawerCloseRef.current?.focus();
+            }}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              menuButtonRef.current?.focus();
+            }}
+            className="fixed inset-y-0 left-0 z-50 flex w-[18rem] max-w-[85vw] animate-drawer-in shadow-elevated focus-visible:outline-none lg:hidden"
           >
+            <DialogPrimitive.Title className="sr-only">Navigation</DialogPrimitive.Title>
             <SidebarContent onNavigate={closeDrawer} />
-            <Button
-              ref={drawerCloseRef}
-              variant="ghost"
-              size="icon-sm"
-              className="absolute right-3 top-6 text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
-              onClick={closeDrawer}
-              aria-label="Close navigation"
-            >
-              <X aria-hidden="true" />
-            </Button>
-          </aside>
-        </div>
-      ) : null}
+            <DialogPrimitive.Close asChild>
+              <Button
+                ref={drawerCloseRef}
+                variant="ghost"
+                size="icon-sm"
+                className="absolute right-3 top-6 text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                aria-label="Close navigation"
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </DialogPrimitive.Close>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
 
       <div className={cn("relative", SIDEBAR_WIDTH)}>
         {/* Ambient light at the top of every page. Decorative only. */}

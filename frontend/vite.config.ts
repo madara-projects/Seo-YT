@@ -3,13 +3,15 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
-// The production bundle is served by FastAPI from `win_engine/api/static/app/`,
-// so every asset is requested under `/app-assets/`. Keeping the base path
-// explicit avoids the root-relative lookups that would collide with the
-// legacy dashboard still mounted at `/static`.
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
-  base: "/app-assets/",
+  // The production bundle is served by FastAPI from `win_engine/api/static/app/`,
+  // so every built asset is requested under `/app-assets/`, which also avoids
+  // the root-relative lookups that would collide with the classic dashboard at
+  // `/static`. The dev server has no FastAPI in front of it, so it serves the
+  // app itself at `/next/`, the router's basename; with `/app-assets/` there a
+  // page URL such as /next/creator was a 404.
+  base: command === "build" ? "/app-assets/" : "/next/",
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
@@ -58,4 +60,4 @@ export default defineConfig({
     // first render can exceed the 5s default on a loaded machine.
     testTimeout: 20_000,
   },
-});
+}));

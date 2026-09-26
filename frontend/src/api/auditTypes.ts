@@ -30,6 +30,15 @@ export interface PerformanceSnapshot {
   snapshot_status?: string | null;
 }
 
+/** The newest snapshot as the audit list carries it: a subset of `PerformanceSnapshot`. */
+export interface CandidatePerformance {
+  views?: number | null;
+  avg_view_percentage?: number | null;
+  impressions_ctr?: number | null;
+  snapshot_window?: string | null;
+  captured_at?: string | null;
+}
+
 /** One row of `GET /api/audits`: a package linked to a published video. */
 export interface AuditCandidate {
   id: number;
@@ -40,13 +49,16 @@ export interface AuditCandidate {
   package_topic?: string | null;
   youtube_metadata?: { title?: string | null } | null;
   metadata_synced_at?: string | null;
-  latest_performance?: PerformanceSnapshot | null;
+  latest_performance?: CandidatePerformance | null;
   ownership_verified?: boolean;
   verified_channel_id?: string | null;
   audit_id?: number | null;
   audit_captured_at?: string | null;
   audit_state: AuditState | string;
+  /** "mature" once any 24h/7d/28d window completed; "observed" when only counts exist. */
   evidence_state: AuditEvidenceState | string;
+  /** Whether the creator recorded a package choice before linking. */
+  selection_state?: "selected" | "unknown" | string;
   idea?: { id: number; topic?: string | null } | null;
 }
 
@@ -68,6 +80,18 @@ export interface AuditFinding {
   evidence?: string;
   evidence_state?: string;
   recommended_interpretation?: string;
+}
+
+/**
+ * Something the audit suggests testing next. Only format and language are
+ * compared across your videos; the rest are hypotheses with a sample of 0.
+ */
+export interface LearningCandidate {
+  variable?: string;
+  value?: unknown;
+  evidence_state?: "mature_comparable_evidence" | "hypothesis_only" | "insufficient_evidence" | string;
+  sample_size?: number;
+  interpretation?: string;
 }
 
 export interface Audit {
@@ -92,6 +116,12 @@ export interface Audit {
     generation_quality?: { status?: string | null } | null;
     retention_assistant?: { status?: string | null; risk_level?: string | null } | null;
     idea?: { id?: number; topic?: string | null } | null;
+    /** The idea's last research before publishing; null when none, or the publish time was unreadable. */
+    idea_research?: {
+      id?: number;
+      captured_at?: string | null;
+      evidence?: { opportunity_explanation?: string | null } | null;
+    } | null;
     demand_research?: { id?: number; classification?: string | null; captured_at?: string | null } | null;
   };
   observed_performance?: {
@@ -101,7 +131,13 @@ export interface Audit {
     maturity?: "mature_observation" | "collecting_evidence" | "unavailable" | string;
   };
   findings?: AuditFinding[];
-  evidence?: { snapshot_count?: number; mature_window_count?: number };
+  learning_candidates?: LearningCandidate[];
+  evidence?: {
+    snapshot_count?: number;
+    mature_window_count?: number;
+    /** Peers only: the audited video is not counted toward its own comparison. */
+    cohort?: { sample_size?: number; learning_allowed?: boolean; confidence_label?: string } | null;
+  };
   limitations?: string[];
 }
 

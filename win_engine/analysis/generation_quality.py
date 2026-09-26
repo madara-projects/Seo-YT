@@ -9,10 +9,12 @@ performance prediction.
 from __future__ import annotations
 
 import re
-import unicodedata
 from difflib import SequenceMatcher
+from itertools import pairwise
 from typing import Any, Iterable
 
+from win_engine.analysis.source_cues import is_short_video, source_quote
+from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
 from win_engine.analysis.transliteration import phonetic_key, phonetic_keys, phonetic_match
 
 
@@ -40,7 +42,6 @@ _UNSUPPORTED_CLAIMS = (
     ("invented_relationship", re.compile(r"\b(?:breakup|toxic relationship|one-sided relationship|just an option)\b", re.IGNORECASE)),
     ("invented_causality", re.compile(r"\b(?:leads? to|causes?|results? in)\b", re.IGNORECASE)),
 )
-_SHORT_FORMATS = {"short", "shorts", "youtube_shorts", "quote", "reel", "reels"}
 # Platform-format words are not subject evidence. ``yt`` and ``shorts`` may be
 # retained separately as an explicit creator strategy preference for Shorts.
 _PLATFORM_TAGS = {
@@ -169,29 +170,6 @@ _PROCEDURAL_ACTION_RE = re.compile(
 )
 
 
-def normalize_unicode(value: Any) -> str:
-    """Return stable printable Unicode without invisible control characters."""
-
-    text = unicodedata.normalize("NFKC", str(value or ""))
-    return "".join(
-        char for char in text
-        if char in "\n\t\u200d" or not unicodedata.category(char).startswith("C")
-    ).strip()
-
-
-def unicode_words(value: Any) -> list[str]:
-    """Tokenize letters and numbers from every Unicode script."""
-
-    # Python's ``\w`` does not consistently retain Indic combining marks on
-    # every supported runtime. Keep the Tamil block with its base characters
-    # so language validation and source-overlap checks do not erase Tamil text.
-    return [
-        token.casefold()
-        for token in re.findall(r"[\w\u0B80-\u0BFF]+(?:['’][\w\u0B80-\u0BFF]+)?", normalize_unicode(value), re.UNICODE)
-        if len(token.replace("_", "")) > 1
-    ]
-
-
 def title_similarity(left: Any, right: Any) -> float:
     """Combine Unicode sequence and token overlap similarity."""
 
@@ -240,17 +218,11 @@ def candidate_mechanism(title: str) -> str:
 
 
 def is_short_content(script: str, creator_brief: dict[str, Any] | None = None) -> bool:
-    """Resolve Short intent from the structured brief first, then explicit source wording."""
+    """Whether the video is a Short; see source_cues.is_short_video, the one resolver."""
 
-    brief = creator_brief or {}
-    format_value = normalize_unicode(brief.get("video_format")).casefold().replace("-", "_").replace(" ", "_")
-    if format_value in _SHORT_FORMATS or any(token in format_value for token in ("youtube_short", "short_form", "quote_short")):
-        return True
-    # The structured brief preserves the creator's original source.  The caller's
-    # `script` can be an expanded research query, so it must not turn a silent
-    # quote into an apparent tutorial merely because it contains helper text.
-    source = normalize_unicode(brief.get("content") or script)
-    return bool(re.search(r"\b(?:youtube\s+shorts?|short[- ]form|shorts?|reels?|quote\s+short)\b", source, re.IGNORECASE))
+    # The structured brief preserves the creator's original source; the caller's
+    # `script` can be an expanded research query.
+    return is_short_video(script, creator_brief)
 
 
 def is_silent_quote_only_short(script: str, creator_brief: dict[str, Any] | None = None) -> bool:
@@ -260,7 +232,7 @@ def is_silent_quote_only_short(script: str, creator_brief: dict[str, Any] | None
     # Prefer the creator's preserved source to the expanded request/query text.
     # The latter is a research aid, not evidence that the video teaches anything.
     source = normalize_unicode(brief.get("content") or script)
-    quote = normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text") or _extract_quote(source))
+    quote = normalize_unicode(brief.get("exact_quote") or brief.get("on_screen_text")) or source_quote(source, brief)
     return bool(
         quote
         and normalize_unicode(brief.get("voice_over")).casefold() == "none"
@@ -407,7 +379,6 @@ def evaluate_package_quality(
     language: str = "english",
     recent_titles: Iterable[str] | None = None,
     published_titles: Iterable[str] | None = None,
-    require_shorts_tags: bool = True,
     tag_context: Any = None,
     tag_evidence: dict[str, Any] | None = None,
     competitor_titles: Iterable[str] | None = None,
@@ -417,8 +388,7 @@ def evaluate_package_quality(
 
     brief = creator_brief or {}
     source = normalize_unicode(script or brief.get("content"))
-    source_folded = " ".join(unicode_words(source))
-    exact_quote = normalize_unicode(brief.get("exact_quote") or _extract_quote(source))
+    exact_quote = source_quote(source, brief)
     is_short = is_short_content(source, brief)
     silent_quote_only = is_silent_quote_only_short(source, brief)
     non_instructional = source_requires_noninstructional_framing(source, brief)
@@ -454,7 +424,7 @@ def evaluate_package_quality(
             reasons.append(_issue("title_too_long", "title", "The upload-ready title exceeds YouTube's 100-character limit.", index=index))
         if len(emojis) > 2:
             reasons.append(_issue("excessive_title_emojis", "title", "Use no more than two relevant emojis in a title.", index=index))
-        if any(left == right for left, right in zip(emojis, emojis[1:])):
+        if any(left == right for left, right in pairwise(emojis)):
             reasons.append(_issue("repeated_title_emoji", "title", "The title repeats the same emoji in sequence.", index=index))
         if emoji_recommended and not emojis:
             warnings.append(_issue(
@@ -511,7 +481,6 @@ def evaluate_package_quality(
     if not description:
         issues.append(_issue("missing_description", "description", "Description is empty."))
     else:
-        description_folded = " ".join(unicode_words(description))
         if re.search(r"(?i)\ba\s+(?:one|a|an|the)\s+(?:person|man|woman|boy|girl)\b", description):
             issues.append(_issue("broken_description_grammar", "description", "Description contains a duplicated article or production-note fragment."))
         exact_quote_text = re.sub(r"\s+", " ", exact_quote).strip()
@@ -897,14 +866,15 @@ def _final_semantic_quality(
     description_score = _bounded_score(
         35 + min(description_overlap * 55, 45) + (10 if 4 <= len(description_words) <= 120 else 0)
     )
+    # A score the local word-overlap matcher cannot measure is reported as not
+    # measured, with the reason. It used to be raised to 70 (60 for a sparse
+    # source) and shown as if it had been measured.
+    not_measured: dict[str, str] = {}
     if not source_overlap_supported:
-        # Preserve language checks while avoiding false semantic failures for
-        # scripts whose morphology cannot be safely judged by an English-only
-        # local lexical matcher.
-        title_score = max(title_score, 70.0 if title_words else 0.0)
-        description_score = max(description_score, 70.0 if description_words else 0.0)
-    if len(source_words) <= 1 and description_words:
-        description_score = max(description_score, 60.0)
+        reason = "The local word-overlap check reads English word forms and cannot judge this language."
+        not_measured["title_score"] = not_measured["description_score"] = reason
+    elif len(source_words) <= 1 and description_words:
+        not_measured["description_score"] = "The source has too few words to check the description against."
     # Overlap alone cannot tell a sentence from word salad built out of the
     # same words, so a title with broken word order is capped regardless.
     fluency_issues = title_fluency_issues(title) if title else []
@@ -932,16 +902,13 @@ def _final_semantic_quality(
         if isinstance(item, dict) and normalize_unicode(item.get("keyword")).casefold() in tag_keys
     ]
     topic_rows = [item for item in selected_rows if item.get("classification") != "platform_format"]
-    # A selected tag viewers demonstrably search (a YouTube suggestion, already
-    # checked against the source and subject) meets the bar even when its
-    # specificity score is modest: "love quotes" is broad and still exactly
-    # what a love-quote Short should carry.
-    tag_scores = [
-        max(float(item.get("keyword_relevance_score") or 0), 90.0) if item.get("demand_validated")
-        else float(item.get("keyword_relevance_score") or 0)
-        for item in topic_rows
-    ]
+    # The measured relevance of each subject tag. A tag viewers search is
+    # reported as such in the keyword research; raising its score to 90 here
+    # reported a number that was never measured.
+    tag_scores = [float(item.get("keyword_relevance_score") or 0) for item in topic_rows]
     tag_score = round(sum(tag_scores) / len(tag_scores), 1) if tag_scores else None
+    if tag_score is None:
+        not_measured["tag_score"] = "No subject tag was selected, so there is no tag to score."
     title_description_agree = bool(
         {_quality_root(word) for word in title_words} & {_quality_root(word) for word in description_words}
     ) or not title_words or not description_words
@@ -956,7 +923,7 @@ def _final_semantic_quality(
         ))
     if duration_issues:
         critical.append(_issue(duration_issues[0]["code"], "title", duration_issues[0]["message"]))
-    if accepted and title_score < 55:
+    if accepted and "title_score" not in not_measured and title_score < 55:
         critical.append(_issue("low_title_usefulness", "title", "Title is too weakly anchored to the supplied source."))
     if placement == "missing":
         warnings.append(_issue(
@@ -982,7 +949,7 @@ def _final_semantic_quality(
                 f"about {floor} words that cover what the video actually delivers.",
                 severity="warning",
             ))
-    if description and description_score < 55:
+    if description and "description_score" not in not_measured and description_score < 55:
         critical.append(_issue("low_description_usefulness", "description", "Description is too weakly anchored to the supplied source."))
     if not consistency:
         critical.append(_issue("package_consistency_failure", "package", "Title, description, and tags do not agree on the source-supported topic."))
@@ -1013,7 +980,7 @@ def _final_semantic_quality(
     # are better than three tags where the third is generic or speculative.
     strong_topic_rows = [
         row for row in topic_rows
-        if float(row.get("score") or 0) >= 90 and float(row.get("source_support_score") or 0) >= 70
+        if float(row.get("keyword_relevance_score") or 0) >= 90 and float(row.get("source_support_score") or 0) >= 70
     ]
     if is_short_content(source, brief) and rich_quote_context and len(topic_rows) < 2 and not strong_topic_rows:
         warnings.append(_issue(
@@ -1023,9 +990,11 @@ def _final_semantic_quality(
         ))
     verdict = "RED" if critical else ("YELLOW" if warnings else "GREEN")
     return {
-        "title_score": round(title_score, 1),
-        "description_score": round(description_score, 1),
+        "title_score": None if "title_score" in not_measured else round(title_score, 1),
+        "description_score": None if "description_score" in not_measured else round(description_score, 1),
         "tag_score": tag_score,
+        # Why a score above is None: not measured, which is not a low score.
+        "not_measured": not_measured,
         "tag_count": len(tags),
         "package_consistency": consistency,
         "critical_issues": critical,
@@ -1209,13 +1178,6 @@ def _issue(code: str, field: str, message: str, *, severity: str = "error", inde
     return result
 
 
-def _extract_quote(source: str) -> str:
-    matches = re.findall(r'["“]([^"“”]{6,})["”]', source)
-    if not matches:
-        matches = re.findall(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", source)
-    return max((normalize_unicode(item) for item in matches), key=len, default="")
-
-
 def _unique(values: Iterable[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -1270,7 +1232,7 @@ _MEASURE_WORDS = {
     "cup", "cups", "tsp", "tbsp", "teaspoon", "teaspoons", "tablespoon", "tablespoons",
     "gram", "grams", "gms", "kg", "kgs", "litre", "liter", "litres", "liters", "pinch",
     "spoon", "spoons", "piece", "pieces", "inch", "inches", "mins", "minutes", "hours",
-    "grams", "ounce", "ounces", "pound", "pounds", "gb", "tb", "mah", "hz", "watt", "watts",
+    "ounce", "ounces", "pound", "pounds", "gb", "tb", "mah", "hz", "watt", "watts",
 }
 
 
@@ -1426,7 +1388,7 @@ def title_fluency_issues(title: str, *, index: int | None = None) -> list[dict[s
     # Two search phrases jammed together repeat their shared words:
     # "2 ingredient ice cream instant mango ice cream".
     content = [token for token in tokens if token not in _DANGLING_TITLE_ENDINGS and len(token) > 1]
-    bigrams = list(zip(content, content[1:]))
+    bigrams = list(pairwise(content))
     repeated = next((pair for position, pair in enumerate(bigrams) if pair in bigrams[position + 1:]), None)
     if repeated:
         issues.append(_issue(

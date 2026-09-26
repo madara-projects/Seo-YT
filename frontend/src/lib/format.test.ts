@@ -10,6 +10,7 @@ import {
   initialOf,
   percentChange,
   relativeTime,
+  scheduledTime,
   toFiniteNumber,
 } from "./format";
 
@@ -29,6 +30,11 @@ describe("formatCompact", () => {
     expect(formatCompact(9_999)).toBe("9,999");
     expect(formatCompact(18_432)).toBe("18.4K");
     expect(formatCompact(4_829_331)).toBe("4.8M");
+  });
+
+  it("uses one locale for both ranges, whatever the viewer's", () => {
+    // The exact form uses the compact form's locale, so their separators agree.
+    expect(formatCompact(1_234.5)).toBe((1_234.5).toLocaleString("en"));
   });
 
   it("says Unavailable instead of inventing a zero", () => {
@@ -73,6 +79,14 @@ describe("durations", () => {
     expect(formatMinutes(undefined)).toBe("Unavailable");
   });
 
+  it("uses singulars and rounds before choosing the unit", () => {
+    expect(formatMinutes(1)).toBe("1 min");
+    expect(formatMinutes(12.6)).toBe("13 mins");
+    expect(formatMinutes(59.7)).toBe("1 hr");
+    expect(formatMinutes(60)).toBe("1 hr");
+    expect(formatMinutes(90)).toBe("1.5 hrs");
+  });
+
   it("formats uptime by its largest units", () => {
     expect(formatUptime(42)).toBe("42 s");
     expect(formatUptime(11_520)).toBe("3 h 12 min");
@@ -104,6 +118,21 @@ describe("relativeTime", () => {
     expect(relativeTime(null, now)).toBe("Unavailable");
     expect(relativeTime("not a date", now)).toBe("Unavailable");
   });
+
+  it("moves to the next unit instead of printing 60 min or 24 h", () => {
+    expect(relativeTime("2026-09-24T11:00:30Z", now)).toBe("1 h ago");
+    expect(relativeTime("2026-09-23T12:10:00Z", now)).toBe("1 d ago");
+  });
+});
+
+describe("scheduledTime", () => {
+  const now = Date.parse("2026-09-24T12:00:00Z");
+
+  it("says a past schedule is due rather than how long ago it was", () => {
+    expect(scheduledTime("2026-09-24T11:56:00Z", now)).toBe("Due now");
+    expect(scheduledTime("2026-09-24T12:30:00Z", now)).toBe("in 30 min");
+    expect(scheduledTime(null, now)).toBe("Unavailable");
+  });
 });
 
 describe("engagementRate", () => {
@@ -114,6 +143,11 @@ describe("engagementRate", () => {
   it("is unavailable without views", () => {
     expect(engagementRate(5, 1, 0)).toBeNull();
     expect(engagementRate(5, 1, undefined)).toBeNull();
+  });
+
+  it("is unavailable when neither likes nor comments are known, not zero", () => {
+    expect(engagementRate(null, null, 1000)).toBeNull();
+    expect(engagementRate(null, 10, 1000)).toBeCloseTo(1);
   });
 });
 

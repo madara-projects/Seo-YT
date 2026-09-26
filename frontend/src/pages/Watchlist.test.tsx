@@ -175,6 +175,27 @@ describe("WatchlistPage", () => {
     expect(screen.getByText("Choose a channel or video")).toBeInTheDocument();
   });
 
+  it("keeps every typed character and puts the settled search in the URL", async () => {
+    // No pause between keys, as when typing fast.
+    const user = userEvent.setup({ delay: null });
+    renderPage("/watchlist?state=all");
+
+    const box = await screen.findByRole("searchbox", { name: "Search watched videos" });
+    await user.type(box, "silence says");
+
+    // The box answers each keystroke itself; it never waits for the router.
+    expect(box).toHaveValue("silence says");
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/watchlist?state=all&q=silence+says"));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).startsWith("/api/watchlist/videos?") && String(url).includes("q=silence+says")),
+      ).toBe(true),
+    );
+    // Only the settled text was searched, not each prefix.
+    expect(fetchMock.mock.calls.filter(([url]) => /[?&]q=/.test(String(url)))).toHaveLength(1);
+    expect(box).toHaveValue("silence says");
+  });
+
   it("adds a video from a link and opens it", async () => {
     const user = userEvent.setup();
     renderPage();
@@ -211,7 +232,10 @@ describe("WatchlistPage", () => {
     const detail = await screen.findByTestId("watch-detail");
     expect(within(detail).getByRole("heading", { name: OUTLIER_VIDEO.title })).toBeInTheDocument();
     expect(within(detail).getByText("Possible outlier")).toBeInTheDocument();
-    expect(within(detail).getByText("4.5×")).toBeInTheDocument();
+    // Two decimals, as stored: one decimal could round across the 2.5× threshold.
+    expect(within(detail).getByText("4.47×")).toBeInTheDocument();
+    expect(within(detail).getByText("Peer median at this age")).toBeInTheDocument();
+    expect(within(detail).getByText(/views per day at a similar age/)).toBeInTheDocument();
     expect(within(detail).getByText(/4\.47x the median of 6 comparable recent videos/)).toBeInTheDocument();
     expect(within(detail).getByText("Tamil")).toBeInTheDocument();
     expect(within(detail).getByText("Dated snapshots (2)")).toBeInTheDocument();
@@ -233,7 +257,7 @@ describe("WatchlistPage", () => {
     const detail = await screen.findByTestId("watch-detail");
     expect(within(detail).getByRole("heading", { name: "Kavithai Corner" })).toBeInTheDocument();
     expect(within(detail).getByText("Tamil quote Shorts; strong hooks.")).toBeInTheDocument();
-    expect(within(detail).getByText(/about 100 YouTube quota units/)).toBeInTheDocument();
+    expect(within(detail).getByText(/about 3 YouTube quota units/)).toBeInTheDocument();
 
     await user.click(await within(detail).findByRole("button", { name: /Silence is the loudest answer/ }));
 
@@ -243,6 +267,39 @@ describe("WatchlistPage", () => {
     ).toBeInTheDocument();
     // The list follows the open record onto the Videos tab.
     expect(screen.getByRole("tab", { name: /Videos/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("lists a channel's uploads by the outlier check's own peer rule", async () => {
+    videos = [
+      structuredClone(OUTLIER_VIDEO),
+      // Added on its own, not through the channel, yet still one of its peers.
+      { ...structuredClone(OUTLIER_VIDEO), id: 24, video_id: "abcdefghij4", title: "Added by hand", watchlist_channel_id: null } as unknown as Video,
+      // Archived videos are left out of the check, so they are left out here.
+      { ...structuredClone(OUTLIER_VIDEO), id: 25, video_id: "abcdefghij5", title: "Archived upload", state: "archived" },
+      // Another channel's video, even if it was once linked to this record.
+      { ...structuredClone(OUTLIER_VIDEO), id: 26, video_id: "abcdefghij6", title: "Other channel", channel_id: "UCother" },
+    ];
+    renderPage("/watchlist?channel=3");
+
+    const detail = await screen.findByTestId("watch-detail");
+    expect(await within(detail).findByText("Watched uploads (2)")).toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: /Added by hand/ })).toBeInTheDocument();
+    expect(within(detail).queryByRole("button", { name: /Archived upload/ })).not.toBeInTheDocument();
+    expect(within(detail).queryByRole("button", { name: /Other channel/ })).not.toBeInTheDocument();
+  });
+
+  it("doesn't suggest a paid refresh when the uploads can't be loaded", async () => {
+    const route = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      String(url).startsWith("/api/watchlist/videos?state=active")
+        ? Promise.resolve(json({ error: { message: "The database is unavailable." } }, 503))
+        : route(url, init),
+    );
+    renderPage("/watchlist?channel=3");
+
+    const detail = await screen.findByTestId("watch-detail");
+    expect(await within(detail).findByText("Watched uploads couldn't be loaded right now.")).toBeInTheDocument();
+    expect(within(detail).queryByText(/Refresh it to add its 20 most recent uploads/)).not.toBeInTheDocument();
   });
 
   it("archives a video", async () => {
@@ -267,7 +324,9 @@ describe("WatchlistPage", () => {
   });
 
   it("searches watched videos once typing pauses", async () => {
-    const user = userEvent.setup();
+    // No delay between keys: on a loaded machine a real pause could outlast the
+    // debounce mid-word, which is correct behaviour but not what this checks.
+    const user = userEvent.setup({ delay: null });
     renderPage();
 
     await user.type(await screen.findByLabelText("Search watched videos"), "silence");

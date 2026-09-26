@@ -1,10 +1,11 @@
-import { useId } from "react";
+import { cloneElement, isValidElement, useId } from "react";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 /**
  * A labelled form control with its validation message, or a hint when valid.
- * The message is an alert so it is announced as soon as it appears.
+ * The message is an alert so it is announced as soon as it appears, and the
+ * control points `aria-describedby` at it, so it is read with the field too.
  */
 export function FormField({
   id,
@@ -23,19 +24,29 @@ export function FormField({
   className?: string;
   children: React.ReactNode;
 }) {
+  const noteId = `${id}-note`;
+  const described = error || hint ? noteId : undefined;
+  // The control is passed in as a child, so the link is added to it here.
+  const control =
+    described && isValidElement<{ "aria-describedby"?: string }>(children)
+      ? cloneElement(children, { "aria-describedby": children.props["aria-describedby"] ?? described })
+      : children;
+
   return (
     <div className={cn("space-y-2", className)}>
       <Label htmlFor={id} className="flex items-baseline gap-1.5">
         {label}
         {optional ? <span className="text-xs font-normal text-muted-foreground">Optional</span> : null}
       </Label>
-      {children}
+      {control}
       {error ? (
-        <p role="alert" className="text-xs font-medium text-tone-bad">
+        <p id={noteId} role="alert" className="text-xs font-medium text-tone-bad">
           {error}
         </p>
       ) : hint ? (
-        <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>
+        <p id={noteId} className="text-xs leading-relaxed text-muted-foreground">
+          {hint}
+        </p>
       ) : null}
     </div>
   );

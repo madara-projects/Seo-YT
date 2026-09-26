@@ -5,6 +5,7 @@ import {
   BarChart3,
   ClipboardCheck,
   History,
+  Lightbulb,
   ListChecks,
   Loader2,
   RefreshCw,
@@ -15,19 +16,20 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { EvidenceChip } from "@/components/common/EvidenceChip";
-import { Field, Inset, Panel } from "@/components/common/Panel";
+import { EvidenceChip, type EvidenceTone } from "@/components/common/EvidenceChip";
+import { Field, Inset, Panel, Stat } from "@/components/common/Panel";
 import { SectionTitle } from "@/components/common/SectionTitle";
 import { CardSkeleton, EmptyState, ErrorState } from "@/components/common/States";
 import { VideoThumb } from "@/components/common/VideoThumb";
 import { StepFlow, type Step } from "@/components/research/StepFlow";
-import { apiErrorMessage, apiRequestId } from "@/api/client";
+import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { useRefreshAudit } from "@/hooks/useAudits";
 import { formatDuration, useElapsedSeconds } from "@/hooks/useElapsed";
-import { formatCompact } from "@/lib/format";
-import { historyDate, shortDate } from "@/lib/historyFormat";
+import { useRecordActivity } from "@/hooks/useRecordActivity";
+import { formatCompact, viewsAsOf } from "@/lib/format";
+import { historyDate, shortDate, withReadableDates } from "@/lib/historyFormat";
 import { humanize } from "@/lib/labels";
-import { asArray } from "@/lib/utils";
+import { asArray, displayValue } from "@/lib/utils";
 import { classificationLabel } from "@/lib/demandFormat";
 import {
   auditStateLabel,
@@ -38,6 +40,7 @@ import {
   fieldStateLabel,
   findingSeverity,
   metadataVerdict,
+  publishedFieldState,
   windowLabel,
 } from "@/lib/auditFormat";
 import type {
@@ -47,6 +50,7 @@ import type {
   AuditDetailResponse,
   AuditFinding,
   AuditVersion,
+  LearningCandidate,
   PerformanceSnapshot,
 } from "@/api/auditTypes";
 
@@ -56,13 +60,15 @@ function percent(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}%` : "Unavailable";
 }
 
-function Stat({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <Inset className="space-y-1">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="font-display text-xl font-semibold leading-none tracking-tight text-foreground">{value}</dd>
-    </Inset>
-  );
+/** Only format and language are compared across your videos; the rest are hypotheses. */
+function candidateEvidence(state: unknown, sample: unknown): { label: string; tone: EvidenceTone } {
+  if (state === "mature_comparable_evidence") {
+    // A missing sample size is unknown, not zero peers.
+    const label = typeof sample === "number" ? `Compared with ${sample} of your videos` : "Compared with your videos";
+    return { label, tone: "info" };
+  }
+  if (state === "hypothesis_only") return { label: "Hypothesis, not compared", tone: "warn" };
+  return { label: "Not enough evidence", tone: "neutral" };
 }
 
 /** One side of a comparison. Long descriptions fold, with a way to read all of it. */
@@ -95,8 +101,17 @@ function ComparedValue({ label, value, empty }: { label: string; value: string |
   );
 }
 
-function ComparisonCard({ item, withSelection }: { item: AuditComparison; withSelection: boolean }) {
-  const state = fieldStateLabel(item.generated_to_published);
+function ComparisonCard({
+  item,
+  withSelection,
+  selectionRecorded,
+}: {
+  item: AuditComparison;
+  withSelection: boolean;
+  selectionRecorded: boolean;
+}) {
+  // Judged against what the creator chose to publish, when a choice was recorded.
+  const state = fieldStateLabel(publishedFieldState(item, selectionRecorded));
   return (
     <Inset className="space-y-3 p-4" data-testid="audit-field">
       <div className="flex items-center justify-between gap-2">
@@ -111,7 +126,7 @@ function ComparisonCard({ item, withSelection }: { item: AuditComparison; withSe
         <ComparedValue
           label="On YouTube"
           value={comparisonText(item.published)}
-          empty={item.generated_to_published === "unavailable" ? "Not captured" : "Empty"}
+          empty={publishedFieldState(item, selectionRecorded) === "unavailable" ? "Not captured" : "Empty"}
         />
       </div>
     </Inset>
@@ -146,8 +161,12 @@ function auditSteps(audit: Audit): Step[] {
 
 function AuditBody({ audit, videoId, versions }: { audit: Audit; videoId?: string; versions: AuditVersion[] }) {
   const comparisons = asArray<AuditComparison>(audit.comparisons);
-  const withSelection = comparisons.some((item) => comparisonText(item.selected) !== null);
-  const verdict = metadataVerdict(comparisons);
+  // The audit states whether a choice was recorded; guessing from non-empty values could disagree.
+  const selectionRecorded = audit.intent?.selection_attribution === "creator_selected";
+  const withSelection = selectionRecorded;
+  const verdict = metadataVerdict(comparisons, selectionRecorded);
+  const candidates = asArray<LearningCandidate>(audit.learning_candidates);
+  const ideaResearch = audit.before_publication?.idea_research ?? null;
   const performance = audit.observed_performance ?? {};
   const latest: PerformanceSnapshot | null = performance.latest_observation ?? null;
   const windows = asArray<PerformanceSnapshot>(performance.completed_windows);
@@ -191,12 +210,17 @@ function AuditBody({ audit, videoId, versions }: { audit: Audit; videoId?: strin
         <p className="text-sm leading-relaxed text-foreground">
           {verdict.text}{" "}
           {withSelection
-            ? "The package you selected is shown beside it."
+            ? "Each field is checked against the package you selected, shown beside it."
             : "No package selection was recorded, so the comparison uses the generated package."}
         </p>
         <div className="space-y-3">
           {comparisons.map((item) => (
-            <ComparisonCard key={item.field} item={item} withSelection={withSelection} />
+            <ComparisonCard
+              key={item.field}
+              item={item}
+              withSelection={withSelection}
+              selectionRecorded={selectionRecorded}
+            />
           ))}
         </div>
       </section>
@@ -266,6 +290,33 @@ function AuditBody({ audit, videoId, versions }: { audit: Audit; videoId?: strin
         </section>
       ) : null}
 
+      {candidates.length ? (
+        <section className="space-y-3">
+          <SectionTitle icon={Lightbulb}>What this video could teach</SectionTitle>
+          <ul className="space-y-2">
+            {candidates.map((candidate, index) => {
+              const evidence = candidateEvidence(candidate.evidence_state, candidate.sample_size);
+              return (
+                <li
+                  key={`${candidate.variable}-${index}`}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card p-3.5"
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="text-sm font-medium text-foreground">
+                      {humanize(String(candidate.variable ?? "variable"))}: {displayValue(candidate.value)}
+                    </p>
+                    {candidate.interpretation ? (
+                      <p className="text-xs leading-relaxed text-muted-foreground">{candidate.interpretation}</p>
+                    ) : null}
+                  </div>
+                  <EvidenceChip tone={evidence.tone}>{evidence.label}</EvidenceChip>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
       <details className="group rounded-2xl border border-border bg-elevated">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
           <span className="inline-flex items-center gap-2">
@@ -297,6 +348,22 @@ function AuditBody({ audit, videoId, versions }: { audit: Audit; videoId?: strin
               "No idea linked"
             )}
           </Field>
+          {before.idea?.id ? (
+            <Field label="Idea research" className="col-span-2 md:col-span-4">
+              {ideaResearch?.captured_at ? (
+                <>
+                  Researched {shortDate(ideaResearch.captured_at)}, before publishing.
+                  {ideaResearch.evidence?.opportunity_explanation ? (
+                    <span className="mt-1 block text-xs font-normal leading-relaxed text-muted-foreground">
+                      {withReadableDates(ideaResearch.evidence.opportunity_explanation)}
+                    </span>
+                  ) : null}
+                </>
+              ) : (
+                "No research was saved before publishing."
+              )}
+            </Field>
+          ) : null}
         </dl>
       </details>
 
@@ -346,7 +413,11 @@ function NotRun({ candidate, videoId }: { candidate?: AuditCandidate; videoId?: 
         <VideoThumb videoId={videoId} className="w-full" />
         <dl className="grid grid-cols-2 gap-4">
           <Field label="Published">{historyDate(candidate?.published_at)}</Field>
-          <Field label="Views">{formatCompact(candidate?.latest_performance?.views)}</Field>
+          <Field label="Views">
+            {typeof candidate?.latest_performance?.views === "number"
+              ? viewsAsOf(candidate.latest_performance.views, candidate.latest_performance.captured_at)
+              : "Unavailable"}
+          </Field>
           <Field label="Performance data">
             <EvidenceChip tone={evidence.tone}>{evidence.label}</EvidenceChip>
           </Field>
@@ -373,10 +444,17 @@ function NotRun({ candidate, videoId }: { candidate?: AuditCandidate; videoId?: 
   );
 }
 
-/** Keyed by video, so switching videos never shows another video's error. */
+/**
+ * Keyed by video. The refresh's state is read from the mutation cache for
+ * this video, so switching videos and back still shows one in flight (and
+ * keeps its button disabled) or the error it ended with.
+ */
 function RefreshAction({ linkId, hasAudit, connected }: { linkId: number; hasAudit: boolean; connected: boolean | null }) {
-  const refresh = useRefreshAudit();
-  const elapsed = useElapsedSeconds(refresh.isPending);
+  const refresh = useRefreshAudit(linkId);
+  const activity = useRecordActivity("audit", linkId);
+  const pending = activity.pending !== null;
+  const latest = activity.latestOf("refresh");
+  const elapsed = useElapsedSeconds(pending, activity.pending?.submittedAt);
   const blocked = connected === false;
 
   const onRefresh = async () => {
@@ -390,8 +468,9 @@ function RefreshAction({ linkId, hasAudit, connected }: { linkId: number; hasAud
           ? `Audit saved. Captured the ${captured.map((window) => windowLabel(window).toLowerCase()).join(", ")}.`
           : "Audit saved with the latest metadata and counts.",
       );
-    } catch {
-      /* Shown below with its request ID. */
+    } catch (error) {
+      // Also shown below; the toast reaches the creator if they've moved to another video.
+      toast.error(formatApiError(error, "The audit could not be refreshed."));
     }
   };
 
@@ -401,7 +480,7 @@ function RefreshAction({ linkId, hasAudit, connected }: { linkId: number; hasAud
         <div className="min-w-0 space-y-0.5">
           <p className="text-sm font-semibold text-foreground">{hasAudit ? "Refresh this audit" : "Run the first audit"}</p>
           <p className="text-xs leading-relaxed text-muted-foreground" aria-live="polite">
-            {refresh.isPending
+            {pending
               ? `Reading the video from your channel… ${formatDuration(elapsed)}`
               : blocked
                 ? "Connect your YouTube channel first: an audit reads the video from it."
@@ -416,16 +495,16 @@ function RefreshAction({ linkId, hasAudit, connected }: { linkId: number; hasAud
             </Link>
           </Button>
         ) : (
-          <Button variant="gradient" onClick={() => void onRefresh()} disabled={refresh.isPending} className="shrink-0">
-            {refresh.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
-            {refresh.isPending ? "Auditing…" : hasAudit ? "Refresh audit" : "Run audit"}
+          <Button variant="gradient" onClick={() => void onRefresh()} disabled={pending} className="shrink-0">
+            {pending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+            {pending ? "Auditing…" : hasAudit ? "Refresh audit" : "Run audit"}
           </Button>
         )}
       </div>
-      {refresh.isError ? (
+      {latest?.status === "error" ? (
         <ErrorState
-          message={apiErrorMessage(refresh.error, "The audit could not be refreshed.")}
-          requestId={apiRequestId(refresh.error)}
+          message={apiErrorMessage(latest.error, "The audit could not be refreshed.")}
+          requestId={apiRequestId(latest.error)}
         />
       ) : null}
     </div>

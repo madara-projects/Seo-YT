@@ -19,12 +19,31 @@ export function extractChannelId(value: string): string | null {
   return match?.[1] ?? null;
 }
 
-/** Mirrors `_extract_youtube_video_id` in the backend routes. */
+const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+const YOUTUBE_HOSTS = new Set(["youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com"]);
+
+/**
+ * Mirrors `_extract_youtube_video_id` in the backend routes: a bare
+ * 11-character ID, youtu.be/<id>, or a YouTube host with `?v=<id>` or
+ * /shorts|embed|live|v/<id>. Any other host is refused, and a longer ID is
+ * refused rather than cut to 11 characters.
+ */
 export function extractVideoId(value: string): string | null {
   const candidate = value.trim();
-  const match = candidate.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/embed\/)([A-Za-z0-9_-]{11})/);
-  if (match?.[1]) return match[1];
-  return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : null;
+  if (VIDEO_ID.test(candidate)) return candidate;
+  let url: URL;
+  try {
+    url = new URL(candidate.includes("://") ? candidate : `https://${candidate}`);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  if (host === "youtu.be") return url.pathname.match(/^\/([A-Za-z0-9_-]{11})\/?$/)?.[1] ?? null;
+  if (!YOUTUBE_HOSTS.has(host)) return null;
+  // Like the server's `parse_qs`, the first non-empty `v` counts.
+  const v = url.searchParams.getAll("v").find(Boolean) ?? "";
+  if (VIDEO_ID.test(v)) return v;
+  return url.pathname.match(/^\/(?:shorts|embed|live|v)\/([A-Za-z0-9_-]{11})\/?$/)?.[1] ?? null;
 }
 
 const notes = z.string().trim().max(2000, "Notes are limited to 2,000 characters.");

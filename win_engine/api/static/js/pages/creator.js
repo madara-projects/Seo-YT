@@ -48,7 +48,7 @@ const CHECKLIST_ITEMS = [
   { key: "manualPublish", source: "Creator-confirmed", label: "I understand this tool does not upload, publish, or guarantee views, CTR, reach, or growth." },
 ];
 
-const TEMPLATE_TEXT = {
+export const TEMPLATE_TEXT = {
   tech: "How to build a full YouTube SEO automation app in Python and Tamil using Gemini AI and FastAPI.",
   quote: "The biggest betrayal is knowing that if you didn't find out, they would have never told you.",
   growth: "How I grew my YouTube channel from 0 to 10,000 subscribers in 30 days using stronger title and topic choices.",
@@ -601,14 +601,12 @@ function setAnalyzeBusy(root, busy) {
 
 function resetGeneratedState(root) {
   creatorState.analysis = null;
-  creatorState.generatedPackage = null;
   creatorState.inferredBrief = null;
   creatorState.packageOptions = [];
   creatorState.selectedPackageId = null;
   creatorState.selectionStatus = "unrecorded";
   creatorState.selectionError = null;
   creatorState.checklist = freshChecklist();
-  creatorState.error = null;
   creatorState.researchError = null;
   const exportButton = root.getElementById("exportBtn");
   if (exportButton) exportButton.disabled = true;
@@ -622,7 +620,6 @@ async function submitAnalyze(root) {
   creatorState.researchStatus = values.script ? "loading" : "no-research";
   renderResearchPanel(root);
   if (!values.script) {
-    creatorState.generationStatus = "error";
     renderAlert(root, "error", ["Please enter a script or video idea first."]);
     return;
   }
@@ -630,8 +627,6 @@ async function submitAnalyze(root) {
   creatorState.submittedFormValues = submitted;
   const sequence = creatorState.requestSequence + 1;
   creatorState.requestSequence = sequence;
-  creatorState.activeRequestSequence = sequence;
-  creatorState.generationStatus = "loading";
   renderAlert(root, "loading", ["Analysis is in progress. This is the only Analyze request for this submission."]);
   setAnalyzeBusy(root, true);
   const payload = {
@@ -651,13 +646,11 @@ async function submitAnalyze(root) {
     });
     if (sequence !== creatorState.requestSequence) return;
     creatorState.analysis = data;
-    creatorState.generatedPackage = { title: data.title, description: data.description, tags: data.tags, hashtags: data.hashtags };
     creatorState.inferredBrief = data.creator_brief || null;
     creatorState.packageOptions = buildPackageOptions(data);
     creatorState.selectedPackageId = creatorState.packageOptions[0]?.id || null;
     creatorState.selectionStatus = "unrecorded";
     creatorState.checklist = freshChecklist();
-    creatorState.generationStatus = "success";
     creatorState.researchStatus = researchHasEvidence(data) ? "available" : "unavailable";
     creatorState.researchError = null;
     const exportButton = root.getElementById("exportBtn");
@@ -674,17 +667,12 @@ async function submitAnalyze(root) {
     if (typeof callbacks.onAnalysisSaved === "function") callbacks.onAnalysisSaved(data);
   } catch (error) {
     if (sequence !== creatorState.requestSequence) return;
-    creatorState.generationStatus = "error";
-    creatorState.error = { message: error.message || "Analysis failed.", requestId: error.requestId || "", status: error.status || 0 };
     creatorState.researchStatus = "error";
     creatorState.researchError = formatApiError(error, "Analysis failed.");
     renderAlert(root, "error", [creatorState.researchError]);
     renderResearchPanel(root);
   } finally {
-    if (sequence === creatorState.requestSequence) {
-      creatorState.activeRequestSequence = 0;
-      setAnalyzeBusy(root, false);
-    }
+    if (sequence === creatorState.requestSequence) setAnalyzeBusy(root, false);
   }
 }
 
@@ -845,13 +833,11 @@ export function mountCreatorPage(root = document, options = {}) {
   const view = root.getElementById("view-creator");
   if (!view) return;
   callbacks = { ...callbacks, ...options };
-  view.dataset.pageModule = "creator";
   if (view.dataset.creatorInitialized === "true") {
     renderStage(root, creatorState.stage);
     return;
   }
   view.dataset.creatorInitialized = "true";
-  creatorState.initialized = true;
   if (!creatorState.checklist || !Object.keys(creatorState.checklist).length) creatorState.checklist = freshChecklist();
   if (creatorState.formValues && Object.keys(creatorState.formValues).length) writeCreatorForm(root, creatorState.formValues);
   syncFormState(root);

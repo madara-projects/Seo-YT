@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 import tempfile
 import unittest
@@ -47,8 +46,14 @@ class Phase1MigrationTests(unittest.TestCase):
         backup_path = online_backup(str(path), str(self.root / "backups"))
 
         self.assertTrue(Path(backup_path).exists())
+        # The source uses WAL; its backup is one self-contained file with no -wal or -shm beside it.
+        with sqlite3.connect(path) as source:
+            self.assertEqual(source.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        self.assertFalse(Path(backup_path + "-wal").exists())
+        self.assertFalse(Path(backup_path + "-shm").exists())
         backup = sqlite3.connect(f"file:{Path(backup_path).as_posix()}?mode=ro", uri=True)
         try:
+            self.assertEqual(backup.execute("PRAGMA journal_mode").fetchone()[0], "delete")
             self.assertEqual(backup.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(backup.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0], 1)
         finally:

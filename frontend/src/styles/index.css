@@ -47,7 +47,6 @@
   --muted-foreground: oklch(0.5 0.022 286);
 
   --accent: oklch(0.955 0.01 286);
-  --accent-foreground: oklch(0.26 0.03 286);
 
   --destructive: oklch(0.57 0.215 25);
   --destructive-foreground: oklch(0.99 0.01 20);
@@ -95,7 +94,6 @@
   /* Chart colours. Series colour is the brand violet; red stays reserved for
      failure states and is only used for a decline where the label says so. */
   --chart-1: oklch(0.55 0.24 285);
-  --chart-2: oklch(0.82 0.02 286);
   --chart-grid: oklch(0.915 0.008 286);
   --chart-axis: oklch(0.5 0.022 286);
 
@@ -130,7 +128,6 @@
   --muted-foreground: oklch(0.72 0.02 286);
 
   --accent: oklch(0.25 0.026 286);
-  --accent-foreground: oklch(0.965 0.005 286);
 
   --destructive: oklch(0.58 0.21 25);
   --destructive-foreground: oklch(0.99 0.01 20);
@@ -167,7 +164,6 @@
   --sidebar-brand: oklch(0.8 0.13 292);
 
   --chart-1: oklch(0.7 0.18 288);
-  --chart-2: oklch(0.42 0.022 286);
   --chart-grid: oklch(0.28 0.02 286);
   --chart-axis: oklch(0.72 0.02 286);
 
@@ -195,7 +191,6 @@
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
@@ -223,7 +218,6 @@
   --color-sidebar-brand: var(--sidebar-brand);
 
   --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
   --color-chart-grid: var(--chart-grid);
   --color-chart-axis: var(--chart-axis);
 
@@ -251,8 +245,6 @@
   --animate-dialog-in: dialog-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-sheet-in: sheet-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-drawer-in: drawer-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
-  --animate-float: float 7s ease-in-out infinite;
-  --animate-spin-slow: spin 5s linear infinite;
 
   @keyframes shimmer {
     0% { transform: translateX(-100%); }
@@ -263,7 +255,7 @@
     100% { transform: translateX(330%); }
   }
   @keyframes fade-up {
-    from { opacity: 0; transform: translateY(8px); }
+    from { opacity: 0; transform: translateY(0.5rem); }
     to { opacity: 1; transform: translateY(0); }
   }
   @keyframes overlay-in {
@@ -273,20 +265,16 @@
   /* Tailwind v4 centres with the `translate` property, so this animates
      `transform` on top of it rather than repeating the centring offset. */
   @keyframes dialog-in {
-    from { opacity: 0; transform: translateY(10px) scale(0.98); }
+    from { opacity: 0; transform: translateY(0.625rem) scale(0.98); }
     to { opacity: 1; transform: none; }
   }
   @keyframes sheet-in {
-    from { opacity: 0.4; transform: translateX(24px); }
+    from { opacity: 0.4; transform: translateX(1.5rem); }
     to { opacity: 1; transform: translateX(0); }
   }
   @keyframes drawer-in {
     from { transform: translateX(-100%); }
     to { transform: translateX(0); }
-  }
-  @keyframes float {
-    0%, 100% { transform: translate3d(0, 0, 0); }
-    50% { transform: translate3d(0, -10px, 0); }
   }
 }
 

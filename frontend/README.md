@@ -1,14 +1,13 @@
 # Win-Engine frontend
 
 React + TypeScript + Vite rebuild of the Win-Engine dashboard. It runs beside the
-existing interface rather than replacing it: the backend, the API, the SQLite
-database, and the legacy dashboard are all unchanged.
+existing interface rather than replacing it: both interfaces use the same API and
+SQLite database.
 
 | Route | Serves |
 |---|---|
 | `/next` | This React app |
-| `/`, `/app`, `/dashboard_view` | The existing extracted dashboard (unchanged) |
-| `/dashboard_legacy` | The original embedded dashboard (unchanged) |
+| `/`, `/app`, `/dashboard_view` | The classic dashboard |
 
 Every page is now migrated. `/` and `/app` still serve the extracted dashboard;
 switching them over to React is a separate step.
@@ -26,7 +25,7 @@ and the app gains nothing from 19's new features today.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173, proxies the API to 127.0.0.1:8000
+npm run dev        # http://localhost:5173/next/, proxies the API to 127.0.0.1:8000
 npm run build      # builds into ../win_engine/api/static/app/
 npm run test       # Vitest
 npm run typecheck  # tsc --noEmit
@@ -37,6 +36,11 @@ The dev server proxies `/analyze`, `/api`, `/health`, `/meta`, `/diagnostics`,
 `/ready`, `/youtube`, and `/oauth` to the Docker backend, so the app is
 same-origin in both development and production and the API client never needs a
 base URL.
+
+`index.html` has no inline script or event handler, so the server's Content
+Security Policy can forbid inline scripts. The pre-paint theme switch is
+`public/theme-init.js`, served at `/app-assets/theme-init.js` when built and at
+`/next/theme-init.js` by the dev server.
 
 ## API types
 

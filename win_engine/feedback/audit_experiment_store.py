@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
 from win_engine.analysis.audit_experiment import AUDIT_RULE_VERSION, EXPERIMENT_RULE_VERSION, build_published_audit, compare_experiment
+from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES, mature_snapshot
 from win_engine.feedback.history_store import HistoryStore
 
 
-EXPERIMENT_STATUSES = {"draft", "planned", "active", "paused", "completed", "cancelled", "inconclusive"}
 STATUS_TRANSITIONS = {
     "draft": {"planned", "cancelled"}, "planned": {"active", "paused", "cancelled"},
     "active": {"paused", "completed", "inconclusive", "cancelled"},
     "paused": {"active", "completed", "inconclusive", "cancelled"},
     "completed": set(), "cancelled": set(), "inconclusive": set(),
 }
+# Results collected under a hypothesis belong to it, so it can change only before the experiment runs.
+HYPOTHESIS_EDITABLE_STATUSES = {"draft", "planned"}
+# A closed experiment's videos and recorded results are final.
+CLOSED_STATUSES = {status for status, allowed in STATUS_TRANSITIONS.items() if not allowed}
 
 
 class AuditExperimentStore:
@@ -36,12 +41,20 @@ class AuditExperimentStore:
             # Only whether a selection exists matters here. Reading them in one
             # query replaces a connection per linked video, which made the list slow.
             selected_runs = {int(row[0]) for row in connection.execute("SELECT DISTINCT analysis_run_id FROM analysis_package_selections").fetchall()}
+            # The state comes from every snapshot, not the newest row: a failed
+            # retry is not a completed window, and a later current-count refresh
+            # does not undo one.
+            observed_videos = {row[0] for row in connection.execute("SELECT DISTINCT youtube_video_id FROM video_performance_snapshots WHERE views IS NOT NULL").fetchall()}
+            completed_rows = connection.execute(
+                "SELECT youtube_video_id,snapshot_window,snapshot_status,completed_at,views FROM video_performance_snapshots WHERE snapshot_status='complete'"
+            ).fetchall()
+        mature_videos = {row[0] for row in completed_rows if mature_snapshot({"snapshot_window": row[1], "snapshot_status": row[2], "completed_at": row[3], "views": row[4]})}
         audits = {row[0]: {"audit_id": row[1], "audit_captured_at": row[2], "audit_state": row[3]} for row in audit_rows}
         ideas = {row[0]: {"id": row[1], "topic": row[2]} for row in idea_rows}
         result = []
         for link in self.history.published_video_links_list():
-            latest = link.get("latest_performance") or {}
-            state = "mature" if latest.get("snapshot_window") in {"24h", "7d", "28d"} else "observed" if latest else "unavailable"
+            video_id = link["youtube_video_id"]
+            state = "mature" if video_id in mature_videos else "observed" if video_id in observed_videos else "unavailable"
             item = {**link, **audits.get(link["id"], {"audit_id": None, "audit_captured_at": None, "audit_state": "not_run"}), "idea": ideas.get(link["id"]), "evidence_state": state, "selection_state": "selected" if int(link["analysis_run_id"]) in selected_runs else "unknown"}
             if evidence_state and state != evidence_state:
                 continue
@@ -95,7 +108,10 @@ class AuditExperimentStore:
         run = self.history.history_run(int(link["analysis_run_id"]))
         if not run:
             return None
-        published_at = str(link.get("published_at") or "9999")
+        # SQLite parses both timestamps, offsets included, so research saved at
+        # 06:00Z is not "before" a manual 10:00+05:30 publish time. A publish
+        # time it cannot read matches nothing: no research is claimed as pre-publish.
+        published_at = str(link.get("published_at") or "")
         with self.history._connect() as connection:
             idea_row = connection.execute(
                 """SELECT id,topic,notes,format,language,region,visual_or_background,on_screen_text,
@@ -107,23 +123,29 @@ class AuditExperimentStore:
             demand = None
             if idea_row:
                 idea = {"id": idea_row[0], "topic": idea_row[1], "notes": idea_row[2], "format": idea_row[3], "language": idea_row[4], "region": idea_row[5], "visual_or_background": idea_row[6], "on_screen_text": idea_row[7], "target_duration_seconds": idea_row[8], "emotion_or_intent": idea_row[9], "search_angle": idea_row[10], "browse_angle": idea_row[11], "audience_angle": idea_row[12], "status": idea_row[13], "provenance": "saved_content_idea"}
-                research_row = connection.execute("SELECT id,captured_at,evidence_json FROM content_idea_research_snapshots WHERE content_idea_id=? AND captured_at<=? ORDER BY captured_at DESC,id DESC LIMIT 1", (idea_row[0], published_at)).fetchone()
+                research_row = connection.execute("SELECT id,captured_at,evidence_json FROM content_idea_research_snapshots WHERE content_idea_id=? AND julianday(captured_at)<=julianday(?) ORDER BY julianday(captured_at) DESC,id DESC LIMIT 1", (idea_row[0], published_at)).fetchone()
                 if research_row:
                     idea_research = {"id": research_row[0], "captured_at": research_row[1], "evidence": _object(research_row[2]), "provenance": "saved_pre_publish_idea_research"}
-                demand_row = connection.execute("SELECT id,captured_at,classification,evidence_json FROM demand_research_snapshots WHERE idea_id=? AND captured_at<=? ORDER BY captured_at DESC,id DESC LIMIT 1", (idea_row[0], published_at)).fetchone()
+                demand_row = connection.execute("SELECT id,captured_at,classification,evidence_json FROM demand_research_snapshots WHERE idea_id=? AND julianday(captured_at)<=julianday(?) ORDER BY julianday(captured_at) DESC,id DESC LIMIT 1", (idea_row[0], published_at)).fetchone()
                 if demand_row:
                     demand = {"id": demand_row[0], "captured_at": demand_row[1], "classification": demand_row[2], "evidence": _object(demand_row[3]), "provenance": "saved_pre_publish_demand_research"}
         snapshots = self.history.performance_snapshots(str(link["youtube_video_id"]))
-        report = self.history.linked_package_report(run["id"])
+        report = self.history.linked_package_report(run["id"], run=run)
         comparable = self.history.comparable_metadata(link_id) or {}
-        mature_window = next((window for window in ("28d", "7d", "24h") if self.history.completed_evidence_snapshot(str(link["youtube_video_id"]), window)), "24h")
+        # Snapshots come oldest first, so each window keeps its newest completed row.
+        completed = {item["snapshot_window"]: item for item in snapshots if mature_snapshot(item)}
+        mature_window = next((window for window in ("28d", "7d", "24h") if window in completed), "24h")
         try:
+            # A video is judged by its peers: counted with itself, four peers
+            # would meet a threshold of five, and its own views would sit in the
+            # median. An unknown label filters nothing (known_filter).
             cohort = self.history.cohort_analytics(
-                format_filter=None if comparable.get("format") in {None, "unknown"} else comparable.get("format"),
-                language_filter=None if comparable.get("language") in {None, "unknown"} else comparable.get("language"),
-                duration_bucket_filter=None if comparable.get("duration_bucket") in {None, "unknown"} else comparable.get("duration_bucket"),
-                topic_category_filter=None if comparable.get("topic_category") in {None, "unknown"} else comparable.get("topic_category"),
+                format_filter=comparable.get("format"),
+                language_filter=comparable.get("language"),
+                duration_bucket_filter=comparable.get("duration_bucket"),
+                topic_category_filter=comparable.get("topic_category"),
                 snapshot_window=mature_window,
+                exclude_video_id=str(link["youtube_video_id"]),
             )
         except (ValueError, TypeError):
             cohort = {"sample_size": 0, "learning_allowed": False, "confidence_label": "Collecting evidence"}
@@ -187,6 +209,7 @@ class AuditExperimentStore:
         changes = {key: value for key, value in values.items() if key in allowed}
         if not changes:
             raise ValueError("Provide at least one supported experiment update.")
+        _validate_experiment_update(current, changes)
         changes["updated_at"] = datetime.now(timezone.utc).isoformat()
         with self.history._connect() as connection:
             connection.execute("UPDATE experiments SET " + ",".join(f"{key}=?" for key in changes) + " WHERE id=?", (*changes.values(), experiment_id))
@@ -204,7 +227,7 @@ class AuditExperimentStore:
         experiment = self.experiment(experiment_id)
         if not experiment:
             raise LookupError("Experiment not found.")
-        if experiment["status"] in {"completed", "cancelled", "inconclusive"}:
+        if experiment["status"] in CLOSED_STATUSES:
             raise ValueError("Closed experiments cannot accept new video assignments.")
         link = self.history.published_video_link(link_id)
         if not link or not link.get("ownership_verified"):
@@ -218,14 +241,17 @@ class AuditExperimentStore:
             with self.history._connect() as connection:
                 connection.execute("INSERT INTO experiment_video_assignments (experiment_id,published_video_link_id,role,assigned_at,notes) VALUES (?,?,?,?,?)", (experiment_id, link_id, role, now, notes))
                 connection.execute("UPDATE experiments SET updated_at=? WHERE id=?", (now, experiment_id))
-        except Exception as exc:
-            if "UNIQUE constraint" in str(exc):
+        except sqlite3.IntegrityError as exc:
+            if exc.sqlite_errorname == "SQLITE_CONSTRAINT_UNIQUE":
                 raise ValueError("This video is already assigned to the experiment.") from exc
             raise
         return self.experiment(experiment_id) or {}
 
     def remove_assignment(self, experiment_id: int, assignment_id: int) -> bool:
         with self.history._connect() as connection:
+            status = connection.execute("SELECT status FROM experiments WHERE id=?", (experiment_id,)).fetchone()
+            if status and status[0] in CLOSED_STATUSES:
+                raise ValueError("Closed experiments keep the videos they were compared on.")
             cursor = connection.execute("DELETE FROM experiment_video_assignments WHERE id=? AND experiment_id=?", (assignment_id, experiment_id))
         return cursor.rowcount > 0
 
@@ -233,6 +259,9 @@ class AuditExperimentStore:
         experiment = self.experiment(experiment_id)
         if not experiment:
             return None
+        if experiment["status"] in CLOSED_STATUSES:
+            # Each comparison is saved as a new result, and a closed one's are final.
+            raise ValueError("Closed experiments keep their recorded results; no new comparison is saved.")
         assignments = []
         for assignment in experiment["assignments"]:
             link = self.history.published_video_link(int(assignment["published_video_link_id"]))
@@ -255,6 +284,36 @@ class AuditExperimentStore:
         with self.history._connect() as connection:
             rows = connection.execute("SELECT id,captured_at,result_state,provenance_version FROM experiment_result_snapshots WHERE experiment_id=? ORDER BY captured_at DESC,id DESC", (experiment_id,)).fetchall()
         return [{"id": r[0], "captured_at": r[1], "result_state": r[2], "provenance_version": r[3]} for r in rows]
+
+
+def _validate_experiment_update(current: dict[str, Any], changes: dict[str, Any]) -> None:
+    if (
+        "hypothesis" in changes
+        and current["status"] not in HYPOTHESIS_EDITABLE_STATUSES
+        and str(changes["hypothesis"] or "").strip() != str(current["hypothesis"] or "").strip()
+    ):
+        raise ValueError("The hypothesis cannot change once the experiment has started; create a new experiment to test a different one.")
+    target = changes.get("target_sample_size")
+    # Older experiments may store a minimum below the floor the analysis applies.
+    minimum = max(EARLY_SIGNAL_MIN_SAMPLES, int(current["minimum_sample_size"] or 0))
+    if target is not None and int(target) < minimum * 2:
+        raise ValueError("Target sample size must cover the minimum control and variant samples.")
+    for field in ("start_date", "end_date"):
+        if changes.get(field) and _moment(changes[field]) is None:
+            raise ValueError("Use an ISO date, for example 2026-09-01.")
+    start = _moment(changes.get("start_date", current["start_date"]))
+    end = _moment(changes.get("end_date", current["end_date"]))
+    if start and end and end < start:
+        raise ValueError("The end date cannot be before the start date.")
+
+
+def _moment(value: Any) -> datetime | None:
+    """An ISO 8601 date or date-time as an aware datetime; None when it is not one."""
+    try:
+        parsed = datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _object(raw: Any) -> dict[str, Any]:

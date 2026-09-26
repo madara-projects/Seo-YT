@@ -1,18 +1,21 @@
-"""Lightweight, rule-based topic-lock + safety layer.
+"""Rule-based topic, category, tag and safety helpers around the SEO generator.
 
-Pure-Python, no ML, no extra deps. All six fixes live here so the rest of the
-pipeline stays untouched. Used as a thin pre/post wrapper around the existing
-SEO generator.
+Pure Python with no model calls: category inference, the main-topic phrase,
+tag and hashtag clean-up, and the policy-risk wording check on generated text.
 """
 
 from __future__ import annotations
 
 import re
 from collections import Counter
+from functools import lru_cache
 from typing import Iterable, List
 
+from win_engine.analysis.source_cues import source_quote
+from win_engine.analysis.text_tokens import is_word_character, strip_stray_joiners, unicode_words
+
 # ---------------------------------------------------------------------------
-# Fix 2: Category awareness — keyword sets per category
+# Category awareness: keyword sets per category
 # ---------------------------------------------------------------------------
 # Subject evidence only. Words that describe a *format* ("tutorial", "review",
 # "lesson") used to live here, which classified every tutorial as education —
@@ -96,64 +99,15 @@ _FORMAT_HINTS: dict[str, str] = {
 _FORMAT_HINT_WEIGHT = 0.4
 
 # ---------------------------------------------------------------------------
-# Fix 3: API fallback — predefined keyword sets when YouTube returns nothing
-# ---------------------------------------------------------------------------
-CATEGORY_FALLBACK_KEYWORDS: dict[str, List[str]] = {
-    "gaming": [
-        "free fire diamonds", "ff tips", "redeem code", "battle royale tricks",
-        "free fire guide", "ff pro tips",
-    ],
-    "education": [
-        "study tips", "exam preparation", "learning guide", "concept explained",
-        "tutorial", "complete course",
-    ],
-    "finance": [
-        "personal finance", "investment guide", "money management",
-        "saving tips", "budget plan", "tax saving",
-    ],
-    "tech": [
-        "tech review", "smartphone guide", "app tutorial", "best gadgets",
-        "tech tips", "honest review",
-    ],
-    "fitness": [
-        "workout plan", "diet tips", "weight loss", "fitness routine",
-        "gym guide", "home workout",
-    ],
-    "cooking": [
-        "easy recipe", "quick meal", "cooking tips", "kitchen hacks",
-        "tasty dish", "step by step recipe",
-    ],
-    "vlog": [
-        "daily vlog", "morning routine", "weekend vlog", "lifestyle",
-        "day in life", "real life",
-    ],
-    "quotes": [
-        "quote video", "life quotes", "deep quotes", "motivational quote",
-        "healing quotes", "aesthetic quotes", "shorts quotes", "heart quotes",
-    ],
-    "shorts": [
-        "youtube shorts", "trending shorts", "short video", "viral shorts",
-        "aesthetic shorts", "relatable shorts",
-    ],
-    "youtube_shorts": [
-        "youtube shorts", "trending shorts", "short video", "viral shorts",
-        "aesthetic shorts", "relatable shorts",
-    ],
-    "general": [
-        "complete guide", "tips and tricks", "how to", "tutorial",
-        "real methods", "beginner guide",
-    ],
-}
-
-# ---------------------------------------------------------------------------
-# Fix 6: Risk filter — risky words → safer alternatives
+# Risk wording: exploit promises -> safer alternatives, in generated text only
 # ---------------------------------------------------------------------------
 # Only multi-word phrases that promise in-game exploits (a real YouTube policy
-# risk) are rewritten. Single words such as "hack", "cheat" and "scam" were
-# rewritten globally before, which changed what the creator said: "kitchen
-# hacks" became "kitchen tricks", "cheat sheet" became "trick sheet", and "how
-# to avoid a scam" became "how to avoid a real methods". The script is the
-# source of truth and must reach analysis intact.
+# risk) are listed; single words are ordinary copy ("kitchen hacks", "cheat
+# sheet", "how to avoid a scam"). The creator's own script is never rewritten:
+# "never install a mod apk: malware explained" became "never install a
+# official method", and "GTA 5 unlimited money glitch patched" became "GTA 5
+# money tips glitch patched". Generated copy may not *add* one of these
+# phrases; a phrase the creator used is their subject and stays.
 RISK_TERMS: dict[str, str] = {
     # phrase priority — longest match wins (sorted by length at apply-time)
     "unlimited free diamonds": "ways to earn diamonds",
@@ -189,15 +143,12 @@ STOP_TAGS: set[str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Fix 5: Title patterns — concrete, topic-locked, non-generic
+# Title patterns, used only when a generated title is missing or unusable
 # ---------------------------------------------------------------------------
-TITLE_PATTERNS: List[str] = [
-    "How to {topic} (2026 Guide)",
-    "{topic}: Real Methods That Work",
-    "{topic} Tips & Tricks (No Scam)",
-    "Complete {topic} Guide for Beginners",
-    "How I Improved {topic} (Step-by-Step)",
-]
+# A fallback knows the topic and nothing else. The old templates promised a
+# year ("(2026 Guide)"), results ("Real Methods That Work"), trust ("(No Scam)")
+# and a personal story ("How I Improved...") that no creator had claimed.
+TITLE_PATTERNS: List[str] = ["{topic}"]
 
 _STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "i",
@@ -208,21 +159,81 @@ _STOPWORDS = {
 
 
 # ---------------------------------------------------------------------------
-# Fix 6 — risk normalization
+# Risk wording
 # ---------------------------------------------------------------------------
-def normalize_risk_terms(text: str) -> str:
-    """Replace risky words/phrases with safer alternatives (word-boundary aware)."""
+def _risk_pattern(phrase: str) -> re.Pattern[str]:
+    return re.compile(r"\b" + re.escape(phrase) + r"\b", re.IGNORECASE)
+
+
+def _risk_readable(text: str) -> str:
+    # "#FreeFireHack" reads as "Free Fire Hack", so hashtags are checked too.
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(text or "").replace("#", " "))
+
+
+_RISK_HASHTAG_RE = re.compile(r"#[^\s#]+")
+
+
+def _squashed(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(text or "").casefold())
+
+
+# The creator's source is read once per generated title, tag and hashtag.
+@lru_cache(maxsize=256)
+def _risk_phrases(text: str) -> frozenset[str]:
+    """Risk phrases a text uses, in prose or in a hashtag of any casing.
+
+    "#UNLIMITEDDIAMONDS" has no case change to split at, so a hashtag is also
+    compared with its letters run together. Prose is not: "it's free. Diamonds
+    are..." does not say "free diamonds".
+    """
+
+    readable = _risk_readable(text)
+    hashtags = [_squashed(tag) for tag in _RISK_HASHTAG_RE.findall(str(text or ""))]
+    return frozenset(
+        risky for risky in RISK_TERMS
+        if _risk_pattern(risky).search(readable) or any(_squashed(risky) in tag for tag in hashtags)
+    )
+
+
+def unsupported_risk_terms(text: str, source: str = "") -> list[str]:
+    """Risk phrases in generated text that the creator's source never uses.
+
+    The source is read the same way as the text: a creator's own
+    "#FreeFireHack" is the subject of the video.
+    """
+
+    found = _risk_phrases(text) - _risk_phrases(source)
+    return [risky for risky in sorted(RISK_TERMS, key=len, reverse=True) if risky in found]
+
+
+def normalize_risk_terms(text: str, source: str = "") -> str:
+    """Replace risk phrases with safer alternatives, except those in ``source``.
+
+    Meant for generated copy. ``source`` is the creator's own material: a
+    phrase it uses is the subject of the video ("never install a mod apk")
+    and is left alone.
+    """
     if not text:
         return text
-    out = text
+    supported = _risk_phrases(source)
+    # A hashtag cannot be reworded in place, so one that adds a risk phrase is
+    # dropped, as an offending tag is.
+    out = re.sub(
+        r"#[^\s#]+[ \t]*",
+        lambda match: "" if _risk_phrases(match.group(0)) - supported else match.group(0),
+        text,
+    )
+    if out != text:
+        out = re.sub(r"[ \t]+(?=\n|$)", "", out)
     # longest first so multi-word terms win over single-word ones
     for risky, safe in sorted(RISK_TERMS.items(), key=lambda kv: -len(kv[0])):
-        out = re.sub(r"\b" + re.escape(risky) + r"\b", safe, out, flags=re.IGNORECASE)
+        if risky not in supported:
+            out = _risk_pattern(risky).sub(safe, out)
     return out
 
 
 # ---------------------------------------------------------------------------
-# Fix 2 — category inference
+# Category inference
 # ---------------------------------------------------------------------------
 _TAMIL_CHAR_RE = re.compile(r"[஀-௿]")
 
@@ -273,7 +284,7 @@ def infer_category(text: str, hint: str | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fix 1 — main topic extraction
+# Main topic extraction
 # ---------------------------------------------------------------------------
 def extract_main_topic(text: str) -> str:
     """Pull the main topic phrase. Prefers quote sentiment over camera/visual setup headers."""
@@ -288,10 +299,11 @@ def extract_main_topic(text: str) -> str:
         count=1,
     )
     clean_text = re.sub(r"(?i)quote\s*on\s*screen:?", "", clean_text)
-    
-    quote_match = re.search(r'"([^"]+)"', text)
-    if quote_match and len(quote_match.group(1).strip()) > 5:
-        quote_body = quote_match.group(1).strip()
+
+    # A labelled quote or a quote Short's quoted line; in a tutorial,
+    # `click "Save changes"` names a button and is not the topic.
+    quote_body = source_quote(text)
+    if quote_body:
         quote_words = [
             w.lower()
             for w in re.findall(r"[A-Za-z]{4,}", quote_body)
@@ -392,35 +404,23 @@ def source_lead_phrase(text: str, max_words: int = 12) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fix 4 — idea-mode expansion
+# Junk tags
 # ---------------------------------------------------------------------------
-def is_short_idea(text: str, threshold: int = 20) -> bool:
-    return len((text or "").split()) < threshold
+def _is_tag_character(char: str) -> bool:
+    # Emoji variation selectors are not tag text; a joiner inside a word is.
+    return char in " -'’" or char.isspace() or is_word_character(char)
 
 
-def expand_idea_to_script(idea: str) -> str:
-    """Return a short idea unchanged.
+def is_junk_tag(tag: str) -> bool:
+    """A tag is junk if it contains symbols (#, |, etc.), is empty,
+    or every meaningful word is in STOP_TAGS.
 
-    This used to append invented sentences to any input under twenty words —
-    "we walk through ... the real methods that work ... share practical tips,
-    and break down the steps" or "featuring deep quote reflections, an
-    aesthetic visual mood". The model was then told to treat that text as the
-    only source of facts, so the tool manufactured the very claims its own
-    fidelity rules forbid. A short idea is a short source; the prompt and the
-    quality gate already handle sparse input honestly.
+    Letters and vowel signs of every script are ordinary tag text; an
+    ASCII-only test threw away every Tamil and accented tag and hashtag.
     """
-    return (idea or "").strip()
-
-
-# ---------------------------------------------------------------------------
-# Fix 3 — keyword fallback when YouTube API has no data
-# ---------------------------------------------------------------------------
-def _is_junk_tag(tag: str) -> bool:
-    """A tag is junk if it contains weird chars (#, |, etc.), is empty,
-    or every meaningful word is in STOP_TAGS."""
     if not tag:
         return True
-    if re.search(r"[^A-Za-z0-9\s\-'’]", tag):
+    if not all(_is_tag_character(char) for char in tag) or strip_stray_joiners(tag) != tag:
         return True
     # A standalone contraction stem is a reliable sign that an LLM or keyword
     # tokenizer destroyed the original phrase ("didn't" -> "didn"). Do not
@@ -430,38 +430,15 @@ def _is_junk_tag(tag: str) -> bool:
         tag.lower(),
     ):
         return True
-    words = [w for w in re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", tag.lower()) if w]
+    words = [word for word in unicode_words(tag) if any(char.isalpha() for char in word)]
     if len(words) > 12:
         return True
     return not words or all(w in STOP_TAGS for w in words)
 
 
-def fallback_keyword_signals(category: str) -> list[dict[str, object]]:
-    seeds = CATEGORY_FALLBACK_KEYWORDS.get(category, CATEGORY_FALLBACK_KEYWORDS["general"])
-    return [
-        {"keyword": kw, "mentions": 1, "strength": "medium",
-         "region_relevant": False, "source": "fallback"}
-        for kw in seeds if not _is_junk_tag(kw)
-    ]
-
-
 # ---------------------------------------------------------------------------
-# Fix 1 + 5 — topic-lock validators / regenerators
+# Topic-lock validators / regenerators
 # ---------------------------------------------------------------------------
-def title_contains_topic(title: str, topic: str) -> bool:
-    if not topic:
-        return True
-    return topic.lower() in (title or "").lower()
-
-
-def _topic_in_head(title: str, topic: str, max_words: int = 4) -> bool:
-    """Keyword-first check: topic appears within the first `max_words` of the title."""
-    if not topic:
-        return True
-    head = " ".join((title or "").split()[:max_words]).lower()
-    return topic.lower() in head
-
-
 def _title_is_broken(title: str) -> bool:
     """A title is broken only if empty or under 6 characters.
     AI generated titles (whether for Vlogs, Music, Gaming, Quotes, or Tutorials)
@@ -472,25 +449,29 @@ def _title_is_broken(title: str) -> bool:
     return len(cleaned) < 6
 
 
-QUOTE_TITLE_PATTERNS: List[str] = [
-    "{topic} 💔 #Shorts",
-    "The Hardest Truth: {topic} #Shorts",
-    "{topic} | Watch Until The End... #Shorts",
-    "What They Never Told You: {topic}",
-    "{topic} #Shorts #Quote",
-]
+# A Short's title carries #Shorts exactly once. A fixed 💔, "The Hardest
+# Truth", "Watch Until The End..." and "What They Never Told You" (which also
+# dropped #Shorts) told viewers things about the video no one had said.
+QUOTE_TITLE_PATTERNS: List[str] = ["{topic} #Shorts"]
 
 
 def force_topic_in_title(title: str, topic: str, category: str = "general",
-                         variant_index: int = 0) -> str:
-    """Regenerate ONLY when the LLM title is missing or unusable."""
+                         variant_index: int = 0, *, short_form: bool = False) -> str:
+    """Regenerate ONLY when the LLM title is missing or unusable.
+
+    ``short_form`` is the caller's Short decision (source_cues.is_short_video);
+    a category or a topic word ("sunset", "betrayal") never makes a Short.
+    """
     cleaned = (title or "").strip()
     if not _title_is_broken(cleaned):
         return cleaned
 
-    is_shorts_or_quote = category in ("youtube_shorts", "shorts") or any(w in (topic or "").lower() for w in ["quote", "betrayal", "sunset", "aesthetic", "shorts"])
-    patterns = QUOTE_TITLE_PATTERNS if is_shorts_or_quote else TITLE_PATTERNS
-    pretty = topic.strip().title() if topic else ("Aesthetic Quote" if is_shorts_or_quote else f"{category.title()} Guide")
+    pretty = (topic or "").strip().title()
+    if not pretty:
+        # Nothing to name. A placeholder ("General Guide", "Aesthetic Quote")
+        # is not a title; the quality gate reports the missing one instead.
+        return cleaned
+    patterns = QUOTE_TITLE_PATTERNS if short_form else TITLE_PATTERNS
     pattern = patterns[variant_index % len(patterns)]
     return pattern.format(topic=pretty)
 
@@ -506,76 +487,12 @@ def force_topic_in_description(description: str, topic: str) -> str:
     desc = (description or "").strip()
     if desc:
         return desc
-    if not topic:
+    text = (topic or "").strip()
+    if not text:
         return ""
-    return f"{topic.strip().title()} — a practical walkthrough."
-
-
-def force_topic_in_tags(tags: list[str], topic: str, category: str,
-                        max_tags: int = 12, min_before_fallback: int = 6,
-                        context: str | Iterable[str] | None = None) -> list[str]:
-    """Drop junk tags, ensure the real topic is first, and preserve model tags.
-
-    Generic category filler is intentionally not added. A Short keeps only the
-    useful format tag ``shorts``; every other tag must describe the actual video.
-    """
-    pinned = {"shorts"}
-    generic_format_tags = {
-        "yt", "youtube", "viral", "trending", "youtube shorts", "viral shorts",
-        "trending shorts", "short video", "video", "fyp",
-    }
-    context_text = context if isinstance(context, str) else " ".join(str(item) for item in (context or []))
-    context_words = set(re.findall(r"[a-z0-9]+", (" ".join([topic or "", context_text])).casefold()))
-    required = list(dict.fromkeys(
-        str(tag).strip().lower()
-        for tag in (tags or [])
-        if str(tag).strip().lower() in pinned
-    ))
-    out: list[str] = []
-    seen: set[str] = set()
-    reserved = min(len(required), max_tags)
-    # The final package quality gate accepts one focused phrase per tag and
-    # rejects tags longer than eight words. Creator topics can legitimately be
-    # longer (especially when inferred from an exact quote), so do not let the
-    # topic-lock post-process make an otherwise valid provider package fail its
-    # own final validation.
-    topic_words = str(topic or "").strip().lower().split()
-    # A full on-screen quote can exceed the one-tag contract.  Keep the first
-    # focused words rather than an arbitrary closing fragment: the opening
-    # phrase names the topic naturally and remains understandable on its own.
-    topic_tag = " ".join(topic_words[:8])
-    if topic_tag and not _is_junk_tag(topic_tag) and max_tags > reserved:
-        out.append(topic_tag)
-        seen.add(topic_tag)
-    # If a quote needs truncating, retain its concise closing thought as a
-    # second specific tag.  This avoids losing the actual emotional resolution
-    # while still keeping every individual tag within the quality contract.
-    closing_tag = " ".join(topic_words[-5:]) if len(topic_words) > 8 else ""
-    if (
-        closing_tag
-        and closing_tag not in seen
-        and not _is_junk_tag(closing_tag)
-        and len(out) < max_tags - reserved
-    ):
-        out.append(closing_tag)
-        seen.add(closing_tag)
-    for raw in tags or []:
-        t = (raw or "").strip().lower()
-        if t in pinned or t in generic_format_tags or not t or t in seen or _is_junk_tag(t) or len(t.split()) > 8 or len(out) >= max_tags - reserved:
-            continue
-        if context is not None:
-            tag_words = set(re.findall(r"[a-z0-9]+", t))
-            if tag_words and not (tag_words & context_words):
-                continue
-        if len(out) >= max_tags - reserved:
-            continue
-        out.append(t)
-        seen.add(t)
-    for tag in required:
-        if tag not in seen and len(out) < max_tags:
-            out.append(tag)
-            seen.add(tag)
-    return out[:max_tags]
+    # Only what the input says. "— a practical walkthrough" claimed an
+    # instructional video, and title() cased "iPhone" as "Iphone".
+    return text[:1].upper() + text[1:] + ("" if text.endswith((".", "!", "?")) else ".")
 
 
 _HASHTAG_STOPWORDS = {
@@ -725,7 +642,7 @@ def force_hashtags(existing: list[str] | None, topic: str, category: str,
     for raw in existing or []:
         tag = normalize_hashtag(restore_source_casing(str(raw or ""), casing or {}))
         body = tag.lstrip("#")
-        if not body or len(tag) > 30 or _is_junk_tag(body):
+        if not body or len(tag) > 30 or is_junk_tag(body):
             continue
         _push(tag)
         if len(out) >= count:
@@ -741,7 +658,7 @@ def force_hashtags(existing: list[str] | None, topic: str, category: str,
         if len(out) >= count:
             break
         text = str(tag or "").strip()
-        if not text or text.casefold() in {"yt", "shorts", "youtube", "video"} or _is_junk_tag(text):
+        if not text or text.casefold() in {"yt", "shorts", "youtube", "video"} or is_junk_tag(text):
             continue
         _push(hashtag_from_phrase(restore_source_casing(text, casing or {})))
 

@@ -30,6 +30,8 @@ export async function apiRequest(url, options = {}) {
       envelope.message || data.detail || data.message || `Request failed (${response.status}).`,
       envelope.request_id || data.request_id || "",
       response.status,
+      envelope.code || "",
+      envelope.details,
     );
   }
   return data;

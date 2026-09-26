@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 9
+
+CURRENT_SCHEMA_VERSION = 10
+_BACKUPS_KEPT = 10
+# The pre-migration state is what a backup must preserve, so a migration that
+# is retried in the same process does not copy the whole database again.
+_BACKED_UP_PATHS: set[str] = set()
 _APPLICATION_TABLES = {
     "analysis_runs",
     "video_snapshots",
@@ -48,6 +57,8 @@ def configure_connection(connection: sqlite3.Connection) -> sqlite3.Connection:
 
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 10000")
+    # Per-connection, so it must be set here; in WAL mode NORMAL cannot corrupt the file.
+    connection.execute("PRAGMA synchronous = NORMAL")
     return connection
 
 
@@ -72,6 +83,10 @@ def online_backup(database_path: str, backup_directory: str | None = None) -> st
     destination = sqlite3.connect(destination_path, timeout=10)
     try:
         source.backup(destination)
+        # A copy of a WAL database is a WAL database too, and the read-only
+        # check below then left -wal and -shm files beside it. A backup is one
+        # self-contained file.
+        destination.execute("PRAGMA journal_mode=DELETE")
         destination.commit()
         integrity = destination.execute("PRAGMA integrity_check").fetchone()
         if not integrity or integrity[0] != "ok":
@@ -95,7 +110,21 @@ def online_backup(database_path: str, backup_directory: str | None = None) -> st
             raise MigrationError("The reopened SQLite backup failed verification.")
     finally:
         verification.close()
+    _prune_backups(destination_dir, source_path.stem)
     return str(destination_path)
+
+
+def _prune_backups(directory: Path, stem: str) -> None:
+    """Keep the newest backups; each is a full copy of the database."""
+
+    backups = sorted(directory.glob(f"{stem}.backup-*.sqlite3"), key=lambda item: item.name, reverse=True)
+    for stale in backups[_BACKUPS_KEPT:]:
+        # Older backups were WAL files and may have -wal and -shm files beside them.
+        for path in (stale, stale.with_name(stale.name + "-wal"), stale.with_name(stale.name + "-shm")):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def prepare_database(database_path: str, *, backup_before_migration: bool = True) -> MigrationResult:
@@ -115,6 +144,9 @@ def prepare_database(database_path: str, *, backup_before_migration: bool = True
         raise MigrationError(
             f"Database schema version {old_version} is newer than supported version {CURRENT_SCHEMA_VERSION}."
         )
+    if old_version < 0:
+        # Not a version any release wrote; a negative index would run the last steps only.
+        raise MigrationError(f"Database schema version {old_version} is not valid. The database was not modified.")
 
     # A zero-byte/new SQLite file has no user data to back up or migrate.
     if not (_APPLICATION_TABLES & tables):
@@ -141,69 +173,28 @@ def prepare_database(database_path: str, *, backup_before_migration: bool = True
             "Legacy database is missing required tables and was not modified: "
             + ", ".join(sorted(unknown_tables))
         )
+    if old_version == 0:
+        # Checks that can refuse the migration run before the backup, so a
+        # refused database is not copied again on every attempt.
+        check = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=10)
+        try:
+            _preflight_v0(check)
+        finally:
+            check.close()
 
-    backup_path = online_backup(str(path)) if backup_before_migration else None
+    backup_path = None
+    if backup_before_migration and str(path) not in _BACKED_UP_PATHS:
+        backup_path = online_backup(str(path))
+        _BACKED_UP_PATHS.add(str(path))
     connection = sqlite3.connect(path, timeout=10)
     connection.execute("PRAGMA busy_timeout = 10000")
     try:
-        if old_version == 0:
-            _migrate_v0_to_v1(connection)
-            _migrate_v1_to_v2(connection)
-            _migrate_v2_to_v3(connection)
-            _migrate_v3_to_v4(connection)
-            _migrate_v4_to_v5(connection)
-            _migrate_v5_to_v6(connection)
-            _migrate_v6_to_v7(connection)
-            _migrate_v7_to_v8(connection)
-            _migrate_v8_to_v9(connection)
-        elif old_version == 1:
-            _migrate_v1_to_v2(connection)
-            _migrate_v2_to_v3(connection)
-            _migrate_v3_to_v4(connection)
-            _migrate_v4_to_v5(connection)
-            _migrate_v5_to_v6(connection)
-            _migrate_v6_to_v7(connection)
-            _migrate_v7_to_v8(connection)
-            _migrate_v8_to_v9(connection)
-        elif old_version == 2:
-            _migrate_v2_to_v3(connection)
-            _migrate_v3_to_v4(connection)
-            _migrate_v4_to_v5(connection)
-            _migrate_v5_to_v6(connection)
-            _migrate_v6_to_v7(connection)
-            _migrate_v7_to_v8(connection)
-            _migrate_v8_to_v9(connection)
-        elif old_version == 3:
-            _migrate_v3_to_v4(connection)
-            _migrate_v4_to_v5(connection)
-            _migrate_v5_to_v6(connection)
-            _migrate_v6_to_v7(connection)
-            _migrate_v7_to_v8(connection)
-            _migrate_v8_to_v9(connection)
-        elif old_version == 4:
-            _migrate_v4_to_v5(connection)
-            _migrate_v5_to_v6(connection)
-            _migrate_v6_to_v7(connection)
-            _migrate_v7_to_v8(connection)
-            _migrate_v8_to_v9(connection)
-        elif old_version == 5:
-            _migrate_v5_to_v6(connection)
-            _migrate_v6_to_v7(connection)
-            _migrate_v7_to_v8(connection)
-            _migrate_v8_to_v9(connection)
-        elif old_version == 6:
-            _migrate_v6_to_v7(connection)
-            _migrate_v7_to_v8(connection)
-            _migrate_v8_to_v9(connection)
-        elif old_version == 7:
-            _migrate_v7_to_v8(connection)
-            _migrate_v8_to_v9(connection)
-        elif old_version == 8:
-            _migrate_v8_to_v9(connection)
-        else:
-            raise MigrationError(f"No migration path exists from schema version {old_version}.")
+        for step in _MIGRATIONS[old_version:]:
+            step(connection)
         configure_connection(connection)
         _verify_database(connection)
+        # The migration steps run in rollback-journal mode; switch once they are done.
+        connection.execute("PRAGMA journal_mode = WAL")
     except Exception as exc:
         connection.rollback()
         if isinstance(exc, MigrationError):
@@ -229,7 +220,6 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
     """Create the current schema without rewriting existing compatible tables."""
 
     connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA synchronous = NORMAL")
     _create_independent_tables(connection)
     _create_relational_tables(connection)
     _create_indexes(connection)
@@ -242,15 +232,11 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
-        (
-            CURRENT_SCHEMA_VERSION,
-            datetime.now(timezone.utc).isoformat(),
-            "Cloud sync conflict audit and deterministic equal-revision resolution",
-        ),
+        (CURRENT_SCHEMA_VERSION, datetime.now(timezone.utc).isoformat(), _V10_DESCRIPTION),
     )
     connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
     connection.commit()
-    _verify_database(connection)
+    _verify_database(connection, thorough=False)
 
 
 def _migrate_v0_to_v1(connection: sqlite3.Connection) -> None:
@@ -372,25 +358,30 @@ def _preflight_v0(connection: sqlite3.Connection) -> None:
 def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
     """Add source-aware comparable metadata without rewriting Phase 1 rows."""
 
-    _create_comparable_metadata_tables(connection)
-    connection.execute(
-        """INSERT OR IGNORE INTO published_video_comparable_metadata
-           (published_video_link_id, language, format, duration_bucket, topic_category,
-            language_source, format_source, duration_bucket_source, topic_category_source,
-            created_at, updated_at)
-           SELECT id, language, format, 'unknown', 'unknown',
-                  CASE WHEN NULLIF(TRIM(language), '') IS NULL THEN 'unknown' ELSE 'package' END,
-                  CASE WHEN NULLIF(TRIM(format), '') IS NULL THEN 'unknown' ELSE 'package' END,
-                  'unknown', 'unknown',
-                  COALESCE(linked_at, CURRENT_TIMESTAMP), COALESCE(updated_at, linked_at, CURRENT_TIMESTAMP)
-           FROM published_video_links"""
-    )
-    connection.execute(
-        "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
-        (2, datetime.now(timezone.utc).isoformat(), "Phase 2 comparable metadata and source audit"),
-    )
-    connection.execute("PRAGMA user_version = 2")
-    connection.commit()
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_comparable_metadata_tables(connection)
+        connection.execute(
+            """INSERT OR IGNORE INTO published_video_comparable_metadata
+               (published_video_link_id, language, format, duration_bucket, topic_category,
+                language_source, format_source, duration_bucket_source, topic_category_source,
+                created_at, updated_at)
+               SELECT id, language, format, 'unknown', 'unknown',
+                      CASE WHEN NULLIF(TRIM(language), '') IS NULL THEN 'unknown' ELSE 'package' END,
+                      CASE WHEN NULLIF(TRIM(format), '') IS NULL THEN 'unknown' ELSE 'package' END,
+                      'unknown', 'unknown',
+                      COALESCE(linked_at, CURRENT_TIMESTAMP), COALESCE(updated_at, linked_at, CURRENT_TIMESTAMP)
+               FROM published_video_links"""
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
+            (2, datetime.now(timezone.utc).isoformat(), "Phase 2 comparable metadata and source audit"),
+        )
+        connection.execute("PRAGMA user_version = 2")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
@@ -506,6 +497,98 @@ def _migrate_v8_to_v9(connection: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_v9_to_v10(connection: sqlite3.Connection) -> None:
+    """Keep a losing sync edit, attribute uploads to their channel, and store one spelling per format."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(cloud_sync_conflicts)")}
+        if "local_payload_json" not in columns:
+            connection.execute("ALTER TABLE cloud_sync_conflicts ADD COLUMN local_payload_json TEXT")
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(owned_video_snapshots)")}
+        if "channel_id" not in columns:
+            connection.execute("ALTER TABLE owned_video_snapshots ADD COLUMN channel_id TEXT")
+        _attribute_owned_snapshots(connection)
+        # Cohorts compare exact values, and older links stored the brief's own
+        # spelling ("Short") or free text; the link row keeps that text.
+        for link_id, value in connection.execute(
+            "SELECT published_video_link_id, format FROM published_video_comparable_metadata"
+        ).fetchall():
+            stored = _v10_format(value)
+            if stored != value:
+                connection.execute(
+                    """UPDATE published_video_comparable_metadata
+                       SET format = ?, format_source = CASE WHEN ? = 'unknown' THEN 'unknown' ELSE format_source END
+                       WHERE published_video_link_id = ?""",
+                    (stored, stored, link_id),
+                )
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (10, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), _V10_DESCRIPTION),
+        )
+        connection.execute("PRAGMA user_version = 10")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+_V10_DESCRIPTION = "Keep the losing local edit with each cloud sync conflict; uploads by channel; one spelling per format"
+# history_store's format spellings as version 10 shipped them. A migration must
+# keep doing what it did then, so it has its own copy.
+_V10_FORMATS = frozenset({
+    "youtube_shorts", "long_form", "talking_head", "tutorial", "vlog", "review", "quote", "story", "challenge", "other",
+})
+_V10_FORMAT_ALIASES = {"short": "youtube_shorts", "shorts": "youtube_shorts", "youtube_short": "youtube_shorts", "longform": "long_form"}
+
+
+def _v10_format(value: object) -> str:
+    key = re.sub(r"[\s-]+", "_", str(value or "").strip().casefold())
+    key = _V10_FORMAT_ALIASES.get(key, key)
+    # Free text that starts with the platform's name for the format, such as
+    # "YouTube Short quote video", is a Short; other free text is unknown.
+    if re.match(r"youtube_shorts?(?:_|$)", key):
+        key = "youtube_shorts"
+    return key if key in _V10_FORMATS else "unknown"
+
+
+def _attribute_owned_snapshots(connection: sqlite3.Connection) -> None:
+    """Give each earlier upload the channel whose saved sync listed it.
+
+    An upload no kept sync lists stays unattributed, and no channel shows it.
+    """
+    owners: dict[str, str] = {}
+    for (payload_json,) in connection.execute("SELECT payload_json FROM youtube_channel_syncs ORDER BY id").fetchall():
+        try:
+            payload = json.loads(payload_json)
+            channel_id = str(payload["channel"]["id"] or "")
+            rows = payload["recent_videos"]["rows"]
+        except (TypeError, ValueError, KeyError):
+            continue
+        for row in rows if channel_id and isinstance(rows, list) else []:
+            if isinstance(row, dict) and row.get("video_id"):
+                owners[str(row["video_id"])] = channel_id
+    connection.executemany(
+        "UPDATE owned_video_snapshots SET channel_id = ? WHERE video_id = ? AND channel_id IS NULL",
+        [(channel_id, video_id) for video_id, channel_id in owners.items()],
+    )
+
+
+# Step n moves a database from version n to n + 1; each step commits its own version.
+_MIGRATIONS = (
+    _migrate_v0_to_v1,
+    _migrate_v1_to_v2,
+    _migrate_v2_to_v3,
+    _migrate_v3_to_v4,
+    _migrate_v4_to_v5,
+    _migrate_v5_to_v6,
+    _migrate_v6_to_v7,
+    _migrate_v7_to_v8,
+    _migrate_v8_to_v9,
+    _migrate_v9_to_v10,
+)
+assert len(_MIGRATIONS) == CURRENT_SCHEMA_VERSION
+
+
 def _create_comparable_metadata_tables(connection: sqlite3.Connection) -> None:
     connection.execute(
         """CREATE TABLE IF NOT EXISTS published_video_comparable_metadata (
@@ -565,6 +648,7 @@ def _create_independent_tables(connection: sqlite3.Connection) -> None:
         """CREATE TABLE IF NOT EXISTS owned_video_snapshots (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
                video_id TEXT NOT NULL,
+               channel_id TEXT,
                captured_at TEXT NOT NULL,
                published_at TEXT,
                title TEXT,
@@ -674,6 +758,7 @@ def _create_cloud_sync_tables(connection: sqlite3.Connection) -> None:
                remote_content_hash TEXT NOT NULL,
                winner TEXT NOT NULL CHECK(winner IN ('local', 'remote', 'tombstone')),
                detected_at TEXT NOT NULL,
+               local_payload_json TEXT,
                UNIQUE(sync_uuid, local_revision, local_content_hash, remote_revision, remote_content_hash)
            )"""
     )
@@ -981,12 +1066,22 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
-def _verify_database(connection: sqlite3.Connection) -> None:
-    if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+def _verify_database(connection: sqlite3.Connection, *, thorough: bool = True) -> None:
+    """Check a database after a migration (thorough) or at start-up.
+
+    At start-up a quick check guards against corruption without reading every
+    index. A foreign-key violation left by old data is logged rather than
+    fatal, after a migration too: refusing to start would lock the creator out
+    of all their data, and the steps have committed by then, so refusing here
+    would fail one start and let the next pass without a word.
+    """
+
+    check = "integrity_check" if thorough else "quick_check"
+    if connection.execute(f"PRAGMA {check}").fetchone()[0] != "ok":
         raise MigrationError("Database integrity check failed.")
     violations = connection.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
-        raise MigrationError(f"Database contains {len(violations)} foreign-key violation(s).")
+        logger.warning("Database contains %d foreign-key violation(s) from older data.", len(violations))
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
     if version != CURRENT_SCHEMA_VERSION:
         raise MigrationError(

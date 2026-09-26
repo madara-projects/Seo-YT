@@ -304,6 +304,42 @@ describe("IdeasPage", () => {
     expect(JSON.parse(String(calls("PATCH", "/api/ideas/7")[0]![1]?.body))).toEqual({ status: "package_generated" });
   });
 
+  it("keeps a request in flight across switching ideas, so it can't be sent twice", async () => {
+    ideas = [structuredClone(IDEA), { ...structuredClone(IDEA), id: 9, topic: "Letters I never sent" }];
+    const route = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      // Generating never answers in this test: it is still running when the creator comes back.
+      String(url) === "/api/ideas/7/generate" ? new Promise(() => {}) : route(url, init),
+    );
+    const user = userEvent.setup();
+    renderPage("/ideas?idea=7");
+
+    await user.click(await screen.findByRole("button", { name: "Generate package" }));
+    expect(await screen.findByRole("button", { name: "Generating…" })).toBeDisabled();
+
+    const items = await screen.findAllByTestId("idea-item");
+    await user.click(items.find((item) => item.textContent?.includes("Letters I never sent"))!);
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/ideas?idea=9"));
+    expect(await screen.findByRole("button", { name: "Generate package" })).toBeEnabled();
+
+    await user.click(items.find((item) => item.textContent?.includes(IDEA.topic))!);
+    expect(await screen.findByRole("button", { name: "Generating…" })).toBeDisabled();
+    expect(calls("POST", "/api/ideas/7/generate")).toHaveLength(1);
+  });
+
+  it("keeps the status filter and page in the URL", async () => {
+    listTotal = 45;
+    const user = userEvent.setup();
+    renderPage("/ideas?status=scripted");
+
+    expect(await screen.findByText("1–1 of 45")).toBeInTheDocument();
+    expect(calls("GET", "/api/ideas?limit=20&offset=0&status=scripted")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/ideas?status=scripted&offset=20"));
+    await waitFor(() => expect(calls("GET", "/api/ideas?limit=20&offset=20&status=scripted")).toHaveLength(1));
+  });
+
   it("pages through a long backlog", async () => {
     listTotal = 45;
     const user = userEvent.setup();

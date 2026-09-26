@@ -35,7 +35,7 @@ export function BriefStage({
     const submittedValue = String(
       (submitted as Record<string, unknown> | null)?.[field] ?? "",
     ).trim();
-    const value = String((brief as Record<string, unknown>)[field] ?? submittedValue ?? "").trim();
+    const value = String((brief as Record<string, unknown>)[field] ?? submittedValue).trim();
     const rawSource = String(
       asObject(provenance[field]).source ??
         (submittedValue ? "creator_supplied" : value ? "inferred" : "unknown"),

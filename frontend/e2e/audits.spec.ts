@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   VIEWPORTS,
+  blockWrites,
   choose,
   collectErrors,
   expectNoHorizontalOverflow,
@@ -78,6 +79,11 @@ async function mockAudits(page: Page, calls: { refreshed: number }) {
   });
   await stubThumbnails(page);
 }
+
+/** Nothing a test does may change saved data: writes are answered by its own routes or aborted. */
+test.beforeEach(async ({ page }) => {
+  await blockWrites(page);
+});
 
 test.describe("Audits", () => {
   test("runs a first audit and shows the field-by-field check", async ({ page }) => {

@@ -169,11 +169,15 @@ class PublishedAuditTests(Phase8Fixture):
 
     def test_five_comparable_videos_enable_actionable_observation_not_causality(self):
         link_id = None
-        for index in range(5):
+        # Five peers plus the audited video, which never counts toward its own cohort.
+        for index in range(6):
             _, link_id, _ = self.add_video(views=100 + index, retention=60 + index)
         audit = self.store.refresh_audit(link_id)
         self.assertEqual(audit["summary"]["state"], "actionable_observation")
-        self.assertTrue(all(item["evidence_state"] == "mature_comparable_evidence" for item in audit["learning_candidates"]))
+        # The cohort is matched on format and language, so only those are backed by it.
+        states = {item["variable"]: item["evidence_state"] for item in audit["learning_candidates"]}
+        self.assertEqual({states.pop("format"), states.pop("language")}, {"mature_comparable_evidence"})
+        self.assertEqual(set(states.values()), {"hypothesis_only"})
         self.assertTrue(all("causal proof" in item["interpretation"] for item in audit["learning_candidates"]))
 
     def test_saved_prepublication_idea_and_demand_trace_is_used(self):
@@ -224,6 +228,26 @@ class StructuredExperimentTests(Phase8Fixture):
         _, verified, _ = self.add_video()
         with self.assertRaisesRegex(ValueError, "controlled"):
             self.store.assign_video(item["id"], verified, "observational_reference")
+
+    def test_a_closed_experiment_keeps_its_videos_and_results(self):
+        item = self.experiment()
+        _, control, _ = self.add_video()
+        _, extra, _ = self.add_video()
+        assignment_id = self.store.assign_video(item["id"], control, "control")["assignments"][0]["id"]
+        self.store.refresh_experiment_result(item["id"])
+        for status in ("planned", "active", "completed"):
+            self.store.update_experiment(item["id"], {"status": status})
+
+        with self.assertRaisesRegex(ValueError, "Closed experiments"):
+            self.store.assign_video(item["id"], extra, "variant")
+        with self.assertRaisesRegex(ValueError, "Closed experiments"):
+            self.store.remove_assignment(item["id"], assignment_id)
+        with self.assertRaisesRegex(ValueError, "Closed experiments"):
+            self.store.refresh_experiment_result(item["id"])
+
+        closed = self.store.experiment(item["id"])
+        self.assertEqual(closed["assignment_counts"]["control"], 1)
+        self.assertEqual(len(self.store.result_versions(item["id"])), 1)
 
     def test_assignment_rejects_a_video_verified_for_another_channel(self):
         item = self.experiment()

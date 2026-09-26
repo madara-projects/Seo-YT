@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -22,10 +22,10 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Delta } from "@/components/common/Delta";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
-import { Meter } from "@/components/common/Meter";
 import { Panel } from "@/components/common/Panel";
 import { StatCard } from "@/components/common/StatCard";
 import { CardSkeleton, EmptyState, ErrorState, GridSkeleton, UnavailableNote } from "@/components/common/States";
+import { LearningPanel } from "@/components/dashboard/DashboardSections";
 import { VideoThumb } from "@/components/common/VideoThumb";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -40,11 +40,13 @@ import { UploadsTable } from "@/components/channel/UploadsTable";
 import { useChannelStatus, useRefreshChannel } from "@/hooks/useSystem";
 import { useCohortLearning, usePublishedVideos } from "@/hooks/useHistory";
 import { useOAuthReturnNotice } from "@/hooks/useOAuthReturn";
+import { mutationKeys } from "@/hooks/queryKeys";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { asArray, cn, formatNumber } from "@/lib/utils";
-import { formatCompact, formatMinutes, formatSeconds, initialOf, relativeTime } from "@/lib/format";
+import { formatCompact, formatMinutes, formatSeconds, initialOf, relativeTime, viewsAsOf } from "@/lib/format";
 import { historyDate, shortDate } from "@/lib/historyFormat";
 import { hasMetrics, periodComparison, youtubeChannelUrl } from "@/lib/channelFormat";
+import { windowLabel } from "@/lib/auditFormat";
 import type { ChannelSyncData, ChannelVideo, LearningVideo } from "@/api/systemTypes";
 import type { PublishedVideoLink } from "@/api/historyTypes";
 
@@ -179,54 +181,17 @@ function ConnectedPreview() {
   );
 }
 
-function LearningPanel({ fallbackSample }: { fallbackSample?: number }) {
+function ChannelLearning() {
   const cohorts = useCohortLearning();
-  const data = cohorts.data;
-  const sample = typeof data?.sample_size === "number" ? data.sample_size : fallbackSample ?? 0;
-  const threshold = typeof data?.next_threshold === "number" ? data.next_threshold : null;
-
   return (
-    <Panel
-      icon={GraduationCap}
+    <LearningPanel
       title="Learning from linked packages"
       description="Which packaging worked, once enough linked videos have matured."
-      aside={
-        <EvidenceChip tone={data?.learning_allowed ? "ok" : "warn"}>
-          {data?.confidence_label ?? "Unavailable"}
-        </EvidenceChip>
-      }
-    >
-      {cohorts.isPending ? (
-        <CardSkeleton rows={2} />
-      ) : cohorts.isError ? (
-        <UnavailableNote>Learning status could not be loaded.</UnavailableNote>
-      ) : (
-        <div className="space-y-4">
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <p className="font-display text-4xl font-semibold leading-none text-foreground">
-                {formatNumber(sample)}
-              </p>
-              <p className="mt-1.5 text-xs text-muted-foreground">Comparable linked videos</p>
-            </div>
-            <p className="text-right text-xs text-muted-foreground">
-              <span className="numeric block text-sm font-semibold text-foreground">
-                {formatNumber(data?.next_threshold)}
-              </span>
-              needed for the next level
-            </p>
-          </div>
-          <Meter
-            value={sample}
-            max={threshold ?? Math.max(sample, 1)}
-            label="Comparable linked videos collected"
-          />
-          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
-            {data?.recommendation ?? "Learning status is unavailable for this window."}
-          </p>
-        </div>
-      )}
-    </Panel>
+      sampleLabel="Comparable linked videos"
+      data={cohorts.data}
+      isPending={cohorts.isPending}
+      isError={cohorts.isError}
+    />
   );
 }
 
@@ -236,7 +201,7 @@ function BestVideos({ videos }: { videos: LearningVideo[] }) {
     <ul className="space-y-2">
       {videos.map((video, index) => (
         <li key={video.video_id ?? index} className="flex items-center gap-3 rounded-xl border border-border bg-elevated p-2.5">
-          <VideoThumb videoId={video.video_id} title={video.title} className="w-20" />
+          <VideoThumb videoId={video.video_id} className="w-20" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-[0.8125rem] font-medium text-foreground">{video.title || "Untitled"}</p>
             <p className="numeric text-xs text-muted-foreground">
@@ -276,20 +241,20 @@ function LinkedPackages() {
           {links.slice(0, 6).map((link) => {
             const title =
               link.youtube_metadata?.title || link.selected_title || link.package_topic || "Saved package";
-            const views = link.latest_performance?.views;
+            const performance = link.latest_performance;
             return (
               <li key={link.id ?? link.youtube_video_id}>
                 <Link
                   to={link.analysis_run_id ? `/history?run=${link.analysis_run_id}` : "/history"}
                   className="flex items-center gap-3 rounded-xl border border-border bg-elevated p-2.5 transition-colors hover:border-brand-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <VideoThumb videoId={link.youtube_video_id} title={title} className="w-20" />
+                  <VideoThumb videoId={link.youtube_video_id} className="w-20" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[0.8125rem] font-medium text-foreground">{title}</p>
                     <p className="text-xs text-muted-foreground">
-                      {views === null || views === undefined
-                        ? "No snapshot yet"
-                        : `${formatNumber(views)} views at ${link.latest_performance?.snapshot_window ?? "last snapshot"}`}
+                      {typeof performance?.views === "number"
+                        ? `${viewsAsOf(performance.views, performance.captured_at)} · ${windowLabel(performance.snapshot_window).toLowerCase()}`
+                        : "No snapshot yet"}
                     </p>
                   </div>
                   <EvidenceChip tone={link.ownership_verified ? "ok" : "neutral"}>
@@ -314,7 +279,10 @@ export default function ChannelPage() {
   const { notice, dismiss } = useOAuthReturnNotice();
   const status = useChannelStatus();
   const refresh = useRefreshChannel();
+  const startRefresh = refresh.mutateAsync;
   const queryClient = useQueryClient();
+  // A refresh started from Settings counts too: both share one mutation key.
+  const refreshing = useIsMutating({ mutationKey: mutationKeys.channelRefresh }) > 0;
 
   const data = status.data;
   const connected = Boolean(data?.connected);
@@ -322,25 +290,26 @@ export default function ChannelPage() {
   const syncData = sync?.data;
   const syncedAt = sync?.synced_at;
 
-  const onRefresh = async (silent = false) => {
+  const onRefresh = async () => {
     try {
-      await refresh.mutateAsync();
-      if (!silent) toast.success("YouTube analytics and video counts updated.");
+      await startRefresh();
+      toast.success("YouTube analytics and video counts updated.");
     } catch (error) {
       toast.error(formatApiError(error, "YouTube refresh failed."));
     }
   };
 
-  // Like the classic dashboard: bring stale numbers up to date once per session.
+  // Like the classic dashboard: bring stale numbers up to date once per
+  // session (see the README). Never while a refresh is already running, so
+  // opening this page during one from Settings can't start a second.
   useEffect(() => {
     if (!connected || autoRefreshed.has(queryClient)) return;
+    if (queryClient.isMutating({ mutationKey: mutationKeys.channelRefresh }) > 0) return;
     const age = syncedAt ? Date.now() - new Date(syncedAt).getTime() : Infinity;
     if (!(age > STALE_AFTER_MS)) return;
     autoRefreshed.add(queryClient);
-    void onRefresh(true);
-    // `onRefresh` closes over the mutation, which is stable for this purpose.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected, syncedAt]);
+    startRefresh().catch((error: unknown) => toast.error(formatApiError(error, "YouTube refresh failed.")));
+  }, [connected, syncedAt, queryClient, startRefresh]);
 
   const videos = asArray<ChannelVideo>(syncData?.recent_videos?.rows);
   const current = syncData?.current_28_days;
@@ -349,18 +318,27 @@ export default function ChannelPage() {
   const metric = (key: string) => comparison.find((item) => item.key === key);
   const channelUrl = youtubeChannelUrl(syncData?.channel?.id ?? data?.channel?.id);
   const analyticsAvailable = hasMetrics(current);
+  // Parts of the last sync that YouTube refused or never answered.
+  const failed = new Set(asArray<string>(syncData?.partial_failures));
+  const uploadsFailed = (
+    <UnavailableNote>
+      Uploads could not be read from YouTube during the last sync, so none are shown. Refresh to
+      try again.
+    </UnavailableNote>
+  );
 
   const actions = connected ? (
     <>
-      <Button onClick={() => void onRefresh()} disabled={refresh.isPending}>
-        <RefreshCw className={cn(refresh.isPending && "animate-spin")} aria-hidden="true" />
-        {refresh.isPending ? "Refreshing…" : "Refresh analytics"}
+      <Button onClick={() => void onRefresh()} disabled={refreshing}>
+        <RefreshCw className={cn(refreshing && "animate-spin")} aria-hidden="true" />
+        {refreshing ? "Refreshing…" : "Refresh analytics"}
       </Button>
       {channelUrl ? (
         <Button variant="outline" asChild>
           <a href={channelUrl} target="_blank" rel="noreferrer">
             Open on YouTube
             <ArrowUpRight aria-hidden="true" />
+            <span className="sr-only">(opens in a new tab)</span>
           </a>
         </Button>
       ) : null}
@@ -431,9 +409,9 @@ export default function ChannelPage() {
             title="Connected — waiting for the first sync"
             description="Your channel is connected, but no analytics have been pulled yet. Refresh to fetch current counts from YouTube."
             action={
-              <Button onClick={() => void onRefresh()} disabled={refresh.isPending}>
-                <RefreshCw className={cn(refresh.isPending && "animate-spin")} aria-hidden="true" />
-                {refresh.isPending ? "Refreshing…" : "Refresh analytics"}
+              <Button onClick={() => void onRefresh()} disabled={refreshing}>
+                <RefreshCw className={cn(refreshing && "animate-spin")} aria-hidden="true" />
+                {refreshing ? "Refreshing…" : "Refresh analytics"}
               </Button>
             }
           />
@@ -454,7 +432,13 @@ export default function ChannelPage() {
                       footer={
                         <Delta
                           value={item?.change ?? null}
-                          label={item?.change === null ? "No earlier period to compare" : "vs previous 28 days"}
+                          label={
+                            item?.change !== null && item?.change !== undefined
+                              ? "vs previous 28 days"
+                              : item?.previous === 0
+                                ? "Earlier period was 0, so no percentage"
+                                : "No earlier period to compare"
+                          }
                         />
                       }
                       caption="YouTube Analytics, processed days only."
@@ -464,6 +448,12 @@ export default function ChannelPage() {
                   );
                 })}
               </section>
+            ) : failed.has("analytics") ? (
+              <UnavailableNote>
+                YouTube Analytics could not be read during the last sync, usually because of a quota
+                limit or an outage. Refresh to try again; the channel counts above come from the Data
+                API and are current.
+              </UnavailableNote>
             ) : (
               <UnavailableNote>
                 YouTube Analytics returned no totals for the last 28 days. This happens for new
@@ -479,7 +469,7 @@ export default function ChannelPage() {
                 title="Recent uploads"
                 aside={<EvidenceChip tone="info">YouTube data</EvidenceChip>}
               >
-                <UploadsChart videos={videos} />
+                {failed.has("uploads") ? uploadsFailed : <UploadsChart videos={videos} />}
               </Panel>
               <Panel
                 className="lg:col-span-2"
@@ -498,15 +488,17 @@ export default function ChannelPage() {
             <Panel
               icon={ListVideo}
               title="All uploads"
-              description={`${videos.length.toLocaleString()} uploads in the last sync.`}
+              description={
+                failed.has("uploads") ? "Not read in the last sync." : `${videos.length.toLocaleString()} uploads in the last sync.`
+              }
               aside={<EvidenceChip tone="info">Public counts</EvidenceChip>}
             >
-              <UploadsTable videos={videos} />
+              {failed.has("uploads") ? uploadsFailed : <UploadsTable videos={videos} />}
             </Panel>
 
             <div className="grid gap-5 lg:grid-cols-2">
               <div className="space-y-5">
-                <LearningPanel fallbackSample={syncData.video_learning?.sample_size} />
+                <ChannelLearning />
                 {asArray<LearningVideo>(syncData.video_learning?.best_videos).length ? (
                   <Panel icon={GraduationCap} title="Leading comparable videos" headingLevel={3}>
                     <BestVideos videos={asArray<LearningVideo>(syncData.video_learning?.best_videos)} />

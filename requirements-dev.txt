@@ -1,0 +1,3 @@
+-r requirements.txt
+# The test runner: tests/conftest.py (key isolation, network guard) is pytest-only.
+pytest==9.1.1

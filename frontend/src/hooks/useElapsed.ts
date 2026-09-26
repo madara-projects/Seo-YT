@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 
-/** Seconds elapsed since `active` became true; resets when it goes false. */
-export function useElapsedSeconds(active: boolean): number {
+/**
+ * Seconds elapsed while `active`; resets when it goes false. Pass `since`
+ * (ms) when the work began before this component mounted, so returning to a
+ * page mid-request shows the real elapsed time rather than restarting at 0.
+ */
+export function useElapsedSeconds(active: boolean, since?: number): number {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -9,13 +13,12 @@ export function useElapsedSeconds(active: boolean): number {
       setElapsed(0);
       return;
     }
-    const startedAt = Date.now();
-    setElapsed(0);
-    const timer = window.setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
-    }, 1000);
+    const startedAt = since && since > 0 ? since : Date.now();
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [active, since]);
 
   return elapsed;
 }

@@ -1,11 +1,14 @@
 import {
+  ArrowUpRight,
   BadgeCheck,
+  BarChart3,
   FileText,
   Gauge,
   Hash,
   HeartPulse,
   ListOrdered,
   ScrollText,
+  Stethoscope,
   Tag,
   Target,
   Type,
@@ -23,12 +26,17 @@ import {
 import { CopyButton } from "@/components/common/CopyButton";
 import { EvidenceChip, type EvidenceTone } from "@/components/common/EvidenceChip";
 import { IconBadge } from "@/components/common/IconBadge";
+import { Stat } from "@/components/common/Panel";
 import { CardSkeleton, ErrorState, UnavailableNote } from "@/components/common/States";
 import { apiErrorMessage, apiRequestId } from "@/api/client";
-import { asArray, asObject, displayValue, formatNumber } from "@/lib/utils";
+import { asArray, asObject, displayValue } from "@/lib/utils";
+import { formatCompact } from "@/lib/format";
+import { opportunityText, titleScoreText } from "@/lib/dashboardFormat";
 import { historyDate } from "@/lib/historyFormat";
+import { windowLabel } from "@/lib/auditFormat";
+import { youtubeWatchUrl } from "@/lib/channelFormat";
 import { uploadBundleText } from "@/lib/packages";
-import type { HistoryRunDetail } from "@/api/historyTypes";
+import type { HistoryRunDetail, LinkedVideoReport } from "@/api/historyTypes";
 
 /** Older records predate full-package history, so absent fields say so plainly. */
 const NOT_STORED = "Not stored in this older record.";
@@ -125,6 +133,134 @@ function ScoreTile({
   );
 }
 
+function percent(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}%` : "Unavailable";
+}
+
+function BulletList({ items }: { items: string[] }) {
+  return (
+    <ul className="space-y-1">
+      {items.map((item) => (
+        <li key={item} className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
+          <span className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground" aria-hidden="true" />
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * What went live and how it did: the linked video's report. Every number is
+ * the stored measurement or "Unavailable", never a zero standing in for one.
+ */
+function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoReport; fallbackTitle: string }) {
+  const performance = report.performance ?? {};
+  const usage = report.package_usage ?? {};
+  const diagnosis = report.diagnosis ?? {};
+  const url = youtubeWatchUrl(report.video_id);
+  // oEmbed-only metadata can lack a title; fall back to what was published from, never to "undefined".
+  const uploadedTitle = report.youtube?.title || usage.uploaded_title || fallbackTitle;
+  const titleKnown = Boolean(report.youtube?.title || usage.uploaded_title);
+  const generatedTags = asArray<string>(usage.generated_tags);
+  const matchingTags = asArray<string>(usage.matching_tags);
+  const worked = asArray<string>(diagnosis.what_worked);
+  const improve = asArray<string>(diagnosis.needs_improvement);
+
+  return (
+    <Section
+      icon={Youtube}
+      title="Published video"
+      action={
+        <EvidenceChip tone={report.ownership_verified ? "ok" : "neutral"}>
+          {report.ownership_verified ? "Verified owner" : "Unverified"}
+        </EvidenceChip>
+      }
+    >
+      <div className="space-y-4 rounded-xl border border-border bg-card p-4" data-testid="published-video">
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">
+            {url ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="numeric inline-flex items-center gap-1 text-brand underline-offset-4 hover:underline"
+              >
+                {report.video_id}
+                <ArrowUpRight className="size-3" aria-hidden="true" />
+                <span className="sr-only">(opens in a new tab)</span>
+              </a>
+            ) : (
+              "Video ID unavailable"
+            )}
+            {report.published_at ? ` · published ${historyDate(report.published_at)}` : ""}
+          </p>
+          <p className="text-sm font-medium text-foreground">{uploadedTitle}</p>
+          {titleKnown && typeof usage.title_match === "boolean" ? (
+            <EvidenceChip tone={usage.title_match ? "ok" : "warn"}>
+              {usage.title_match
+                ? usage.attribution_status === "creator_selected"
+                  ? "Same title as your selection"
+                  : "Same title as the package"
+                : "Title changed before publishing"}
+            </EvidenceChip>
+          ) : null}
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <BarChart3 className="size-3.5 text-muted-foreground" aria-hidden="true" />
+              Performance
+            </p>
+            <EvidenceChip tone="info">YouTube data</EvidenceChip>
+          </div>
+          <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Stat label="Views" value={formatCompact(performance.views)} />
+            <Stat label="Likes" value={formatCompact(performance.likes)} />
+            <Stat label="Comments" value={formatCompact(performance.comments)} />
+            <Stat label="Avg viewed" value={percent(performance.average_view_percentage)} />
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            {performance.captured_at
+              ? `${windowLabel(performance.snapshot_window)} · captured ${historyDate(performance.captured_at)}.`
+              : "No performance snapshot has been captured yet."}
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-foreground">What was used from the package</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {generatedTags.length
+              ? `${matchingTags.length.toLocaleString()} of ${generatedTags.length.toLocaleString()} generated tags are on the video.`
+              : "The package had no tags to compare."}{" "}
+            {displayValue(usage.attribution_note, "")}
+          </p>
+        </div>
+
+        {diagnosis.verdict ? (
+          <div className="space-y-2 border-t border-border pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <Stethoscope className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                {diagnosis.verdict}
+              </p>
+              <EvidenceChip tone="warn">Local heuristic</EvidenceChip>
+            </div>
+            {worked.length ? <BulletList items={worked} /> : null}
+            {improve.length ? <BulletList items={improve} /> : null}
+            <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+              {diagnosis.confidence ? `${diagnosis.confidence}. ` : ""}
+              Compares completed windows only. {displayValue(diagnosis.attribution_note, "")}
+            </p>
+          </div>
+        ) : null}
+      </div>
+    </Section>
+  );
+}
+
 function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void }) {
   const pkg = asObject(run.package);
   const hasPackage = Object.keys(pkg).length > 0;
@@ -134,6 +270,8 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
   const variants = asArray<unknown>(pkg.title_variants)
     .map((item) => (typeof item === "string" ? item : String(asObject(item).title ?? "")))
     .filter(Boolean);
+  // Chapters are only kept when the creator wrote a valid list; none are invented.
+  const chaptersStored = Array.isArray(pkg.chapters);
   const chapters = asArray<unknown>(pkg.chapters)
     .map((item) => {
       const chapter = asObject(item);
@@ -144,18 +282,19 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
   const brief = asObject(pkg.creator_brief);
   const fullScript = String(brief.content ?? run.query ?? "");
 
-  const selection = asObject(run.selected_package);
-  const selectedData = asObject(selection.package);
-  const hasSelection = Object.keys(selectedData).length > 0;
+  const selection = run.selected_package ?? null;
+  const selectedData = selection?.package ?? null;
+  const hasSelection = Boolean(selectedData && Object.keys(selectedData).length);
 
   const retention = asObject(pkg.retention_assistant);
   const retentionRisks = asArray<{ risks?: unknown[] }>(retention.risk_map).flatMap((stage) =>
     asArray(asObject(stage).risks),
   );
 
-  const report = asObject(run.linked_video_report);
-  const isLinked = Boolean(report.linked);
+  const report = run.linked_video_report ?? null;
+  const isLinked = Boolean(report?.linked);
   const description = String(pkg.description ?? "");
+  const unmeasured = run.opportunity_label === "UNMEASURED";
 
   return (
     <div className="space-y-6">
@@ -170,13 +309,14 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
         <ScoreTile
           icon={Target}
           label="Opportunity"
-          value={`${formatNumber(run.opportunity_score)} / 100`}
-          note={displayValue(run.opportunity_label, "Unavailable")}
+          // An unmeasured score was once stored as 0; the label says it was never measured.
+          value={unmeasured ? "Unavailable" : opportunityText(run.opportunity_score)}
+          note={unmeasured ? "Not measured: no competitor results" : displayValue(run.opportunity_label, "Unavailable")}
         />
         <ScoreTile
           icon={Type}
           label="Title quality"
-          value={`${formatNumber(run.title_score)} / 10`}
+          value={titleScoreText(run.title_score)}
           note="Local heuristic"
         />
         <ScoreTile
@@ -193,7 +333,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
           title="Creator-selected package"
           body={
             hasSelection
-              ? `${String(selectedData.title ?? "Selected package")} · selected ${historyDate(String(selection.selected_at ?? ""))}`
+              ? `${String(selectedData?.title ?? "Selected package")} · selected ${historyDate(selection?.selected_at)}`
               : "No explicit selection was recorded. The tool will not infer one after publishing."
           }
           chip={hasSelection ? "Explicitly recorded" : "Unknown"}
@@ -210,24 +350,27 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
           />
         ) : null}
 
-        <Callout
-          icon={Youtube}
-          title="Published-video learning"
-          body={
-            isLinked
-              ? `Linked to YouTube video ${displayValue(report.youtube_video_id ?? run.linked_youtube_video_id)}. Performance evidence is kept with this package.`
-              : "No YouTube video is linked yet. Link it after publishing to keep performance evidence with this package."
-          }
-          tone={isLinked ? "info" : "neutral"}
-          action={
-            !isLinked ? (
+        {!isLinked ? (
+          <Callout
+            icon={Youtube}
+            title="Published-video learning"
+            body="No YouTube video is linked yet. Link it after publishing to keep performance evidence with this package."
+            tone="neutral"
+            action={
               <Button size="sm" variant="outline" onClick={onLink}>
                 Link video
               </Button>
-            ) : undefined
-          }
-        />
+            }
+          />
+        ) : null}
       </div>
+
+      {isLinked && report ? (
+        <PublishedVideo
+          report={report}
+          fallbackTitle={String(selectedData?.title || pkg.title || run.title || "Saved package")}
+        />
+      ) : null}
 
       <Section
         icon={FileText}
@@ -292,7 +435,9 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
               ))}
             </ul>
           ) : (
-            <UnavailableNote>{NOT_STORED}</UnavailableNote>
+            <UnavailableNote>
+              {chaptersStored ? "No chapters: add your own timestamps to the description." : NOT_STORED}
+            </UnavailableNote>
           )}
         </Section>
       </div>
@@ -337,8 +482,10 @@ export function HistoryDetail({
 }) {
   const pkg = asObject(run?.package);
   const hasPackage = Object.keys(pkg).length > 0;
-  const isLinked = Boolean(asObject(run?.linked_video_report).linked);
+  const isLinked = Boolean(run?.linked_video_report?.linked);
   const title = run ? displayValue(run.title, "Untitled package") : fallbackTitle || "Saved package";
+  // The creator's recorded choice is what they meant to publish, so it is what gets copied.
+  const chosen = run?.selected_package?.package ?? null;
 
   return (
     <Sheet open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
@@ -374,12 +521,12 @@ export function HistoryDetail({
                   only route was selecting text inside a scroll box. */}
               <CopyButton
                 value={uploadBundleText({
-                  title: String(pkg.title ?? run.title ?? ""),
-                  description: String(pkg.description ?? ""),
-                  tags: asArray<string>(pkg.tags),
-                  hashtags: asArray<string>(pkg.hashtags),
+                  title: String(chosen?.title || pkg.title || run.title || ""),
+                  description: String(chosen?.description ?? pkg.description ?? ""),
+                  tags: asArray<string>(chosen?.tags ?? pkg.tags),
+                  hashtags: asArray<string>(chosen?.hashtags ?? pkg.hashtags),
                 })}
-                label="Copy upload package"
+                label={chosen ? "Copy selected upload package" : "Copy upload package"}
                 variant="gradient"
                 size="sm"
                 disabled={!hasPackage}

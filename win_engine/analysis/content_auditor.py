@@ -3,13 +3,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from win_engine.analysis.source_cues import is_short_video, source_quote
+from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
+
 
 def audit_content_package(
     script: str,
     title: str,
     primary_topic: str,
     secondary_topic: str,
-    content_angle: str,
     video_format: str = "",
     context_text: str = "",
     exact_quote: str = "",
@@ -17,18 +19,19 @@ def audit_content_package(
     """Heuristic package audit for hook, retention, and alignment."""
 
     first_150_words = _first_words(script, 150)
-    short_format = any(term in video_format.lower() for term in ("short", "reel"))
+    format_brief = {"video_format": video_format}
+    short_format = is_short_video(script, format_brief)
     if exact_quote.strip() and short_format:
         # A single on-screen line: judge reading load, not long-form cues.
         return _audit_quote_short(first_150_words, title, exact_quote)
-    is_quote_short = _is_quote_short(script, video_format)
-    if not is_quote_short:
+    if not (short_format and source_quote(script, format_brief)):
         return _audit_long_form(script, title, primary_topic, secondary_topic, context_text)
     hook_audit = {
         "first_150_words": first_150_words,
         "keyword_in_opening": _contains_topic(first_150_words, primary_topic, secondary_topic),
-        "stakes_present": _has_stakes(first_150_words) or is_quote_short,
-        "hook_strength": _quote_hook_strength(script) if is_quote_short else _hook_strength(first_150_words, content_angle),
+        # The quote on screen is the stakes of a quote Short.
+        "stakes_present": True,
+        "hook_strength": _quote_hook_strength(script),
     }
 
     alignment_source = " ".join(part for part in (script, context_text) if part)
@@ -38,13 +41,15 @@ def audit_content_package(
     }
 
     first_30_second_simulator = {
-        "predicted_dropoff_risk": _quote_dropoff_risk(script) if is_quote_short else _dropoff_risk(first_150_words),
-        "engagement_strength": _quote_engagement_strength(script) if is_quote_short else _engagement_strength(first_150_words),
+        "predicted_dropoff_risk": _quote_dropoff_risk(script),
+        # Mood words such as "rain" or "music" say nothing about likes or comments.
+        "engagement_strength": "UNKNOWN",
+        "basis": "Derived from the script's production cues only; not a measurement of retention or engagement.",
     }
 
     pattern_interrupts = {
-        "count": _quote_pattern_count(script) if is_quote_short else _pattern_interrupt_count(script),
-        "assessment": _quote_pattern_label(script) if is_quote_short else _pattern_interrupt_label(script),
+        "count": _quote_pattern_count(script),
+        "assessment": _quote_pattern_label(script),
     }
 
     retention_risk = {
@@ -78,14 +83,14 @@ def _audit_quote_short(first_150_words: str, title: str, quote: str) -> dict[str
     and retention sections for the same video.
     """
 
-    words = re.findall(r"[^\W_]+(?:['’][^\W_]+)?", quote)
+    # Whole words in every script: [^\W_]+ split Tamil at each vowel sign, so a
+    # 7-word Tamil quote counted as 17 and read as a heavy, slow hook.
+    words = unicode_words(quote, min_length=1)
     read_seconds = round(len(words) / _ON_SCREEN_WORDS_PER_SECOND, 1)
     hook = "HIGH" if len(words) <= 12 else "MEDIUM" if len(words) <= 25 else "LOW"
     risk = "LOW" if read_seconds <= 5 else "MEDIUM" if read_seconds <= 10 else "HIGH"
-    quote_terms = {word.casefold() for word in words if len(word) >= 3} - _QUOTE_ALIGNMENT_STOPWORDS
-    title_terms = {
-        word.casefold() for word in re.findall(r"[^\W_]+(?:['’][^\W_]+)?", title) if len(word) >= 3
-    } - _QUOTE_ALIGNMENT_STOPWORDS
+    quote_terms = {word for word in words if len(word) >= 3} - _QUOTE_ALIGNMENT_STOPWORDS
+    title_terms = {word for word in unicode_words(title, min_length=1) if len(word) >= 3} - _QUOTE_ALIGNMENT_STOPWORDS
     overlap = round(len(title_terms & quote_terms) / len(title_terms), 2) if title_terms else 0.0
     hold_seconds = int(read_seconds + 2.5)
     return {
@@ -148,10 +153,12 @@ def _audit_long_form(
     words = re.findall(r"\S+", script)
     opening = " ".join(words[:40])
     first_sentence = re.split(r"(?<=[.!?।])\s+", script.strip(), maxsplit=1)[0]
-    # Half the topic's words in the opening. (_contains_topic is always true
-    # when a topic is empty, because "" is in every string.)
-    topic_words = [word for word in re.findall(r"[^\W_]+", primary_topic.casefold()) if len(word) >= 3]
-    opening_folded = opening.casefold()
+    # Half the topic's words in the opening. Tamil words stay whole: split at
+    # vowel signs, a Tamil topic had no words and was never "named early".
+    topic_words = [word for word in unicode_words(primary_topic) if len(word) >= 3]
+    # Normalised like the topic words: a script typed with decomposed Tamil
+    # vowel signs never contained the composed topic.
+    opening_folded = normalize_unicode(opening).casefold()
     topic_early = bool(topic_words) and sum(word in opening_folded for word in topic_words) >= max(1, len(topic_words) // 2)
     payoff = bool(_PAYOFF_CUE_RE.search(opening) or re.search(r"\d", opening))
     concise = len(first_sentence.split()) <= 25
@@ -210,51 +217,11 @@ def _first_words(text: str, limit: int) -> str:
 
 def _contains_topic(text: str, primary_topic: str, secondary_topic: str) -> bool:
     lowered = _normalize_text(text)
-    primary_normalized = _normalize_text(primary_topic)
-    secondary_normalized = _normalize_text(secondary_topic)
-    return primary_normalized in lowered or secondary_normalized in lowered
-
-
-def _has_stakes(text: str) -> bool:
-    lowered = text.lower()
-    markers = [
-        "grow",
-        "views",
-        "result",
-        "worked",
-        "failed",
-        "mistake",
-        "strategy",
-        "improve",
-        "what happened",
-        "tried",
-        "tested",
-        "honest result",
-        "worth it",
-        "overhyped",
-        "benefit",
-        "downside",
-        "should you",
-        "honest",
-    ]
-    return any(marker in lowered for marker in markers)
-
-
-def _hook_strength(text: str, content_angle: str) -> str:
-    lowered = text.lower()
-    score = 0
-    if any(token in lowered for token in ["today", "in this video", "i tested", "i tried", "what happened"]):
-        score += 1
-    if any(token in lowered for token in ["worked", "failed", "result", "mistake", "strategy"]):
-        score += 1
-    if content_angle in {"Experiment", "Curiosity", "Story"}:
-        score += 1
-
-    if score >= 3:
-        return "HIGH"
-    if score == 2:
-        return "MEDIUM"
-    return "LOW"
+    # An empty topic is "in" every string, so it must not count as present.
+    return any(
+        topic and topic in lowered
+        for topic in (_normalize_text(primary_topic), _normalize_text(secondary_topic))
+    )
 
 
 def _alignment_score(title: str, script: str, primary_topic: str, secondary_topic: str) -> float:
@@ -263,9 +230,11 @@ def _alignment_score(title: str, script: str, primary_topic: str, secondary_topi
     primary_normalized = _normalize_text(primary_topic)
     secondary_normalized = _normalize_text(secondary_topic)
     score = 0.0
-    if primary_normalized in lowered_title and primary_normalized in lowered_script:
+    # An empty topic is in every string; a Tamil topic used to normalise to ""
+    # and gave an unrelated title 0.8 ("STRONG").
+    if primary_normalized and primary_normalized in lowered_title and primary_normalized in lowered_script:
         score += 0.5
-    if secondary_normalized in lowered_title and secondary_normalized in lowered_script:
+    if secondary_normalized and secondary_normalized in lowered_title and secondary_normalized in lowered_script:
         score += 0.3
     alignment_stopwords = {
         "and", "are", "for", "from", "how", "the", "their", "them", "then",
@@ -274,25 +243,13 @@ def _alignment_score(title: str, script: str, primary_topic: str, secondary_topi
     }
     title_words = {
         word
-        for word in re.findall(r"[a-z0-9]+", lowered_title)
+        for word in lowered_title.split()
         if len(word) >= 3 and word not in alignment_stopwords
     }
-    script_words = set(re.findall(r"[a-z0-9]+", lowered_script))
+    script_words = set(lowered_script.split())
     if title_words:
         score += min(0.7, (len(title_words & script_words) / len(title_words)) * 0.7)
     return round(min(score, 1.0), 2)
-
-
-def _is_quote_short(script: str, video_format: str) -> bool:
-    lowered = f"{video_format} {script}".lower()
-    has_quote = bool(re.search(r'["\u201c\u201d]([^"\u201c\u201d]{12,})["\u201c\u201d]', script))
-    if not has_quote:
-        has_quote = bool(re.search(r"(?<![A-Za-z])'([^'\n]{12,})'(?![A-Za-z])", script))
-    if not has_quote:
-        has_quote = bool(re.search(r"(?:on-screen text|quote|exact quote)\s*:\s*([^\n]{12,})", script, re.IGNORECASE))
-    return has_quote and any(
-        term in lowered for term in ("short", "reel", "quote", "typewriter", "on-screen", "on screen")
-    )
 
 
 def _quote_hook_strength(script: str) -> str:
@@ -308,10 +265,6 @@ def _quote_dropoff_risk(script: str) -> str:
     if strength == "HIGH" and len(script.split()) <= 120:
         return "LOW"
     return "MEDIUM" if strength == "MEDIUM" else "HIGH"
-
-
-def _quote_engagement_strength(script: str) -> str:
-    return "HIGH" if _quote_hook_strength(script) == "HIGH" else "MEDIUM"
 
 
 def _quote_pattern_count(script: str) -> int:
@@ -330,45 +283,6 @@ def _package_match_label(title: str, script: str, primary_topic: str, secondary_
     if score >= 0.75:
         return "STRONG"
     if score >= 0.45:
-        return "MEDIUM"
-    return "WEAK"
-
-
-def _dropoff_risk(text: str) -> str:
-    lowered = text.lower()
-    if not any(
-        marker in lowered
-        for marker in ["result", "strategy", "worked", "failed", "show", "explain", "worth it", "overhyped", "what happened"]
-    ):
-        return "HIGH"
-    if len(text.split()) < 40:
-        return "MEDIUM"
-    return "LOW"
-
-
-def _engagement_strength(text: str) -> str:
-    lowered = text.lower()
-    score = 0
-    if any(marker in lowered for marker in ["i tested", "i tried", "case study", "show you"]):
-        score += 1
-    if any(marker in lowered for marker in ["worked", "failed", "best", "result"]):
-        score += 1
-    if len(text.split()) >= 60:
-        score += 1
-    return "HIGH" if score >= 3 else "MEDIUM" if score == 2 else "LOW"
-
-
-def _pattern_interrupt_count(script: str) -> int:
-    lowered = script.lower()
-    markers = ["but", "however", "instead", "then", "next", "also", "because", "if you"]
-    return sum(lowered.count(marker) for marker in markers)
-
-
-def _pattern_interrupt_label(script: str) -> str:
-    count = _pattern_interrupt_count(script)
-    if count >= 6:
-        return "STRONG"
-    if count >= 3:
         return "MEDIUM"
     return "WEAK"
 
@@ -393,8 +307,6 @@ def _retention_notes(
     notes: list[str] = []
     if not hook_audit["keyword_in_opening"]:
         notes.append("Bring the main topic into the first few lines faster.")
-    if not hook_audit["stakes_present"]:
-        notes.append("State the stakes or promised outcome earlier.")
     if first_30_second_simulator["predicted_dropoff_risk"] == "HIGH":
         notes.append("The opening may lose viewers before the payoff is clear.")
     if pattern_interrupts["assessment"] == "WEAK":
@@ -405,7 +317,5 @@ def _retention_notes(
 
 
 def _normalize_text(text: str) -> str:
-    lowered = text.lower()
-    lowered = re.sub(r"[^a-z0-9\s]+", " ", lowered)
-    lowered = re.sub(r"\s+", " ", lowered).strip()
-    return lowered
+    # Words from every script: an ASCII-only pattern erased Tamil entirely.
+    return " ".join(unicode_words(text))

@@ -1,4 +1,8 @@
-"""Single source of truth for mature, comparable personal learning evidence."""
+"""Thresholds and eligibility rules for mature, comparable personal learning evidence.
+
+The cohort queries in history_store apply the same rules in SQL (its
+_VERIFIED_LINK_SQL, _COMPARABLE_LABELS_SQL and _MATURE_SNAPSHOT_SQL); keep them in step.
+"""
 
 from __future__ import annotations
 
@@ -64,7 +68,8 @@ def mature_snapshot(snapshot: dict[str, Any] | None, expected_window: str | None
 
 
 def comparable_metadata(link: dict[str, Any]) -> bool:
-    return bool(str(link.get("format") or "").strip() and str(link.get("language") or "").strip())
+    # "unknown" is the stored placeholder for a missing label, not a cohort of its own.
+    return all(str(link.get(field) or "").strip() not in {"", "unknown"} for field in ("format", "language"))
 
 
 def sample_is_eligible(

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   BadgeCheck,
   Cloud,
@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { HistoryRow } from "@/components/history/HistoryRow";
 import { HistoryDetail } from "@/components/history/HistoryDetail";
-import { DeleteRunsDialog, LinkVideoDialog } from "@/components/history/HistoryDialogs";
+import { DeleteRunsDialog, LinkVideoDialog, RelinkConfirmDialog } from "@/components/history/HistoryDialogs";
 import {
   cloudDeletionNote,
   MAX_BULK_DELETE,
@@ -32,11 +32,12 @@ import {
   useHistoryRuns,
   useLinkVideo,
 } from "@/hooks/useHistory";
-import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
+import { useSelectedId } from "@/hooks/useSelection";
+import { ApiError, apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { matchesQuery, resultSummary, runTitle, savedCountLabel } from "@/lib/historyFormat";
-import { asArray } from "@/lib/utils";
+import { UNAVAILABLE } from "@/lib/utils";
 import { toFiniteNumber } from "@/lib/format";
-import type { HistoryRun } from "@/api/historyTypes";
+import type { HistoryRun, RelinkConflict } from "@/api/historyTypes";
 
 function LibraryStat({
   icon: Icon,
@@ -58,7 +59,13 @@ function LibraryStat({
         {pending ? (
           <Skeleton className="h-6 w-12" />
         ) : (
-          <p className="font-display text-2xl font-semibold leading-none tracking-tight text-foreground">
+          <p
+            className={
+              value === UNAVAILABLE
+                ? "text-sm font-medium text-muted-foreground"
+                : "font-display text-2xl font-semibold leading-none tracking-tight text-foreground"
+            }
+          >
             {value}
           </p>
         )}
@@ -68,39 +75,30 @@ function LibraryStat({
   );
 }
 
+/** The package a link dialog is for: from its row, or from the open detail. */
+interface LinkTarget {
+  id: number;
+  isRelink: boolean;
+}
+
 export default function HistoryPage() {
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [deleteTargets, setDeleteTargets] = useState<number[] | null>(null);
-  const [linkTarget, setLinkTarget] = useState<HistoryRun | null>(null);
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [linkTarget, setLinkTarget] = useState<LinkTarget | null>(null);
+  const [relink, setRelink] = useState<{ videoId: string; conflict: RelinkConflict } | null>(null);
 
-  // The open package lives in the URL (`?run=12`), so the Dashboard can link
-  // straight to one and a reload keeps it open.
-  const requestedRun = Number(searchParams.get("run"));
-  const openRunId = Number.isInteger(requestedRun) && requestedRun > 0 ? requestedRun : null;
+  // The open package lives in the URL (`?run=12`), so the Dashboard, Ideas,
+  // Audits and Channel can link straight to one and a reload keeps it open.
+  const { selectedId: openRunId, select: setOpenRunId } = useSelectedId("run");
 
-  const setOpenRunId = useCallback(
-    (runId: number | null) => {
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          if (runId === null) next.delete("run");
-          else next.set("run", String(runId));
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  const runsQuery = useHistoryRuns(50, 0);
+  const runsQuery = useHistoryRuns();
   const detailQuery = useHistoryRun(openRunId);
   const deleteRuns = useDeleteRuns();
   const linkVideo = useLinkVideo();
 
-  const runs = useMemo(() => asArray<HistoryRun>(runsQuery.data?.runs), [runsQuery.data]);
+  const runs = useMemo(() => runsQuery.data?.runs ?? [], [runsQuery.data]);
+  const total = runsQuery.data?.total ?? runs.length;
   const visibleRuns = useMemo(
     () => runs.filter((run) => matchesQuery(run, query)),
     [runs, query],
@@ -150,7 +148,7 @@ export default function HistoryPage() {
       const result = await deleteRuns.mutateAsync(deleteTargets);
       const count = deleteTargets.length;
       toast.success(
-        `${count === 1 ? "Saved package deleted." : `${count} packages deleted.`} ${cloudDeletionNote(result?.cloud_sync?.state)}`,
+        `${count === 1 ? "Saved package deleted." : `${count} packages deleted.`} ${cloudDeletionNote(result?.cloud_sync, count)}`,
       );
       setSelectedIds((current) => {
         const next = new Set(current);
@@ -164,34 +162,42 @@ export default function HistoryPage() {
     }
   }, [deleteTargets, deleteRuns, openRunId, setOpenRunId]);
 
-  const handleLink = useCallback(
-    async (youtubeVideoId: string) => {
-      if (!linkTarget) return;
+  const linkTo = useCallback(
+    async (runId: number, youtubeVideoId: string, replaceExistingEvidence = false) => {
       try {
-        const result = (await linkVideo.mutateAsync({
-          runId: linkTarget.id,
-          youtubeVideoId,
-        })) as { ownership_message?: string };
+        const result = await linkVideo.mutateAsync({ runId, youtubeVideoId, replaceExistingEvidence });
         toast.success(result?.ownership_message || "Package linked to YouTube Video ID.");
+        // Linked, but its first analytics read failed: say so rather than imply fresh numbers.
+        if (result?.refresh_warning) toast.warning(result.refresh_warning);
         setLinkTarget(null);
+        setRelink(null);
       } catch (error) {
+        if (error instanceof ApiError && error.code === "relink_would_delete_evidence") {
+          // Replacing the link deletes the old video's evidence, so ask first.
+          setRelink({ videoId: youtubeVideoId, conflict: (error.details as RelinkConflict) ?? {} });
+          return;
+        }
         toast.error(formatApiError(error, "Could not link video."));
       }
     },
-    [linkTarget, linkVideo],
+    [linkVideo],
   );
 
-  const total = runs.length;
   const bulkCapped = selectedIds.size > MAX_BULK_DELETE;
   const withSelection = runs.filter((run) => run.selected_package_id).length;
   const linked = runs.filter((run) => run.linked_youtube_video_id).length;
   const scored = runs
     .map((run) => toFiniteNumber(run.opportunity_score))
     .filter((value): value is number => value !== null);
+  // Whole numbers, as the Dashboard shows opportunity; unmeasured runs are left out.
   const avgOpportunity = scored.length
-    ? (scored.reduce((sum, value) => sum + value, 0) / scored.length).toFixed(1)
-    : "—";
+    ? String(Math.round(scored.reduce((sum, value) => sum + value, 0) / scored.length))
+    : UNAVAILABLE;
   const openRun = runs.find((run) => run.id === openRunId);
+  const partial = runs.length < total;
+  // Without a loaded list the counts are unknown, not zero.
+  const loaded = Boolean(runsQuery.data);
+  const countText = (value: number) => (loaded ? value.toLocaleString() : UNAVAILABLE);
 
   return (
     <div className="mx-auto w-full max-w-page animate-fade-up">
@@ -221,11 +227,17 @@ export default function HistoryPage() {
 
       <div className="space-y-5">
         <section aria-label="Library summary" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <LibraryStat icon={Package} label="Total packages" value={String(total)} pending={runsQuery.isPending} />
-          <LibraryStat icon={BadgeCheck} label="With a recorded choice" value={String(withSelection)} pending={runsQuery.isPending} />
-          <LibraryStat icon={Link2} label="Linked to YouTube" value={String(linked)} pending={runsQuery.isPending} />
-          <LibraryStat icon={Target} label="Avg opportunity" value={avgOpportunity} pending={runsQuery.isPending} />
+          <LibraryStat icon={Package} label="Total packages" value={countText(total)} pending={runsQuery.isPending} />
+          <LibraryStat icon={BadgeCheck} label="With a recorded choice" value={countText(withSelection)} pending={runsQuery.isPending} />
+          <LibraryStat icon={Link2} label="Linked to YouTube" value={countText(linked)} pending={runsQuery.isPending} />
+          <LibraryStat icon={Target} label="Avg opportunity" value={loaded ? avgOpportunity : UNAVAILABLE} pending={runsQuery.isPending} />
         </section>
+        {partial ? (
+          <p className="text-xs text-muted-foreground">
+            Showing the newest {runs.length.toLocaleString()} of {total.toLocaleString()} saved packages; search and
+            the figures above cover those. Older packages still open from a link.
+          </p>
+        ) : null}
 
         <Card className="overflow-hidden">
           <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
@@ -233,12 +245,13 @@ export default function HistoryPage() {
               <h2 className="font-display text-base font-semibold text-foreground">Saved packages</h2>
               <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Cloud className="size-3.5 shrink-0" aria-hidden="true" />
-                <span data-testid="history-result-summary">
+                {/* Only the summary is announced: wrapping the list would re-read every row on each refetch. */}
+                <span data-testid="history-result-summary" aria-live="polite">
                   {runsQuery.isPending
                     ? "Loading saved packages…"
                     : runsQuery.isError
                       ? "Could not load saved packages."
-                      : resultSummary(total, visibleRuns.length, query)}
+                      : resultSummary(runs.length, visibleRuns.length, query)}
                 </span>
                 <span className="hidden md:inline">· stored locally, synced when cloud sync is on</span>
               </p>
@@ -261,7 +274,7 @@ export default function HistoryPage() {
             </div>
           </div>
 
-          {total > 0 ? (
+          {runs.length > 0 ? (
             <div
               role="toolbar"
               aria-label="Bulk actions for saved packages"
@@ -296,7 +309,7 @@ export default function HistoryPage() {
             </div>
           ) : null}
 
-          <div aria-live="polite">
+          <div>
             {runsQuery.isPending ? (
               <div className="p-5">
                 <CardSkeleton rows={4} />
@@ -312,15 +325,15 @@ export default function HistoryPage() {
             ) : !visibleRuns.length ? (
               <div className="p-5">
                 <EmptyState
-                  icon={total ? Search : Library}
-                  title={total ? "No matching packages" : "No saved packages yet"}
+                  icon={runs.length ? Search : Library}
+                  title={runs.length ? "No matching packages" : "No saved packages yet"}
                   description={
-                    total
+                    runs.length
                       ? "No saved packages match your search."
                       : "No saved packages yet. Generate an SEO package and it will appear here."
                   }
                   action={
-                    total ? undefined : (
+                    runs.length ? undefined : (
                       <Button variant="gradient" asChild>
                         <Link to="/creator">
                           <Plus aria-hidden="true" />
@@ -332,7 +345,7 @@ export default function HistoryPage() {
                 />
               </div>
             ) : (
-              visibleRuns.map((run) => (
+              visibleRuns.map((run: HistoryRun) => (
                 <HistoryRow
                   key={run.id}
                   run={run}
@@ -340,7 +353,7 @@ export default function HistoryPage() {
                   isOpen={openRunId === run.id}
                   onToggleSelect={(checked) => toggleSelection(run.id, checked)}
                   onOpen={() => setOpenRunId(run.id)}
-                  onLink={() => setLinkTarget(run)}
+                  onLink={() => setLinkTarget({ id: run.id, isRelink: Boolean(run.linked_youtube_video_id) })}
                   onDelete={() => setDeleteTargets([run.id])}
                 />
               ))
@@ -357,13 +370,16 @@ export default function HistoryPage() {
         error={detailQuery.error}
         onClose={() => setOpenRunId(null)}
         onLink={() => {
-          if (openRun) setLinkTarget(openRun);
+          // The detail is the source: a package opened from a link may be older than the loaded list.
+          const detail = detailQuery.data;
+          if (detail) setLinkTarget({ id: detail.id, isRelink: Boolean(detail.linked_video_report?.linked) });
         }}
       />
 
       <DeleteRunsDialog
         open={Boolean(deleteTargets?.length)}
         count={deleteTargets?.length ?? 0}
+        linked={runs.filter((run) => deleteTargets?.includes(run.id) && run.linked_youtube_video_id).length}
         pending={deleteRuns.isPending}
         onConfirm={handleDelete}
         onOpenChange={(open) => {
@@ -372,12 +388,28 @@ export default function HistoryPage() {
       />
 
       <LinkVideoDialog
-        open={Boolean(linkTarget)}
-        isRelink={Boolean(linkTarget?.linked_youtube_video_id)}
+        open={Boolean(linkTarget) && relink === null}
+        isRelink={Boolean(linkTarget?.isRelink)}
         pending={linkVideo.isPending}
-        onSubmit={handleLink}
+        onSubmit={(videoId) => {
+          if (linkTarget) void linkTo(linkTarget.id, videoId);
+        }}
         onOpenChange={(open) => {
           if (!open) setLinkTarget(null);
+        }}
+      />
+
+      <RelinkConfirmDialog
+        conflict={relink?.conflict ?? null}
+        newVideoId={relink?.videoId ?? ""}
+        pending={linkVideo.isPending}
+        onConfirm={() => {
+          if (linkTarget && relink) void linkTo(linkTarget.id, relink.videoId, true);
+        }}
+        onCancel={() => {
+          // Nothing was changed; the package stays linked to its current video.
+          setRelink(null);
+          setLinkTarget(null);
         }}
       />
     </div>

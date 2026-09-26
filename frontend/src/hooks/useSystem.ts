@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/api/client";
 import type {
   ChannelStatus,
@@ -9,26 +9,24 @@ import type {
   LiveDiagnostics,
   SettingsStatus,
 } from "@/api/systemTypes";
-import { historyKeys } from "./useHistory";
+import { historyKeys, mutationKeys, systemKeys } from "./queryKeys";
 
 /**
  * Settings, sync and channel data access.
  *
- * The channel status is read by the sidebar, the Dashboard, Settings and the
- * Channel page, so it lives under one key and is fetched once.
+ * The channel status is read by the sidebar, Settings, the Channel page and
+ * the research pages that need a connected channel, so it lives under one key
+ * and is fetched once. (The Dashboard reads its channel from the history
+ * summary instead.)
  */
-export const systemKeys = {
-  health: ["health"] as const,
-  settings: ["system", "settings"] as const,
-  cloudSync: ["system", "cloud-sync"] as const,
-  channel: ["system", "channel"] as const,
-  diagnostics: ["system", "diagnostics"] as const,
-};
+
+/** Scheduled times on Settings are re-read this often, so "next check" never goes stale. */
+const STATUS_POLL_MS = 60_000;
 
 export function useHealth() {
   return useQuery({
     queryKey: systemKeys.health,
-    queryFn: () => apiRequest<HealthStatus>("/health"),
+    queryFn: ({ signal }) => apiRequest<HealthStatus>("/health", { signal }),
     // An at-a-glance reassurance, not a monitor; the backend rate-limits per path.
     refetchInterval: 60_000,
     retry: 1,
@@ -38,14 +36,16 @@ export function useHealth() {
 export function useSettingsStatus() {
   return useQuery({
     queryKey: systemKeys.settings,
-    queryFn: () => apiRequest<SettingsStatus>("/api/settings/status"),
+    queryFn: ({ signal }) => apiRequest<SettingsStatus>("/api/settings/status", { signal }),
+    refetchInterval: STATUS_POLL_MS,
   });
 }
 
 export function useCloudSyncStatus() {
   return useQuery({
     queryKey: systemKeys.cloudSync,
-    queryFn: () => apiRequest<CloudSyncStatus>("/api/cloud-sync/status"),
+    queryFn: ({ signal }) => apiRequest<CloudSyncStatus>("/api/cloud-sync/status", { signal }),
+    refetchInterval: STATUS_POLL_MS,
   });
 }
 
@@ -63,24 +63,38 @@ export function useRunCloudSync() {
 }
 
 /**
- * Runs `/diagnostics`, which performs one real YouTube search. It is a
- * mutation rather than a query so it only ever runs when asked.
+ * Runs `/diagnostics`, which proves a YouTube key works with one
+ * `i18nRegions` call (1 quota unit). It is a mutation rather than a query so
+ * it only ever runs when asked, and a POST so the server's cross-site guard and
+ * costly-request budget apply.
  */
 export function useLiveDiagnostics() {
   return useMutation<LiveDiagnostics, unknown, void>({
-    mutationKey: systemKeys.diagnostics,
-    mutationFn: () => apiRequest<LiveDiagnostics>("/diagnostics"),
+    mutationFn: () => apiRequest<LiveDiagnostics>("/diagnostics", { method: "POST" }),
   });
+}
+
+function fetchChannelStatus(signal?: AbortSignal) {
+  return apiRequest<ChannelStatus>("/youtube/channel/status", { signal });
 }
 
 export function useChannelStatus() {
   return useQuery({
     queryKey: systemKeys.channel,
-    queryFn: () => apiRequest<ChannelStatus>("/youtube/channel/status"),
+    queryFn: ({ signal }) => fetchChannelStatus(signal),
   });
 }
 
-function invalidateChannelViews(queryClient: ReturnType<typeof useQueryClient>) {
+/** The channel status as the server reports it now, not as cached. */
+export function fetchFreshChannelStatus(queryClient: QueryClient) {
+  return queryClient.fetchQuery({
+    queryKey: systemKeys.channel,
+    queryFn: ({ signal }) => fetchChannelStatus(signal),
+    staleTime: 0,
+  });
+}
+
+function invalidateChannelViews(queryClient: QueryClient) {
   void queryClient.invalidateQueries({ queryKey: systemKeys.channel });
   void queryClient.invalidateQueries({ queryKey: systemKeys.settings });
   // The Dashboard's owned-performance numbers come from the history summary.
@@ -89,12 +103,14 @@ function invalidateChannelViews(queryClient: ReturnType<typeof useQueryClient>) 
 
 /**
  * Pulls fresh numbers from YouTube with the stored read-only token. Retrying
- * silently would spend quota twice, so failures surface instead.
+ * silently would spend quota twice, so failures surface instead. Settings and
+ * Channel share `mutationKeys.channelRefresh`, so either can see a refresh the
+ * other started and not start a second one.
  */
 export function useRefreshChannel() {
   const queryClient = useQueryClient();
   return useMutation<ChannelSyncData, unknown, void>({
-    mutationKey: ["channel-refresh"],
+    mutationKey: mutationKeys.channelRefresh,
     retry: false,
     mutationFn: () =>
       apiRequest<ChannelSyncData>("/youtube/channel/refresh", { method: "POST" }),

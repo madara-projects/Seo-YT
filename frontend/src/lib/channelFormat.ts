@@ -1,5 +1,5 @@
 import type { ChannelMetrics, ChannelVideo } from "@/api/systemTypes";
-import { percentChange, toFiniteNumber } from "./format";
+import { engagementRate, percentChange, toFiniteNumber } from "./format";
 
 /**
  * Derived views of a channel sync payload, kept pure so the rules are tested:
@@ -15,7 +15,7 @@ export interface PeriodMetric {
   change: number | null;
 }
 
-export const PERIOD_METRICS: { key: keyof ChannelMetrics; label: string }[] = [
+const PERIOD_METRICS: { key: keyof ChannelMetrics; label: string }[] = [
   { key: "views", label: "Views" },
   { key: "estimatedMinutesWatched", label: "Watch time" },
   { key: "averageViewDuration", label: "Avg view duration" },
@@ -48,12 +48,14 @@ export function sortVideos(videos: ChannelVideo[], sort: VideoSort): ChannelVide
     return copy.sort((a, b) => (toFiniteNumber(b.views) ?? -1) - (toFiniteNumber(a.views) ?? -1));
   }
   if (sort === "engagement") {
-    const rate = (video: ChannelVideo) => {
-      const views = toFiniteNumber(video.views);
-      if (!views) return -1;
-      return ((toFiniteNumber(video.likes) ?? 0) + (toFiniteNumber(video.comments) ?? 0)) / views;
-    };
-    return copy.sort((a, b) => rate(b) - rate(a));
+    // Unknown engagement sorts last, below a measured zero.
+    const rate = (video: ChannelVideo) => engagementRate(video.likes, video.comments, video.views);
+    return copy.sort((a, b) => {
+      const first = rate(a);
+      const second = rate(b);
+      if (first === null || second === null) return first === null ? (second === null ? 0 : 1) : -1;
+      return second - first;
+    });
   }
   return copy.sort((a, b) => String(b.published_at ?? "").localeCompare(String(a.published_at ?? "")));
 }

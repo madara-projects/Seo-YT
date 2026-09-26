@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from win_engine.ai_enhancement import find_content_similarity
-from win_engine.analysis.generation_quality import candidate_mechanism, unicode_words
+from win_engine.analysis.generation_quality import candidate_mechanism
+from win_engine.analysis.text_tokens import unicode_words
 
 
 _GENERIC_WORDS = {
@@ -14,6 +14,31 @@ _GENERIC_WORDS = {
     "today", "update", "watch", "must", "viral", "everything", "things",
 }
 _CONTEXT_STOPWORDS = {"about", "after", "and", "are", "for", "from", "have", "into", "my", "of", "our", "the", "this", "to", "with", "your"}
+# Gate codes for a title that claims something the creator never said. Other
+# rejections (a near-duplicate, a missing #shorts) are not misleading.
+_MISLEADING_CODES = {
+    "relationship_event", "invented_loss_event", "invented_outcome", "invented_evidence",
+    "invented_relationship", "invented_causality", "invented_message_content", "unsupported_context",
+    "invented_story_detail", "unsupported_action", "invented_timescale", "dropped_number",
+    "unsupported_instructional_framing",
+}
+
+
+def title_gate_status(title: str, gate: dict[str, Any] | None, *, source: str) -> dict[str, Any]:
+    """This title's verdict in a quality gate, or not_evaluated when the gate never judged it."""
+
+    key = " ".join(unicode_words(title))
+    for item in (gate or {}).get("accepted_candidates") or []:
+        if isinstance(item, dict) and " ".join(unicode_words(item.get("title"))) == key:
+            return {"status": "pass", "source": source}
+    for item in (gate or {}).get("rejected_candidates") or []:
+        if isinstance(item, dict) and " ".join(unicode_words(item.get("title"))) == key:
+            codes = [
+                str(reason.get("code") or "quality_failure")
+                for reason in item.get("issues") or [] if isinstance(reason, dict)
+            ]
+            return {"status": "fail", "source": source, "issues": list(dict.fromkeys(codes))}
+    return {"status": "not_evaluated", "source": source}
 
 
 def build_title_thumbnail_packages(
@@ -27,6 +52,9 @@ def build_title_thumbnail_packages(
 
     ``focus_phrases`` are the video's final subject tags; the
     thumbnail text keeps them when the title is too long to use whole.
+    A variant's ``quality_gate`` (see ``title_gate_status``) decides its
+    approval and misleading-risk labels; ``validated`` only skips this
+    module's own checks, so an unjudged title reads "not evaluated".
     """
 
     brief = creator_brief or {}
@@ -41,6 +69,10 @@ def build_title_thumbnail_packages(
         issues = [] if validated else _quality_issues(title, brief, competitor_titles or [])
         if issues:
             continue
+        gate = variant.get("quality_gate") if isinstance(variant.get("quality_gate"), dict) else (
+            {"status": "not_evaluated", "source": "none"} if validated
+            else {"status": "pass", "source": "package_builder_checks"}
+        )
         style = _title_style(title)
         package_intent = str(variant.get("package_intent") or "Alternative")
         packages.append(
@@ -48,25 +80,39 @@ def build_title_thumbnail_packages(
                 "package_id": f"package-{chr(97 + len(packages))}",
                 "package": chr(65 + len(packages)),
                 "title": title,
-                "thumbnail_text": _thumbnail_text(title, brief, focus_phrases),
+                "thumbnail_text": _thumbnail_text(title, focus_phrases),
                 "thumbnail_visual": str(brief.get("thumbnail_idea") or _default_visual(brief)).strip(),
                 "viewer_promise": str(brief.get("viewer_promise") or _default_promise(brief)).strip(),
                 "why_click": _why_click(style, brief, package_intent),
                 "approach": style,
                 "package_intent": package_intent,
                 "best_for": _best_for(style, brief, package_intent),
-                "misleading_risk": "low",
-                "quality_status": "approved",
+                "misleading_risk": _misleading_risk(gate),
+                "quality_status": _quality_status(gate),
                 "mechanism": str(variant.get("mechanism") or candidate_mechanism(title)),
                 "reason": str(variant.get("reason") or "A distinct, source-supported packaging option."),
                 "discovery_surface": str(variant.get("discovery_surface") or package_intent),
                 "evidence_used": variant.get("evidence_used") or {"status": "insufficient_evidence"},
                 "tradeoffs": variant.get("tradeoffs") or ["Generated suggestion; publishing outcome is not guaranteed."],
-                "quality_gate": variant.get("quality_gate") or {"status": "pass", "source": "local"},
+                "quality_gate": gate,
                 "provenance": "generated_suggestion",
             }
         )
     return packages[:8]
+
+
+def _quality_status(gate: dict[str, Any]) -> str:
+    status = gate.get("status")
+    return "approved" if status == "pass" else "rejected" if status == "fail" else "not evaluated"
+
+
+def _misleading_risk(gate: dict[str, Any]) -> str:
+    status = gate.get("status")
+    if status == "pass":
+        return "low"
+    if status == "fail":
+        return "high" if _MISLEADING_CODES & set(gate.get("issues") or []) else "low"
+    return "not evaluated"
 
 
 def _quality_issues(title: str, brief: dict[str, Any], competitor_titles: list[str]) -> list[str]:
@@ -109,17 +155,12 @@ def _stem(word: str) -> str:
     return folded.rstrip("e")
 
 
-def _thumbnail_text(title: str, brief: dict[str, Any], focus_phrases: list[str] | None = None) -> str:
-    direction = str(brief.get("thumbnail_idea") or "").strip()
-    if direction:
-        words = unicode_words(direction.upper())[:4]
-        if words:
-            return " ".join(words)
-    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").casefold()
-    if "silence" in quote and "know" in quote:
-        return "SILENCE KNOWS"
-    if "deserve" in quote and "hard" in quote and "find" in quote:
-        return "KNOW YOUR WORTH"
+def _thumbnail_text(title: str, focus_phrases: list[str] | None = None) -> str:
+    # The creator's thumbnail direction describes the image and is shown as
+    # the visual. Its first words are not text for the image: "Show me holding
+    # the phone..." became the thumbnail text "show me holding the". Lines
+    # written for two test quotes ("SILENCE KNOWS", "KNOW YOUR WORTH") went on
+    # any quote that shared their words; the text now comes from the title.
     # A validated search phrase that the title contains is a ready-made,
     # grammatical thumbnail line ("SAD LOVE QUOTES", "PAINFUL LOVE").
     phrases = [" ".join(str(item).split()) for item in (focus_phrases or []) if str(item).strip()]
@@ -147,7 +188,7 @@ def _thumbnail_text(title: str, brief: dict[str, Any], focus_phrases: list[str] 
     focus = {word.casefold() for phrase in phrases for word in phrase.split()}
     best: tuple[int, int, list[str]] | None = None
     for size in (4, 3, 2):
-        for start in range(0, max(len(words) - size, 0) + 1):
+        for start in range(max(len(words) - size, 0) + 1):
             window = words[start:start + size]
             while window and window[0].lower() in _EDGE_WORDS:
                 window = window[1:]

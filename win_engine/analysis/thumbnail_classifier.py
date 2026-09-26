@@ -13,12 +13,13 @@ def build_thumbnail_strategy(
 ) -> dict[str, Any]:
     """Classify a likely thumbnail style and suggest a baseline direction."""
 
-    quality_counts = thumbnail_intelligence.get("quality_counts", {})
-    high_quality = int(quality_counts.get("high", 0))
-    maxres = int(quality_counts.get("maxres", 0))
     lower_title = title.lower()
-    sample_size = int(thumbnail_intelligence.get("sample_size") or sum(int(v or 0) for v in quality_counts.values()))
-    strength = "strong" if (high_quality + maxres) >= 3 else "average" if sample_size else "unknown"
+    sample_size = int(thumbnail_intelligence.get("sample_size") or 0)
+    low_resolution = int(thumbnail_intelligence.get("low_resolution_count") or 0)
+    # Only resolution is known about competitor thumbnails, and search results
+    # list a "high" size for every video, so "strong" only ever meant "three
+    # or more results". A mostly low-resolution sample is the one real signal.
+    strength = "weak" if sample_size and low_resolution * 2 > sample_size else "unknown"
 
     if quote_short:
         # Every quote Short used to be classed "instructional_thumbnail".

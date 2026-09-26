@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   VIEWPORTS,
+  blockWrites,
   choose,
   collectErrors,
   expectNoHorizontalOverflow,
@@ -84,6 +85,11 @@ async function mockExperiments(page: Page, calls: { created: unknown[]; assigned
   });
   await stubThumbnails(page);
 }
+
+/** Nothing a test does may change saved data: writes are answered by its own routes or aborted. */
+test.beforeEach(async ({ page }) => {
+  await blockWrites(page);
+});
 
 test.describe("Experiments", () => {
   test("creates a comparison, assigns a verified video and runs it to completion", async ({ page }) => {

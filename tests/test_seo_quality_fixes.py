@@ -24,7 +24,6 @@ from win_engine.analysis.keyword_research import (
     select_final_tags,
 )
 from win_engine.analysis.topic_lock import (
-    expand_idea_to_script,
     force_hashtags,
     infer_category,
     normalize_risk_terms,
@@ -70,7 +69,7 @@ def _gate(package, script, language="english", brief=None):
     package = {"variants": [], "tags": [], "hashtags": [], **package}
     return evaluate_package_quality(
         package, script=script, creator_brief=brief or {}, language=language,
-        require_shorts_tags=False, enforce_final_tag_rules=bool(package.get("tags")),
+        enforce_final_tag_rules=bool(package.get("tags")),
     )
 
 
@@ -129,9 +128,6 @@ class SourceIntegrityTests(unittest.TestCase):
         self.assertIn("free fire tricks", normalize_risk_terms("free fire hack tutorial").casefold())
         self.assertIn("official method", normalize_risk_terms("download the mod apk").casefold())
 
-    def test_short_ideas_are_not_padded_with_invented_claims(self):
-        idea = "morning habits for focus"
-        self.assertEqual(expand_idea_to_script(idea), idea)
 
 
 class GateAcceptsGoodCopyTests(unittest.TestCase):
@@ -702,7 +698,7 @@ class FinalRunPrecisionTests(unittest.TestCase):
             {"title": "SIP vs lump sum: Rs 60,000 Nifty 50 test for beginners", "variants": [],
              "description": "SIP vs lump sum compared using the last 10 years of Nifty 50 index fund returns.",
              "tags": ["nifty 50 index fund returns", "sip vs lump sum"], "hashtags": []},
-            script=script, creator_brief={}, require_shorts_tags=False, tag_evidence=evidence,
+            script=script, creator_brief={}, tag_evidence=evidence,
             enforce_final_tag_rules=False,
         )
         codes = {item["code"] for item in gate["final_seo_quality"]["warnings"]}

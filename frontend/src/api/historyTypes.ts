@@ -62,12 +62,20 @@ export interface LatestSync {
   synced_at?: string | null;
   channel?: OwnedChannel;
   period?: { start?: string; end?: string };
-  current_28_days?: { views?: number | null; estimatedMinutesWatched?: number | null };
+  current_28_days?: { views?: number | null; estimatedMinutesWatched?: number | null } | null;
+  /** Parts YouTube refused or never answered during this sync: "uploads", "analytics". */
+  partial_failures?: string[];
 }
 
 export interface OwnedPerformance {
+  /**
+   * Present exactly when a channel is connected, even while its id and title
+   * are still empty (a connection whose first lookup failed).
+   */
   channel?: OwnedChannel | null;
+  /** Null unless the sync belongs to the connected channel. */
   latest_sync?: LatestSync | null;
+  /** Null when Analytics has no 28-day figure; never a sum of lifetime views. */
   total_views?: number | null;
   total_likes?: number | null;
   views_28_days?: number | null;
@@ -76,16 +84,22 @@ export interface OwnedPerformance {
   subscribers?: number | null;
   video_count?: number | null;
   max_views?: number | null;
+  /** The 28-day Analytics total, else the sum over linked videos with watch time, else null. */
   estimated_watch_minutes?: number | null;
+  /** Every linked video. */
   linked_videos_count?: number | null;
+  /** The linked videos that contribute to `estimated_watch_minutes`. */
+  linked_videos_with_watch_time?: number | null;
   videos?: unknown[];
 }
 
 export interface SystemStatus {
-  database_path?: string;
   database_ok?: boolean;
-  snapshot_count?: number;
-  analysis_count?: number;
+  /** Null when the database could not be read. */
+  snapshot_count?: number | null;
+  analysis_count?: number | null;
+  /** An exception type name only. */
+  error?: string | null;
 }
 
 export interface HistorySummary {
@@ -118,8 +132,69 @@ export interface HistoryRun {
 
 export interface HistoryRunsResponse {
   runs?: HistoryRun[];
+  /** Every saved package, not just this page. */
+  total?: number;
   limit?: number;
   offset?: number;
+}
+
+/** The creator's recorded choice (`analysis_package_selections`). */
+export interface PackageSelection {
+  generated_package_id?: string | null;
+  package?: {
+    package_id?: string;
+    title?: string;
+    description?: string;
+    tags?: string[];
+    hashtags?: string[];
+  } | null;
+  selected_at?: string | null;
+}
+
+/** Measured numbers for a linked video; each is null when unknown, never 0. */
+export interface LinkedPerformance {
+  views?: number | null;
+  likes?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+  like_rate_percent?: number | null;
+  comment_rate_percent?: number | null;
+  average_view_percentage?: number | null;
+  average_view_duration_seconds?: number | null;
+  snapshot_window?: string | null;
+  captured_at?: string | null;
+}
+
+/** `linked_package_report`: the package joined to what was published and measured. */
+export interface LinkedVideoReport {
+  linked?: boolean;
+  link_id?: number;
+  /** The linked video's id. There is no `youtube_video_id` key here. */
+  video_id?: string;
+  ownership_verified?: boolean;
+  published_at?: string | null;
+  /** Public or owned metadata; any field may be null when only partial data exists. */
+  youtube?: { title?: string | null; description?: string | null; tags?: string[] | null } | null;
+  package_usage?: {
+    attribution_status?: "creator_selected" | "unknown" | string;
+    attribution_note?: string;
+    generated_title?: string;
+    uploaded_title?: string;
+    title_match?: boolean;
+    description_match_percent?: number | null;
+    generated_tags?: string[];
+    matching_tags?: string[];
+  };
+  performance?: LinkedPerformance;
+  diagnosis?: {
+    /** Compares completed windows only. */
+    verdict?: string;
+    what_worked?: string[];
+    needs_improvement?: string[];
+    confidence?: string;
+    learning_eligible?: boolean;
+    attribution_note?: string;
+  };
 }
 
 export interface HistoryRunDetail {
@@ -132,32 +207,51 @@ export interface HistoryRunDetail {
   title_score?: number | null;
   retention_risk?: string | null;
   opportunity_label?: string | null;
+  /** Null when unmeasured ("UNMEASURED"), never 0. */
   opportunity_score?: number | null;
   package?: Record<string, unknown> | null;
-  linked_video?: Record<string, unknown> | null;
-  [key: string]: unknown;
+  selected_package?: PackageSelection | null;
+  linked_video_report?: LinkedVideoReport | null;
 }
 
+/** `POST /api/history/runs/{id}/link-video`. */
+export interface LinkVideoResult {
+  status?: string;
+  link_id?: number;
+  analysis_run_id?: number;
+  youtube_video_id?: string;
+  /** The package this video was linked to before; the link and its evidence moved here. */
+  moved_from_run_id?: number | null;
+  ownership_verified?: boolean;
+  ownership_state?: string;
+  ownership_message?: string;
+  /** Set when the link was saved but its first analytics refresh failed. */
+  refresh_warning?: string | null;
+}
+
+/** `error.details` of the 409 a relink returns when it would delete collected evidence. */
+export interface RelinkConflict {
+  youtube_video_id?: string;
+  evidence?: Record<string, number>;
+}
+
+/** One row of `GET /api/published-videos`. */
 export interface PublishedVideoLink {
   id?: number;
   analysis_run_id?: number | null;
   youtube_video_id?: string;
-  title?: string;
-  verified?: boolean;
   published_at?: string | null;
-  latest_snapshot?: Record<string, unknown> | null;
   /** The title recorded when linking, and the saved package's own title. */
   selected_title?: string | null;
   package_topic?: string | null;
   ownership_verified?: boolean;
-  youtube_metadata?: { title?: string } | null;
+  youtube_metadata?: { title?: string | null } | null;
   latest_performance?: {
     views?: number | null;
     avg_view_percentage?: number | null;
     snapshot_window?: string | null;
     captured_at?: string | null;
   } | null;
-  [key: string]: unknown;
 }
 
 export interface PublishedVideosResponse {

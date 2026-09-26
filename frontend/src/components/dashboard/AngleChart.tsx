@@ -9,6 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import { UnavailableNote } from "@/components/common/States";
+import { useRemPx } from "@/hooks/useRemPx";
 import type { AngleEffectiveness } from "@/api/historyTypes";
 
 /**
@@ -64,6 +65,7 @@ function ChartTooltip({
 }
 
 export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
+  const rem = useRemPx();
   const rows: Row[] = data
     .filter((item) => typeof item.avg_title_score === "number")
     .map((item) => ({
@@ -104,8 +106,8 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
           <BarChart
             data={rows}
             layout="vertical"
-            margin={{ top: 4, right: 44, bottom: 4, left: 4 }}
-            barCategoryGap={8}
+            margin={{ top: rem(0.25), right: rem(2.75), bottom: rem(0.25), left: rem(0.25) }}
+            barCategoryGap={rem(0.5)}
           >
             <defs>
               <linearGradient id="angle-bar" x1="0" y1="0" x2="1" y2="0">
@@ -125,7 +127,7 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
             <YAxis
               type="category"
               dataKey="contentAngle"
-              width={116}
+              width={rem(7.25)}
               tick={{ fill: "var(--chart-axis)", fontSize: CHART_TEXT }}
               tickLine={false}
               axisLine={false}
@@ -143,7 +145,7 @@ export function AngleChart({ data }: { data: AngleEffectiveness[] }) {
               <LabelList
                 dataKey="score"
                 position="right"
-                offset={8}
+                offset={rem(0.5)}
                 formatter={(value: number) => value.toFixed(1)}
                 style={{ fill: "var(--foreground)", fontSize: CHART_TEXT, fontWeight: 600 }}
               />

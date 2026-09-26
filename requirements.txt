@@ -1,11 +1,15 @@
-fastapi==0.115.6
+fastapi==0.141.1
+starlette==1.7.0
 uvicorn==0.34.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
-requests==2.32.3
-httpx==0.25.2
+requests==2.34.2
+httpx==0.28.1
 redis==6.0.0
 google-api-python-client==2.179.0
+# Imported directly (OAuth refresh errors, transport errors), not only through the client above.
+google-auth==2.58.1
+httplib2==0.32.0
 google-auth-oauthlib==1.2.2
-cryptography==45.0.6
+cryptography==50.0.1
 PyMySQL==1.1.1

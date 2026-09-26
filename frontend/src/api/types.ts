@@ -1,17 +1,14 @@
 /**
  * Domain view models for the `/analyze` payload.
  *
- * `schema.d.ts` is generated from the live FastAPI OpenAPI document and is the
- * source of truth for the request contract and top-level scalars. The nested
- * structures arrive as bare `dict` in the Pydantic models, so openapi-typescript
- * renders them as `Record<string, never>` — which would make every real field
- * access a type error. These interfaces describe the shapes the UI actually
- * reads, and every field is optional because the backend's contract is to omit
- * what it cannot evidence rather than to invent a value.
+ * The nested structures arrive as bare `dict` in the Pydantic models, so the
+ * generated `schema.d.ts` types them as `Record<string, never>`, which would
+ * make every real field access a type error. These interfaces describe the
+ * shapes the UI actually reads, and every field is optional because the
+ * backend's contract is to omit what it cannot evidence rather than to invent
+ * a value. The request body is built by `toAnalyzePayload` in
+ * `schemas/creator.ts`.
  */
-import type { components } from "./schema";
-
-export type AnalyzeRequest = components["schemas"]["AnalyzeRequest"];
 
 export type ProvenanceSource = "creator_supplied" | "inferred" | "unknown" | "unavailable";
 
@@ -62,13 +59,22 @@ export interface YoutubeResult {
   title?: string;
   channel_title?: string;
   published_at?: string;
-  view_count?: number;
-  outlier_score?: number;
+  view_count?: number | string | null;
+  /** Null when the result could not be scored; unscored rows come last. */
+  outlier_score?: number | null;
+  views_per_day?: number | null;
+  views_per_subscriber?: number | null;
+  engagement_density?: number | null;
+  retention_proxy?: number | null;
+  /** Null when the channel hides it. */
+  subscriber_count?: number | null;
+  /** When the statistics were fetched (ISO, UTC). */
+  captured_at?: string | null;
 }
 
 export interface TopOpportunity {
   title?: string;
-  outlier_score?: number;
+  outlier_score?: number | null;
   opportunity_reasons?: string[];
 }
 
@@ -106,6 +112,13 @@ export interface UploadTiming {
   confidence?: string;
 }
 
+/** The final quality gate's verdict on one title. */
+export interface QualityGate {
+  status?: "pass" | "fail" | "not_evaluated" | string;
+  source?: "final_quality_gate" | "writer_quality_gate" | "package_builder_checks" | "none" | string;
+  issues?: unknown[];
+}
+
 export interface TitleThumbnailPackage {
   package_id?: string;
   title?: string;
@@ -116,13 +129,15 @@ export interface TitleThumbnailPackage {
   approach?: string;
   package_intent?: string;
   best_for?: string;
+  /** "low", "high" or "not evaluated"; "not evaluated" is never a pass. */
   misleading_risk?: string;
+  /** "approved", "rejected" or "not evaluated". */
   quality_status?: string;
   mechanism?: string;
   reason?: string;
   evidence_used?: Record<string, unknown>;
   tradeoffs?: unknown[];
-  quality_gate?: Record<string, unknown>;
+  quality_gate?: QualityGate;
 }
 
 export interface LanguagePackage {
@@ -148,17 +163,25 @@ export interface RetentionAssistant {
   rule_version?: string;
   opening?: { score?: number | null; clarity?: string; specificity?: string; generic_setup?: boolean };
   first_frame?: {
+    /** "unavailable" when no on-screen text or first visual was supplied. */
     status?: string;
+    /** Why it wasn't analysed, when it wasn't. */
+    reason?: string;
+    score?: number | null;
     readability?: string;
     text_word_count?: number;
-    estimated_single_read_seconds?: number;
+    estimated_single_read_seconds?: number | null;
     visual_analysis_basis?: string;
+    /** Where the first-frame text came from: the brief's field provenance. */
+    provenance?: ProvenanceSource | string;
   };
   pacing?: {
+    status?: string;
     format_assessment?: string;
     word_count?: number;
     estimated_spoken_seconds?: number;
-    duration_seconds?: number;
+    /** Null when the creator gave no duration. */
+    duration_seconds?: number | null;
     timing_confidence?: string;
   };
   quote_presentation?: {
@@ -166,8 +189,10 @@ export interface RetentionAssistant {
     reason?: string;
     word_count?: number;
     estimated_single_read_seconds?: number;
-    exact_text_preserved_on_screen?: string;
+    /** Null when no on-screen text was supplied to check against. */
+    exact_text_preserved_on_screen?: boolean | null;
     attribution?: string;
+    provenance?: ProvenanceSource | string;
   };
   retention_learning?: {
     learning_allowed?: boolean;
@@ -191,6 +216,38 @@ export interface GenerationQuality {
   warnings?: unknown[];
   accepted_candidates?: { title?: string; mechanism?: string; source?: string }[];
   rejected_candidates?: unknown[];
+}
+
+/** One tag the keyword research selected, with how far public results back it. */
+export interface SelectedKeyword {
+  keyword?: string;
+  /** "platform_format" marks the yt/shorts discovery tags, which are not subject tags. */
+  classification?: string;
+  /** Sampled public results whose metadata carries the phrase; never search volume. */
+  evidence_count?: number | null;
+  demand_validated?: boolean;
+}
+
+/** `keyword_research`: how the final tags were chosen. */
+export interface KeywordResearch {
+  /** "youtube_evidence" when sampled public results were available, else "semantic_only". */
+  status?: string;
+  confidence?: string;
+  evidence_scope?: string;
+  search_volume_available?: boolean;
+  selected_keywords?: SelectedKeyword[];
+  limitations?: string[];
+}
+
+/** `pacing_analysis`: a spoken script's pace, or a quote Short's readability. */
+export interface PacingAnalysis {
+  analysis_type?: "spoken_script" | "quote_short" | string;
+  pace_label?: string | null;
+  avg_sentence_length?: number | null;
+  hook_density?: string | null;
+  pattern_interrupts?: number | null;
+  recommended_read_time_seconds?: number | null;
+  recommendation?: string | null;
 }
 
 /** The full `/analyze` response as the Creator workflow consumes it. */
@@ -221,15 +278,23 @@ export interface AnalyzeResponse {
   upload_timing?: UploadTiming;
   retention_assistant?: RetentionAssistant;
   generation_quality?: GenerationQuality;
-  ctr_prediction?: { title_quality_score?: number };
-  opportunity_gap_analysis?: { opportunity_score?: { score?: number } };
+  keyword_research?: KeywordResearch;
+  pacing_analysis?: PacingAnalysis;
+  ctr_prediction?: { title_quality_score?: number | null };
+  opportunity_gap_analysis?: { opportunity_score?: { score?: number | null; label?: string } };
 
   [key: string]: unknown;
 }
 
 /** A comparable package option derived from the analysis payload. */
 export interface PackageOption {
+  /** Unique among the options; the server's package ID when there is one. */
   id: string;
+  /**
+   * The ID the server knows this package by, or null for a title-only
+   * alternative, which the server cannot record as a selection.
+   */
+  packageId: string | null;
   label: string;
   primary: boolean;
   title: string;

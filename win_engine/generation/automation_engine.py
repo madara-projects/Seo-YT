@@ -50,7 +50,9 @@ def build_automation_workflow(
         ],
         "publish_workflow": [
             "Upload video and paste the optimized description.",
-            "Add chapters before publishing." if chapter_ready else "Add manual timestamps once the cut is final.",
+            # Chapters are only ever the creator's own timestamps.
+            "Paste your chapter timestamps into the description and check them against the final cut."
+            if chapter_ready else "Add manual timestamps once the cut is final.",
             "Pin a comment that bridges into the next video.",
             "Track the first 24h for CTR and early retention signals.",
         ],

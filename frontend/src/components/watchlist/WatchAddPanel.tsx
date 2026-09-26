@@ -29,16 +29,21 @@ function ChannelForm({ onAdded }: { onAdded: (id: number) => void }) {
   const add = useAddWatchChannel();
   const errors = form.formState.errors;
 
-  const submit = form.handleSubmit(async (values) => {
-    try {
-      const data = await add.mutateAsync({ channel_id: extractChannelId(values.channel) ?? "", notes: values.notes });
-      toast.success(`Now watching ${data.channel?.title || "the channel"}.`);
-      form.reset();
-      add.reset();
-      if (data.channel?.id) onAdded(data.channel.id);
-    } catch {
-      /* Shown under the form with its request ID. */
-    }
+  // A failure is shown under the form with its request ID.
+  const submit = form.handleSubmit((values) => {
+    // Per-call callbacks don't run once the form has unmounted, so an add that
+    // finishes after the creator has left never pulls them back to this page.
+    add.mutate(
+      { channel_id: extractChannelId(values.channel) ?? "", notes: values.notes },
+      {
+        onSuccess: (data) => {
+          toast.success(`Now watching ${data.channel?.title || "the channel"}.`);
+          form.reset();
+          add.reset();
+          if (data.channel?.id) onAdded(data.channel.id);
+        },
+      },
+    );
   });
 
   return (
@@ -86,16 +91,21 @@ function VideoForm({ onAdded }: { onAdded: (id: number) => void }) {
   const add = useAddWatchVideo();
   const errors = form.formState.errors;
 
-  const submit = form.handleSubmit(async (values) => {
-    try {
-      const data = await add.mutateAsync({ video_id: extractVideoId(values.video) ?? "", notes: values.notes });
-      toast.success("Video added. Refresh it to capture its first snapshot.");
-      form.reset();
-      add.reset();
-      if (data.video?.id) onAdded(data.video.id);
-    } catch {
-      /* Shown under the form with its request ID. */
-    }
+  // A failure is shown under the form with its request ID.
+  const submit = form.handleSubmit((values) => {
+    // Per-call callbacks don't run once the form has unmounted, so an add that
+    // finishes after the creator has left never pulls them back to this page.
+    add.mutate(
+      { video_id: extractVideoId(values.video) ?? "", notes: values.notes },
+      {
+        onSuccess: (data) => {
+          toast.success("Video added. Refresh it to capture its first snapshot.");
+          form.reset();
+          add.reset();
+          if (data.video?.id) onAdded(data.video.id);
+        },
+      },
+    );
   });
 
   return (

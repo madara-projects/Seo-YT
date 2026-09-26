@@ -1,4 +1,5 @@
-import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import { VIEWPORTS, blockWrites, collectErrors, expectNoHorizontalOverflow, stubThumbnails } from "./helpers";
 
 /**
  * The Demand explorer against the running backend. Research and generation
@@ -6,16 +7,9 @@ import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
  * to History. Requires `docker compose up -d`.
  */
 
-const VIEWPORTS = {
-  desktop: { width: 1440, height: 900 },
-  tablet: { width: 834, height: 1112 },
-  mobile: { width: 390, height: 844 },
-} as const;
-
-const PIXEL = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
-  "base64",
-);
+test.beforeEach(async ({ page }) => {
+  await blockWrites(page);
+});
 
 const SNAPSHOT = {
   id: 7,
@@ -50,15 +44,6 @@ const SNAPSHOT = {
   },
 };
 
-function collectErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on("console", (message: ConsoleMessage) => {
-    if (message.type() === "error") errors.push(message.text());
-  });
-  page.on("pageerror", (error) => errors.push(String(error)));
-  return errors;
-}
-
 async function mockDemand(page: Page, calls: { research: unknown[]; generate: number }) {
   let snapshots = [SNAPSHOT];
   await page.route("**/api/demand/research**", async (route) => {
@@ -80,7 +65,9 @@ async function mockDemand(page: Page, calls: { research: unknown[]; generate: nu
     }
     if (request.method() === "POST" && path.endsWith("/generate")) {
       calls.generate += 1;
-      return route.fulfill({ json: { status: "package_generated", analysis: { history_run_id: 42 } } });
+      return route.fulfill({
+        json: { status: "package_generated", analysis: { history_run_id: 42 }, demand_research_id: 7 },
+      });
     }
     const detail = path.match(/\/api\/demand\/research\/(\d+)$/);
     if (detail) {
@@ -89,9 +76,7 @@ async function mockDemand(page: Page, calls: { research: unknown[]; generate: nu
     }
     return route.fulfill({ json: { research: snapshots, total: snapshots.length } });
   });
-  await page.route("https://i.ytimg.com/**", (route) =>
-    route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
-  );
+  await stubThumbnails(page);
 }
 
 test.describe("Demand", () => {
@@ -143,10 +128,7 @@ test.describe("Demand", () => {
       await page.goto("/next/demand?snapshot=7");
       await expect(page.getByTestId("demand-detail")).toBeVisible();
 
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
-      expect(overflow).toBeLessThanOrEqual(1);
+      await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: `screenshots/demand-${name}.png`, fullPage: true });
     });
   }

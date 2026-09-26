@@ -29,7 +29,7 @@ class SourceFidelityTests(unittest.TestCase):
                 "description": f"{quote}\n\nWe break down practical tips and common questions about how to cope.",
                 "tags": ["coping with being misunderstood", "being genuine"],
                 "hashtags": ["#shorts", "#authenticity"],
-            }, script=quote, creator_brief=_silent_quote_brief(quote), require_shorts_tags=False,
+            }, script=quote, creator_brief=_silent_quote_brief(quote),
         )
         flagged = {(item["field"], item["code"]) for item in [*gate["issues"], *(issue for rejected in gate["rejected_candidates"] for issue in rejected["issues"])]}
         self.assertIn(("title", "unsupported_instructional_framing"), flagged)
@@ -45,7 +45,7 @@ class SourceFidelityTests(unittest.TestCase):
                 "variants": ["A thought about being valued #shorts"],
                 "description": f"{quote}\n\nThis explains relationship counseling strategies and ways to overcome it.",
                 "tags": ["feeling valued", "relationship counseling"], "hashtags": ["#shorts"],
-            }, script=quote, creator_brief=_silent_quote_brief(quote), require_shorts_tags=False,
+            }, script=quote, creator_brief=_silent_quote_brief(quote),
         )
         self.assertIn("unsupported_instructional_framing", {item["code"] for item in gate["issues"]})
 
@@ -58,7 +58,7 @@ class SourceFidelityTests(unittest.TestCase):
                 "variants": ["Being misunderstood without losing yourself #shorts"],
                 "description": f"{quote}\n\nWe share practical tips for coping.",
                 "tags": ["coping with being misunderstood"], "hashtags": ["#shorts"],
-            }, script=expanded_query, creator_brief={**_silent_quote_brief(quote), "content": quote}, require_shorts_tags=False,
+            }, script=expanded_query, creator_brief={**_silent_quote_brief(quote), "content": quote},
         )
         self.assertTrue(gate["silent_quote_only_checked"])
         self.assertIn("unsupported_instructional_framing", {item["code"] for item in gate["issues"]})
@@ -92,7 +92,7 @@ class SourceFidelityTests(unittest.TestCase):
                 "variants": ["When Staying Stops Feeling Possible #shorts"],
                 "description": f"{quote}\n\nDiscover practical ways to understand why people walk away.",
                 "tags": ["relationship reflection"], "hashtags": ["#shorts"],
-            }, script=quote, creator_brief=brief, require_shorts_tags=False,
+            }, script=quote, creator_brief=brief,
         )
         self.assertTrue(is_silent_quote_only_short(quote, brief))
         self.assertIn("unsupported_instructional_framing", {item["code"] for item in gate["issues"]})
@@ -106,7 +106,7 @@ class SourceFidelityTests(unittest.TestCase):
                 "variants": ["A Three-Word Message #shorts"],
                 "description": "We break down practical tips and common questions behind this message.",
                 "tags": ["three word message"], "hashtags": ["#shorts"],
-            }, script=story, creator_brief=brief, require_shorts_tags=False,
+            }, script=story, creator_brief=brief,
         )
         self.assertIn("unsupported_instructional_framing", {item["code"] for item in gate["issues"]})
         sparse = {**_silent_quote_brief("Keep going."), "content": "Keep going."}
@@ -128,7 +128,7 @@ class SourceFidelityTests(unittest.TestCase):
                 "title": "The Three-Word Message #shorts", "variants": ["A Message Read Ten Times #shorts"],
                 "description": "Discover the exact text he received and what those words reveal.",
                 "tags": ["three word message"], "hashtags": ["#shorts"],
-            }, script=story, creator_brief=brief, require_shorts_tags=False,
+            }, script=story, creator_brief=brief,
         )
         self.assertIn("invented_message_content", {item["code"] for item in gate["issues"]})
 

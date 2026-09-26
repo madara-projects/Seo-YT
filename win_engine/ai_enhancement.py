@@ -1,12 +1,17 @@
-"""Lightweight text-similarity helper used by competitor gap analysis."""
+"""Lightweight text-similarity helper used by competitor gap analysis and package checks.
+
+Despite the module name, nothing here calls a model: it is word overlap.
+"""
 
 from __future__ import annotations
 
-import re
+from win_engine.analysis.text_tokens import unicode_words
 
 
 def _word_set(text: str) -> set[str]:
-    return set(re.findall(r"[A-Za-z]{3,}", (text or "").lower()))
+    # Words of three or more characters in any script. An ASCII-only pattern
+    # gave Tamil titles no words at all, so a copied title scored as unique.
+    return {word for word in unicode_words(text) if len(word) >= 3 and not word.isdigit()}
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:

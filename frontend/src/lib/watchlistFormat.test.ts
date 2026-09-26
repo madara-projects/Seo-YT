@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { channelCounts, languageName, outlierLabel, watchFormatLabel, watchStateLabel } from "./watchlistFormat";
+import {
+  channelCounts,
+  formatMultiplier,
+  languageName,
+  outlierLabel,
+  watchFormatBasis,
+  watchFormatLabel,
+  watchStateLabel,
+} from "./watchlistFormat";
 import { addChannelSchema, addVideoSchema, extractChannelId, extractVideoId } from "@/schemas/watchlist";
 
 const CHANNEL = "UCzU9GK79bxzBfBYrc_D9jjg";
@@ -8,11 +16,18 @@ describe("outlierLabel", () => {
   it("names each result of the local check", () => {
     expect(outlierLabel("possible_outlier")).toEqual({ label: "Possible outlier", tone: "warn" });
     expect(outlierLabel("observed_normal").label).toBe("Within normal range");
-    expect(outlierLabel("insufficient_evidence").label).toBe("Not enough peers");
+    expect(outlierLabel("insufficient_evidence").label).toBe("Not enough evidence");
   });
 
   it("says when no check has run", () => {
     expect(outlierLabel(null)).toEqual({ label: "Not analysed", tone: "neutral" });
+    expect(outlierLabel("not_analyzed")).toEqual({ label: "Not analysed", tone: "neutral" });
+  });
+
+  it("never rounds a multiplier across the threshold", () => {
+    // 2.45 is within the normal range; one decimal would print the 2.5× threshold.
+    expect(formatMultiplier(2.45)).toBe("2.45×");
+    expect(formatMultiplier(4.47)).toBe("4.47×");
   });
 });
 
@@ -34,6 +49,11 @@ describe("watchlist labels", () => {
     expect(watchStateLabel("archived").label).toBe("Archived");
     expect(watchStateLabel("active").label).toBe("Active");
   });
+
+  it("says a format is inferred from duration, not reported by YouTube", () => {
+    expect(watchFormatBasis("youtube_shorts")).toMatch(/Inferred from its duration: up to 3 minutes/);
+    expect(watchFormatBasis("unknown")).toBeNull();
+  });
 });
 
 describe("identifiers", () => {
@@ -51,6 +71,19 @@ describe("identifiers", () => {
     expect(extractVideoId("https://www.youtube.com/shorts/z4HKMfQ3nJc")).toBe("z4HKMfQ3nJc");
     expect(extractVideoId("z4HKMfQ3nJc")).toBe("z4HKMfQ3nJc");
     expect(extractVideoId("not a link")).toBeNull();
+  });
+
+  it("accepts only YouTube's hosts and paths, as the backend now does", () => {
+    expect(extractVideoId("m.youtube.com/watch?v=z4HKMfQ3nJc")).toBe("z4HKMfQ3nJc");
+    expect(extractVideoId("https://music.youtube.com/watch?v=z4HKMfQ3nJc")).toBe("z4HKMfQ3nJc");
+    expect(extractVideoId("https://www.youtube-nocookie.com/embed/z4HKMfQ3nJc")).toBe("z4HKMfQ3nJc");
+    expect(extractVideoId("https://www.youtube.com/live/z4HKMfQ3nJc?si=x")).toBe("z4HKMfQ3nJc");
+    expect(extractVideoId("https://example.com/watch?v=z4HKMfQ3nJc")).toBeNull();
+    expect(extractVideoId("https://youtube.com.evil.test/watch?v=z4HKMfQ3nJc")).toBeNull();
+    // Longer than 11 characters is refused rather than cut.
+    expect(extractVideoId("z4HKMfQ3nJcX")).toBeNull();
+    expect(extractVideoId("https://youtu.be/z4HKMfQ3nJcX")).toBeNull();
+    expect(extractVideoId("https://www.youtube.com/watch?v=z4HKMfQ3nJcX")).toBeNull();
   });
 
   it("explains why a handle can't be added", () => {

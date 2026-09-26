@@ -4,7 +4,7 @@ import { OptionSelect } from "@/components/common/OptionSelect";
 import { SelectableItem } from "@/components/common/SelectableItem";
 import { VideoThumb } from "@/components/common/VideoThumb";
 import { ListPanel, RecordList } from "@/components/research/ListPanel";
-import { formatCompact } from "@/lib/format";
+import { viewsAsOf } from "@/lib/format";
 import { shortDate } from "@/lib/historyFormat";
 import {
   AUDIT_EVIDENCE_FILTERS,
@@ -86,14 +86,16 @@ export function AuditList({
                 data-testid="audit-candidate"
                 className="flex items-center gap-3"
               >
-                <VideoThumb videoId={candidate.youtube_video_id} title={candidateTitle(candidate)} className="w-20" />
+                <VideoThumb videoId={candidate.youtube_video_id} className="w-20" />
                 <span className="min-w-0 flex-1">
                   <span className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
                     {candidateTitle(candidate)}
                   </span>
                   <span className="numeric mt-0.5 block text-[0.6875rem] text-muted-foreground">
-                    {shortDate(candidate.published_at)}
-                    {typeof views === "number" ? ` · ${formatCompact(views)} views` : ""}
+                    Published {shortDate(candidate.published_at)}
+                    {typeof views === "number"
+                      ? ` · ${viewsAsOf(views, candidate.latest_performance?.captured_at)}`
+                      : ""}
                   </span>
                   <span className="mt-1 flex flex-wrap items-center gap-1.5">
                     <EvidenceChip tone={state.tone}>{state.label}</EvidenceChip>

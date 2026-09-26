@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatWatchTime,
+  linkedWatchCaption,
+  opportunityText,
   riskTone,
   roundOpportunity,
   roundTitleScore,
   savedAnalysesCaption,
+  titleScoreText,
   watchTimeSource,
 } from "./dashboardFormat";
 import {
@@ -18,27 +20,6 @@ import {
 } from "./historyFormat";
 import type { HistoryRun } from "@/api/historyTypes";
 
-describe("formatWatchTime", () => {
-  it("shows hours to one decimal at or above an hour", () => {
-    expect(formatWatchTime(60, true)).toBe("1.0 hrs");
-    expect(formatWatchTime(90, true)).toBe("1.5 hrs");
-  });
-
-  it("shows minutes below an hour", () => {
-    expect(formatWatchTime(45, true)).toBe("45 mins");
-  });
-
-  it("treats a connected zero as a measurement, not an absence", () => {
-    expect(formatWatchTime(0, true)).toBe("0 mins");
-  });
-
-  it("reports unavailable when disconnected or absent", () => {
-    expect(formatWatchTime(0, false)).toBe("Unavailable");
-    expect(formatWatchTime(null, true)).toBe("Unavailable");
-    expect(formatWatchTime(undefined, true)).toBe("Unavailable");
-  });
-});
-
 describe("score rounding", () => {
   it("rounds opportunity to a whole number and title score to one decimal", () => {
     expect(roundOpportunity(38.6)).toBe(39);
@@ -49,6 +30,14 @@ describe("score rounding", () => {
     expect(roundOpportunity(null)).toBeNull();
     expect(roundTitleScore(undefined)).toBeNull();
     expect(roundOpportunity("7")).toBeNull();
+  });
+
+  it("prints the scale only beside a real score", () => {
+    expect(opportunityText(48.34)).toBe("48 / 100");
+    expect(titleScoreText(7.54)).toBe("7.5 / 10");
+    // An UNMEASURED opportunity is null, never "0 / 100" or "Unavailable / 100".
+    expect(opportunityText(null)).toBe("Unavailable");
+    expect(titleScoreText(undefined)).toBe("Unavailable");
   });
 });
 
@@ -79,10 +68,11 @@ describe("historyDate", () => {
     expect(formatted).toContain("2026");
   });
 
-  it("returns Unknown for missing or unparseable values", () => {
-    expect(historyDate(null)).toBe("Unknown");
-    expect(historyDate("")).toBe("Unknown");
-    expect(historyDate("not a date")).toBe("Unknown");
+  it("says Unavailable for missing or unparseable values", () => {
+    expect(historyDate(null)).toBe("Unavailable");
+    expect(historyDate("")).toBe("Unavailable");
+    expect(historyDate("not a date")).toBe("Unavailable");
+    expect(shortDate(undefined)).toBe("Unavailable");
   });
 });
 
@@ -158,6 +148,16 @@ describe("watchTimeSource", () => {
   it("does not present the fallback's zero as a measurement", () => {
     expect(watchTimeSource({ estimated_watch_minutes: 0, linked_videos_count: 19 })).toBe("none");
     expect(watchTimeSource({ estimated_watch_minutes: 40, linked_videos_count: 0 })).toBe("none");
+    expect(watchTimeSource({ estimated_watch_minutes: null, linked_videos_count: 19 })).toBe("none");
     expect(watchTimeSource({})).toBe("none");
+  });
+
+  it("counts the videos that contribute, not every link", () => {
+    expect(
+      watchTimeSource({ estimated_watch_minutes: 132, linked_videos_count: 19, linked_videos_with_watch_time: 4 }),
+    ).toBe("linked");
+    expect(
+      linkedWatchCaption({ estimated_watch_minutes: 132, linked_videos_count: 19, linked_videos_with_watch_time: 4 }),
+    ).toBe("Across 4 of your 19 linked videos, at each video's highest snapshot — not a 28-day channel total.");
   });
 });

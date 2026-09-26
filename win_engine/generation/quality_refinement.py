@@ -1,13 +1,13 @@
 """Bounded editorial refinement with explicit, measured acceptance targets."""
 from __future__ import annotations
 
-import re
 from copy import deepcopy
 from typing import Any
 
 from win_engine.analysis.generation_quality import evaluate_package_quality
+from win_engine.analysis.text_tokens import unicode_words
 from win_engine.llm import gemini_client
-from win_engine.llm.seo_writer import _generate_one
+from win_engine.llm.seo_writer import generate_one
 
 TARGET = 90.0
 SCORE_FIELDS = ("title_score", "description_score", "tag_score")
@@ -15,7 +15,6 @@ SCORE_FIELDS = ("title_score", "description_score", "tag_score")
 _WEAK_TAG_SCORE = 60.0
 # Minimum title score for search-phrase presence to decide between titles.
 _KEYWORD_TITLE_FLOOR = 70.0
-_WORD_RE = re.compile(r"[\w஀-௿]+")
 
 
 def title_demand_words(title: str, evidence: dict[str, Any] | None) -> int:
@@ -29,10 +28,10 @@ def title_demand_words(title: str, evidence: dict[str, Any] | None) -> int:
 
     demand = (evidence or {}).get("search_demand") or {}
     phrases = {*(demand.get("grounded_suggestions") or []), *(demand.get("validated_keywords") or [])}
-    folded = f" {' '.join(_WORD_RE.findall(str(title or '').casefold()))} "
+    folded = f" {' '.join(unicode_words(title, min_length=1))} "
     best = 0
     for phrase in phrases:
-        words = _WORD_RE.findall(str(phrase).casefold())
+        words = unicode_words(phrase, min_length=1)
         if len(words) >= 2 and f" {' '.join(words)} " in folded:
             best = max(best, len(words))
     return best
@@ -42,13 +41,18 @@ def enforce_quality_target(gate: dict[str, Any]) -> dict[str, Any]:
     """Annotate shortfalls without replacing scores or treating missing data as zero evidence."""
     result = deepcopy(gate)
     quality = result.setdefault("final_seo_quality", {})
+    # An unmeasured score cannot show the target was met; it is named as not
+    # measured rather than read as a low score.
+    unmeasured = [field for field in SCORE_FIELDS if quality.get(field) is None]
     shortfalls = [field for field in SCORE_FIELDS
                   if quality.get(field) is None or float(quality[field]) < TARGET]
     result["quality_target"] = {"minimum": TARGET, "met": not shortfalls,
-                                "shortfalls": shortfalls, "basis": "local_heuristic_not_performance"}
+                                "shortfalls": shortfalls, "not_measured": unmeasured,
+                                "basis": "local_heuristic_not_performance"}
     if shortfalls:
+        named = [f"{field} (not measured)" if field in unmeasured else field for field in shortfalls]
         issue = {"code": "quality_target_not_met", "field": "package", "severity": "warning",
-                 "message": "90/90/90 target not met: " + ", ".join(shortfalls) + ". Manual review required."}
+                 "message": "90/90/90 target not met: " + ", ".join(named) + ". Manual review required."}
         result.setdefault("warnings", []).append(issue)
         quality.setdefault("warnings", []).append(issue)
         if result.get("verdict") != "RED":
@@ -56,13 +60,38 @@ def enforce_quality_target(gate: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _lead_with(title: str, variants: list[str]) -> list[str]:
+    """The chosen title first, then every other alternative once."""
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for value in [title, *variants]:
+        key = " ".join(str(value or "").casefold().split())
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(value)
+    return ordered
+
+
 def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any],
                    language: str, region: str, evidence: dict[str, Any],
-                   competitors: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Rank existing alternatives, then attempt one repair; retain the stronger valid result."""
+                   competitors: list[dict[str, Any]],
+                   channel_learning: dict[str, Any] | None = None,
+                   local_fallback: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Rank existing alternatives, then attempt one repair; retain the stronger valid result.
+
+    ``channel_learning`` carries the recent and published titles a refined
+    title must not repeat. ``local_fallback`` marks a package the writer built
+    locally; it is ranked but never sent to Gemini, since the writer's own
+    request has just failed or been rejected.
+    """
+    learning = channel_learning or {}
+
     def evaluate(value: dict[str, Any]) -> dict[str, Any]:
         return evaluate_package_quality(value, script=script, creator_brief=brief,
-            language=language, require_shorts_tags=False, tag_evidence=evidence,
+            language=language, tag_evidence=evidence,
+            recent_titles=learning.get("recent_titles") or [],
+            published_titles=learning.get("published_titles") or [],
             competitor_titles=[str(row.get("title") or "") for row in competitors])
 
     def rank(gate: dict[str, Any], pkg: dict[str, Any]) -> tuple[bool, bool, float, float, int]:
@@ -123,14 +152,9 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
                 pruned = True
             else:
                 break
-        # If still below TARGET and candidates exist with score >= TARGET, swap out weak tags
-        current_avg = sum(s for _, s in scored_topics) / max(len(scored_topics), 1)
-        if current_avg < TARGET:
-            # Raw candidates include phrases rejected by the final selector.
-            # Refinement may prune selected tags, but must never promote a raw
-            # candidate and bypass relevance, quote-copy, or diversity checks.
-            pass
-
+        # A package still under target keeps its tags. Raw candidates include
+        # phrases the final selector rejected; promoting one here would bypass
+        # its relevance, quote-copy and diversity checks.
         if not pruned:
             return pkg
         kept = {t for t, _ in scored_topics} | set(protected) | set(platform_tags)
@@ -145,31 +169,48 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
         if rank(candidate_tag_gate, candidate_tag_pkg) > rank(gate, best):
             best, gate = candidate_tag_pkg, candidate_tag_gate
     for title in dict.fromkeys([best.get("title", ""), *(best.get("variants") or [])]):
-        candidate = {**best, "title": title, "variants": [title, *(best.get("variants") or [])]}
+        candidate = {**best, "title": title, "variants": _lead_with(title, best.get("variants") or [])}
         candidate_gate = evaluate(candidate)
         if rank(candidate_gate, candidate) > rank(gate, best):
             best, gate = candidate, candidate_gate
     trace: dict[str, Any] = {"target": TARGET, "attempted": False, "accepted": False,
                              "before": deepcopy(gate.get("final_seo_quality", {}))}
     scores = gate.get("final_seo_quality", {})
-    if gemini_client.is_available() and any(float(scores.get(field) or 0) < TARGET
-                                           for field in SCORE_FIELDS):
+    # Only a measured shortfall is worth a repair request: a score the local
+    # check cannot measure (a Tamil title) would not show any improvement.
+    below_target = any(scores.get(field) is not None and float(scores[field]) < TARGET for field in SCORE_FIELDS)
+    if below_target and local_fallback:
+        trace["skipped_reason"] = "writer_used_local_fallback"
+    elif below_target and not gemini_client.is_available():
+        trace["skipped_reason"] = "provider_not_configured"
+    elif below_target and gemini_client.provider_health().get("cooldown_active"):
+        trace["skipped_reason"] = "provider_cooling_down"
+    elif below_target:
         trace["attempted"] = True
-        repaired = _generate_one(script, competitors, language=language, region=region,
+        repaired = generate_one(script, competitors, language=language, region=region,
             audience_type="general", category="quotes" if brief.get("exact_quote") else None,
-            creator_brief=brief, temperature=0.2, max_tokens=2200,
+            creator_brief=brief, channel_learning=learning, temperature=0.2, max_tokens=2200,
             repair_feedback=[{"message":
                 "Improve the title and description for source fidelity, natural wording and complementary meaning. "
                 "Keep exact on-screen text in the description, followed by one useful non-repetitive sentence. "
                 "Avoid vague hooks, invented claims, quote-copy titles and keyword stuffing. "
-                f"Measured scores: title={scores.get('title_score')}, description={scores.get('description_score')}, tags={scores.get('tag_score')}; target 90 each."}],
+                "Measured scores: " + ", ".join(
+                    f"{label}={'not measured' if scores.get(field) is None else scores.get(field)}"
+                    for label, field in (("title", "title_score"), ("description", "description_score"), ("tags", "tag_score"))
+                ) + "; target 90 each."}],
             previous_package=best)
+        # Attempts, retries and status of this request, so the caller can add
+        # it to the package's Gemini totals whether or not it succeeded.
+        trace["provider_call"] = dict(
+            (repaired or {}).pop("_provider_trace", None) or gemini_client.last_generation_diagnostic()
+        )
         if repaired:
             # Writer suggestions cannot bypass the research tag selector.
             repaired["tags"], repaired["hashtags"] = best["tags"], best["hashtags"]
             repaired_tag_pkg = refine_tags_locally(repaired)
             for title in dict.fromkeys([repaired_tag_pkg.get("title", ""), *(repaired_tag_pkg.get("variants") or [])]):
-                candidate = {**repaired_tag_pkg, "title": title, "variants": [title, *(repaired_tag_pkg.get("variants") or [])]}
+                candidate = {**repaired_tag_pkg, "title": title,
+                             "variants": _lead_with(title, repaired_tag_pkg.get("variants") or [])}
                 cand_gate = evaluate(candidate)
                 if rank(cand_gate, candidate) > rank(gate, best):
                     best, gate = candidate, cand_gate

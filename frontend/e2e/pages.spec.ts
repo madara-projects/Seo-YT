@@ -1,24 +1,22 @@
-import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import {
+  VIEWPORTS,
+  blockWrites,
+  collectErrors,
+  expectNoHorizontalOverflow,
+  mockHistoryRuns,
+} from "./helpers";
 
 /**
- * Dashboard and History against the running backend with its real data.
- * Requires `docker compose up -d` at the repository root.
+ * Dashboard and History against the running backend. Requires
+ * `docker compose up -d` at the repository root. No request that could change
+ * saved data reaches the server: every write is answered by a test's own
+ * route or aborted.
  */
 
-const VIEWPORTS = {
-  desktop: { width: 1440, height: 900 },
-  tablet: { width: 834, height: 1112 },
-  mobile: { width: 390, height: 844 },
-} as const;
-
-function collectErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on("console", (message: ConsoleMessage) => {
-    if (message.type() === "error") errors.push(message.text());
-  });
-  page.on("pageerror", (error) => errors.push(String(error)));
-  return errors;
-}
+test.beforeEach(async ({ page }) => {
+  await blockWrites(page);
+});
 
 test.describe("Dashboard", () => {
   test("renders against live data with no console errors", async ({ page }) => {
@@ -40,7 +38,7 @@ test.describe("Dashboard", () => {
         json: {
           learning: {},
           scorecard: { total_runs: 3 },
-          owned_performance: { channel: null, latest_sync: null, estimated_watch_minutes: 0, linked_videos_count: 0 },
+          owned_performance: { channel: null, latest_sync: null, estimated_watch_minutes: null, linked_videos_count: 0 },
         },
       }),
     );
@@ -56,14 +54,20 @@ test.describe("Dashboard", () => {
   });
 
   test("labels linked-video watch time as its own measure", async ({ page }) => {
-    // Without a channel sync the backend falls back to linked videos' latest
-    // snapshots; that is not a 28-day channel total and must not look like one.
+    // Without a channel sync the backend adds up the linked videos that have
+    // watch time; that is not a 28-day channel total and must not look like one.
     await page.route("**/api/history", (route) =>
       route.fulfill({
         json: {
           learning: {},
           scorecard: { total_runs: 41 },
-          owned_performance: { channel: null, latest_sync: null, estimated_watch_minutes: 132, linked_videos_count: 19 },
+          owned_performance: {
+            channel: null,
+            latest_sync: null,
+            estimated_watch_minutes: 132,
+            linked_videos_count: 19,
+            linked_videos_with_watch_time: 4,
+          },
         },
       }),
     );
@@ -72,7 +76,7 @@ test.describe("Dashboard", () => {
     const card = page.locator('[data-stat="Estimated watch time"]');
     await expect(card).toContainText("2.2 hrs");
     await expect(card).toContainText("Linked videos");
-    await expect(card).toContainText("Across your 19 linked videos");
+    await expect(card).toContainText("Across 4 of your 19 linked videos");
     await expect(card).not.toContainText("Not connected");
   });
 
@@ -134,10 +138,7 @@ test.describe("Dashboard", () => {
       // the screenshot) reflects the layout a user actually sees.
       await expect(page.locator('[data-stat="Avg opportunity score"]')).toBeVisible();
 
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
-      expect(overflow).toBeLessThanOrEqual(1);
+      await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: `screenshots/dashboard-${name}.png` });
     });
   }
@@ -145,8 +146,7 @@ test.describe("Dashboard", () => {
 
 /**
  * Waits for the list to settle before counting: the rows arrive asynchronously,
- * so counting immediately after navigation always reports zero and would skip
- * every test that needs data.
+ * so counting immediately after navigation always reports zero.
  */
 async function savedRowCount(page: Page): Promise<number> {
   const rows = page.getByTestId("history-row");
@@ -168,13 +168,12 @@ test.describe("History", () => {
   });
 
   test("opens a saved package and offers the whole bundle for reuse", async ({ page }) => {
+    await mockHistoryRuns(page);
     await page.goto("/next/history");
     await expect(page.getByRole("heading", { name: "Package library", level: 1 })).toBeVisible();
+    expect(await savedRowCount(page)).toBe(2);
 
-    const rows = page.getByTestId("history-row");
-    test.skip((await savedRowCount(page)) === 0, "no saved packages in this environment");
-
-    await rows.first().getByRole("button", { name: "View package" }).click();
+    await page.getByTestId("history-row").first().getByRole("button", { name: "View package" }).click();
     const detail = page.getByTestId("history-detail");
     await expect(detail).toBeVisible();
     await expect(detail.getByRole("button", { name: "Copy upload package" })).toBeVisible();
@@ -182,21 +181,25 @@ test.describe("History", () => {
   });
 
   test("asks for confirmation before deleting and does not delete on cancel", async ({ page }) => {
+    await mockHistoryRuns(page);
     let deleteCalls = 0;
+    // Counted and answered here, so even a regression that confirmed would never delete anything.
     await page.route("**/api/history/runs**", (route) => {
-      if (route.request().method() === "DELETE") deleteCalls += 1;
-      return route.continue();
+      if (route.request().method() !== "DELETE") return route.fallback();
+      deleteCalls += 1;
+      return route.fulfill({ json: { status: "deleted", run_id: 0, cloud_sync: { state: "disabled" } } });
     });
 
     await page.goto("/next/history");
-    const rows = page.getByTestId("history-row");
-    test.skip((await savedRowCount(page)) === 0, "no saved packages in this environment");
+    expect(await savedRowCount(page)).toBe(2);
 
-    await rows.first().getByRole("button", { name: /^Delete/ }).click();
+    await page.getByTestId("history-row").first().getByRole("button", { name: /^Delete/ }).click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText("marked deleted");
+    // Focus starts on Cancel, so Enter straight away never confirms.
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
 
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toBeHidden();
@@ -204,15 +207,22 @@ test.describe("History", () => {
   });
 
   test("filters the list from the search box", async ({ page }) => {
+    await mockHistoryRuns(page);
     await page.goto("/next/history");
-    const rows = page.getByTestId("history-row");
-    test.skip((await savedRowCount(page)) === 0, "no saved packages in this environment");
+    expect(await savedRowCount(page)).toBe(2);
 
-    const before = await savedRowCount(page);
     await page.getByLabel("Search saved packages").fill("zzzz-no-match-zzzz");
 
     await expect(page.getByText("No saved packages match your search.")).toBeVisible();
-    expect(before).toBeGreaterThan(0);
+  });
+
+  test("shows an unmeasured opportunity as unavailable, never as 0", async ({ page }) => {
+    await mockHistoryRuns(page);
+    await page.goto("/next/history");
+
+    const row = page.getByTestId("history-row").filter({ hasText: "Top AI Tools" });
+    await expect(row.getByRole("group", { name: "Package scores" })).toContainText("Unavailable");
+    await expect(row.getByRole("group", { name: "Package scores" })).not.toContainText("0/100");
   });
 
   for (const [name, viewport] of Object.entries(VIEWPORTS)) {
@@ -222,10 +232,7 @@ test.describe("History", () => {
       await expect(page.getByRole("heading", { name: "Package library", level: 1 })).toBeVisible();
       await savedRowCount(page);
 
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
-      expect(overflow).toBeLessThanOrEqual(1);
+      await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: `screenshots/history-${name}.png` });
     });
   }

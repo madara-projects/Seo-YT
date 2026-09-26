@@ -4,20 +4,26 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UnavailableNote } from "@/components/common/States";
 import { VideoThumb } from "@/components/common/VideoThumb";
-import { formatNumber } from "@/lib/utils";
+import { useUrlState } from "@/hooks/useUrlState";
+import { formatNumber, UNAVAILABLE } from "@/lib/utils";
 import { engagementRate, toFiniteNumber } from "@/lib/format";
 import { shortDate } from "@/lib/historyFormat";
 import { sortVideos, youtubeWatchUrl, type VideoSort } from "@/lib/channelFormat";
 import type { ChannelVideo } from "@/api/systemTypes";
 
 const PAGE = 8;
+const SORTS: readonly VideoSort[] = ["newest", "views", "engagement"];
 
 /**
  * Every upload from the last sync with its public counts. Engagement is
  * derived here — (likes + comments) per 100 views — and labelled as such.
+ * The sort lives in the URL (`?sort=views`), so a reload or a shared link
+ * keeps it.
  */
 export function UploadsTable({ videos }: { videos: ChannelVideo[] }) {
-  const [sort, setSort] = useState<VideoSort>("newest");
+  const url = useUrlState();
+  const requested = url.get("sort");
+  const sort: VideoSort = SORTS.includes(requested as VideoSort) ? (requested as VideoSort) : "newest";
   const [expanded, setExpanded] = useState(false);
 
   if (!videos.length) {
@@ -30,7 +36,7 @@ export function UploadsTable({ videos }: { videos: ChannelVideo[] }) {
 
   return (
     <div className="space-y-4">
-      <Tabs value={sort} onValueChange={(value) => setSort(value as VideoSort)}>
+      <Tabs value={sort} onValueChange={(value) => url.set({ sort: value === "newest" ? null : value })}>
         <TabsList aria-label="Sort uploads">
           <TabsTrigger value="newest">Newest</TabsTrigger>
           <TabsTrigger value="views">Most viewed</TabsTrigger>
@@ -55,24 +61,25 @@ export function UploadsTable({ videos }: { videos: ChannelVideo[] }) {
           </thead>
           <tbody className="divide-y divide-border">
             {shown.map((video, index) => {
-              const url = youtubeWatchUrl(video.video_id);
+              const watchUrl = youtubeWatchUrl(video.video_id);
               const views = toFiniteNumber(video.views);
               const rate = engagementRate(video.likes, video.comments, video.views);
               return (
                 <tr key={video.video_id ?? index} className="transition-colors hover:bg-accent/40">
                   <td className="px-5 py-3 sm:px-6">
                     <div className="flex items-center gap-3">
-                      <VideoThumb videoId={video.video_id} title={video.title} className="w-24" />
+                      <VideoThumb videoId={video.video_id} className="w-24" />
                       <div className="min-w-0">
-                        {url ? (
+                        {watchUrl ? (
                           <a
-                            href={url}
+                            href={watchUrl}
                             target="_blank"
                             rel="noreferrer"
                             className="group line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground hover:text-brand"
                           >
                             {video.title || "Untitled upload"}
                             <ArrowUpRight className="ml-0.5 inline size-3 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
+                            <span className="sr-only">(opens in a new tab)</span>
                           </a>
                         ) : (
                           <p className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
@@ -99,7 +106,7 @@ export function UploadsTable({ videos }: { videos: ChannelVideo[] }) {
                     {formatNumber(video.comments)}
                   </td>
                   <td className="numeric px-5 py-3 text-right text-[0.8125rem] text-foreground sm:px-6">
-                    {rate === null ? "—" : rate.toFixed(1)}
+                    {rate === null ? UNAVAILABLE : rate.toFixed(1)}
                   </td>
                 </tr>
               );

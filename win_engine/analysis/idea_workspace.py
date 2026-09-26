@@ -4,14 +4,25 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from statistics import median
 from typing import Any
 
+from win_engine.analysis.numbers import optional_number
 
+
+# keyword_research carries the tag candidates and the search-suggestion
+# evidence; without it "Generate from idea" chose tags from model output alone.
 RESEARCH_FIELDS = (
     "youtube_results", "top_opportunities", "keyword_signals", "entity_signals",
     "upload_timing", "thumbnail_intelligence", "research_queries",
     "research_decision", "research_warnings", "cache_policy",
+    "keyword_research", "search_demand",
 )
+# A result is a possible outlier when it is a small-channel breakout, or when
+# its outlier score is at least 2.5x the median of five or more measured
+# results: the watchlist's rule, applied to the sample instead of a channel.
+_OUTLIER_MULTIPLIER = 2.5
+_MIN_OUTLIER_BASELINE = 5
 
 
 def idea_script(idea: dict[str, Any], override: str = "") -> str:
@@ -47,17 +58,14 @@ def build_idea_evidence(
         [str(item.get("published_at")) for item in results if isinstance(item, dict) and item.get("published_at")],
         reverse=True,
     )
-    possible_outliers = sum(
-        1 for item in results
-        if isinstance(item, dict) and (
-            bool(item.get("small_channel_outlier")) or float(item.get("outlier_score") or 0) >= 3
-        )
-    )
+    possible_outliers, unmeasured = _possible_outliers(results)
     if results:
         freshness = f" Most recent observed publication: {publication_dates[0]}." if publication_dates else " Publication dates were unavailable."
+        unmeasured_note = f" Outlier stats were unavailable for {unmeasured} result(s)." if unmeasured else ""
         explanation = (
             f"Observed {len(results)} relevant public YouTube API result(s) across {len(queries)} approved research "
-            f"query angle(s); {possible_outliers} carried a possible-outlier signal.{freshness} "
+            f"query angle(s); {possible_outliers} carried a possible-outlier signal (a small-channel breakout, or at "
+            f"least 2.5x the median outlier score of five or more measured results).{unmeasured_note}{freshness} "
             "These are dated public observations, not monthly search volume or predicted demand."
         )
     else:
@@ -94,7 +102,7 @@ def evidence_to_research(evidence: dict[str, Any]) -> dict[str, Any]:
     """Rehydrate only the existing generator's approved research fields."""
 
     list_fields = {"youtube_results", "top_opportunities", "keyword_signals", "entity_signals", "research_queries", "research_warnings"}
-    dict_fields = {"upload_timing", "thumbnail_intelligence", "research_decision"}
+    dict_fields = {"upload_timing", "thumbnail_intelligence", "research_decision", "keyword_research", "search_demand"}
     result: dict[str, Any] = {}
     for field in RESEARCH_FIELDS:
         value = evidence.get(field)
@@ -105,6 +113,32 @@ def evidence_to_research(evidence: dict[str, Any]) -> dict[str, Any]:
         else:
             result[field] = value or "idea-research-snapshot"
     return result
+
+
+def _possible_outliers(results: list[Any]) -> tuple[int, int]:
+    """Count possible outliers among results with measured stats, and the unmeasured rest.
+
+    A raw outlier score of 3 used to be the bar, and an ordinary 20k-view video
+    on a 150k-subscriber channel scores about 18, so nearly every result counted.
+    """
+
+    measured: list[tuple[dict[str, Any], float]] = []
+    unmeasured = 0
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        score = optional_number(item.get("outlier_score"))
+        if score is None:
+            unmeasured += 1
+        else:
+            measured.append((item, score))
+    scores = [score for _, score in measured]
+    baseline = median(scores) if len(scores) >= _MIN_OUTLIER_BASELINE else 0.0
+    count = sum(
+        1 for item, score in measured
+        if item.get("small_channel_outlier") or (baseline > 0 and score >= baseline * _OUTLIER_MULTIPLIER)
+    )
+    return count, unmeasured
 
 
 def _json_safe(value: Any) -> Any:

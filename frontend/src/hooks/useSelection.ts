@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useMounted, withParams, type ParamChanges } from "./useUrlState";
 
 export interface Selection<K extends string> {
   kind: K;
@@ -20,11 +21,15 @@ function positiveId(value: string | null): number | null {
  * kind of record (the watchlist's channels and videos) passes each parameter
  * name; selecting one clears the others. Choosing from the list also brings
  * the inspector into view when the two are stacked on a narrow screen.
+ *
+ * `extra` changes other parameters (a filter, a page) in the same navigation;
+ * a separate call in the same event would be overwritten.
  */
 export function useSelection<K extends string>(kinds: readonly K[]) {
   const [searchParams, setSearchParams] = useSearchParams();
   const detailRef = useRef<HTMLDivElement>(null);
   const pendingReveal = useRef(false);
+  const mounted = useMounted();
   const kindsKey = kinds.join(",");
 
   let selected: Selection<K> | null = null;
@@ -37,19 +42,16 @@ export function useSelection<K extends string>(kinds: readonly K[]) {
   }
 
   const select = useCallback(
-    (kind: K | null, id: number | null) => {
+    (kind: K | null, id: number | null, extra: ParamChanges = {}) => {
+      // A request that finishes after the page was left must not navigate back to it.
+      if (!mounted.current) return;
       pendingReveal.current = kind !== null && id !== null;
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          for (const name of kindsKey.split(",")) next.delete(name);
-          if (kind !== null && id !== null) next.set(kind, String(id));
-          return next;
-        },
-        { replace: true },
-      );
+      const changes: ParamChanges = {};
+      for (const name of kindsKey.split(",")) changes[name] = null;
+      if (kind !== null && id !== null) changes[kind] = id;
+      setSearchParams((current) => withParams(current, { ...changes, ...extra }), { replace: true });
     },
-    [kindsKey, setSearchParams],
+    [kindsKey, mounted, setSearchParams],
   );
 
   const selectedKey = selected ? `${selected.kind}:${selected.id}` : "";
@@ -67,6 +69,9 @@ export function useSelection<K extends string>(kinds: readonly K[]) {
 /** `useSelection` for a page with one kind of record. */
 export function useSelectedId(name: string) {
   const { selected, select, detailRef } = useSelection([name]);
-  const selectId = useCallback((id: number | null) => select(id === null ? null : name, id), [name, select]);
+  const selectId = useCallback(
+    (id: number | null, extra?: ParamChanges) => select(id === null ? null : name, id, extra),
+    [name, select],
+  );
   return { selectedId: selected?.id ?? null, select: selectId, detailRef };
 }

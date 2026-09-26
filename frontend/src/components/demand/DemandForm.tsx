@@ -1,22 +1,17 @@
 import { Controller, useForm, type UseFormReturn } from "react-hook-form";
+import { useMutationState } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Search, Telescope } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
+import { FormField } from "@/components/common/FormField";
+import { OptionSelect } from "@/components/common/OptionSelect";
 import { Panel } from "@/components/common/Panel";
 import { ErrorState } from "@/components/common/States";
 import { apiErrorMessage, apiRequestId } from "@/api/client";
 import { useResearchDemand } from "@/hooks/useDemand";
+import { mutationKeys } from "@/hooks/queryKeys";
 import { formatDuration, useElapsedSeconds } from "@/hooks/useElapsed";
 import {
   DEMAND_FORMAT_OPTIONS,
@@ -26,12 +21,10 @@ import {
   demandFormSchema,
   type DemandFormValues,
 } from "@/schemas/demand";
+import type { LabelledOption } from "@/lib/labels";
 import type { DemandSnapshot } from "@/api/researchTypes";
 
-/** Radix Select treats "" as "no value", so "any" needs a sentinel. */
-const ANY = "__any";
-
-function OptionSelect({
+function ChoiceField({
   form,
   name,
   label,
@@ -40,34 +33,19 @@ function OptionSelect({
   form: UseFormReturn<DemandFormValues>;
   name: "language" | "format" | "region";
   label: string;
-  options: { value: string; label: string }[];
+  options: readonly LabelledOption[];
 }) {
   const id = `demand-${name}`;
   return (
-    <div className="space-y-2">
-      <Label htmlFor={id}>{label}</Label>
+    <FormField id={id} label={label}>
       <Controller
         control={form.control}
         name={name}
         render={({ field }) => (
-          <Select
-            value={field.value || ANY}
-            onValueChange={(value) => field.onChange(value === ANY ? "" : value)}
-          >
-            <SelectTrigger id={id} aria-label={label}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {options.map((option) => (
-                <SelectItem key={option.value || ANY} value={option.value || ANY}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <OptionSelect id={id} ariaLabel={label} value={field.value} onValueChange={field.onChange} options={options} />
         )}
       />
-    </div>
+    </FormField>
   );
 }
 
@@ -78,20 +56,27 @@ export function DemandForm({ onResearched }: { onResearched: (snapshot: DemandSn
     mode: "onBlur",
   });
   const research = useResearchDemand();
-  const elapsed = useElapsedSeconds(research.isPending);
+  // A research run started before the page was left is still in the mutation
+  // cache: it keeps the button disabled, so the same quota isn't spent twice.
+  const running = useMutationState({
+    filters: { mutationKey: mutationKeys.demandResearch, status: "pending" },
+    select: (mutation) => mutation.state.submittedAt,
+  });
+  const inFlight = running.length > 0;
+  const elapsed = useElapsedSeconds(inFlight, inFlight ? Math.max(...running) : undefined);
   const topicError = form.formState.errors.topic?.message;
   const audienceError = form.formState.errors.audience_context?.message;
 
-  const submit = form.handleSubmit(async (values) => {
-    try {
-      const data = await research.mutateAsync(values);
-      if (data.research?.id) {
-        toast.success("Demand snapshot saved.");
-        onResearched(data.research);
-      }
-    } catch {
-      /* Shown below the form with its request ID. */
-    }
+  // Per-call callbacks don't run once the form has unmounted, so a run that
+  // finishes after the creator has moved on never pulls them back here. A
+  // failure is shown below the form with its request ID.
+  const submit = form.handleSubmit((values) => {
+    if (inFlight) return;
+    research.mutate(values, {
+      onSuccess: (data) => {
+        if (data.research?.id) onResearched(data.research);
+      },
+    });
   });
 
   return (
@@ -103,8 +88,7 @@ export function DemandForm({ onResearched }: { onResearched: (snapshot: DemandSn
     >
       <form onSubmit={submit} noValidate className="space-y-5">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="space-y-2 sm:col-span-2 xl:col-span-4">
-            <Label htmlFor="demand-topic">Topic or phrase</Label>
+          <FormField id="demand-topic" label="Topic or phrase" error={topicError} className="sm:col-span-2 xl:col-span-4">
             <Input
               id="demand-topic"
               placeholder="e.g. painful love quotes"
@@ -114,17 +98,11 @@ export function DemandForm({ onResearched }: { onResearched: (snapshot: DemandSn
               className="text-[0.9375rem]"
               {...form.register("topic")}
             />
-            {topicError ? (
-              <p role="alert" className="text-xs font-medium text-tone-bad">
-                {topicError}
-              </p>
-            ) : null}
-          </div>
-          <OptionSelect form={form} name="language" label="Language" options={DEMAND_LANGUAGE_OPTIONS} />
-          <OptionSelect form={form} name="format" label="Format" options={DEMAND_FORMAT_OPTIONS} />
-          <OptionSelect form={form} name="region" label="Region" options={DEMAND_REGION_OPTIONS} />
-          <div className="space-y-2">
-            <Label htmlFor="demand-audience">Audience context</Label>
+          </FormField>
+          <ChoiceField form={form} name="language" label="Language" options={DEMAND_LANGUAGE_OPTIONS} />
+          <ChoiceField form={form} name="format" label="Format" options={DEMAND_FORMAT_OPTIONS} />
+          <ChoiceField form={form} name="region" label="Region" options={DEMAND_REGION_OPTIONS} />
+          <FormField id="demand-audience" label="Audience context" error={audienceError}>
             <Input
               id="demand-audience"
               placeholder="Optional"
@@ -132,12 +110,7 @@ export function DemandForm({ onResearched }: { onResearched: (snapshot: DemandSn
               aria-invalid={Boolean(audienceError)}
               {...form.register("audience_context")}
             />
-            {audienceError ? (
-              <p role="alert" className="text-xs font-medium text-tone-bad">
-                {audienceError}
-              </p>
-            ) : null}
-          </div>
+          </FormField>
         </div>
 
         {research.isError ? (
@@ -149,17 +122,17 @@ export function DemandForm({ onResearched }: { onResearched: (snapshot: DemandSn
 
         <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs leading-relaxed text-muted-foreground" aria-live="polite">
-            {research.isPending
+            {inFlight
               ? `Searching YouTube and scoring the results… ${formatDuration(elapsed)}`
               : "Runs live YouTube searches, which spend API quota. Nothing is invented: there is no search-volume data, only what was observed."}
           </p>
-          <Button type="submit" variant="gradient" disabled={research.isPending} className="shrink-0">
-            {research.isPending ? (
+          <Button type="submit" variant="gradient" disabled={inFlight} className="shrink-0">
+            {inFlight ? (
               <Loader2 className="animate-spin" aria-hidden="true" />
             ) : (
               <Search aria-hidden="true" />
             )}
-            {research.isPending ? "Researching…" : "Research demand"}
+            {inFlight ? "Researching…" : "Research demand"}
           </Button>
         </div>
       </form>

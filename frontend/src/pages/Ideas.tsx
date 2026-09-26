@@ -8,18 +8,22 @@ import { IdeaFormSheet } from "@/components/ideas/IdeaFormSheet";
 import { IdeaList } from "@/components/ideas/IdeaList";
 import { IDEAS_PAGE_SIZE, useIdea, useIdeas } from "@/hooks/useIdeas";
 import { useSelectedId } from "@/hooks/useSelection";
+import { offsetParam, useUrlState } from "@/hooks/useUrlState";
 import { asArray } from "@/lib/utils";
 import type { IdeaSummary } from "@/api/ideaTypes";
 
 /**
  * The idea backlog: save original topics, research them with approved YouTube
  * data, check demand, and carry one idea at a time into a package. The open
- * idea lives in the URL (`?idea=`), so it can be linked to.
+ * idea, the status filter and the page all live in the URL (`?idea=`,
+ * `?status=`, `?offset=`), so a reload or a shared link shows the same view.
  */
 export default function IdeasPage() {
   const { selectedId, select, detailRef } = useSelectedId("idea");
-  const [status, setStatus] = useState("");
-  const [offset, setOffset] = useState(0);
+  const url = useUrlState();
+  const status = url.get("status");
+  const offset = offsetParam(url.get("offset"));
+  const setUrl = url.set;
   const [formOpen, setFormOpen] = useState(false);
 
   const list = useIdeas(status, offset);
@@ -30,9 +34,9 @@ export default function IdeasPage() {
   // A status change can empty the page being viewed; step back to the last one.
   useEffect(() => {
     if (!list.isPlaceholderData && list.isSuccess && !ideas.length && offset > 0) {
-      setOffset(Math.max(0, Math.floor((total - 1) / IDEAS_PAGE_SIZE) * IDEAS_PAGE_SIZE));
+      setUrl({ offset: Math.max(0, Math.floor((total - 1) / IDEAS_PAGE_SIZE) * IDEAS_PAGE_SIZE) || null });
     }
-  }, [ideas.length, list.isPlaceholderData, list.isSuccess, offset, total]);
+  }, [ideas.length, list.isPlaceholderData, list.isSuccess, offset, total, setUrl]);
 
   const selected = detail.data?.idea ?? null;
   const unfiltered = !status && offset === 0;
@@ -65,11 +69,8 @@ export default function IdeasPage() {
           total={total}
           offset={offset}
           status={status}
-          onStatusChange={(next) => {
-            setStatus(next);
-            setOffset(0);
-          }}
-          onOffsetChange={setOffset}
+          onStatusChange={(next) => setUrl({ status: next, offset: null })}
+          onOffsetChange={(next) => setUrl({ offset: next || null })}
           isPending={list.isPending}
           isFetching={list.isFetching}
           error={list.error}
@@ -94,10 +95,8 @@ export default function IdeasPage() {
         open={formOpen}
         onOpenChange={setFormOpen}
         onCreated={(idea) => {
-          // Show the new idea where it lands: first on the unfiltered list.
-          setStatus("");
-          setOffset(0);
-          select(idea.id);
+          // Show the new idea where it lands: first on the unfiltered list, in one navigation.
+          select(idea.id, { status: null, offset: null });
         }}
       />
     </div>

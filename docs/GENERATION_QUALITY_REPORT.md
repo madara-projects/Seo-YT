@@ -1,5 +1,7 @@
 # Phase 2B — Generation Quality and Package Dynamicity
 
+> **Historical record.** This report describes the repository as it was on its stated date. Schema versions, test counts, file names and routes have changed since; the README and CHANGELOG describe the current state.
+
 Verification date: 2026-08-28  
 Application: 0.13.0 · SQLite schema: 8
 

@@ -101,7 +101,9 @@ export const VOICE_OVER_OPTIONS = [
 
 export const FORMAT_OPTIONS = [
   { value: "", label: "Not specified" },
-  { value: "Short", label: "Short" },
+  // The backend's canonical Shorts key: brief inference, Ideas, Demand and
+  // cohorts all group on it, so a differently spelled value would split them.
+  { value: "youtube_shorts", label: "Short" },
   { value: "tutorial", label: "Tutorial" },
   { value: "vlog", label: "Vlog" },
   { value: "review", label: "Review" },

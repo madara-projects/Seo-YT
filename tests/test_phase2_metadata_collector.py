@@ -29,7 +29,8 @@ class Phase2MetadataTests(unittest.TestCase):
 
     def test_metadata_sources_and_package_are_separate(self):
         metadata = self.store.comparable_metadata(self.link_id)
-        self.assertEqual(metadata["format"], "short")
+        # The package said "short"; cohorts store the one Shorts spelling.
+        self.assertEqual(metadata["format"], "youtube_shorts")
         self.assertEqual(metadata["sources"]["format"], "package")
         self.store.update_comparable_metadata(self.link_id, {"topic_category": "heartbreak"})
         metadata = self.store.comparable_metadata(self.link_id)
@@ -83,7 +84,7 @@ class Phase2CollectorTests(unittest.TestCase):
             store = HistoryStore(path)
             with store._connect() as c:
                 c.execute("INSERT INTO analysis_runs (query, created_at) VALUES ('q', 'now')")
-            link = store.link_published_video(1, "abcdefghijk", (datetime.now(timezone.utc) - timedelta(days=8)).isoformat(), format_val="short", language="english", ownership_state="verified", ownership_verified=True, verified_channel_id="c", ownership_verified_at="now")
+            store.link_published_video(1, "abcdefghijk", (datetime.now(timezone.utc) - timedelta(days=8)).isoformat(), format_val="short", language="english", ownership_state="verified", ownership_verified=True, verified_channel_id="c", ownership_verified_at="now")
             store.record_performance_snapshot("abcdefghijk", 24, views=10, snapshot_window="24h", snapshot_status="complete")
             due = store.due_snapshot_links()
             self.assertEqual(due[0]["due_windows"], ["7d"])

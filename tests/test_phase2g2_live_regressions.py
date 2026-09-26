@@ -94,7 +94,6 @@ class Phase2G2LiveRegressionTests(unittest.TestCase):
             title="When false hope keeps you waiting 🌧️ #shorts",
             primary_topic="false hope",
             secondary_topic="letting go",
-            content_angle="Story",
             video_format="youtube_shorts",
         )
         hook_strength = audit["hook_audit"]["hook_strength"]

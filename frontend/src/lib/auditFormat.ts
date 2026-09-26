@@ -100,11 +100,24 @@ export function comparisonText(value: unknown): string | null {
 }
 
 /**
+ * How a field on YouTube compares with what the creator meant to publish:
+ * the package they explicitly selected when one was recorded (the backend's
+ * `selection_attribution`), otherwise the generated package.
+ */
+export function publishedFieldState(item: AuditComparison, selectionRecorded: boolean): string | undefined {
+  return selectionRecorded ? item.selected_to_published : item.generated_to_published;
+}
+
+/**
  * The metadata check's headline. The legacy page compared against "match",
  * a value the backend never returns, so it always reported differences.
  */
-export function metadataVerdict(comparisons: AuditComparison[]): { label: string; tone: EvidenceTone; text: string } {
-  const states = comparisons.map((item) => item.generated_to_published);
+export function metadataVerdict(
+  comparisons: AuditComparison[],
+  selectionRecorded = false,
+): { label: string; tone: EvidenceTone; text: string } {
+  const states = comparisons.map((item) => publishedFieldState(item, selectionRecorded));
+  const target = selectionRecorded ? "the package you selected" : "the saved package";
   if (!states.length || states.every((state) => state === "unavailable")) {
     return {
       label: "YouTube data unavailable",
@@ -114,18 +127,18 @@ export function metadataVerdict(comparisons: AuditComparison[]): { label: string
   }
   if (states.every((state) => state === "exact_match")) {
     return {
-      label: "Matches your package",
+      label: selectionRecorded ? "Matches your selection" : "Matches your package",
       tone: "ok",
-      text: "The title, description, tags and hashtags on YouTube match the saved package.",
+      text: `The title, description, tags and hashtags on YouTube match ${target}.`,
     };
   }
   const differing = comparisons
-    .filter((item) => item.generated_to_published !== "exact_match")
+    .filter((item) => publishedFieldState(item, selectionRecorded) !== "exact_match")
     .map((item) => fieldName(item.field).toLowerCase());
   return {
     label: "Differences found",
     tone: "warn",
-    text: `What's on YouTube differs from the saved package in: ${differing.join(", ")}.`,
+    text: `What's on YouTube differs from ${target} in: ${differing.join(", ")}.`,
   };
 }
 

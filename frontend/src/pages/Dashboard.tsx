@@ -4,7 +4,7 @@ import { StatCard } from "@/components/common/StatCard";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { Delta } from "@/components/common/Delta";
 import { Panel } from "@/components/common/Panel";
-import { CardSkeleton, ErrorState, GridSkeleton } from "@/components/common/States";
+import { CardSkeleton, ErrorState, GridSkeleton, UnavailableNote } from "@/components/common/States";
 import { AngleChart } from "@/components/dashboard/AngleChart";
 import { DashboardHero } from "@/components/dashboard/DashboardHero";
 import {
@@ -17,13 +17,13 @@ import {
 import { QuickLaunch } from "@/components/dashboard/QuickLaunch";
 import { useCohortLearning, useHistorySummary } from "@/hooks/useHistory";
 import { apiErrorMessage, apiRequestId } from "@/api/client";
-import { asArray, asObject, formatNumber } from "@/lib/utils";
-import { toFiniteNumber } from "@/lib/format";
+import { asArray, asObject, formatNumber, UNAVAILABLE } from "@/lib/utils";
+import { formatMinutes, relativeTime, toFiniteNumber } from "@/lib/format";
 import {
-  formatWatchTime,
-  roundOpportunity,
-  roundTitleScore,
+  linkedWatchCaption,
+  opportunityText,
   savedAnalysesCaption,
+  titleScoreText,
   watchTimeSource,
 } from "@/lib/dashboardFormat";
 import type {
@@ -37,18 +37,27 @@ import type {
 export default function DashboardPage() {
   const summary = useHistorySummary();
   const cohorts = useCohortLearning();
+  // A failed summary (a 503 or 429) says nothing about the channel or the
+  // library, so nothing below may read its absence as "not connected" or "none
+  // yet". A failed refetch keeps the last good summary, which is still shown.
+  const failed = summary.isError && !summary.data;
 
   const learning = asObject(summary.data?.learning);
   const scorecard = asObject(summary.data?.scorecard);
-  const owned = asObject(summary.data?.owned_performance);
+  const owned = asObject(summary.data?.owned_performance) as OwnedPerformance;
 
-  const channel = asObject(owned.channel);
-  const sync = asObject(owned.latest_sync);
-  const syncChannel = asObject(sync.channel);
-  const channelTitle = String(channel.title ?? syncChannel.title ?? "");
-  const isConnected = Boolean(channel.id || channelTitle);
-  const watchSource = watchTimeSource(owned as OwnedPerformance);
-  const linkedCount = toFiniteNumber(owned.linked_videos_count) ?? 0;
+  // `channel` is present exactly when a channel is connected, even while its
+  // title is still unknown; the last sync's title says nothing about now.
+  const isConnected = Boolean(owned.channel);
+  const channelTitle = String(owned.channel?.title || "YouTube channel");
+  const sync = owned.latest_sync ?? null;
+  const syncedAt = sync?.synced_at ?? null;
+  const analyticsFailed = asArray<string>(sync?.partial_failures).includes("analytics");
+  // Only YouTube Analytics' own 28-day figure is shown as one, never a sum of lifetime views.
+  const views28 = isConnected ? toFiniteNumber(sync?.current_28_days?.views) : null;
+  const watchSource = watchTimeSource(owned);
+  const watchMinutes =
+    watchSource === "channel" ? sync?.current_28_days?.estimatedMinutesWatched : owned.estimated_watch_minutes;
 
   const recentRuns = asArray<RecentRun>(learning.recent_runs);
   const angles = asArray<AngleEffectiveness>(learning.angle_effectiveness);
@@ -56,8 +65,6 @@ export default function DashboardPage() {
   const retention = asArray<RetentionPattern>(learning.retention_pattern);
 
   const totalRuns = scorecard.total_runs;
-  const avgOpportunity = roundOpportunity(scorecard.avg_opportunity_score);
-  const avgTitle = roundTitleScore(scorecard.avg_title_score);
   const opportunityDelta = toFiniteNumber(scorecard.opportunity_delta_vs_previous_window);
   const titleDelta = toFiniteNumber(scorecard.title_score_delta_vs_previous_window);
 
@@ -75,33 +82,35 @@ export default function DashboardPage() {
 
       {summary.isPending ? (
         <GridSkeleton cards={4} />
-      ) : (
+      ) : failed ? null : (
         <section aria-label="Key numbers" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Views (28 days)"
             icon={Eye}
-            value={isConnected ? formatNumber(owned.total_views) : "Unavailable"}
+            value={views28 === null ? UNAVAILABLE : formatNumber(views28)}
             caption={
-              isConnected
-                ? "Real 28-day channel views synced from YouTube."
-                : "Connect and refresh your channel in Settings."
+              !isConnected
+                ? "Connect and refresh your channel in Settings."
+                : views28 !== null
+                  ? `Real 28-day channel views from YouTube Analytics, synced ${relativeTime(syncedAt)}.`
+                  : analyticsFailed
+                    ? "YouTube Analytics couldn't be read during the last sync. Refresh on the Channel page."
+                    : syncedAt
+                      ? "YouTube Analytics has no 28-day figure for this channel yet."
+                      : "Not synced yet. Refresh on the Channel page."
             }
-            tone={isConnected ? "info" : "neutral"}
-            toneLabel={isConnected ? "YouTube data" : "Not connected"}
+            tone={views28 !== null ? "info" : "neutral"}
+            toneLabel={!isConnected ? "Not connected" : views28 !== null ? "YouTube data" : "Unavailable"}
           />
           <StatCard
             label="Estimated watch time"
             icon={Clock}
-            value={
-              watchSource === "none"
-                ? "Unavailable"
-                : formatWatchTime(owned.estimated_watch_minutes, true)
-            }
+            value={watchSource === "none" ? UNAVAILABLE : formatMinutes(watchMinutes)}
             caption={
               watchSource === "channel"
-                ? "Total estimated watch time from the 28-day sync."
+                ? `Total estimated watch time from the 28-day sync, ${relativeTime(syncedAt)}.`
                 : watchSource === "linked"
-                  ? `Across your ${linkedCount} linked ${linkedCount === 1 ? "video" : "videos"} at their latest snapshots — not a 28-day channel total.`
+                  ? linkedWatchCaption(owned)
                   : "Unavailable until a YouTube Analytics sync succeeds."
             }
             tone={watchSource === "none" ? "neutral" : "info"}
@@ -110,13 +119,15 @@ export default function DashboardPage() {
                 ? "YouTube data"
                 : watchSource === "linked"
                   ? "Linked videos"
-                  : "Not connected"
+                  : isConnected
+                    ? "Unavailable"
+                    : "Not connected"
             }
           />
           <StatCard
             label="Avg opportunity score"
             icon={Target}
-            value={avgOpportunity === null ? "Unavailable" : `${avgOpportunity} / 100`}
+            value={opportunityText(scorecard.avg_opportunity_score)}
             footer={
               opportunityDelta !== null ? (
                 <Delta value={opportunityDelta} unit="points" label="vs previous window" />
@@ -129,7 +140,7 @@ export default function DashboardPage() {
           <StatCard
             label="Avg title quality"
             icon={Type}
-            value={avgTitle === null ? "Unavailable" : `${avgTitle} / 10`}
+            value={titleScoreText(scorecard.avg_title_score)}
             footer={
               titleDelta !== null ? (
                 <Delta value={titleDelta} unit="points" label="vs previous window" />
@@ -146,11 +157,12 @@ export default function DashboardPage() {
         <QuickLaunch className="lg:col-span-3" />
         <ChannelSnapshot
           className="lg:col-span-2"
-          owned={owned as OwnedPerformance}
+          owned={owned}
           channelTitle={channelTitle}
           isConnected={isConnected}
-          syncedAt={sync.synced_at ? String(sync.synced_at) : null}
+          syncedAt={syncedAt}
           isPending={summary.isPending}
+          isError={failed}
         />
       </div>
 
@@ -161,10 +173,19 @@ export default function DashboardPage() {
           title="Title quality by content angle"
           aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}
         >
-          {summary.isPending ? <CardSkeleton rows={3} /> : <AngleChart data={angles} />}
+          {summary.isPending ? (
+            <CardSkeleton rows={3} />
+          ) : failed ? (
+            <UnavailableNote>Title quality by angle is unavailable right now.</UnavailableNote>
+          ) : (
+            <AngleChart data={angles} />
+          )}
         </Panel>
         <LearningPanel
           className="lg:col-span-2"
+          title="Learning confidence"
+          description="Learning from results starts only once enough comparable videos have matured."
+          sampleLabel="Comparable videos"
           data={cohorts.data}
           isPending={cohorts.isPending}
           isError={cohorts.isError}
@@ -176,11 +197,13 @@ export default function DashboardPage() {
           className="lg:col-span-3"
           runs={recentRuns}
           isPending={summary.isPending}
+          isError={failed}
         />
         <RetentionSpread
           className="lg:col-span-2"
           rows={retention}
           isPending={summary.isPending}
+          isError={failed}
         />
       </div>
 
@@ -192,6 +215,7 @@ export default function DashboardPage() {
             : undefined
         }
         isPending={summary.isPending}
+        isError={failed}
       />
     </div>
   );

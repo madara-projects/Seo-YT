@@ -11,13 +11,16 @@ export class ApiError extends Error {
   readonly requestId: string;
   readonly status: number;
   readonly code: string;
+  /** The envelope's machine-readable `details`, when the server sent any. */
+  readonly details: unknown;
 
-  constructor(message: string, requestId = "", status = 0, code = "") {
+  constructor(message: string, requestId = "", status = 0, code = "", details: unknown = undefined) {
     super(message);
     this.name = "ApiError";
     this.requestId = requestId;
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -50,43 +53,34 @@ export function apiRequestId(error: unknown): string {
   return error instanceof ApiError ? error.requestId : "";
 }
 
+/**
+ * There is deliberately no client timeout: analysis runs for minutes and
+ * aborting would throw away work the server is still doing. `signal` is how
+ * TanStack Query cancels a read nobody is waiting for any more.
+ */
 type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
-  /** Overrides the default absence of a client timeout. */
-  timeoutMs?: number;
 };
 
 export async function apiRequest<T = unknown>(
   url: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { body, timeoutMs, headers, signal, ...rest } = options;
-
-  const controller = new AbortController();
-  const timer =
-    typeof timeoutMs === "number" && timeoutMs > 0
-      ? window.setTimeout(() => controller.abort(), timeoutMs)
-      : undefined;
-
-  // Caller-supplied cancellation still wins.
-  if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener("abort", () => controller.abort(), { once: true });
-  }
+  const { body, headers, signal, ...rest } = options;
 
   let response: Response;
   try {
     response = await fetch(url, {
       ...rest,
-      signal: controller.signal,
+      signal,
       headers: {
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(headers ?? {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-  } catch (cause) {
-    if (controller.signal.aborted) {
+  } catch {
+    if (signal?.aborted) {
       throw new ApiError("The request was cancelled before the server replied.", "", 0, "aborted");
     }
     throw new ApiError(
@@ -95,8 +89,6 @@ export async function apiRequest<T = unknown>(
       0,
       "network_error",
     );
-  } finally {
-    if (timer !== undefined) window.clearTimeout(timer);
   }
 
   const raw = await response.text();
@@ -119,6 +111,7 @@ export async function apiRequest<T = unknown>(
       String(envelope.request_id ?? data.request_id ?? ""),
       response.status,
       String(envelope.code ?? ""),
+      envelope.details,
     );
   }
 

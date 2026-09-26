@@ -63,12 +63,13 @@ class FallbackAndGroundingTests(unittest.TestCase):
 
     def test_creator_instruction_and_fragments_are_rejected(self):
         terms = {"message", "three", "words", "keyboard", "mechanical", "membrane"}
+        # "one room", "between tcp" and "udp user" were rejected only because a
+        # list of fragments from particular test scripts named them.
         for value in (
             "emotional short story without inventing the message",
             "minimal motivational content without a specific life problem",
-            "silent reflective quote", "minimal reflection", "fast near", "one room", "slow one",
+            "silent reflective quote", "minimal reflection", "fast near", "slow one",
             "checking same", "walks through green hills while", "used talk every then neither", "value only after",
-            "between tcp", "udp user",
         ):
             _, rejected = _classify(value, "long_tail", terms, set())
             self.assertIsNotNone(rejected, value)
@@ -100,12 +101,15 @@ class FallbackAndGroundingTests(unittest.TestCase):
             script="TCP establishes a connection before transferring data, while UDP sends packets without the same connection setup.",
             semantic={"primary_topic": "TCP vs UDP", "secondary_topics": [], "search_intents": [], "keyword_clusters": []},
             creator_brief={}, research_queries=[], entity_signals=[], youtube_results=[],
-            search_opportunities={"opportunities": [{"concept": "TCP connection oriented", "semantic_confirmed": True,
+            search_opportunities={"opportunities": [{"concept": "TCP connection setup", "semantic_confirmed": True,
                 "script_relevance_score": 90, "research_relevance_score": 60, "intent": "comparison", "cluster": "tcp"}]},
         )
+        # Support is the share of the concept the source contains: every word
+        # of "tcp connection setup" is in the script. ("tcp connection oriented"
+        # passed only through a word list written for this test script.)
         tags, evidence = select_final_tags(research, generated_tags=[], title="TCP vs UDP", script="TCP establishes a connection before transferring data, while UDP sends packets without the same connection setup.")
-        self.assertIn("tcp connection oriented", tags)
-        selected = next(item for item in evidence["selected_keywords"] if item["keyword"] == "tcp connection oriented")
+        self.assertIn("tcp connection setup", tags)
+        selected = next(item for item in evidence["selected_keywords"] if item["keyword"] == "tcp connection setup")
         self.assertGreaterEqual(selected["source_support_score"], 70)
         self.assertTrue(selected["source_support"])
 

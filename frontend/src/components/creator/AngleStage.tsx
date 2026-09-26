@@ -13,13 +13,15 @@ import {
   UserPen,
   Wand2,
 } from "lucide-react";
-import { EvidenceChip, SourceLegend, type EvidenceTone } from "@/components/common/EvidenceChip";
+import { EvidenceChip, provenanceLabel, SourceLegend, type EvidenceTone } from "@/components/common/EvidenceChip";
 import { Inset, Panel } from "@/components/common/Panel";
 import { EmptyState, UnavailableNote } from "@/components/common/States";
 import { StatCard } from "@/components/common/StatCard";
-import { asArray, asObject, displayValue, formatNumber } from "@/lib/utils";
+import { humanize } from "@/lib/labels";
+import { toFiniteNumber } from "@/lib/format";
+import { asArray, asObject, displayValue, formatNumber, UNAVAILABLE } from "@/lib/utils";
+import { PacingPanel } from "./PacingPanel";
 import type { AnalyzeResponse, PackageOption, RetentionAssistant, RetentionRisk } from "@/api/types";
-import type { CreatorFormValues } from "@/schemas/creator";
 
 function severityTone(severity?: string): EvidenceTone {
   if (severity === "high") return "bad";
@@ -27,13 +29,44 @@ function severityTone(severity?: string): EvidenceTone {
   return "info";
 }
 
+/** The backend's stored words ("high_burden", "relative_stage_only") as a person would say them. */
+function words(value: unknown): string {
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  const text = String(value ?? "").trim();
+  return text ? humanize(text) : UNAVAILABLE;
+}
+
+/** "12 words"; null when nothing was counted, so no unit is ever put on "Unavailable". */
+function wordCount(value: unknown): string | null {
+  const count = toFiniteNumber(value);
+  return count === null ? null : `${formatNumber(count)} ${count === 1 ? "word" : "words"}`;
+}
+
+/** "4.5s"; null when there is no estimate. */
+function secondsText(value: unknown): string | null {
+  const seconds = toFiniteNumber(value);
+  return seconds === null ? null : `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })}s`;
+}
+
+/** The parts that were measured, joined; the fallback when none were. */
+function caption(parts: (string | null)[], fallback: string): string {
+  const known = parts.filter((part): part is string => Boolean(part));
+  return known.length ? known.join(" · ") : fallback;
+}
+
+/** "Supplied" only when the brief says the creator supplied it; otherwise its real source. */
+function suppliedChip(status: unknown, provenance: unknown): { tone: EvidenceTone; label: string } {
+  if (status !== "available") return { tone: "neutral", label: "Unavailable" };
+  const source = provenanceLabel(provenance);
+  return source.tone === "ok" ? { tone: "ok", label: "Supplied" } : source;
+}
+
 export function AngleStage({
   data,
-  submitted,
   selected,
 }: {
   data: AnalyzeResponse | null;
-  submitted: CreatorFormValues | null;
+  /** The creator's explicit choice, or null before one is made. */
   selected: PackageOption | null;
 }) {
   if (!data) {
@@ -48,7 +81,8 @@ export function AngleStage({
 
   const decision = asObject(data.research_decision);
   const brief = asObject(data.creator_brief);
-  const enteredAngle = Boolean(String(submitted?.unique_angle ?? "").trim());
+  // The backend records where every brief field came from; it never infers the unique angle.
+  const angleSource = provenanceLabel(asObject(asObject(brief.field_provenance).unique_angle).source);
   const publicCount = asArray(data.youtube_results).length;
 
   const assistant = asObject(data.retention_assistant) as RetentionAssistant;
@@ -58,9 +92,11 @@ export function AngleStage({
   const pacing = asObject(assistant.pacing);
   const quote = asObject(assistant.quote_presentation);
   const learning = asObject(assistant.retention_learning);
+  const frameChip = suppliedChip(frame.status, frame.provenance);
+  const quoteChip = suppliedChip(quote.status, quote.provenance);
   const alignment = asArray<{ package_id?: string; status?: string; opening_similarity?: string }>(
     assistant.package_alignment,
-  ).find((item) => item.package_id === selected?.id);
+  ).find((item) => selected?.packageId && item.package_id === selected.packageId);
 
   const risks = asArray<{ risks?: RetentionRisk[] }>(assistant.risk_map).flatMap((stage) =>
     asArray<RetentionRisk>(stage.risks),
@@ -100,13 +136,9 @@ export function AngleStage({
 
         <Panel
           icon={UserPen}
-          iconTone={enteredAngle ? "ok" : "neutral"}
+          iconTone={angleSource.tone === "ok" ? "ok" : "neutral"}
           title="Creator brief angle"
-          aside={
-            <EvidenceChip tone={enteredAngle ? "ok" : "warn"}>
-              {enteredAngle ? "Creator-entered" : "Inferred"}
-            </EvidenceChip>
-          }
+          aside={<EvidenceChip tone={angleSource.tone}>{angleSource.label}</EvidenceChip>}
         >
           <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
             {displayValue(brief.unique_angle)}
@@ -118,7 +150,7 @@ export function AngleStage({
           iconTone={publicCount ? "info" : "neutral"}
           title="Public context"
           aside={
-            <EvidenceChip tone={publicCount ? "info" : "warn"}>
+            <EvidenceChip tone={publicCount ? "info" : "neutral"}>
               {publicCount ? "Public observation" : "Unavailable"}
             </EvidenceChip>
           }
@@ -130,6 +162,8 @@ export function AngleStage({
           </p>
         </Panel>
       </div>
+
+      <PacingPanel pacing={data.pacing_analysis} />
 
       <Panel
         icon={HeartPulse}
@@ -156,26 +190,48 @@ export function AngleStage({
                 icon={Wand2}
                 value={
                   opening.score === null || opening.score === undefined
-                    ? "Unavailable"
+                    ? UNAVAILABLE
                     : `${formatNumber(opening.score)} / 100`
                 }
-                caption={`Clarity: ${displayValue(opening.clarity)} · Specificity: ${displayValue(opening.specificity)}. Not measured retention.`}
+                caption={`Clarity: ${words(opening.clarity)} · Specificity: ${words(opening.specificity)}. Not measured retention.`}
                 tone="warn"
                 toneLabel="Heuristic"
               />
               <StatCard
                 label="First frame"
                 icon={Eye}
-                value={displayValue(frame.readability)}
-                caption={`${displayValue(frame.text_word_count)} words · one-read estimate ${displayValue(frame.estimated_single_read_seconds)}s`}
-                tone={frame.status === "unavailable" ? "warn" : "ok"}
-                toneLabel={frame.status === "unavailable" ? "Unavailable" : "Supplied"}
+                value={frame.status === "available" ? words(frame.readability) : UNAVAILABLE}
+                caption={
+                  frame.status === "available"
+                    ? caption(
+                        [
+                          wordCount(frame.text_word_count),
+                          secondsText(frame.estimated_single_read_seconds)
+                            ? `one-read estimate ${secondsText(frame.estimated_single_read_seconds)}`
+                            : null,
+                        ],
+                        "No on-screen text was counted.",
+                      )
+                    : // Why it wasn't analysed, in the backend's words (a plain script has no first frame).
+                      displayValue(frame.reason, "No first-frame analysis was returned for this run.")
+                }
+                tone={frameChip.tone}
+                toneLabel={frameChip.label}
               />
               <StatCard
                 label="Pacing"
                 icon={AudioWaveform}
-                value={displayValue(pacing.format_assessment)}
-                caption={`${displayValue(pacing.word_count)} words · est. speech ${displayValue(pacing.estimated_spoken_seconds)}s · timing ${displayValue(pacing.timing_confidence)}`}
+                value={words(pacing.format_assessment)}
+                caption={caption(
+                  [
+                    wordCount(pacing.word_count),
+                    secondsText(pacing.estimated_spoken_seconds)
+                      ? `est. speech ${secondsText(pacing.estimated_spoken_seconds)}`
+                      : null,
+                    pacing.timing_confidence ? `timing ${words(pacing.timing_confidence).toLowerCase()}` : null,
+                  ],
+                  "No pacing figures were returned for this run.",
+                )}
                 tone="warn"
                 toneLabel="Heuristic"
               />
@@ -185,31 +241,35 @@ export function AngleStage({
                 value={
                   quote.status === "available"
                     ? `${displayValue(quote.word_count)} words`
-                    : "Unavailable"
+                    : UNAVAILABLE
                 }
                 caption={
                   quote.status === "available"
-                    ? `Exact text preserved: ${displayValue(quote.exact_text_preserved_on_screen)} · attribution ${displayValue(quote.attribution)}`
+                    ? `Exact text preserved on screen: ${words(quote.exact_text_preserved_on_screen)} · attribution ${words(quote.attribution).toLowerCase()}`
                     : displayValue(quote.reason)
                 }
-                tone={quote.status === "available" ? "ok" : "warn"}
-                toneLabel={quote.status === "available" ? "Supplied" : "Unavailable"}
+                tone={quoteChip.tone}
+                toneLabel={quoteChip.label}
               />
               <StatCard
                 label="Selected package alignment"
                 icon={ScanText}
                 value={selected ? selected.label : "No selection"}
-                caption={`Status: ${displayValue(alignment?.status)} · similarity ${displayValue(alignment?.opening_similarity)}. Text alignment, not viewer behaviour.`}
+                caption={
+                  selected
+                    ? `Status: ${words(alignment?.status)} · similarity ${words(alignment?.opening_similarity).toLowerCase()}. Text alignment, not viewer behaviour.`
+                    : "Select a package to see how its opening lines up with the script."
+                }
                 tone="warn"
                 toneLabel="Heuristic"
               />
               <StatCard
                 label="Post-publish learning"
                 icon={TrendingUp}
-                value={displayValue(learning.status)}
-                caption={`${displayValue(learning.message, "")} Sample ${formatNumber(learning.sample_size ?? 0)} of ${formatNumber(learning.minimum_samples ?? 0)}.`}
-                tone={learning.learning_allowed ? "info" : "warn"}
-                toneLabel={learning.learning_allowed ? "Post-publish" : "Unavailable"}
+                value={words(learning.status)}
+                caption={`${displayValue(learning.message, "")} Sample ${formatNumber(learning.sample_size)} of ${formatNumber(learning.minimum_samples)}.`}
+                tone={learning.learning_allowed ? "info" : "neutral"}
+                toneLabel={learning.learning_allowed ? "Post-publish" : "Not enough evidence"}
               />
             </div>
 
@@ -229,7 +289,7 @@ export function AngleStage({
                       <Inset>
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-[0.8125rem] font-medium text-foreground">
-                            {displayValue(risk.stage)} · {displayValue(risk.risk_code)}
+                            {words(risk.stage)} · {words(risk.risk_code)}
                           </p>
                           <EvidenceChip tone={severityTone(risk.severity)}>
                             {String(risk.severity ?? "review").toUpperCase()}
@@ -273,7 +333,7 @@ export function AngleStage({
                         {displayValue(row.recommendation)}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Priority: {displayValue(row.priority)} · Heuristic · no performance guarantee
+                        Priority: {words(row.priority)} · Heuristic · no performance guarantee
                       </p>
                     </Inset>
                   ))
@@ -291,7 +351,7 @@ export function AngleStage({
                   alternatives.map((row, index) => (
                     <Inset key={index}>
                       <p className="text-[0.8125rem] font-medium text-foreground">
-                        {displayValue(row.alternative_code)}
+                        {words(row.alternative_code)}
                       </p>
                       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                         {displayValue(row.structure)}

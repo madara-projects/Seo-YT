@@ -30,8 +30,6 @@ from functools import lru_cache
 from typing import Iterable
 
 TAMIL_RE = re.compile(r"[஀-௿]")
-_TAMIL_WORD_RE = re.compile(r"[஀-௿]+")
-_LATIN_WORD_RE = re.compile(r"[a-z0-9]+")
 
 _PULLI = "்"
 
@@ -150,9 +148,3 @@ def phonetic_match(word: str, source_keys: set[str]) -> bool:
     if key in source_keys:
         return True
     return len(key) >= 4 and any(candidate.startswith(key) for candidate in source_keys)
-
-
-def latin_gloss_tokens(text: object) -> list[str]:
-    """Latin rendering of each Tamil word in the text, for token-level matching."""
-
-    return [tamil_to_latin(word) for word in _TAMIL_WORD_RE.findall(str(text or ""))]

@@ -8,11 +8,12 @@ or result phrase directly into a package.
 
 from __future__ import annotations
 
-import json
 import re
-from collections import Counter
 from typing import Any, Iterable
 
+from win_engine.analysis.semantic_research import fallback_viewer_intent
+from win_engine.analysis.text_tokens import unicode_words
+from win_engine.analysis.transliteration import has_tamil, phonetic_keys, phonetic_match
 from win_engine.llm import gemini_client
 
 
@@ -24,7 +25,8 @@ _ALLOWED_INTENTS = {
 _GENERIC = {"video", "videos", "youtube", "short", "shorts", "quote", "quotes", "viral", "trending"}
 _INTENT_WORDS = {"how", "to", "cope", "coping", "dealing", "deal", "feeling", "feel", "signs", "recognizing", "understanding", "overcoming", "healing", "from", "with", "after", "why"}
 _UNSUPPORTED_SPECIFIERS = {"childhood", "chronic", "clinical", "diagnosis", "disorder", "trauma", "abuse", "neglect", "neurological", "medical", "therapy", "ghosting", "workplace", "school", "college", "family", "parent", "friend", "friends", "partner", "relationship", "marriage", "social", "group", "groups"}
-_UNSUPPORTED_ADJACENT_CONTEXT = {"gaming", "performance", "region", "choosing", "correct", "best", "recommendation"}
+# Also applied by keyword_research to tag candidates.
+UNSUPPORTED_ADJACENT_CONTEXT = {"gaming", "performance", "region", "choosing", "correct", "best", "recommendation"}
 _GROUNDING_STOP = _GENERIC | _INTENT_WORDS | {"a", "an", "and", "the", "of", "in", "on", "for", "someone", "people", "person", "video", "short"}
 
 
@@ -76,10 +78,13 @@ def discover_search_opportunities(
     raw = gemini_client.generate(
         prompt=prompt,
         system="You are a careful semantic search-research analyst. Return compact valid JSON only.",
-        max_tokens=650,
+        # Six opportunities with reasons can take about 800 tokens of JSON
+        # before a thinking model's reasoning tokens, so 650 cut replies off.
+        max_tokens=2000,
         temperature=0.15,
+        purpose="research",
     )
-    parsed = _parse(raw)
+    parsed = gemini_client.parse_json_object(raw)
     if parsed is None:
         base["status"] = "provider_invalid"
         return base
@@ -102,23 +107,6 @@ def discover_search_opportunities(
         "rejected_count": rejected,
     })
     return base
-
-
-def _parse(raw: str) -> dict[str, Any] | None:
-    if not raw:
-        return None
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            return None
-        try:
-            value = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return value if isinstance(value, dict) else None
 
 
 def _validated(item: Any, titles: list[str], descriptions: list[str], anchors: set[str]) -> dict[str, Any] | None:
@@ -184,39 +172,29 @@ def _creator_support(concept: str, anchors: set[str]) -> tuple[int, str]:
     words = [word for word in _words(concept) if word not in _GROUNDING_STOP]
     if not words or any(word in _UNSUPPORTED_SPECIFIERS and word not in anchors for word in words):
         return 0, "unsupported specific context"
-    if any(word in _UNSUPPORTED_ADJACENT_CONTEXT and word not in anchors for word in words):
+    if any(word in UNSUPPORTED_ADJACENT_CONTEXT and word not in anchors for word in words):
         return 0, "unsupported adjacent context"
-    matched = len(set(words) & anchors)
-    ratio = matched / len(set(words))
+    word_set = set(words)
+    matched = word_set & anchors
+    if any(has_tamil(anchor) for anchor in anchors):
+        # Gemini answers a Tamil source in English or Tanglish: "chettinad
+        # biryani" is grounded in செட்டிநாடு பிரியாணி. Latin-only sources keep
+        # literal matching, where sound-alikes would pass as support.
+        keys = phonetic_keys(anchors)
+        matched |= {word for word in word_set if phonetic_match(word, keys)}
+    ratio = len(matched) / len(word_set)
     if ratio >= 1.0:
         return 100, "direct creator-source support"
-    # Explicit semantic bridges are narrow and reflect a relationship already
-    # stated by the source, rather than an external use case from research.
-    word_set = set(words)
-    if {"tcp", "udp", "connection"} & anchors and word_set <= {"tcp", "udp", "connection", "oriented", "connectionless"}:
-        return 80, "network connection semantic bridge"
-    if {"mechanical", "membrane", "keyboard"} & anchors and word_set <= {"mechanical", "membrane", "keyboard", "tactile", "typing", "quiet", "quieter"}:
-        return 80, "keyboard comparison semantic bridge"
+    # Support is the share of the concept the source contains; word lists
+    # written for two test scripts (tcp/udp, keyboards) are not evidence.
     return int(round(ratio * 100)), "partial creator-source overlap"
-
-
-def _creator_grounded(concept: str, anchors: set[str]) -> bool:
-    """Compatibility predicate retained for callers/tests outside this module."""
-    return _creator_support(concept, anchors)[0] >= 70
 
 
 def _intent(semantic: dict[str, Any], script: str) -> str:
     value = semantic.get("viewer_intent") or semantic.get("intent")
     if value:
         return _normalize_intent(value, "emotional_relatable")
-    text = script.casefold()
-    if re.search(r"\b(?:how to|tutorial|guide|steps?)\b", text):
-        return "how_to"
-    if re.search(r"\b(?:why|what is|explained)\b", text):
-        return "explanation"
-    if re.search(r"\b(?:news|today|latest|breaking)\b", text):
-        return "current_event"
-    return "emotional_relatable" if re.search(r"\b(?:feel|heart|miss|lonely|love|quote)\b", text) else "informational"
+    return fallback_viewer_intent(script)
 
 
 def _normalize_intent(value: Any, fallback: str) -> str:
@@ -244,7 +222,9 @@ def _clean(value: Any) -> str:
 
 
 def _words(value: Any) -> list[str]:
-    return re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", _clean(value).casefold())
+    # An ASCII-only pattern gave a Tamil source no anchors at all, so every
+    # opportunity was rejected and the Gemini call was always wasted.
+    return unicode_words(str(value or "").replace("_", " "))
 
 
 def _slug(value: Any) -> str:

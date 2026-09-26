@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import unicodedata
+from collections import Counter
 from typing import Any
 
 
@@ -9,20 +11,30 @@ def build_language_strategy(script: str, context: dict[str, Any] | None = None) 
     context = context or {}
     lowered = script.lower()
     hindi_markers = [" hai ", " kya ", " kaise ", " aur ", " karna ", " nahi ", " kyun "]
-    spanish_markers = [" como ", " porque ", " canal ", " crecer ", " video "]
+    # Spanish-only words: " video " and " canal " are English too, so three
+    # mentions of "video" made an English script "spanish_like".
+    spanish_markers = [" como ", " porque ", " crecer ", " para ", " pero ", " muy ", " también ", " cómo ", " qué "]
     tanglish_markers = [" da ", " pa ", " illa ", " macha ", " semma ", " vera level ", " podu ", " ah "]
-    non_ascii_count = sum(1 for char in script if ord(char) > 127)
     normalized = f" {lowered} "
     selected_language = str(context.get("language", "")).strip().lower()
     region = str(context.get("region", "")).strip() or "Global"
     audience_type = str(context.get("audience_type", "")).strip() or "General"
     tanglish_score = sum(normalized.count(token) for token in tanglish_markers)
+    script_name = _dominant_script(script)
 
     if selected_language in {"english", "tamil"}:
         primary_language = selected_language
-    elif tanglish_score >= 2 and non_ascii_count == 0:
+    # The writing system decides first. Counting any non-ASCII character
+    # called Tamil script, and English with curly quotes or an emoji, Hindi.
+    elif script_name == "tamil":
+        primary_language = "tamil"
+    elif script_name == "devanagari":
+        primary_language = "hinglish_or_hindi"
+    elif script_name == "other":
+        primary_language = "unknown"
+    elif tanglish_score >= 2:
         primary_language = "tanglish"
-    elif non_ascii_count > 3 or sum(normalized.count(token) for token in hindi_markers) >= 3:
+    elif sum(normalized.count(token) for token in hindi_markers) >= 3:
         primary_language = "hinglish_or_hindi"
     elif sum(normalized.count(token) for token in spanish_markers) >= 3:
         primary_language = "spanish_like"
@@ -52,6 +64,20 @@ def build_language_strategy(script: str, context: dict[str, Any] | None = None) 
         "emotional_triggers": emotional_triggers,
         "packaging_style": packaging_style,
     }
+
+
+def _dominant_script(text: str) -> str:
+    """The writing system with the most letters: latin, tamil, devanagari or other."""
+
+    counts: Counter[str] = Counter()
+    for char in text:
+        if "\u0b80" <= char <= "\u0bff":
+            counts["tamil"] += 1
+        elif "\u0900" <= char <= "\u097f":
+            counts["devanagari"] += 1
+        elif char.isalpha():
+            counts["latin" if unicodedata.name(char, "").startswith("LATIN") else "other"] += 1
+    return counts.most_common(1)[0][0] if counts else "latin"
 
 
 def _regional_bias(region: str, audience_type: str) -> dict[str, Any]:

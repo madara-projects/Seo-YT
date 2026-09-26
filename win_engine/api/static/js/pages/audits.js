@@ -10,6 +10,32 @@ const comparisonText = (item) => {
   const text = Array.isArray(item) ? item.join(", ") : value(item);
   return text.length > 110 ? `${text.slice(0, 107)}...` : text;
 };
+// The backend compares each field as exact_match, changed, missing, unknown, or unavailable.
+const FIELD_TONES = { exact_match: "ok", changed: "warn", missing: "warn" };
+
+function metadataVerdict(comparisons) {
+  const states = comparisons.map((item) => item.generated_to_published);
+  if (!states.length || states.every((state) => state === "unavailable")) {
+    return { label: "PUBLISHED DATA UNAVAILABLE", tone: "", text: "The title, description, tags, and hashtags on YouTube were not captured for this audit, so nothing was compared. Refresh data to capture them." };
+  }
+  if (states.every((state) => state === "exact_match")) {
+    return { label: "MATCHES SAVED PACKAGE", tone: "ok", text: "The title, description, tags, and hashtags currently on YouTube match the saved generated package." };
+  }
+  // Only "changed" is a difference (as in the server's findings). A value empty on
+  // one side, or one that could not be read, is named separately and never counted.
+  const fields = (...wanted) => comparisons.filter((item) => wanted.includes(item.generated_to_published)).map((item) => item.field);
+  const changed = fields("changed");
+  const missing = fields("missing");
+  const unknown = fields("unknown", "unavailable");
+  const notes = (missing.length ? ` Empty on one side: ${missing.join(", ")}.` : "") +
+    (unknown.length ? ` Could not be compared: ${unknown.join(", ")}.` : "");
+  if (!changed.length) {
+    return fields("exact_match").length
+      ? { label: "NO DIFFERENCES FOUND", tone: "", text: `The values that could be compared match the saved generated package.${notes}` }
+      : { label: "NOT COMPARED", tone: "", text: `No value could be compared with the saved generated package.${notes}` };
+  }
+  return { label: "DIFFERENCES FOUND", tone: "warn", text: `The published values below differ from the saved generated package in: ${changed.join(", ")}.${notes}` };
+}
 
 function auditCards(items) {
   if (!items.length) {
@@ -59,7 +85,7 @@ function fieldRows(comparisons, hasSelection) {
       <td><strong>${esc(item.field)}</strong></td>
       <td title="${esc(Array.isArray(item.generated) ? item.generated.join(", ") : value(item.generated))}">${esc(comparisonText(item.generated))}</td>
       <td title="${esc(Array.isArray(item.published) ? item.published.join(", ") : value(item.published))}">${esc(comparisonText(item.published))}</td>
-      <td>${chip(stateLabel(item.generated_to_published), item.generated_to_published === "match" ? "ok" : "warn")}</td>
+      <td>${chip(stateLabel(item.generated_to_published), FIELD_TONES[item.generated_to_published] || "")}</td>
       ${hasSelection ? `<td title="${esc(Array.isArray(item.selected) ? item.selected.join(", ") : value(item.selected))}">${esc(comparisonText(item.selected))}</td>` : ""}
     </tr>`).join("");
 }
@@ -77,8 +103,9 @@ function renderAudit(audit, versions) {
   const observed = audit.observed_performance || {};
   const comparisons = arr(audit.comparisons);
   const hasSelection = comparisons.some((item) => item.selected !== null && item.selected !== undefined && item.selected !== "");
-  const metadataMatches = comparisons.length > 0 && comparisons.every((item) => item.generated_to_published === "match");
+  const verdict = metadataVerdict(comparisons);
   const mature = observed.maturity === "mature_observation";
+  const learningAllowed = audit.evidence?.cohort?.learning_allowed === true;
 
   $("auditDetail").innerHTML = `
     <header class="audit-detail-header"><div class="eyebrow">PUBLISHED VIDEO AUDIT</div>
@@ -94,8 +121,8 @@ function renderAudit(audit, versions) {
     </div>
     <div id="auditActionStatus" class="metric-sub" aria-live="polite"></div>
 
-    <section class="audit-section"><h3 class="audit-section-heading">Metadata check ${chip(metadataMatches ? "MATCHES SAVED PACKAGE" : "DIFFERENCES FOUND", metadataMatches ? "ok" : "warn")}</h3>
-    <p class="audit-evidence-note">${metadataMatches ? "The title, description, tags, and hashtags currently on YouTube match the saved generated package." : "The published values below differ from the saved generated package."}${hasSelection ? " A creator-selected package was recorded and is shown in the final column." : " No creator-selected package was recorded, so the comparison uses the saved generated package."}</p>
+    <section class="audit-section"><h3 class="audit-section-heading">Metadata check ${chip(verdict.label, verdict.tone)}</h3>
+    <p class="audit-evidence-note">${esc(verdict.text)}${hasSelection ? " A creator-selected package was recorded and is shown in the final column." : " No creator-selected package was recorded, so the comparison uses the saved generated package."}</p>
     <div class="phase8-table-wrap">
       <table class="history-table audit-comparison-table">
         <thead>
@@ -136,7 +163,7 @@ function renderAudit(audit, versions) {
       <div class="audit-findings">
         ${arr(audit.findings).map((item) => `<div class="audit-finding"><strong>${esc(stateLabel(item.severity))} / ${esc(item.code)}</strong><span>${esc(item.explanation)} ${esc(item.recommended_interpretation || "")}</span></div>`).join("")}
       </div>
-      <p class="metric-sub">${num(audit.evidence?.snapshot_count)} snapshots / ${num(audit.evidence?.mature_window_count)} mature windows / ${num(versions?.length)} saved audit version(s). Learning status: ${mature ? "COLLECTING COMPARABLE EVIDENCE" : "INSUFFICIENT EVIDENCE"}.</p>
+      <p class="metric-sub">${num(audit.evidence?.snapshot_count)} snapshots / ${num(audit.evidence?.mature_window_count)} mature windows / ${num(versions?.length)} saved audit version(s). Learning status: ${mature && learningAllowed ? "MATURE COMPARABLE EVIDENCE" : mature ? "COLLECTING COMPARABLE EVIDENCE" : "INSUFFICIENT EVIDENCE"}.</p>
     </details>`;
 }
 

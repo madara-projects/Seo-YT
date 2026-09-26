@@ -10,7 +10,11 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-from win_engine.analysis.generation_quality import normalize_unicode, title_similarity, unicode_words
+from win_engine.analysis.generation_quality import title_similarity
+from win_engine.analysis.numbers import optional_number
+from win_engine.analysis.source_cues import is_short_video, source_quote
+from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
+from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES
 
 
 RULE_VERSION = "phase5-v1"
@@ -32,7 +36,6 @@ _PAYOFF_MARKERS = re.compile(
     re.IGNORECASE,
 )
 _VOICE_MARKERS = re.compile(r"\b(?:voice[- ]?over|narrat(?:e|ed|ion)|listen|I say|spoken)\b", re.IGNORECASE)
-_SHORT_FORMATS = {"short", "shorts", "youtube_shorts", "quote", "reel", "reels"}
 
 
 def analyze_retention_assistant(
@@ -48,23 +51,21 @@ def analyze_retention_assistant(
     brief = creator_brief or {}
     source = normalize_unicode(script or brief.get("content"))
     provenance = brief.get("field_provenance") if isinstance(brief.get("field_provenance"), dict) else {}
-    exact_quote = normalize_unicode(brief.get("exact_quote") or _extract_quote(source))
+    exact_quote = source_quote(source, brief)
     on_screen_text = normalize_unicode(brief.get("on_screen_text") or exact_quote)
     visual = normalize_unicode(brief.get("visual_requirements"))
     voice_over = normalize_unicode(brief.get("voice_over")).casefold() or "unknown"
     topic = normalize_unicode(brief.get("topic"))
     promise = normalize_unicode(brief.get("viewer_promise"))
     claims = normalize_unicode(brief.get("factual_claims"))
-    duration = _number(brief.get("duration_seconds"))
-    video_format = normalize_unicode(brief.get("video_format")).casefold()
-    is_short = video_format in _SHORT_FORMATS or bool(re.search(r"\b(?:shorts?|reels?)\b", source, re.IGNORECASE))
+    duration = optional_number(brief.get("duration_seconds"))
+    is_short = is_short_video(source, brief)
 
     if not source:
         return _unavailable_result(retention_learning)
 
     words = unicode_words(source)
     opening = _opening_text(source)
-    opening_words = unicode_words(opening)
     package_list = [item for item in (packages or []) if isinstance(item, dict)]
 
     hook = _analyze_hook(
@@ -165,7 +166,6 @@ def _analyze_hook(
     lowered = opening.casefold()
     opening_terms = set(unicode_words(opening))
     topic_terms = set(unicode_words(topic))
-    promise_terms = set(unicode_words(promise))
     subject_clear = bool(topic_terms & opening_terms) if topic_terms else len(opening_terms) >= 3
     specificity = bool(re.search(r"\b\d+(?:\.\d+)?\b", opening)) or len(opening_terms) >= 6
     curiosity = "?" in opening or bool(re.search(r"\b(?:why|how|but|until|what|never|instead)\b", lowered))
@@ -435,7 +435,7 @@ def _normalize_learning(value: dict[str, Any] | None) -> dict[str, Any]:
         return {
             "status": "insufficient_evidence", "learning_allowed": False,
             "sample_size": int(learning.get("sample_size") or 0),
-            "minimum_samples": int(learning.get("minimum_samples") or 5),
+            "minimum_samples": int(learning.get("minimum_samples") or EARLY_SIGNAL_MIN_SAMPLES),
             "confidence": learning.get("confidence_label") or "Collecting evidence",
             "patterns": [],
             "message": learning.get("message") or "Insufficient mature comparable retention evidence; no winning hook or pacing pattern is claimed.",
@@ -444,7 +444,7 @@ def _normalize_learning(value: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "status": "observed_correlations", "learning_allowed": True,
         "sample_size": int(learning.get("sample_size") or 0),
-        "minimum_samples": int(learning.get("minimum_samples") or 5),
+        "minimum_samples": int(learning.get("minimum_samples") or EARLY_SIGNAL_MIN_SAMPLES),
         "confidence": learning.get("confidence_label") or "Early signal",
         "snapshot_window": learning.get("snapshot_window"),
         "patterns": list(learning.get("patterns") or []),
@@ -506,24 +506,8 @@ def _opening_text(source: str) -> str:
     return " ".join(words[:60])
 
 
-def _extract_quote(source: str) -> str:
-    matches = re.findall(r'["\u201c]([^"\u201c\u201d]{6,})["\u201d]', source)
-    if not matches:
-        matches = re.findall(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", source)
-    return max((normalize_unicode(item) for item in matches), key=len, default="")
-
-
 def _reading_seconds(word_count: int) -> float:
     return round(max(1.0, word_count / 2.8), 1)
-
-
-def _number(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _repeated_sentences(source: str) -> list[str]:

@@ -18,6 +18,7 @@ function statusChip(status) {
 function renderIdeaList(data) {
   const root = $("ideasList");
   if (!root) return;
+  root.style.color = "";
   const ideas = arr(data.ideas);
   ideaState.total = Number(data.total || 0);
   $("ideasCount").textContent = `${ideaState.total} saved idea${ideaState.total === 1 ? "" : "s"}`;
@@ -85,6 +86,8 @@ function evidenceCard(idea) {
 function renderIdeaDetail(idea) {
   const root = $("ideaDetail");
   if (!root) return;
+  // An earlier load error colored the container; this render is a success.
+  root.style.color = "";
   ideaState.selectedId = idea.id;
   const linked = Boolean(idea.published_video_link_id);
   const archived = idea.status === "archived";
@@ -143,7 +146,7 @@ function renderIdeaDetail(idea) {
       <button type="button" class="btn btn-primary" data-idea-action="generate" ${archived || idea.status === "published" ? "disabled" : ""}>Generate package</button>
       ${generated ? `<button type="button" class="btn" data-idea-action="history">Open package in History</button>` : ""}
       ${idea.status === "idea" ? `<button type="button" class="btn" data-idea-action="scripted">Mark scripted</button>` : ""}
-      ${idea.status !== "archived" && idea.status !== "published" ? `<button type="button" class="btn" data-idea-action="published" ${linked ? "" : "disabled title='Link the generated History package to an owned YouTube video first.'"}>Mark published</button>` : ""}
+      ${idea.status !== "archived" && idea.status !== "published" ? `<button type="button" class="btn" data-idea-action="published" ${linked ? "" : 'disabled title="Link the generated History package to an owned YouTube video first."'}>Mark published</button>` : ""}
       ${archived ? `<button type="button" class="btn" data-idea-action="restore">Restore idea</button>` : `<button type="button" class="btn" data-idea-action="archive">Archive</button>`}
     </div>
     <p class="metric-sub">Publishing remains manual in YouTube Studio. Mark published is enabled only after the generated package is linked to a verified owned video.</p>`;

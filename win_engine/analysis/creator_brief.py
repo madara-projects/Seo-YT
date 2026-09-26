@@ -5,6 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from win_engine.analysis.source_cues import (
+    SHORTS_MAX_SECONDS,
+    extract_quote,
+    is_short_video,
+    labelled_visual,
+    looks_like_standalone_quote,
+    source_quote,
+)
+from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.topic_lock import source_lead_phrase
 
 
@@ -58,8 +67,17 @@ def build_creator_brief(
 
     # A bare emotional line over a described background is a quote Short even
     # without quotation marks; it used to be read as a talking-head video.
-    standalone_quote = not exact_quote.strip() and _looks_like_standalone_quote(script_text, visual_requirements)
-    is_quote_or_short = standalone_quote or mentions("quote", "quotes", "betrayal", "shorts", "reels", "sunset", "aesthetic", "motivation", "motivational", "life lesson") or (len(script_text) < 250 and '"' in script_text)
+    standalone_quote = not exact_quote.strip() and looks_like_standalone_quote(script_text, visual_requirements)
+    # Only explicit cues infer a Short: a stated length of three minutes or less,
+    # the platform's words ("#shorts", "YouTube Short", "reels"), a standalone
+    # quote, or the creator calling the text a quote. "sunset", "aesthetic",
+    # "motivation" or a quoted `"Error 404"` described a travel vlog, a talk or
+    # a tutorial as often as a Short, and made them Shorts.
+    stated_long_form = duration_seconds is not None and duration_seconds > SHORTS_MAX_SECONDS
+    cue_brief = {"content": script_text, "duration_seconds": duration_seconds, "visual_requirements": visual_requirements}
+    is_quote_or_short = not stated_long_form and (
+        is_short_video(script_text, cue_brief) or mentions("quote", "quotes")
+    )
 
     auto_format = video_format.strip()
     if not auto_format:
@@ -72,12 +90,15 @@ def build_creator_brief(
         else:
             auto_format = "talking_head"
 
-    extracted_quote = exact_quote.strip() or _extract_quote(script_text)
+    # A quoted span is the mandatory quote only when it is labelled or the video
+    # is a quote Short; in a tutorial `click "Save changes"` names a button.
+    quote_short = is_short_video(script_text, {**cue_brief, "video_format": auto_format})
+    extracted_quote = exact_quote.strip() or extract_quote(script_text, short=quote_short)
     if not extracted_quote and standalone_quote:
         extracted_quote = re.sub(r"\s+", " ", script_text).strip(" \t\r\n\"'“”‘’")
     extracted_on_screen = on_screen_text.strip() or extracted_quote
     inferred_duration = duration_seconds if duration_seconds is not None else _extract_duration(script_text)
-    inferred_visual = visual_requirements.strip() or _extract_visual_requirement(script_text)
+    inferred_visual = visual_requirements.strip() or labelled_visual(script_text)
     inferred_voice = voice_over.strip().lower()
     if not inferred_voice:
         if (
@@ -180,67 +201,14 @@ def build_creator_brief(
     }
 
 
-def _quoted_spans(content: str) -> list[str]:
-    """Return quoted spans, longest first. A closing quote mark is the most reliable
-    end-of-quote signal available, so it is tried before any prose heuristic."""
-
-    matches = re.findall(r'["“]([^"“”\n]{6,})["”]', content or "")
-    if not matches:
-        matches = re.findall(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", content or "")
-    cleaned = [re.sub(r"\s+", " ", value).strip(" .,;:-") for value in matches]
-    return sorted((value for value in cleaned if len(value) >= 6), key=len, reverse=True)
-
-
-def _extract_quote(content: str) -> str:
-    # A quoted span wins outright. The marker branch below captures greedily to the
-    # end of the text under (?is), so on a brief that continues past the quote it
-    # swallows the production notes and publishes them in the description.
-    spans = _quoted_spans(content)
-    if spans:
-        return spans[0]
-
-    marker = re.search(
-        r"(?is)\b(?:the\s+)?(?:quote|on[- ]screen\s+text|screen\s+text)(?:\s+(?:on|in)\s+(?:the\s+)?(?:screen|reel|video))?"
-        r"\s*(?:is|reads?)?\s*[:\-\u2013\u2014]+\s*(.+)",
-        content,
-    )
-    if marker:
-        value = re.split(
-            r"(?is)\s+(?:and\s+)?(?:the\s+)?(?:background(?:\s+of\s+the\s+video)?|"
-            r"background\s+visuals?|visuals?|format|voice[- ]?over|video\s+(?:is|shows?|has))\s*(?:is|are|:|\-)?\s*",
-            marker.group(1),
-            maxsplit=1,
-        )[0]
-        value = re.sub(r"\s+", " ", value).strip(" \t\r\n\"'.,;:-")
-        if value.count('"') % 2:
-            value = value.replace('"', "")
-        if len(value) >= 6:
-            return value
-    return ""
-
-
 def _extract_duration(content: str) -> float | None:
-    match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:second|sec|s)\b", content, re.IGNORECASE)
+    # Units spelled out or as sec/min, singular or plural. The bare "s" and "m"
+    # read "iPhone 5s" as five seconds, while "45 seconds" never matched.
+    match = re.search(r"\b(\d+(?:\.\d+)?)[\s-]*(?:seconds?|secs?)\b", content, re.IGNORECASE)
     if match:
         return float(match.group(1))
-    match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:minute|min|m)\b", content, re.IGNORECASE)
+    match = re.search(r"\b(\d+(?:\.\d+)?)[\s-]*(?:minutes?|mins?)\b", content, re.IGNORECASE)
     return float(match.group(1)) * 60 if match else None
-
-
-def _extract_visual_requirement(content: str) -> str:
-    broad_match = re.search(
-        r"(?is)\b(?:background(?:\s+of\s+the\s+video|\s+visuals?)?|visuals?|"
-        r"video\s+(?:is|shows?|has))\s*(?:is|are|of|:|\-)?\s*(.*?)"
-        r"(?=\s+(?:and|with)\s+.*(?:quote|text|screen)|[.;\n]|$)",
-        content,
-    )
-    if broad_match:
-        return re.sub(r"\s+", " ", broad_match.group(1)).strip(" .")
-    match = re.search(
-        r"(?i)\b(?:background(?:\s+visuals?)?|visuals?)\s*(?:is|are|:)?\s*(.*?)(?=\s+(?:and|with)\s+.*(?:quote|text|screen)|[.;\n]|$)",
-        content,
-    )
-    return re.sub(r"\s+", " ", match.group(1)).strip(" .") if match else ""
 
 
 # Words that cannot end a topic phrase: cutting "... than to be in love" at a
@@ -250,39 +218,6 @@ _TOPIC_TRAILING_WORDS = {
     "than", "that", "which", "who", "if", "when", "as", "be", "is", "are", "was", "were", "been",
     "my", "your", "our", "their", "his", "her", "its", "this", "these", "those", "so", "very", "more",
 }
-# Strong signals that a short line is an emotional quote, and weaker ones that
-# count only alongside a described background visual.
-_STRONG_QUOTE_WORDS = re.compile(
-    r"\b(?:love[sd]?|loving|heart\w*|pain(?:ful)?|hurts?|hurting|cry|crying|tears?|miss(?:ing|ed)?|alone|lonely|"
-    r"loneliness|silence|silent|trust|betray\w*|soul|broken|forgive\w*|regrets?|memories|sad(?:ness)?|"
-    r"happiness|heal\w*|goodbye|forget|forgotten|deserve[sd]?)\b",
-    re.IGNORECASE,
-)
-_WEAK_QUOTE_WORDS = re.compile(
-    r"\b(?:never|forever|always|nothing|everything|someone|people|life|hope|dreams?|peace|strong|strength|"
-    r"destiny|fate|karma|respect|feel(?:ings?)?|world)\b",
-    re.IGNORECASE,
-)
-# Video narration, not a quote. "We accept the love we think we deserve" is a
-# quote; "we hiked to Top Station" is a vlog, so only narrated past actions count.
-_NARRATION_CUES = re.compile(
-    r"\b(?:in this (?:video|short|vlog|episode)|today i|i will|we will|let me|i'?m going to|subscribe|how to|"
-    r"step|steps|tutorial|recipe|ingredients|review|unboxing|price|buy|download|link in|watch till|"
-    r"we\s+(?:\w+ed|went|made|had|tried|got|took|spent|did|bought|found|saw|came))\b",
-    re.IGNORECASE,
-)
-
-
-def _looks_like_standalone_quote(text: str, visual_requirements: str = "") -> bool:
-    """A short emotional line with no video narration: the text of a quote Short."""
-
-    words = re.findall(r"[^\W_]+(?:['\u2019][^\W_]+)?", text or "", re.UNICODE)
-    sentences = [part for part in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if part]
-    if not 5 <= len(words) <= 45 or len(sentences) > 3 or _NARRATION_CUES.search(text or ""):
-        return False
-    if _STRONG_QUOTE_WORDS.search(text or ""):
-        return True
-    return bool(visual_requirements.strip()) and bool(_WEAK_QUOTE_WORDS.search(text or ""))
 
 
 def _clean_topic_phrase(words: list[str], limit: int) -> str:
@@ -292,18 +227,30 @@ def _clean_topic_phrase(words: list[str], limit: int) -> str:
     return " ".join(words).strip()
 
 
+def _phrase_words(text: str) -> list[str]:
+    """Casefolded words in order, one-letter words ("I", "a") included.
+
+    The old ``[^\\W_]+`` pattern split Tamil at every vowel sign, so a Tamil
+    quote became letter fragments. unicode_words keeps those words whole but
+    drops one-letter words, which a readable topic phrase needs.
+    """
+
+    return [
+        word.casefold()
+        for chunk in text.split()
+        for word in (unicode_words(chunk) or re.findall(r"[^\W_]", chunk))
+    ]
+
+
 def _infer_topic(content: str, quote: str) -> str:
     if quote:
         sentence = re.split(r"(?<=[.!?])\s+|\.{2,}|[;\u2013\u2014]", quote, maxsplit=1)[0]
-        words = re.findall(r"[^\W_]+(?:['\u2019][^\W_]+)?", sentence, re.UNICODE)
-        natural = _clean_topic_phrase(words, 12)
+        natural = _clean_topic_phrase(_phrase_words(sentence), 12)
         if natural:
             return natural.casefold()
     source = quote or content
-    words = [
-        word.casefold() for word in re.findall(r"[^\W_]+(?:['’][^\W_]+)?", source, re.UNICODE)
-        if len(word) > 2 and word.casefold() not in _TOPIC_STOPWORDS
-    ]
+    # Tamil words stay whole; the old pattern left a Tamil script no topic.
+    words = [word for word in unicode_words(source) if len(word) > 2 and word not in _TOPIC_STOPWORDS]
     return " ".join(words[:8])
 
 
@@ -318,17 +265,14 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
     content = str(brief.get("content") or "").strip()
     # The structured quote fields are more reliable than trying to recover a
     # quote from free-form production directions. A creator can write
-    # ``quote is: ...`` without surrounding punctuation in ``content``.
-    explicit_quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip()
-    quote_match = None if explicit_quote else re.search(r'["“”]([^"“”]{6,})["“”]', content)
-    if not explicit_quote and not quote_match:
-        quote_match = re.search(r"(?<![A-Za-z])'([^'\n]{6,})'(?![A-Za-z])", content)
-    if explicit_quote or quote_match:
+    # ``quote is: ...`` without surrounding punctuation in ``content``. A quoted
+    # button name in a tutorial (`click "Save changes"`) is not a quote.
+    quote_text = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip() or source_quote(content, brief)
+    if quote_text:
         # Keep a grammatical phrase instead of deleting stopwords and turning a
         # quote into a non-searchable bag of words (for example, "part always
         # wonder didn least deserve..."). When an ellipsis introduces the key
         # thought, the final clause is normally the useful search phrase.
-        quote_text = explicit_quote or re.sub(r"\s+", " ", quote_match.group(1)).strip()
         clauses = [
             part.strip(" \t\r\n.,;:!?—–-")
             for part in re.split(r"\.{2,}|[;—–]", quote_text)
@@ -350,21 +294,9 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
     )
     clean_content = re.sub(r"(?i)quote\s*on\s*screen:?", "", clean_content)
 
-    # Narrative prose has sentence grammar, not a keyword list.  Taking its
-    # first non-stopwords created title stems such as "used talk every then one".
-    # Keep a few conservative source-faithful narrative concepts intact instead.
-    narrative_context = " ".join(str(brief.get(field) or "") for field in (
-        "creator_intent", "content_constraints", "video_format", "voice_over",
-    )).casefold()
-    lowered = clean_content.casefold()
-    if any(word in narrative_context for word in ("story", "narrative", "cinematic", "reflection")):
-        if "used to talk" in lowered and "conversation" in lowered:
-            return "conversations fade away"
-        if "empty road" in lowered and re.search(r"\b(?:waiting|checking)\b", lowered):
-            return "waiting on an empty road"
-        if "message" in lowered and re.search(r"\b(?:read|reading)\b", lowered):
-            return "a message read ten times"
-
+    # Narrative prose keeps its own grammar through the contiguous lead phrase
+    # below. Phrases written for three test stories ("waiting on an empty road",
+    # "a message read ten times") named topics no creator had written.
     quote_stopwords = _TOPIC_STOPWORDS.union({
         "background", "visuals", "screen", "vertical", "format", "sunset", "beach",
         "calm", "ocean", "waves", "poignant", "aesthetic", "atmospheric", "cinematic",

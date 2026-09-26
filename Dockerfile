@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+# Pinned so a rebuild gets the same interpreter; bump deliberately.
+FROM python:3.11.16-slim
 
 WORKDIR /app
 

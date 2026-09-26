@@ -46,7 +46,7 @@ describe("signal and source wording", () => {
 
 describe("filter labels", () => {
   it("treats a blank filter as any", () => {
-    expect(languageLabel("")).toBe("Any language");
+    expect(languageLabel("")).toBe("English (default)");
     expect(formatLabel(null)).toBe("Any format");
     expect(regionLabel(undefined)).toBe("Any region");
   });

@@ -39,13 +39,3 @@ export function asObject(value: unknown): Record<string, unknown> {
 export function normalizeTitle(value: unknown): string {
   return String(value ?? "").trim().toLocaleLowerCase();
 }
-
-/*
- * Note: there is deliberately no general-purpose date formatter here.
- *
- * A viewer-locale formatter existed and was unused, which made it a trap: the
- * backend's creator timezone defaults to Asia/Kolkata and the saved-package
- * copy says "IST", so formatting a stored timestamp in the viewer's zone
- * silently re-labels it. Use `historyDate` from `lib/historyFormat.ts` for
- * every stored timestamp.
- */

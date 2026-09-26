@@ -2,9 +2,10 @@ import { Check, Layers, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/common/Badge";
 import { CopyButton } from "@/components/common/CopyButton";
-import { EvidenceChip } from "@/components/common/EvidenceChip";
+import { EvidenceChip, type EvidenceTone } from "@/components/common/EvidenceChip";
 import { EmptyState } from "@/components/common/States";
-import { cn, displayValue, formatNumber } from "@/lib/utils";
+import { cn, displayValue } from "@/lib/utils";
+import { titleScoreText } from "@/lib/dashboardFormat";
 import { copyValue } from "@/lib/packages";
 import { ThumbnailMock } from "./ThumbnailMock";
 import type { PackageOption, SelectionStatus } from "@/api/types";
@@ -19,16 +20,52 @@ function Fact({ label, value, note }: { label: string; value: string; note: stri
   );
 }
 
+/** The final quality gate's verdict on a title. "Not evaluated" never reads as a pass. */
+function qualityCheck(status: string): { label: string; tone: EvidenceTone } {
+  switch (status.toLowerCase()) {
+    case "approved":
+      return { label: "Passed quality check", tone: "warn" };
+    case "rejected":
+      return { label: "Failed quality check", tone: "bad" };
+    default:
+      return { label: "Quality not checked", tone: "neutral" };
+  }
+}
+
+const RISK_STYLES: Record<"high" | "low" | "unchecked", { box: string; icon: string; text: string }> = {
+  high: {
+    box: "border-tone-bad-border bg-tone-bad-bg",
+    icon: "text-tone-bad",
+    text: "Misleading-risk check: high. The quality gate found a claim the script doesn't support; rewrite or avoid this title.",
+  },
+  low: {
+    box: "border-tone-warn-border bg-tone-warn-bg",
+    icon: "text-tone-warn",
+    text: "Misleading-risk check: low. This is a generated or local assessment and must be manually reviewed.",
+  },
+  unchecked: {
+    box: "border-border bg-muted/40",
+    icon: "text-muted-foreground",
+    text: "Misleading-risk check: not evaluated. No check ran on this title, so review it yourself before using it.",
+  },
+};
+
+function riskStyle(risk: string) {
+  const key = risk.trim().toLowerCase();
+  return RISK_STYLES[key === "high" || key === "low" ? key : "unchecked"];
+}
+
 export function CompareStage({
   options,
-  selectedId,
+  chosenId,
   selectionStatus,
   onSelect,
 }: {
   options: PackageOption[];
-  selectedId: string | null;
+  /** The explicitly selected option only; none is marked before a choice. */
+  chosenId: string | null;
   selectionStatus: SelectionStatus;
-  onSelect: (packageId: string) => void;
+  onSelect: (optionId: string) => void;
 }) {
   if (!options.length) {
     return (
@@ -41,27 +78,41 @@ export function CompareStage({
   }
 
   return (
-    <div className="space-y-5">
+    <section className="space-y-5" aria-labelledby="compare-heading">
       <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-card sm:flex-row sm:items-center sm:justify-between">
-        <p className="max-w-2xl text-[0.8125rem] leading-relaxed text-muted-foreground">
-          Scores and best-for labels are local heuristics or generated suggestions. They are not
-          measured CTR, reach, or performance predictions.
-        </p>
+        <div className="max-w-2xl space-y-1">
+          <h2 id="compare-heading" className="font-display text-base font-semibold text-foreground">
+            Package options
+          </h2>
+          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
+            Scores and best-for labels are local heuristics or generated suggestions. They are not
+            measured CTR, reach, or performance predictions.
+          </p>
+        </div>
         <EvidenceChip
-          tone={selectionStatus === "error" ? "bad" : selectionStatus === "saved" ? "ok" : "warn"}
+          tone={selectionStatus === "error" ? "bad" : selectionStatus === "saved" ? "ok" : "neutral"}
         >
-          {selectionStatus === "saved" ? "Selection saved" : "Choose to save"}
+          {selectionStatus === "saved"
+            ? "Selection saved"
+            : selectionStatus === "error"
+              ? "Selection not saved"
+              : selectionStatus === "saving"
+                ? "Saving selection"
+                : "Choose to save"}
         </EvidenceChip>
       </div>
 
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {options.map((option) => {
-          const selected = option.id === selectedId;
+          const selected = option.id === chosenId;
+          const recordable = option.packageId !== null;
+          const quality = qualityCheck(option.qualityStatus);
+          const risk = riskStyle(option.misleadingRisk);
           return (
             <article
               key={option.id}
               data-testid="package-option-card"
-              data-package-id={option.id}
+              data-package-id={option.packageId ?? undefined}
               className={cn(
                 "group relative flex flex-col overflow-hidden rounded-2xl bg-card shadow-card transition-shadow",
                 selected
@@ -93,9 +144,12 @@ export function CompareStage({
 
               <div className="flex flex-1 flex-col gap-4 p-4">
                 <div className="space-y-2">
-                  <EvidenceChip tone={option.source === "AI suggestion" ? "info" : "warn"}>
-                    {option.source}
-                  </EvidenceChip>
+                  <div className="flex flex-wrap gap-1.5">
+                    {/* Gemini's or the fallback's writing: generated, never observed. */}
+                    <EvidenceChip tone="warn">{option.source}</EvidenceChip>
+                    <EvidenceChip tone={quality.tone}>{quality.label}</EvidenceChip>
+                    {recordable ? null : <EvidenceChip tone="neutral">Title only</EvidenceChip>}
+                  </div>
                   <h3 className="font-display text-base font-semibold leading-snug text-foreground">
                     {option.title}
                   </h3>
@@ -104,11 +158,7 @@ export function CompareStage({
                 <div className="grid grid-cols-2 gap-3 rounded-xl border border-border/80 bg-elevated p-3">
                   <Fact
                     label="Title quality"
-                    value={
-                      option.titleQualityScore === null
-                        ? "Unavailable"
-                        : `${formatNumber(option.titleQualityScore)} / 10`
-                    }
+                    value={titleScoreText(option.titleQualityScore)}
                     note="Local heuristic"
                   />
                   <Fact label="Approach" value={displayValue(option.approach)} note="Generated" />
@@ -135,12 +185,14 @@ export function CompareStage({
                   </p>
                 </div>
 
-                <p className="mt-auto flex gap-2 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3 py-2.5 text-[0.6875rem] leading-relaxed text-foreground">
-                  <ShieldAlert className="mt-px size-3.5 shrink-0 text-tone-warn" aria-hidden="true" />
-                  <span>
-                    Misleading-risk check: {option.misleadingRisk}. This is a generated or local
-                    assessment and must be manually reviewed.
-                  </span>
+                <p
+                  className={cn(
+                    "mt-auto flex gap-2 rounded-xl border px-3 py-2.5 text-[0.6875rem] leading-relaxed text-foreground",
+                    risk.box,
+                  )}
+                >
+                  <ShieldAlert className={cn("mt-px size-3.5 shrink-0", risk.icon)} aria-hidden="true" />
+                  <span>{risk.text}</span>
                 </p>
               </div>
 
@@ -157,6 +209,8 @@ export function CompareStage({
                   onClick={() => onSelect(option.id)}
                   data-testid={`select-${option.id}`}
                   aria-pressed={selected}
+                  disabled={!recordable}
+                  title={recordable ? undefined : "A title-only alternative has no saved package to record."}
                 >
                   {selected ? "Selected" : "Select"}
                 </Button>
@@ -165,6 +219,6 @@ export function CompareStage({
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }

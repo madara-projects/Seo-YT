@@ -1,38 +1,55 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Eye } from "lucide-react";
 import { PageHeader } from "@/components/common/PageHeader";
 import { WatchAddPanel } from "@/components/watchlist/WatchAddPanel";
 import { WatchDetail } from "@/components/watchlist/WatchDetail";
 import { WatchList, type WatchTab } from "@/components/watchlist/WatchList";
-import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useSelection } from "@/hooks/useSelection";
+import { useUrlState, useUrlTextParam } from "@/hooks/useUrlState";
 import { useWatchChannel, useWatchChannels, useWatchVideo, useWatchVideos } from "@/hooks/useWatchlist";
 import { asArray } from "@/lib/utils";
-import type { WatchChannel, WatchVideo } from "@/api/watchlistTypes";
+import type { WatchChannel, WatchKind, WatchVideo } from "@/api/watchlistTypes";
 
 const KINDS = ["video", "channel"] as const;
 
+/** The state filter's URL form: absent is the default "active", and "" (every state) is "all". */
+function stateFromUrl(value: string): string {
+  return value === "all" ? "" : value === "archived" ? "archived" : "active";
+}
+
+function stateToUrl(state: string): string | null {
+  return state === "" ? "all" : state === "archived" ? "archived" : null;
+}
+
 /**
  * Public channels and videos followed for ideas and benchmarks. The open
- * record lives in the URL (`?video=` or `?channel=`), so it can be linked to.
+ * record (`?video=` or `?channel=`), the tab, the state filter and the search
+ * all live in the URL, so a reload or a shared link shows the same view.
  */
 export default function WatchlistPage() {
   const { selected, select, detailRef } = useSelection(KINDS);
-  const [tab, setTab] = useState<WatchTab>(selected?.kind === "channel" ? "channels" : "videos");
-  const [state, setState] = useState("active");
-  const [search, setSearch] = useState("");
-  const query = useDebouncedValue(search.trim(), 300);
+  const url = useUrlState();
+  const requestedTab = url.get("tab");
+  // Without an explicit tab, the list follows the open record.
+  const tab: WatchTab =
+    requestedTab === "channels" || requestedTab === "videos"
+      ? requestedTab
+      : selected?.kind === "channel"
+        ? "channels"
+        : "videos";
+  const state = stateFromUrl(url.get("state"));
+  // The box answers every keystroke; the URL, and the query, follow once typing pauses.
+  const search = useUrlTextParam("q");
+  const query = search.settled;
 
   const channels = useWatchChannels(state);
   const videos = useWatchVideos(state, query);
   const channel = useWatchChannel(selected?.kind === "channel" ? selected.id : null);
   const video = useWatchVideo(selected?.kind === "video" ? selected.id : null);
 
-  // Opening a record from elsewhere (an upload in a channel, a new add) shows its list.
-  const selectedKind = selected?.kind;
-  useEffect(() => {
-    if (selectedKind) setTab(selectedKind === "channel" ? "channels" : "videos");
-  }, [selectedKind]);
+  // Opening a record (an upload in a channel, a new add) shows its own list.
+  const open = (kind: WatchKind, id: number, extra: Record<string, string | null> = {}) =>
+    select(kind, id, { tab: null, ...extra });
 
   const channelItems = useMemo(() => asArray<WatchChannel>(channels.data?.channels), [channels.data]);
   const videoItems = useMemo(() => asArray<WatchVideo>(videos.data?.videos), [videos.data]);
@@ -49,21 +66,18 @@ export default function WatchlistPage() {
 
       <div className="space-y-5">
         <WatchAddPanel
-          onAdded={(kind, id) => {
-            // Show the new record: added items are always active.
-            if (state === "archived") setState("active");
-            select(kind, id);
-          }}
+          // Added items are always active, so an archived-only view would hide them.
+          onAdded={(kind, id) => open(kind, id, state === "archived" ? { state: null } : {})}
         />
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[23rem_minmax(0,1fr)]">
           <WatchList
             tab={tab}
-            onTabChange={setTab}
+            onTabChange={(next) => url.set({ tab: next })}
             state={state}
-            onStateChange={setState}
-            search={search}
-            onSearchChange={setSearch}
+            onStateChange={(next) => url.set({ state: stateToUrl(next) })}
+            search={search.value}
+            onSearchChange={search.change}
             videos={{
               items: videoItems,
               isPending: videos.isPending,
@@ -79,7 +93,7 @@ export default function WatchlistPage() {
               refetch: () => void channels.refetch(),
             }}
             selected={selected}
-            onSelect={select}
+            onSelect={(kind, id) => open(kind, id)}
           />
           <div ref={detailRef} className="min-w-0 scroll-mt-24">
             <WatchDetail
@@ -88,7 +102,7 @@ export default function WatchlistPage() {
               video={video.data?.video ?? null}
               isLoading={active.isPending && selected !== null}
               error={active.error}
-              onSelectVideo={(id) => select("video", id)}
+              onSelectVideo={(id) => open("video", id)}
             />
           </div>
         </div>

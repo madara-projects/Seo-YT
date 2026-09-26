@@ -6,25 +6,19 @@ import type {
   ExperimentListResponse,
   ExperimentResponse,
 } from "@/api/experimentTypes";
-
-export const experimentKeys = {
-  all: ["experiments"] as const,
-  lists: () => [...experimentKeys.all, "list"] as const,
-  list: (status: string, mode: string) => [...experimentKeys.lists(), status, mode] as const,
-  detail: (id: number) => [...experimentKeys.all, "detail", id] as const,
-};
+import { experimentKeys, mutationKeys } from "./queryKeys";
 
 const BASE = "/api/experiment-center/experiments";
 
 export function useExperiments(status: string, mode: string) {
   return useQuery({
     queryKey: experimentKeys.list(status, mode),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams();
       if (status) params.set("status", status);
       if (mode) params.set("mode", mode);
       const search = params.toString();
-      return apiRequest<ExperimentListResponse>(`${BASE}${search ? `?${search}` : ""}`);
+      return apiRequest<ExperimentListResponse>(`${BASE}${search ? `?${search}` : ""}`, { signal });
     },
   });
 }
@@ -32,7 +26,7 @@ export function useExperiments(status: string, mode: string) {
 export function useExperiment(id: number | null) {
   return useQuery({
     queryKey: experimentKeys.detail(id ?? 0),
-    queryFn: () => apiRequest<ExperimentDetailResponse>(`${BASE}/${id}`),
+    queryFn: ({ signal }) => apiRequest<ExperimentDetailResponse>(`${BASE}/${id}`, { signal }),
     enabled: typeof id === "number" && id > 0,
   });
 }
@@ -64,17 +58,24 @@ export function useCreateExperiment() {
   });
 }
 
-export function useUpdateExperimentStatus() {
+/*
+ * The changes below are keyed by the experiment (`mutationKeys.recordAction`),
+ * so its panel finds one still running after the creator looked at another.
+ */
+
+export function useUpdateExperimentStatus(experimentId: number) {
   const store = useExperimentUpdater();
   return useMutation<ExperimentResponse, unknown, { id: number; status: string }>({
+    mutationKey: mutationKeys.recordAction("experiment", experimentId, "status"),
     mutationFn: ({ id, status }) => apiRequest<ExperimentResponse>(`${BASE}/${id}`, { method: "PATCH", body: { status } }),
     onSuccess: store,
   });
 }
 
-export function useAssignVideo() {
+export function useAssignVideo(experimentId: number) {
   const store = useExperimentUpdater();
   return useMutation<ExperimentResponse, unknown, { id: number; linkId: number; role: string }>({
+    mutationKey: mutationKeys.recordAction("experiment", experimentId, "assign"),
     mutationFn: ({ id, linkId, role }) =>
       apiRequest<ExperimentResponse>(`${BASE}/${id}/assignments`, {
         method: "POST",
@@ -84,9 +85,10 @@ export function useAssignVideo() {
   });
 }
 
-export function useRemoveAssignment() {
+export function useRemoveAssignment(experimentId: number) {
   const queryClient = useQueryClient();
   return useMutation<unknown, unknown, { id: number; assignmentId: number }>({
+    mutationKey: mutationKeys.recordAction("experiment", experimentId, "remove"),
     mutationFn: ({ id, assignmentId }) => apiRequest(`${BASE}/${id}/assignments/${assignmentId}`, { method: "DELETE" }),
     onSuccess: (_data, { id }) => {
       void queryClient.invalidateQueries({ queryKey: experimentKeys.detail(id) });
@@ -96,9 +98,10 @@ export function useRemoveAssignment() {
 }
 
 /** Compares saved completed snapshots only: local, no YouTube call. */
-export function useCompareExperiment() {
+export function useCompareExperiment(experimentId: number) {
   const store = useExperimentUpdater();
   return useMutation<ExperimentResponse, unknown, number>({
+    mutationKey: mutationKeys.recordAction("experiment", experimentId, "compare"),
     mutationFn: (id) => apiRequest<ExperimentResponse>(`${BASE}/${id}/compare`, { method: "POST" }),
     onSuccess: store,
   });

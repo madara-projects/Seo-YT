@@ -89,10 +89,46 @@ describe("buildPackageOptions", () => {
     );
     expect(options[0]).toMatchObject({
       id: "pkg-real",
+      packageId: "pkg-real",
       thumbnailText: "BIG TEXT",
       bestFor: "Search",
       misleadingRisk: "low",
     });
+  });
+
+  it("never gives a title-only option a server package ID", () => {
+    // "Match the video language": the primary is the Tamil title, which is not
+    // one of the saved packages, while package-a is the English one.
+    const options = buildPackageOptions(
+      baseResponse({
+        multilang: { tamil: { title: "Tamil title" } },
+        title_thumbnail_packages: [{ package_id: "package-a", title: "English title" }],
+        title_variants: ["A plain variant"],
+      }),
+      { language: "auto", video_language: "tamil" },
+    );
+    expect(options.map((option) => [option.title, option.packageId])).toEqual([
+      ["Tamil title", null],
+      ["English title", "package-a"],
+      ["A plain variant", null],
+    ]);
+    expect(new Set(options.map((option) => option.id)).size).toBe(options.length);
+    expect(options.filter((option) => option.id === "package-a")).toHaveLength(1);
+  });
+
+  it("mirrors the server's positional IDs for packages saved without one", () => {
+    const options = buildPackageOptions(
+      baseResponse({
+        title_thumbnail_packages: [{ title: "Primary title" }, { title: "Second package" }],
+      }),
+    );
+    expect(options.map((option) => option.packageId)).toEqual(["package-a", "package-b"]);
+    expect(options[0]?.primary).toBe(true);
+  });
+
+  it("does not claim a quality check that never ran", () => {
+    const [option] = buildPackageOptions(baseResponse());
+    expect(option).toMatchObject({ misleadingRisk: "not evaluated", qualityStatus: "not evaluated" });
   });
 });
 

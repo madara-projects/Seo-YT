@@ -234,6 +234,18 @@ describe("ExperimentsPage", () => {
     await waitFor(() => expect(calls("DELETE", "/api/experiment-center/experiments/3/assignments/101")).toHaveLength(1));
   });
 
+  it("keeps a closed comparison as it was compared", async () => {
+    experiments = [{ ...structuredClone(EXPERIMENT), status: "completed" }];
+    renderPage("/experiments?experiment=3");
+
+    const detail = await screen.findByTestId("experiment-detail");
+    expect(within(detail).getByText(/its saved result stays as it is/)).toBeInTheDocument();
+    expect(within(detail).queryByRole("button", { name: "Compare saved evidence" })).not.toBeInTheDocument();
+    expect(within(detail).queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
+    // The saved result is still readable.
+    expect(within(within(detail).getByTestId("experiment-result")).getByText("Variant ahead")).toBeInTheDocument();
+  });
+
   it("explains why videos can't be assigned without a connected channel", async () => {
     connected = false;
     renderPage("/experiments?experiment=3");

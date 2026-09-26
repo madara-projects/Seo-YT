@@ -17,9 +17,9 @@ import { Meter } from "@/components/common/Meter";
 import { Inset, Panel } from "@/components/common/Panel";
 import { CardSkeleton, UnavailableNote } from "@/components/common/States";
 import { cn, formatNumber } from "@/lib/utils";
-import { initialOf } from "@/lib/format";
+import { initialOf, relativeTime } from "@/lib/format";
 import { historyDate } from "@/lib/historyFormat";
-import { riskTone } from "@/lib/dashboardFormat";
+import { riskTone, roundOpportunity, roundTitleScore, titleScoreText } from "@/lib/dashboardFormat";
 import type {
   CohortLearning,
   OwnedPerformance,
@@ -34,6 +34,7 @@ export function ChannelSnapshot({
   isConnected,
   syncedAt,
   isPending,
+  isError = false,
   className,
 }: {
   owned: OwnedPerformance;
@@ -41,6 +42,8 @@ export function ChannelSnapshot({
   isConnected: boolean;
   syncedAt: string | null;
   isPending: boolean;
+  /** The summary failed: whether a channel is connected is then unknown. */
+  isError?: boolean;
   className?: string;
 }) {
   return (
@@ -50,13 +53,19 @@ export function ChannelSnapshot({
       iconTone={isConnected ? "brand" : "neutral"}
       title="Connected channel"
       aside={
-        <EvidenceChip tone={isConnected ? "ok" : "neutral"}>
-          {isConnected ? "Connected" : "Not connected"}
-        </EvidenceChip>
+        isError ? (
+          <EvidenceChip tone="neutral">Unavailable</EvidenceChip>
+        ) : (
+          <EvidenceChip tone={isConnected ? "ok" : "neutral"}>
+            {isConnected ? "Connected" : "Not connected"}
+          </EvidenceChip>
+        )
       }
     >
       {isPending ? (
         <CardSkeleton rows={2} />
+      ) : isError ? (
+        <UnavailableNote>Channel status is unavailable because the dashboard summary could not be loaded.</UnavailableNote>
       ) : isConnected ? (
         <div className="space-y-4">
           <div className="flex items-center gap-3.5">
@@ -81,8 +90,8 @@ export function ChannelSnapshot({
             {[
               ["Subscribers", formatNumber(owned.subscribers)],
               ["Lifetime views", formatNumber(owned.lifetime_views)],
-              ["Linked videos", formatNumber(owned.linked_videos_count ?? 0)],
-              ["Last synced", syncedAt ? historyDate(syncedAt) : "Never"],
+              ["Linked videos", formatNumber(owned.linked_videos_count)],
+              ["Last synced", syncedAt ? `${historyDate(syncedAt)} · ${relativeTime(syncedAt)}` : "Not synced yet"],
             ].map(([label, value]) => (
               <Inset key={label} className="p-3">
                 <dt className="text-[0.6875rem] text-muted-foreground">{label}</dt>
@@ -143,29 +152,42 @@ export function ChannelSnapshot({
   );
 }
 
+/**
+ * How far learning from published results has come (`/api/learning/cohorts`).
+ * Shared by the Dashboard and the Channel page, which frame it differently.
+ */
 export function LearningPanel({
   data,
   isPending,
   isError,
+  title,
+  description,
+  sampleLabel,
   className,
 }: {
   data: CohortLearning | undefined;
   isPending: boolean;
   isError: boolean;
+  title: string;
+  description: string;
+  sampleLabel: string;
   className?: string;
 }) {
-  const sample = typeof data?.sample_size === "number" ? data.sample_size : 0;
+  // A missing count is unavailable, not zero.
+  const sample = typeof data?.sample_size === "number" ? data.sample_size : null;
+  // Null at the strongest level: there is no next threshold to reach.
   const threshold = typeof data?.next_threshold === "number" ? data.next_threshold : null;
+  const label = data?.confidence_label;
 
   return (
     <Panel
       className={className}
       icon={GraduationCap}
-      title="Learning confidence"
-      description="Learning from results starts only once enough comparable videos have matured."
+      title={title}
+      description={description}
       aside={
-        <EvidenceChip tone={data?.learning_allowed ? "ok" : "warn"}>
-          {data?.confidence_label ?? "Unavailable"}
+        <EvidenceChip tone={!label ? "neutral" : data?.learning_allowed ? "ok" : "warn"}>
+          {label ?? "Unavailable"}
         </EvidenceChip>
       }
     >
@@ -177,23 +199,35 @@ export function LearningPanel({
         <div className="space-y-4">
           <div className="flex items-end justify-between gap-4">
             <div>
-              <p className="font-display text-4xl font-semibold leading-none tracking-tight text-foreground">
+              <p
+                className={
+                  sample === null
+                    ? "text-lg font-medium text-muted-foreground"
+                    : "font-display text-4xl font-semibold leading-none tracking-tight text-foreground"
+                }
+              >
                 {formatNumber(sample)}
               </p>
-              <p className="mt-1.5 text-xs text-muted-foreground">Comparable videos</p>
+              <p className="mt-1.5 text-xs text-muted-foreground">{sampleLabel}</p>
             </div>
             <div className="text-right">
-              <p className="numeric text-sm font-semibold text-foreground">
-                {formatNumber(data?.next_threshold)}
-              </p>
-              <p className="mt-0.5 text-xs text-muted-foreground">Needed for the next level</p>
+              {threshold !== null ? (
+                <>
+                  <p className="numeric text-sm font-semibold text-foreground">{formatNumber(threshold)}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Needed for the next level</p>
+                </>
+              ) : sample !== null && data?.learning_allowed ? (
+                <p className="text-xs text-muted-foreground">Top evidence level reached</p>
+              ) : null}
             </div>
           </div>
-          <Meter
-            value={sample}
-            max={threshold ?? Math.max(sample, 1)}
-            label="Comparable videos collected toward the next learning level"
-          />
+          {sample !== null ? (
+            <Meter
+              value={sample}
+              max={threshold ?? Math.max(sample, 1)}
+              label="Comparable videos collected toward the next learning level"
+            />
+          ) : null}
           <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
             {data?.recommendation ?? "Learning status is unavailable for this window."}
           </p>
@@ -206,10 +240,12 @@ export function LearningPanel({
 export function RecentPackages({
   runs,
   isPending,
+  isError = false,
   className,
 }: {
   runs: RecentRun[];
   isPending: boolean;
+  isError?: boolean;
   className?: string;
 }) {
   return (
@@ -228,6 +264,8 @@ export function RecentPackages({
     >
       {isPending ? (
         <CardSkeleton rows={3} />
+      ) : isError ? (
+        <UnavailableNote>Recent packages are unavailable right now.</UnavailableNote>
       ) : runs.length ? (
         <ul className="-mx-2 space-y-0.5">
           {runs.slice(0, 6).map((run) => (
@@ -253,13 +291,13 @@ export function RecentPackages({
                 <span className="hidden shrink-0 gap-5 text-right sm:flex">
                   <span>
                     <span className="numeric block text-sm font-semibold text-foreground">
-                      {formatNumber(run.opportunity_score)}
+                      {formatNumber(roundOpportunity(run.opportunity_score))}
                     </span>
                     <span className="block text-[0.6875rem] text-muted-foreground">Opportunity</span>
                   </span>
                   <span>
                     <span className="numeric block text-sm font-semibold text-foreground">
-                      {formatNumber(run.title_score)}
+                      {formatNumber(roundTitleScore(run.title_score))}
                     </span>
                     <span className="block text-[0.6875rem] text-muted-foreground">Title</span>
                   </span>
@@ -291,10 +329,12 @@ const RISK_BAR: Record<string, string> = {
 export function RetentionSpread({
   rows,
   isPending,
+  isError = false,
   className,
 }: {
   rows: RetentionPattern[];
   isPending: boolean;
+  isError?: boolean;
   className?: string;
 }) {
   const total = rows.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
@@ -308,6 +348,8 @@ export function RetentionSpread({
     >
       {isPending ? (
         <CardSkeleton rows={2} />
+      ) : isError ? (
+        <UnavailableNote>Retention assessments are unavailable right now.</UnavailableNote>
       ) : rows.length && total > 0 ? (
         <div className="space-y-4">
           <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full" aria-hidden="true">
@@ -356,11 +398,13 @@ export function TopTitles({
   titles,
   scoreTrend,
   isPending,
+  isError = false,
   className,
 }: {
   titles: WinningTitle[];
   scoreTrend?: string;
   isPending: boolean;
+  isError?: boolean;
   className?: string;
 }) {
   return (
@@ -372,6 +416,8 @@ export function TopTitles({
     >
       {isPending ? (
         <CardSkeleton rows={3} />
+      ) : isError ? (
+        <UnavailableNote>Scored titles are unavailable right now.</UnavailableNote>
       ) : titles.length ? (
         <div className="space-y-4">
           <ol className="space-y-2">
@@ -392,7 +438,7 @@ export function TopTitles({
                 <p className="min-w-0 flex-1 text-sm text-foreground">{item.title}</p>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="numeric text-xs font-semibold text-foreground">
-                    {formatNumber(item.title_score)}/10
+                    {titleScoreText(item.title_score)}
                   </span>
                   {item.opportunity_label ? (
                     <EvidenceChip tone="neutral" className="hidden sm:inline-flex">

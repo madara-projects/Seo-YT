@@ -2,17 +2,9 @@
  * The idea backlog (`/api/ideas`). Shapes follow `HistoryStore.content_ideas`
  * and `content_idea`, and the research evidence `build_idea_evidence` saves.
  */
-import type { DemandSnapshot } from "./researchTypes";
+import type { DemandSnapshot, PublicVideoResult } from "./researchTypes";
 
 export type IdeaStatus = "idea" | "scripted" | "package_generated" | "published" | "archived";
-
-export interface IdeaPublicResult {
-  video_id?: string | null;
-  title?: string | null;
-  channel_title?: string | null;
-  published_at?: string | null;
-  view_count?: number | string | null;
-}
 
 export interface IdeaPersonalEvidence {
   status?: string;
@@ -26,15 +18,21 @@ export interface IdeaPersonalEvidence {
 export interface IdeaEvidence {
   captured_at?: string;
   source?: string;
+  /** Names any result left out for unavailable stats. */
   opportunity_explanation?: string;
   signals?: {
     relevant_result_count?: number;
     research_query_count?: number;
+    /** A small-channel outlier, or at least 2.5× the median of 5+ measured results. */
     possible_outlier_count?: number;
     publication_dates?: string[];
   };
   personal_evidence?: IdeaPersonalEvidence;
-  youtube_results?: IdeaPublicResult[];
+  youtube_results?: PublicVideoResult[];
+  /** Problems the research ran into (quota, failed or partial queries). */
+  research_warnings?: string[];
+  keyword_research?: Record<string, unknown> | null;
+  search_demand?: Record<string, unknown> | null;
 }
 
 export interface IdeaResearchSnapshot {

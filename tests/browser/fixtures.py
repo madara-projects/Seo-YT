@@ -11,7 +11,7 @@ def _json_response(route, payload, status=200):
     route.fulfill(status=status, content_type="application/json", body=json.dumps(payload))
 
 
-def history_summary(*, include_link: bool = False):
+def history_summary(*, include_link: bool = False, linked_watch_time: dict | None = None):
     payload = {
         "learning": {"recent_runs": []},
         "scorecard": {"total_runs": 0, "avg_title_score": None, "avg_opportunity_score": None},
@@ -19,6 +19,7 @@ def history_summary(*, include_link: bool = False):
             "channel": {}, "latest_sync": {}, "videos": [], "total_views": 0,
             "estimated_watch_minutes": 0, "subscribers": None, "lifetime_views": None,
             "views_28_days": None, "linked_videos_count": 0,
+            **(linked_watch_time or {}),
         },
     }
     if include_link:
@@ -35,21 +36,37 @@ def history_summary(*, include_link: bool = False):
     return payload
 
 
-def history_runs():
-    return {
-        "runs": [{
-            "id": 1,
-            "created_at": "2026-08-15T10:00:00+00:00",
-            "title": "Rainy Highway Reflection",
-            "query": "Rainy highway quote",
-            "opportunity_score": 64.2,
-            "title_score": 8.5,
-            "content_angle": "quiet reflection",
-            "linked": False,
-        }],
-        "limit": 50,
-        "offset": 0,
-    }
+def history_runs(limit: int = 50, offset: int = 0, *, count: int = 1, deleted: frozenset[int] = frozenset(),
+                 linked: frozenset[int] = frozenset()):
+    runs = [{
+        "id": 1,
+        "created_at": "2026-08-15T10:00:00+00:00",
+        "title": "Rainy Highway Reflection",
+        "query": "Rainy highway quote",
+        "opportunity_score": 64.2,
+        "title_score": 8.5,
+        "content_angle": "quiet reflection",
+        "linked_youtube_video_id": None,
+    }]
+    # Extra packages for bulk and paging tests; newest (highest id) first, like the real list.
+    runs = [{
+        "id": run_id,
+        "created_at": "2026-08-16T10:00:00+00:00",
+        "title": f"Fixture package {run_id}",
+        "query": f"Fixture query {run_id}",
+        "opportunity_score": 50,
+        "title_score": 7,
+        "content_angle": "fixture",
+        "linked_youtube_video_id": None,
+    } for run_id in range(count, 1, -1)] + runs
+    runs = [run for run in runs if run["id"] not in deleted]
+    for run in runs:
+        if run["id"] in linked:
+            run["linked_youtube_video_id"] = f"linkedvid{run['id']:02d}"
+    # Like the real endpoint: limit is capped at 100 and total counts every saved package.
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+    return {"runs": runs[offset:offset + limit], "total": len(runs), "limit": limit, "offset": offset}
 
 
 def history_run_detail(*, include_link: bool = False):
@@ -331,7 +348,13 @@ class FixtureRouter:
     def __init__(self, page, *, analyze_error: bool = False, include_link: bool = False,
                  collector_state: str = "disabled", collector_error: bool = False,
                  creator_research: str = "full", generation_source: str = "gemini",
-                 analyze_delay_ms: int = 0, oauth_state: str = "disconnected"):
+                 analyze_delay_ms: int = 0, oauth_state: str = "disconnected",
+                 history_run_count: int = 1, history_page_error_offset: int | None = None,
+                 delete_cloud_sync: dict | None = None, link_conflict: bool = False,
+                 link_refresh_warning: str | None = None, diagnostics_status: str = "fixture",
+                 channel_status_error: bool = False, history_summary_error: bool = False,
+                 database_unhealthy: bool = False, linked_watch_time: dict | None = None,
+                 linked_run_ids: frozenset[int] = frozenset()):
         self.page = page
         self.analyze_error = analyze_error
         self.include_link = include_link
@@ -341,6 +364,25 @@ class FixtureRouter:
         self.generation_source = generation_source
         self.analyze_delay_ms = analyze_delay_ms
         self.oauth_state = oauth_state
+        self.history_run_count = history_run_count
+        # The GET /api/history/runs page at this offset answers 429, as a spent rate limit would.
+        self.history_page_error_offset = history_page_error_offset
+        # What a delete reports about cloud sync; the default is sync turned off, as in /api/cloud-sync/status.
+        self.delete_cloud_sync = delete_cloud_sync if delete_cloud_sync is not None else {
+            "state": "disabled", "enabled": False, "configured": False, "run_requested": False, "counts": {}}
+        self.deleted_run_ids: set[int] = set()
+        # Linking run 1 again first answers 409 until the request confirms the evidence may be deleted.
+        self.link_conflict = link_conflict
+        self.link_refresh_warning = link_refresh_warning
+        self.diagnostics_status = diagnostics_status
+        self.channel_status_error = channel_status_error
+        self.history_summary_error = history_summary_error
+        # The settings status of a database that could not be read: no counts, schema, or size.
+        self.database_unhealthy = database_unhealthy
+        # Owned-performance fields for the linked-video watch time fallback.
+        self.linked_watch_time = linked_watch_time
+        # Saved packages the list reports as linked to a YouTube video.
+        self.linked_run_ids = frozenset(linked_run_ids)
         self.requests = Counter()
         self.request_bodies: dict[str, list[object]] = {}
         self.external_requests: list[str] = []
@@ -388,11 +430,13 @@ class FixtureRouter:
             route.fulfill(status=204, body="")
             return
 
-        if path in {"/", "/app", "/dashboard_view", "/dashboard_legacy"} or path.startswith("/static/"):
+        if path in {"/", "/app", "/dashboard_view"} or path.startswith("/static/"):
             route.continue_()
             return
         if path == "/youtube/channel/status":
-            if self.oauth_state == "connected":
+            if self.channel_status_error:
+                _json_response(route, {"error": {"code": "http_error", "message": "Channel status unavailable in fixture.", "request_id": "channel-fixture-1"}}, status=503)
+            elif self.oauth_state == "connected":
                 _json_response(route, {
                     "configured": True,
                     "connected": True,
@@ -415,15 +459,89 @@ class FixtureRouter:
             else:
                 _json_response(route, {"state": self.collector_state, "enabled": self.collector_state not in {"disabled", "unconfigured"}, "dry_run": self.collector_state == "dry-run", "running": self.collector_state == "running", "last_error": "Fixture collector failure." if self.collector_state == "error" else None, "last_counts": {"links": 0, "windows": 0, "captured": 0, "failed": 0}})
             return
+        if path == "/api/settings/status":
+            database = {"healthy": True, "name": "win_engine.db", "schema_version": 1, "size_bytes": 4096,
+                        "counts": {"packages": 1, "ideas": len(self.ideas), "published_links": int(self.include_link), "performance_snapshots": 0},
+                        "last_backup_at": None}
+            if self.database_unhealthy:
+                database = {"healthy": False, "error": "The database could not be opened.", "name": "win_engine.db",
+                            "schema_version": None, "size_bytes": None, "counts": None, "last_backup_at": None}
+            _json_response(route, {
+                "app": {"name": "YouTube Win-Engine", "version": "0.13.0", "environment": "test"},
+                "database": database,
+                "providers": {"gemini": {"configured": False, "model": None},
+                              "youtube_data_api": {"configured": False, "key_count": 0},
+                              "local_fallback": {"available": True}, "redis": {"configured": False}},
+            })
+            return
+        if path == "/api/cloud-sync/status":
+            _json_response(route, {"state": "disabled", "enabled": False, "configured": False})
+            return
+        if path == "/api/cloud-sync/run" and method == "POST":
+            # What CloudSyncService.run_once() returns while sync is turned off.
+            _json_response(route, {"state": "disabled", "counts": {"queued": 0, "pushed": 0, "pulled": 0, "failed": 0, "conflicts": 0, "skipped": 0}})
+            return
         if path == "/api/history":
-            _json_response(route, history_summary(include_link=self.include_link))
+            if self.history_summary_error:
+                _json_response(route, {"error": {"code": "http_error", "message": "History summary unavailable in fixture.", "request_id": "history-fixture-1"}}, status=503)
+                return
+            _json_response(route, history_summary(include_link=self.include_link, linked_watch_time=self.linked_watch_time))
             return
         if path == "/api/history/runs" and method == "GET":
-            _json_response(route, history_runs())
+            query = parse_qs(parsed.query)
+            offset = int((query.get("offset") or ["0"])[0])
+            if self.history_page_error_offset is not None and offset == self.history_page_error_offset:
+                _json_response(route, {"error": {"code": "rate_limit_exceeded", "message": "Too many requests. Please retry shortly.", "request_id": "history-page-fixture"}}, status=429)
+                return
+            _json_response(route, history_runs(
+                limit=int((query.get("limit") or ["50"])[0]),
+                offset=offset,
+                count=self.history_run_count,
+                deleted=frozenset(self.deleted_run_ids),
+                linked=self.linked_run_ids,
+            ))
             return
         if path == "/api/history/runs" and method == "DELETE":
-            _json_response(route, {"status": "deleted", "deleted_run_ids": [1], "deleted_count": 1,
-                                   "cloud_sync": {"state": "healthy/idle", "counts": {"pushed": 1}}})
+            # Like the real route: at most 100 IDs a request (422 otherwise), and a
+            # batch with any unknown ID deletes nothing (404).
+            run_ids = list(dict.fromkeys(int(value) for value in ((self.request_bodies[key][-1] or {}).get("run_ids") or [])))
+            if not run_ids or len(run_ids) > 100:
+                _json_response(route, {"error": {"code": "validation_error", "message": "run_ids must hold 1 to 100 IDs.", "request_id": "delete-fixture-422"}}, status=422)
+                return
+            if any(run_id in self.deleted_run_ids or not 1 <= run_id <= self.history_run_count for run_id in run_ids):
+                _json_response(route, {"error": {"code": "http_error", "message": "One or more saved packages were not found; nothing was deleted.", "request_id": "delete-fixture-404"}}, status=404)
+                return
+            self.deleted_run_ids.update(run_ids)
+            _json_response(route, {"status": "deleted", "deleted_run_ids": run_ids, "deleted_count": len(run_ids),
+                                   "cloud_sync": self.delete_cloud_sync})
+            return
+        if method == "DELETE" and re.fullmatch(r"/api/history/runs/\d+", path):
+            run_id = int(path.rsplit("/", 1)[1])
+            if run_id in self.deleted_run_ids or not 1 <= run_id <= self.history_run_count:
+                _json_response(route, {"error": {"code": "http_error", "message": "Analysis run not found.", "request_id": "delete-fixture-404"}}, status=404)
+                return
+            self.deleted_run_ids.add(run_id)
+            _json_response(route, {"status": "deleted", "run_id": run_id, "cloud_sync": self.delete_cloud_sync})
+            return
+        if path == "/api/history/runs/1/link-video" and method == "POST":
+            body = self.request_bodies[key][-1] or {}
+            if self.link_conflict and body.get("replace_existing_evidence") is not True:
+                _json_response(route, {"error": {
+                    "code": "relink_would_delete_evidence",
+                    "message": "This package is already linked to another video; linking a new one deletes the evidence collected for it.",
+                    "request_id": "relink-fixture-409",
+                    "details": {"evidence": {"performance snapshots": 3, "published video audits": 1}},
+                }}, status=409)
+                return
+            _json_response(route, {
+                "status": "linked", "link_id": 9, "analysis_run_id": 1,
+                "youtube_video_id": str(body.get("youtube_video_id") or ""),
+                "published_at": "2026-08-14T10:00:00+00:00",
+                "ownership_verified": True, "ownership_state": "verified",
+                "ownership_message": "Ownership verified against the connected YouTube channel.",
+                "refresh_warning": self.link_refresh_warning,
+                "report": {"linked": True},
+            })
             return
         if path == "/api/history/runs/1" and method == "GET":
             _json_response(route, history_run_detail(include_link=self.include_link))
@@ -448,14 +566,14 @@ class FixtureRouter:
             candidates = []
             if self.include_link:
                 saved = self.audits.get(9)
-                candidates = [{"id": 9, "analysis_run_id": 1, "youtube_video_id": "fixture-video-1", "published_at": "2026-08-14T10:00:00+00:00", "package_topic": "Linked rainy highway upload", "youtube_metadata": {"title": "Published rainy highway title"}, "latest_performance": {"views": 42, "snapshot_window": "24h"}, "ownership_verified": True, "audit_id": saved.get("id") if saved else None, "audit_captured_at": saved.get("captured_at") if saved else None, "audit_state": saved["summary"]["state"] if saved else "not_run", "idea": {"id": 1, "topic": "Rainy highway quote idea"}, "evidence_state": "mature", "selection_state": "selected"}]
+                candidates = [{"id": 9, "analysis_run_id": 1, "youtube_video_id": "fixture-video-1", "published_at": "2026-08-14T10:00:00+00:00", "package_topic": "Linked rainy highway upload", "youtube_metadata": {"title": "Published rainy highway title"}, "latest_performance": {"views": 42, "snapshot_window": "24h"}, "ownership_verified": True, "verified_channel_id": "fixture-channel", "audit_id": saved.get("id") if saved else None, "audit_captured_at": saved.get("captured_at") if saved else None, "audit_state": saved["summary"]["state"] if saved else "not_run", "idea": {"id": 1, "topic": "Rainy highway quote idea"}, "evidence_state": "mature", "selection_state": "selected"}]
             _json_response(route, {"candidates": candidates, "total": len(candidates)})
             return
         audit_match = re.fullmatch(r"/api/audits/(\d+)(?:/(refresh|findings|evidence))?", path)
         if audit_match:
             link_id = int(audit_match.group(1)); action = audit_match.group(2); saved = self.audits.get(link_id)
             if method == "POST" and action == "refresh":
-                saved = {"id": len(self.audits) + 1, "captured_at": "2026-08-23T06:00:00+00:00", "rule_version": "phase8-audit-v1", "summary": {"state": "mature_observation", "message": "Historical intent, actual published metadata, and available observations are separated. No finding establishes causality."}, "video": {"link_id": link_id, "analysis_run_id": 1, "youtube_video_id": "fixture-video-1", "published_at": "2026-08-14T10:00:00+00:00", "format": "youtube_shorts", "language": "english"}, "intent": {"generated_package": {"title": "Generated rainy highway title", "description": "Generated description", "tags": ["rain"], "hashtags": ["#Shorts"]}, "selected_package": {"title": "Selected rainy highway title", "description": "Selected description", "tags": ["rain"], "hashtags": ["#Shorts"]}, "selection_attribution": "creator_selected", "selected_package_id": "package-a"}, "published_reality": {"title": "Published rainy highway title", "description": "Published description", "tags": ["rainy road"], "hashtags": ["#Shorts"], "available": True, "captured_at": "2026-08-23T05:00:00+00:00"}, "comparisons": [{"field": "title", "generated": "Generated rainy highway title", "selected": "Selected rainy highway title", "published": "Published rainy highway title", "selected_to_published": "changed"}, {"field": "description", "generated": "Generated description", "selected": "Selected description", "published": "Published description", "selected_to_published": "changed"}], "before_publication": {"generation_quality": {"status": "pass"}, "retention_assistant": {"risk_level": "medium"}, "demand_research": {"classification": "active_topic"}, "watchlist_context": [], "personal_evidence": {"status": "insufficient_evidence"}, "idea": {"topic": "Rainy highway quote idea"}}, "observed_performance": {"latest_observation": {"views": 42, "avg_view_percentage": 61}, "maturity": "mature_observation", "causality": "not_established"}, "findings": [{"code": "published_title_changed", "severity": "review", "explanation": "Published title differed from the explicitly selected title.", "recommended_interpretation": "Treat performance as evidence about the published title, not the selected draft.", "evidence_state": "observed", "evidence": "creator selection + owned YouTube metadata"}], "learning_candidates": [{"variable": "title_mechanism", "value": "specific_curiosity", "evidence_state": "insufficient_evidence", "sample_size": 1, "interpretation": "Observed association candidate; never causal proof."}], "evidence": {"snapshot_count": 2, "mature_window_count": 1}, "limitations": ["A mature observation can support comparison but does not prove causation."]}
+                saved = {"id": len(self.audits) + 1, "captured_at": "2026-08-23T06:00:00+00:00", "rule_version": "phase8-audit-v1", "summary": {"state": "mature_observation", "message": "Historical intent, actual published metadata, and available observations are separated. No finding establishes causality."}, "video": {"link_id": link_id, "analysis_run_id": 1, "youtube_video_id": "fixture-video-1", "published_at": "2026-08-14T10:00:00+00:00", "format": "youtube_shorts", "language": "english"}, "intent": {"generated_package": {"title": "Generated rainy highway title", "description": "Generated description", "tags": ["rain"], "hashtags": ["#Shorts"]}, "selected_package": {"title": "Selected rainy highway title", "description": "Selected description", "tags": ["rain"], "hashtags": ["#Shorts"]}, "selection_attribution": "creator_selected", "selected_package_id": "package-a"}, "published_reality": {"title": "Published rainy highway title", "description": "Published description", "tags": ["rainy road"], "hashtags": ["#Shorts"], "available": True, "captured_at": "2026-08-23T05:00:00+00:00"}, "comparisons": [{"field": "title", "generated": "Generated rainy highway title", "selected": "Selected rainy highway title", "published": "Published rainy highway title", "generated_to_selected": "changed", "selected_to_published": "changed", "generated_to_published": "changed"}, {"field": "description", "generated": "Generated description", "selected": "Selected description", "published": "Published description", "generated_to_selected": "changed", "selected_to_published": "changed", "generated_to_published": "changed"}, {"field": "tags", "generated": ["rain"], "selected": ["rain"], "published": ["rainy road"], "generated_to_selected": "exact_match", "selected_to_published": "changed", "generated_to_published": "changed"}, {"field": "hashtags", "generated": ["#Shorts"], "selected": ["#Shorts"], "published": ["#Shorts"], "generated_to_selected": "exact_match", "selected_to_published": "exact_match", "generated_to_published": "exact_match"}], "before_publication": {"generation_quality": {"status": "pass"}, "retention_assistant": {"risk_level": "medium"}, "demand_research": {"classification": "active_topic"}, "watchlist_context": [], "personal_evidence": {"status": "insufficient_evidence"}, "idea": {"topic": "Rainy highway quote idea"}}, "observed_performance": {"latest_observation": {"views": 42, "avg_view_percentage": 61}, "maturity": "mature_observation", "causality": "not_established"}, "findings": [{"code": "published_title_changed", "severity": "review", "explanation": "Published title differed from the explicitly selected title.", "recommended_interpretation": "Treat performance as evidence about the published title, not the selected draft.", "evidence_state": "observed", "evidence": "creator selection + owned YouTube metadata"}], "learning_candidates": [{"variable": "title_mechanism", "value": "specific_curiosity", "evidence_state": "insufficient_evidence", "sample_size": 1, "interpretation": "Observed association candidate; never causal proof."}], "evidence": {"snapshot_count": 2, "mature_window_count": 1}, "limitations": ["A mature observation can support comparison but does not prove causation."]}
                 self.audits[link_id] = saved
                 _json_response(route, {"status": "audited", "audit": saved, "versions": [{"id": saved["id"], "captured_at": saved["captured_at"], "summary_state": "mature_observation"}]}, 201); return
             if method == "GET" and not action:
@@ -471,6 +589,14 @@ class FixtureRouter:
         experiment_match = re.fullmatch(r"/api/experiment-center/experiments/(\d+)(?:/(assignments|compare))?(?:/(\d+))?", path)
         if experiment_match:
             experiment_id = int(experiment_match.group(1)); action = experiment_match.group(2); assignment_id = experiment_match.group(3); item = self.structured_experiments.get(experiment_id)
+            # Like AuditExperimentStore: a closed experiment refuses assigning, removing and comparing.
+            closed_refusals = {
+                ("POST", "assignments"): "Closed experiments cannot accept new video assignments.",
+                ("DELETE", "assignments"): "Closed experiments keep the videos they were compared on.",
+                ("POST", "compare"): "Closed experiments keep their recorded results; no new comparison is saved.",
+            }
+            if item and item.get("status") in {"completed", "cancelled", "inconclusive"} and (method, action) in closed_refusals:
+                _json_response(route, {"error": {"code": "http_error", "message": closed_refusals[(method, action)], "request_id": "experiment-closed-fixture"}}, 422); return
             if method == "GET" and not action:_json_response(route,{"experiment":item,"result_versions":([{"id":1,"result_state":item["latest_result"]["state"]}] if item and item.get("latest_result") else [])});return
             if method == "PATCH" and not action and item:item.update(self.request_bodies[key][-1] or {});_json_response(route,{"status":"updated","experiment":item});return
             if method == "POST" and action == "assignments" and item:
@@ -593,8 +719,9 @@ class FixtureRouter:
                 title_prefix = "Second: " if "second" in body.lower() else "First: " if "first" in body.lower() else ""
                 _json_response(route, analyze_success(creator_research=self.creator_research, generation_source=self.generation_source, title_prefix=title_prefix))
             return
-        if path == "/diagnostics":
-            _json_response(route, {"youtube": {"status": "fixture"}, "gemini": {"configured": False}})
+        if path == "/diagnostics" and method == "POST":
+            # A missing key is reported with no error and no warning, like ResearchService.diagnostics().
+            _json_response(route, {"youtube": {"status": self.diagnostics_status, "error": None, "warning": None}, "gemini": {"configured": False}})
             return
         if path == "/youtube/channel/refresh" and method == "POST":
             _json_response(route, {"status": "fixture", "channel": {}, "current_28_days": {}, "previous_28_days": {}, "recent_videos": {"rows": []}})
@@ -603,12 +730,12 @@ class FixtureRouter:
             route.fulfill(status=302, headers={"Location": "/#settings"}, body="")
             return
         if path == "/youtube/channel/disconnect" and method == "POST":
-            _json_response(route, {"status": "disconnected"})
+            _json_response(route, {"disconnected": True})
             return
-        if path.startswith("/api/history/runs/") or path.startswith("/api/published-videos/") or path.startswith("/api/experiments"):
+        if path.startswith(("/api/history/runs/", "/api/published-videos/", "/api/experiments")):
             _json_response(route, {"status": "fixture", "link_id": 1, "comparable_metadata": {"language": "unknown", "format": "unknown", "duration_bucket": "unknown", "topic_category": "unknown", "sources": {}}})
             return
-        route.fulfill(status=204, body="")
+        _json_response(route, {"error": {"code": "http_error", "message": "Not Found", "request_id": "fixture-not-found"}}, status=404)
 
     def count(self, method: str, path: str) -> int:
         return self.requests[f"{method.upper()} {path}"]

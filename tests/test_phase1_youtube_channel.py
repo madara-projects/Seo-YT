@@ -113,14 +113,15 @@ class Phase1YouTubeSnapshotTests(unittest.TestCase):
 
     def test_failed_analytics_window_is_retryable_without_aborting_current_refresh(self):
         result = self._refresh_with_query_results(
-            [{"views": 100}, RuntimeError("temporary analytics failure")]
+            [{"views": 100}, TimeoutError("temporary analytics failure")]
         )
         state = self.store.snapshot_window_state(self.video_id, "24h")
         self.assertEqual(result["captured"], [])
         self.assertEqual(state["status"], "failed_retryable")
         self.assertEqual(state["last_failure_reason"], "analytics_request_failed")
         self.assertTrue(state["retry_allowed"])
-        self.assertIsNotNone(self.store.current_performance_snapshot(self.video_id))
+        # The current counts were still recorded.
+        self.assertEqual(self.store.latest_performance_snapshot(self.video_id)["snapshot_window"], "current")
 
     def test_retry_attempts_are_bounded_and_observable(self):
         for _ in range(5):

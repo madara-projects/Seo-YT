@@ -1,16 +1,21 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Visual and accessibility checks for the React app served by the running
- * Docker backend. These do not start a server: bring the stack up first with
- * `docker compose up -d` from the repository root.
+ * Browser checks for the React app served by the running Docker backend:
+ * console errors, layout at three widths, and the flows unit tests can't
+ * reach. These do not start a server: bring the stack up first with
+ * `docker compose up -d` from the repository root. Every spec blocks writes
+ * to the server (see `blockWrites` in e2e/helpers.ts).
  */
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
-  // Parallel browsers share one single-process backend, so a first page load
-  // (bundle, lazy route chunk, then data) can outlast the default 5s wait on a
-  // busy machine. The assertions are unchanged; only the patience is.
+  // One browser at a time. The backend allows each client 60 requests a
+  // minute per route, and parallel workers are all the same client: together
+  // they used up a route's budget and pages rendered their error state.
+  workers: 1,
+  // A first page load (bundle, lazy route chunk, then data) can outlast the
+  // default 5s wait on a busy machine. The assertions are unchanged; only the
+  // patience is.
   expect: { timeout: 15_000 },
   reporter: [["list"]],
   use: {

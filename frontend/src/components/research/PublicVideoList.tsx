@@ -2,15 +2,7 @@ import { UnavailableNote } from "@/components/common/States";
 import { VideoThumb } from "@/components/common/VideoThumb";
 import { formatNumber } from "@/lib/utils";
 import { shortDate } from "@/lib/historyFormat";
-
-export interface PublicVideo {
-  video_id?: string | null;
-  title?: string | null;
-  channel_title?: string | null;
-  published_at?: string | null;
-  /** YouTube returns counts as strings; both forms are accepted. */
-  view_count?: number | string | null;
-}
+import type { PublicVideoResult } from "@/api/researchTypes";
 
 /**
  * Public YouTube videos captured in a research snapshot, with the views they
@@ -21,7 +13,7 @@ export function PublicVideoList({
   limit = 8,
   empty,
 }: {
-  videos: PublicVideo[];
+  videos: PublicVideoResult[];
   limit?: number;
   empty: string;
 }) {
@@ -37,11 +29,7 @@ export function PublicVideoList({
             // room; wider screens give the count a column of its own.
             className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5 p-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
           >
-            <VideoThumb
-              videoId={video.video_id}
-              title={video.title ?? undefined}
-              className="row-span-2 w-20 sm:row-span-1 sm:w-28"
-            />
+            <VideoThumb videoId={video.video_id} className="row-span-2 w-20 sm:row-span-1 sm:w-28" />
             <div className="min-w-0 self-end sm:self-center">
               <p className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
                 {video.title || "Untitled video"}

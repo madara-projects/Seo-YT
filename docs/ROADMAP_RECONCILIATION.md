@@ -1,5 +1,7 @@
 # Win-Engine OS - Roadmap Reconciliation
 
+> **Historical record.** This reconciliation describes the repository as it was on its stated date. Schema versions, test counts, file names and routes have changed since; the README and CHANGELOG describe the current state.
+
 Reconciled 2026-08-28 against the repository at `3089f8a` (`audit and experiment page fix`). This is a source-based status report, not a claim that every external API or deployment has been live-verified. The working tree was not changed except for this document.
 
 ## 1. Executive Summary

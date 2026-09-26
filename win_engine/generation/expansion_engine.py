@@ -1,33 +1,68 @@
 from __future__ import annotations
 
+import re
+from itertools import pairwise
 from typing import Any
 
 from win_engine.analysis.generation_quality import is_short_content
 from win_engine.analysis.strategy_layer import diverse_followups
 
+# A stripped line that opens with a timestamp: "0:00 Intro", "01:30 - Mixing",
+# "1:02:15 Taste test". Matched on the stripped line with a greedy title: a lazy
+# title before optional trailing space backtracked quadratically on long lines.
+_CHAPTER_LINE_RE = re.compile(r"[\[(]?((?:\d{1,2}:)?\d{1,2}:\d{2})[\])]?\s*[-–—:|.]?\s*(\S.*)")
+
+
+def _timestamp_seconds(value: str) -> int | None:
+    """Seconds from the start, or None when minutes or seconds reach 60 ("0:75")."""
+
+    *hours, minutes, seconds = (int(part) for part in value.split(":"))
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return (hours[0] if hours else 0) * 3600 + minutes * 60 + seconds
+
+
+def _timestamp_runs(text: str) -> list[list[tuple[int, dict[str, str]]]]:
+    """Consecutive timestamp lines, one run per block; blank lines do not end a run."""
+
+    runs: list[list[tuple[int, dict[str, str]]]] = [[]]
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _CHAPTER_LINE_RE.fullmatch(stripped)
+        seconds = _timestamp_seconds(match.group(1)) if match else None
+        if seconds is None:
+            if runs[-1]:
+                runs.append([])
+            continue
+        runs[-1].append((seconds, {"timestamp": match.group(1), "title": match.group(2)}))
+    return [run for run in runs if run]
+
 
 def build_chapters(
     script: str,
-    keyword_signals: list[dict[str, Any]],
     creator_brief: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
+    """The chapter list the creator wrote, or none.
+
+    Times cannot be known before the cut exists. This used to pair fixed times
+    (00:00, 00:30, 02:00, 04:00) with keyword signals, which pasted into
+    YouTube as wrong chapters.
+    """
+
     brief = creator_brief or {}
     if is_short_content(script, brief):
         return []
-    duration = brief.get("duration_seconds")
-    if duration is not None and float(duration) < 300:
-        return []
-    if len(script.split()) < 180:
-        return []
-    keywords = [str(item.get("keyword", "")).strip().title() for item in keyword_signals[:4] if item.get("keyword")]
-    if len(keywords) < 2:
-        return []
-    defaults = keywords
-    timestamps = ["00:00", "00:30", "02:00", "04:00"]
-    return [
-        {"timestamp": timestamp, "title": title}
-        for timestamp, title in zip(timestamps, defaults, strict=False)
-    ]
+    # YouTube only builds chapters from a list that starts at 0:00, has three
+    # or more entries and moves forward by at least ten seconds each time. The
+    # list is one block of timestamp lines: a narration line elsewhere ("7:45
+    # the flight took off late") neither joins it nor, out of order, voids it.
+    for run in _timestamp_runs(str(brief.get("content") or script or "")):
+        seconds = [value for value, _ in run]
+        if len(run) >= 3 and seconds[0] == 0 and all(later - earlier >= 10 for earlier, later in pairwise(seconds)):
+            return [chapter for _, chapter in run]
+    return []
 
 
 def _phrase(value: str) -> str:
@@ -36,8 +71,6 @@ def _phrase(value: str) -> str:
 
 
 def build_session_expansion(
-    title: str,
-    keyword_signals: list[dict[str, Any]],
     *,
     related_phrases: list[str] | None = None,
     short_form: bool = False,
@@ -50,8 +83,6 @@ def build_session_expansion(
     """
 
     phrases = [_phrase(item) for item in (related_phrases or []) if str(item).strip()]
-    if not phrases:
-        phrases = [_phrase(item.get("keyword", "")) for item in keyword_signals[:3] if item.get("keyword")]
     hub = phrases[0] if phrases else ""
     # "Watch next" must be a different search, not a variant of this one.
     phrases = [hub, *diverse_followups(hub, phrases)] if hub else phrases
@@ -72,8 +103,6 @@ def build_session_expansion(
 
 
 def build_binge_bridge(
-    title: str,
-    content_angle: str,
     *,
     related_phrases: list[str] | None = None,
     short_form: bool = False,

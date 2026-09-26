@@ -12,31 +12,21 @@
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Loaded without blocking the first paint: the app renders in system
-         fonts at once (or entirely, offline) and swaps them in when ready. -->
+    <!-- A plain stylesheet: an inline onload handler would need the Content
+         Security Policy to allow inline scripts. display=swap keeps text
+         visible in system fonts until the web fonts arrive. -->
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Geist:wght@300..800&family=Geist+Mono:wght@400..600&display=swap"
-      media="print"
-      onload="this.media='all'"
     />
-    <script>
-      // Apply the stored theme before first paint so a dark-mode reload never
-      // flashes a white screen.
-      try {
-        var stored = localStorage.getItem("win-engine-theme");
-        var dark =
-          stored === "dark" ||
-          ((!stored || stored === "system") &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches);
-        if (dark) document.documentElement.classList.add("dark");
-      } catch (e) {}
-    </script>
-    <script type="module" crossorigin src="/app-assets/assets/index-gpY1UDeO.js"></script>
-    <link rel="modulepreload" crossorigin href="/app-assets/assets/react-C6WQlCgo.js">
-    <link rel="modulepreload" crossorigin href="/app-assets/assets/query--VXmr2ws.js">
-    <link rel="modulepreload" crossorigin href="/app-assets/assets/forms-CWQQ517x.js">
-    <link rel="stylesheet" crossorigin href="/app-assets/assets/index-Dwdb8syt.css">
+    <!-- Synchronous on purpose: the stored theme must apply before first paint.
+         A public file, so Vite prefixes the base: /app-assets/ when built. -->
+    <script src="/app-assets/theme-init.js"></script>
+    <script type="module" crossorigin src="/app-assets/assets/index-BJfkBv6o.js"></script>
+    <link rel="modulepreload" crossorigin href="/app-assets/assets/react-DH0MzLt2.js">
+    <link rel="modulepreload" crossorigin href="/app-assets/assets/query-BAQv-H8H.js">
+    <link rel="modulepreload" crossorigin href="/app-assets/assets/forms-BGEzWZQ9.js">
+    <link rel="stylesheet" crossorigin href="/app-assets/assets/index-_S1GNUS5.css">
   </head>
   <body>
     <div id="root"></div>

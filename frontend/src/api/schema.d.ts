@@ -55,7 +55,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/dashboard_legacy": {
+    "/next/{spa_path}": {
         parameters: {
             query?: never;
             header?: never;
@@ -63,10 +63,48 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Legacy Dashboard
-         * @description Rollback route for the pre-Phase-3C embedded dashboard.
+         * React App
+         * @description Serve the React frontend build.
+         *
+         *     Mounted beside the existing dashboard rather than over it: `/`, `/app`, and
+         *     `/dashboard_view` keep serving the current interface until the React app
+         *     reaches feature parity. Every path under `/next` returns the same document
+         *     so client-side routing survives a reload or a deep link.
+         *
+         *     Built with `npm run build` in `frontend/`. The production bundle is kept in
+         *     the repository because the Python-only Docker image does not run Node; a
+         *     missing bundle is still reported as a clear 404 rather than a 500.
          */
-        get: operations["legacy_dashboard_dashboard_legacy_get"];
+        get: operations["react_app_next__spa_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/next": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * React App
+         * @description Serve the React frontend build.
+         *
+         *     Mounted beside the existing dashboard rather than over it: `/`, `/app`, and
+         *     `/dashboard_view` keep serving the current interface until the React app
+         *     reaches feature parity. Every path under `/next` returns the same document
+         *     so client-side routing survives a reload or a deep link.
+         *
+         *     Built with `npm run build` in `frontend/`. The production bundle is kept in
+         *     the repository because the Python-only Docker image does not run Node; a
+         *     missing bundle is still reported as a clear 404 rather than a 500.
+         */
+        get: operations["react_app_next_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -184,10 +222,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Diagnostics */
-        get: operations["diagnostics_diagnostics_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Diagnostics */
+        post: operations["diagnostics_diagnostics_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1018,7 +1056,7 @@ export interface components {
             language: string;
             /**
              * Region
-             * @description Target region (Global, India, US, etc.)
+             * @description Target region (global, india, us, etc.)
              * @default global
              */
             region: string;
@@ -1461,6 +1499,11 @@ export interface components {
             region?: string | null;
             /** Notes */
             notes?: string | null;
+            /**
+             * Replace Existing Evidence
+             * @default false
+             */
+            replace_existing_evidence: boolean;
         };
         /** RecordExperimentRequest */
         RecordExperimentRequest: {
@@ -1558,6 +1601,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
     };
     responses: never;
@@ -1628,9 +1675,42 @@ export interface operations {
             };
         };
     };
-    legacy_dashboard_dashboard_legacy_get: {
+    react_app_next__spa_path__get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                spa_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    react_app_next_get: {
+        parameters: {
+            query?: {
+                spa_path?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1644,6 +1724,15 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1768,7 +1857,7 @@ export interface operations {
             };
         };
     };
-    diagnostics_diagnostics_get: {
+    diagnostics_diagnostics_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1830,7 +1919,9 @@ export interface operations {
     };
     connect_youtube_channel_youtube_channel_connect_get: {
         parameters: {
-            query?: never;
+            query?: {
+                return_to?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1844,6 +1935,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

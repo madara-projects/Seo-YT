@@ -5,12 +5,14 @@ import os
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from win_engine.api import routes
 from win_engine.core.config import Settings
+from win_engine.integrations.youtube_channel import ChannelConnectError
 
 GOOGLE_URL = "https://accounts.google.com/o/oauth2/auth?state=fixture"
 COOKIE = "win_engine_oauth_return"
@@ -21,7 +23,11 @@ class OAuthReturnTests(unittest.TestCase):
         handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.db_path = handle.name
         handle.close()
-        self.settings = Settings(database_path=self.db_path)
+        # TestClient addresses the app as "testserver", so that is the redirect host here.
+        self.settings = Settings(
+            database_path=self.db_path,
+            youtube_oauth_redirect_uri="http://testserver/oauth/youtube/callback",
+        )
         app = FastAPI()
         app.include_router(routes.router)
         self.client = TestClient(app)
@@ -99,19 +105,67 @@ class OAuthReturnTests(unittest.TestCase):
         with patch.object(
             routes.YouTubeChannelService,
             "complete_authorization",
-            side_effect=ValueError("The connection request expired."),
+            side_effect=ChannelConnectError("expired_state", "The connection request expired."),
         ):
             response = self._callback("?code=abc&state=xyz", cookie="https://evil.example/")
 
-        self.assertEqual(response.headers["location"], "/?youtube=error")
+        self.assertEqual(response.headers["location"], "/?youtube=error&reason=expired_state")
 
-    def test_reason_is_url_encoded(self):
-        response = self._callback("?error=bad%20thing%26more", cookie="/next/settings")
+    def test_an_unexpected_failure_is_logged_by_type_only(self):
+        with (
+            patch.object(
+                routes.YouTubeChannelService,
+                "complete_authorization",
+                side_effect=RuntimeError("token response with secrets"),
+            ),
+            self.assertLogs("win_engine.api.routes", level="WARNING") as logs,
+        ):
+            response = self._callback("?code=abc&state=xyz", cookie="/next/settings")
 
-        self.assertEqual(
-            response.headers["location"],
-            "/next/settings?youtube=error&reason=bad+thing%26more",
-        )
+        self.assertEqual(response.headers["location"], "/next/settings?youtube=error&reason=connect_failed")
+        self.assertNotIn("secrets", "\n".join(logs.output))
+
+    def test_connect_moves_to_the_redirect_host_first(self):
+        # Browsing as localhost while Google returns to 127.0.0.1 would lose the return cookie.
+        self.settings.youtube_oauth_redirect_uri = "http://127.0.0.1:8000/oauth/youtube/callback"
+        response = self._connect("?return_to=/next/channel")
+
+        target = urlsplit(response.headers["location"])
+        self.assertEqual((target.scheme, target.netloc, target.path), ("http", "127.0.0.1:8000", "/youtube/channel/connect"))
+        self.assertEqual(parse_qs(target.query), {"return_to": ["/next/channel"]})
+        self.assertNotIn("set-cookie", response.headers)
+
+    def test_connect_does_not_bounce_on_another_spelling_of_the_redirect_host(self):
+        # Browsers lower-case the host and drop a default port; redirecting on
+        # the raw text sent them back to the same address forever.
+        for redirect_uri, host in (
+            ("http://LocalHost:8000/oauth/youtube/callback", "localhost:8000"),
+            ("http://127.0.0.1:80/oauth/youtube/callback", "127.0.0.1"),
+            ("https://TestServer:443/oauth/youtube/callback", "testserver"),
+            ("http://[::1]:8000/oauth/youtube/callback", "[::1]:8000"),
+        ):
+            with self.subTest(redirect_uri=redirect_uri):
+                self.settings.youtube_oauth_redirect_uri = redirect_uri
+                response = self.client.get("/youtube/channel/connect", headers={"Host": host}, follow_redirects=False)
+                self.assertEqual(response.headers["location"], GOOGLE_URL)
+
+    def test_connect_still_moves_for_another_port_or_a_malformed_host(self):
+        self.settings.youtube_oauth_redirect_uri = "http://testserver:8000/oauth/youtube/callback"
+        for host in ("testserver", "testserver:80", "testserver:abc"):
+            with self.subTest(host=host):
+                response = self.client.get("/youtube/channel/connect", headers={"Host": host}, follow_redirects=False)
+                self.assertEqual(urlsplit(response.headers["location"]).netloc, "testserver:8000")
+
+    def test_connect_without_oauth_setup_returns_to_the_page_with_a_reason(self):
+        with patch.object(routes.YouTubeChannelService, "authorization_url", side_effect=ValueError("not configured")):
+            response = self._connect("?return_to=/next/settings")
+
+        self.assertEqual(response.headers["location"], "/next/settings?youtube=error&reason=not_configured")
+
+    def test_free_text_in_the_error_parameter_is_not_echoed(self):
+        response = self._callback("?error=call%20555-0100%20for%20help", cookie="/next/settings")
+
+        self.assertEqual(response.headers["location"], "/next/settings?youtube=error&reason=unknown")
 
 
 if __name__ == "__main__":

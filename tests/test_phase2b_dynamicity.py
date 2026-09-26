@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 from win_engine.analysis.creator_brief import build_creator_brief, creator_topic
 from win_engine.analysis.generation_quality import evaluate_package_quality
-from win_engine.analysis.topic_lock import force_topic_in_tags
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.strategy_engine import _content_specific_fallback, build_seo_package
 
@@ -90,11 +89,6 @@ class Phase2BDynamicityTests(unittest.TestCase):
         self.assertIn("lemon", two["description"].casefold())
 
     def test_generic_and_unrelated_tags_are_removed_or_rejected(self):
-        locked = force_topic_in_tags(
-            ["python csv parsing", "youtube", "viral", "trending", "chicken recipe", "shorts"],
-            "python csv parsing", "education", context=["A Python tutorial parsing CSV files safely"],
-        )
-        self.assertEqual(locked, ["python csv parsing", "shorts"])
         gate = evaluate_package_quality(
             {
                 "title": "How to Parse CSV Files Safely in Python",

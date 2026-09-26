@@ -168,7 +168,9 @@ class Phase4QualityTests(unittest.TestCase):
             brief["exact_quote"],
             "You don't give up overnight on someone. You reach a point where your heart quietly says, Enough",
         )
-        self.assertIn("rainy weather", brief["visual_requirements"])
+        # Prose ("the background of the video is ...") is not a "Background:"
+        # label, so no visual requirement is inferred from it.
+        self.assertEqual(brief["visual_requirements"], "")
         self.assertNotIn("background", brief["exact_quote"].casefold())
         self.assertTrue(brief["topic"].startswith("you don't give up overnight"))
 
@@ -181,7 +183,6 @@ class Phase4QualityTests(unittest.TestCase):
     def test_shorts_never_receive_synthetic_chapters(self):
         chapters = build_chapters(
             "A reflective quote Short",
-            [{"keyword": "Spell Shorts"}, {"keyword": "Love Spell"}],
             {"video_format": "youtube_shorts", "duration_seconds": 20},
         )
         self.assertEqual(chapters, [])
@@ -198,8 +199,9 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertNotIn("how to is-", combined)
         self.assertNotIn("background of the video is", package["description"].casefold())
         self.assertIn("you don't give up overnight on someone", package["title"].casefold())
-        self.assertIn("rainy weather", package["description"].casefold())
-        self.assertIn("knowing when to let go", package["tags"])
+        self.assertIn("you don't give up overnight on someone", package["description"].casefold())
+        # "enough" in a quote no longer adds the stock tag "knowing when to let go".
+        self.assertNotIn("knowing when to let go", package["tags"])
 
     def test_silence_quote_fallback_is_a_complete_human_package(self):
         quote = "at the end, it's only me and the silence that knows everything.."
@@ -212,18 +214,19 @@ class Phase4QualityTests(unittest.TestCase):
             creator_intent="A reflective Short about solitude, silence, and private thoughts.",
         )
         package = _content_specific_fallback(brief["topic"], [], brief)
-        self.assertGreaterEqual(len(package["variants"]), 4)
-        self.assertTrue(package["title"].startswith("Some Things Only Silence Knows "))
+        # The title, tags and hashtags come from the creator's words. Five titles,
+        # "#DeepThoughts #Solitude", "inner silence" and "SILENCE KNOWS" were
+        # written for this test quote and given to any quote about silence.
+        self.assertTrue(package["title"].casefold().startswith("at the end, it's only me and the silence "))
         self.assertTrue(package["title"].endswith(" #shorts"))
         self.assertIn("A lone person walks through quiet streets.", package["description"])
         self.assertNotIn("A One person", package["description"])
-        self.assertIn("inner silence", package["tags"])
-        self.assertEqual(package["hashtags"], ["#shorts", "#DeepThoughts", "#Solitude"])
+        self.assertNotIn("inner silence", package["tags"])
+        self.assertEqual(package["hashtags"], ["#shorts"])
 
         title_rows = [{"title": title, "package_intent": "Browse"} for title in package["variants"]]
         choices = build_title_thumbnail_packages(title_rows, brief, validated=True)
-        self.assertGreaterEqual(len(choices), 4)
-        self.assertEqual(choices[0]["thumbnail_text"], "SILENCE KNOWS")
+        self.assertNotEqual(choices[0]["thumbnail_text"], "SILENCE KNOWS")
         self.assertIn("walking alone", choices[0]["thumbnail_visual"].casefold())
         self.assertNotEqual(choices[0]["viewer_promise"], "A clear, truthful reason to watch.")
 
@@ -235,13 +238,14 @@ class Phase4QualityTests(unittest.TestCase):
             creator_intent="A reflection about recognizing a person's rarity and worth.",
         )
         package = _content_specific_fallback(brief["topic"], [], brief)
-        self.assertTrue(package["title"].startswith("Know Your Worth—You're Hard to Replace"))
-        self.assertGreaterEqual(len(package["variants"]), 4)
-        self.assertIn("being valued", package["tags"])
+        # "Know Your Worth—You're Hard to Replace", "being valued" and "KNOW YOUR
+        # WORTH" were written for this test quote; the package uses its words.
+        self.assertTrue(package["title"].startswith("You deserve somebody who knows how hard it is"))
+        self.assertNotIn("being valued", package["tags"])
         choices = build_title_thumbnail_packages(
             [{"title": title} for title in package["variants"]], brief, validated=True,
         )
-        self.assertEqual(choices[0]["thumbnail_text"], "KNOW YOUR WORTH")
+        self.assertNotEqual(choices[0]["thumbnail_text"], "KNOW YOUR WORTH")
 
     def test_full_quote_title_is_rejected_when_complementary_titles_exist(self):
         quote = "You deserve somebody who knows how hard it is to find somebody like you"
@@ -486,7 +490,7 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertEqual(trace["status"], "insufficient_evidence")
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
-    @patch("win_engine.llm.seo_writer._generate_one")
+    @patch("win_engine.llm.seo_writer.generate_one")
     def test_one_repair_maximum(self, mocked_generate, _available):
         broken = valid_package("They Left Because I Asked for More")
         broken["description"] += " They left after I asked for more."
@@ -500,7 +504,7 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertTrue(packages["english"]["generation_trace"]["repair_succeeded"])
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
-    @patch("win_engine.llm.seo_writer._generate_one")
+    @patch("win_engine.llm.seo_writer.generate_one")
     def test_missing_shorts_title_format_uses_the_single_repair(self, mocked_generate, _available):
         broken = valid_package("Did I Deserve More Than the Bare Minimum?")
         broken["variants"] = ["Did I Deserve More Than the Bare Minimum?", "The Question I Could Never Ask Them"]
@@ -515,7 +519,7 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertTrue(packages["english"]["generation_trace"]["repair_succeeded"])
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
-    @patch("win_engine.llm.seo_writer._generate_one")
+    @patch("win_engine.llm.seo_writer.generate_one")
     def test_failed_repair_retains_bounded_quality_reasons(self, mocked_generate, _available):
         broken = valid_package("They Left Because I Asked for More #shorts")
         broken["variants"] = [broken["title"]]
@@ -532,7 +536,7 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertIn("gemini_quality_rejection_after_repair", trace["events"])
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
-    @patch("win_engine.llm.seo_writer._generate_one", return_value=None)
+    @patch("win_engine.llm.seo_writer.generate_one", return_value=None)
     def test_empty_or_quota_result_does_not_trigger_repair(self, mocked_generate, _available):
         packages, source = seo_writer.write_multilang_packages_with_source("A video", languages=["english"])
         self.assertEqual(mocked_generate.call_count, 1)

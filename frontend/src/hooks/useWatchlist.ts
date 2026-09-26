@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/api/client";
 import type {
   WatchChannelResponse,
@@ -7,22 +7,15 @@ import type {
   WatchVideoResponse,
   WatchVideosResponse,
 } from "@/api/watchlistTypes";
-
-export const watchKeys = {
-  all: ["watchlist"] as const,
-  lists: () => [...watchKeys.all, "list"] as const,
-  channels: (state: string) => [...watchKeys.lists(), "channels", state] as const,
-  videos: (state: string, query: string) => [...watchKeys.lists(), "videos", state, query] as const,
-  channel: (id: number) => [...watchKeys.all, "channel", id] as const,
-  video: (id: number) => [...watchKeys.all, "video", id] as const,
-};
+import { mutationKeys, watchKeys } from "./queryKeys";
 
 export function useWatchChannels(state: string) {
   return useQuery({
     queryKey: watchKeys.channels(state),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<WatchChannelsResponse>(
         `/api/watchlist/channels${state ? `?state=${encodeURIComponent(state)}` : ""}`,
+        { signal },
       ),
   });
 }
@@ -30,22 +23,25 @@ export function useWatchChannels(state: string) {
 export function useWatchVideos(state: string, query: string) {
   return useQuery({
     queryKey: watchKeys.videos(state, query),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams();
       if (state) params.set("state", state);
       if (query) params.set("q", query);
       const search = params.toString();
-      return apiRequest<WatchVideosResponse>(`/api/watchlist/videos${search ? `?${search}` : ""}`);
+      return apiRequest<WatchVideosResponse>(`/api/watchlist/videos${search ? `?${search}` : ""}`, { signal });
     },
-    // Typing a search keeps the current results on screen until new ones arrive.
-    placeholderData: keepPreviousData,
+    // Typing a search keeps the current results on screen until new ones
+    // arrive. Switching between active and archived doesn't: the old rows
+    // would sit under the wrong filter.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[3] === state ? previous : undefined,
   });
 }
 
 export function useWatchChannel(id: number | null) {
   return useQuery({
     queryKey: watchKeys.channel(id ?? 0),
-    queryFn: () => apiRequest<WatchChannelResponse>(`/api/watchlist/channels/${id}`),
+    queryFn: ({ signal }) => apiRequest<WatchChannelResponse>(`/api/watchlist/channels/${id}`, { signal }),
     enabled: typeof id === "number" && id > 0,
   });
 }
@@ -53,7 +49,7 @@ export function useWatchChannel(id: number | null) {
 export function useWatchVideo(id: number | null) {
   return useQuery({
     queryKey: watchKeys.video(id ?? 0),
-    queryFn: () => apiRequest<WatchVideoResponse>(`/api/watchlist/videos/${id}`),
+    queryFn: ({ signal }) => apiRequest<WatchVideoResponse>(`/api/watchlist/videos/${id}`, { signal }),
     enabled: typeof id === "number" && id > 0,
   });
 }
@@ -64,7 +60,6 @@ function useWatchUpdater() {
   return (data: WatchChannelResponse & WatchVideoResponse) => {
     if (data.channel?.id) queryClient.setQueryData(watchKeys.channel(data.channel.id), { channel: data.channel });
     if (data.video?.id) queryClient.setQueryData(watchKeys.video(data.video.id), { video: data.video });
-    // A channel refresh also saves its recent uploads as watched videos.
     void queryClient.invalidateQueries({ queryKey: watchKeys.lists() });
   };
 }
@@ -89,39 +84,54 @@ export function useAddWatchVideo() {
   });
 }
 
-/**
- * Captures a new dated snapshot. A channel refresh also lists its 20 most
- * recent uploads, which costs about 100 quota units; a video costs one.
+/*
+ * The actions below are keyed by the record (`mutationKeys.recordAction`), so
+ * its panel finds one still running after the creator looked at another.
  */
-export function useResearchWatchItem() {
+
+/**
+ * Captures a new dated snapshot. A channel refresh reads the channel (1 unit),
+ * one page of its uploads playlist (1 unit) and those videos' counts (1 unit),
+ * so about 3 quota units; a video costs one.
+ */
+export function useResearchWatchItem(kind: WatchKind, id: number) {
   const store = useWatchUpdater();
+  const queryClient = useQueryClient();
   return useMutation<WatchChannelResponse & WatchVideoResponse, unknown, { kind: WatchKind; id: number }>({
+    mutationKey: mutationKeys.recordAction(`watch-${kind}`, id, "research"),
     retry: false,
-    mutationFn: ({ kind, id }) =>
-      apiRequest(`/api/watchlist/${kind}s/${id}/research`, { method: "POST" }),
-    onSuccess: store,
+    mutationFn: ({ kind: itemKind, id: itemId }) =>
+      apiRequest(`/api/watchlist/${itemKind}s/${itemId}/research`, { method: "POST" }),
+    onSuccess: (data, variables) => {
+      store(data);
+      // A channel refresh saves new snapshots of its uploads too, which open
+      // video inspectors would otherwise keep showing from their cache.
+      if (variables.kind === "channel") void queryClient.invalidateQueries({ queryKey: watchKeys.all });
+    },
   });
 }
 
 /** Compares a video with its channel's other watched videos. Local only: no quota. */
-export function useAnalyzeOutlier() {
+export function useAnalyzeOutlier(id: number) {
   const store = useWatchUpdater();
   return useMutation<WatchVideoResponse, unknown, number>({
-    mutationFn: (id) =>
-      apiRequest<WatchVideoResponse>(`/api/watchlist/videos/${id}/analyze-outlier`, { method: "POST" }),
+    mutationKey: mutationKeys.recordAction("watch-video", id, "outlier"),
+    mutationFn: (videoId) =>
+      apiRequest<WatchVideoResponse>(`/api/watchlist/videos/${videoId}/analyze-outlier`, { method: "POST" }),
     onSuccess: store,
   });
 }
 
-export function useUpdateWatchItem() {
+export function useUpdateWatchItem(kind: WatchKind, id: number) {
   const store = useWatchUpdater();
   return useMutation<
     WatchChannelResponse & WatchVideoResponse,
     unknown,
     { kind: WatchKind; id: number; changes: { state?: string; notes?: string } }
   >({
-    mutationFn: ({ kind, id, changes }) =>
-      apiRequest(`/api/watchlist/${kind}s/${id}`, { method: "PATCH", body: changes }),
+    mutationKey: mutationKeys.recordAction(`watch-${kind}`, id, "update"),
+    mutationFn: ({ kind: itemKind, id: itemId, changes }) =>
+      apiRequest(`/api/watchlist/${itemKind}s/${itemId}`, { method: "PATCH", body: changes }),
     onSuccess: store,
   });
 }

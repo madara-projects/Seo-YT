@@ -1,5 +1,7 @@
 # Win-Engine OS — Release Verification Baseline
 
+> **Historical record.** This report describes the repository as it was on its stated date. Schema versions, test counts, file names and routes have changed since; the README and CHANGELOG describe the current state.
+
 This is the Phase 1A verification-debt closure record for the current checkout. Product logic and intended UI behavior were preserved; only browser test contracts and this verification document were updated.
 
 ## 1. Repository identity

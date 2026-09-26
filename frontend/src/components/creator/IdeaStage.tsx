@@ -20,16 +20,10 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { IconBadge } from "@/components/common/IconBadge";
+import { OptionSelect } from "@/components/common/OptionSelect";
 import { Panel } from "@/components/common/Panel";
 import type { CreatorFormValues } from "@/schemas/creator";
 import {
@@ -43,12 +37,6 @@ import {
 } from "@/lib/creatorConstants";
 
 type Form = UseFormReturn<CreatorFormValues>;
-
-/**
- * Radix Select treats "" as "no value", so an explicit "Not specified" option
- * needs a sentinel that is mapped back to "" before it reaches the form.
- */
-const NONE = "__none";
 
 /** The optional brief fields, counted to show how much the creator supplied. */
 const BRIEF_FIELDS = [
@@ -77,13 +65,23 @@ const OUTPUTS = [
   { icon: ListChecks, title: "Decision & checklist", body: "A recorded choice and manual pre-publish checks." },
 ] as const;
 
-function FieldError({ message }: { message?: string }) {
-  if (!message) return null;
-  return (
-    <p role="alert" className="text-xs font-medium text-tone-bad">
-      {message}
+/**
+ * A field's error, or its hint while valid, with the id its control points
+ * `aria-describedby` at, so a screen reader reads the message with the field.
+ */
+function FieldNote({ id, error, hint }: { id: string; error?: string; hint?: string }) {
+  if (error) {
+    return (
+      <p id={id} role="alert" className="text-xs font-medium text-tone-bad">
+        {error}
+      </p>
+    );
+  }
+  return hint ? (
+    <p id={id} className="text-xs text-muted-foreground">
+      {hint}
     </p>
-  );
+  ) : null;
 }
 
 function SelectField({
@@ -91,13 +89,11 @@ function SelectField({
   name,
   label,
   options,
-  hint,
 }: {
   form: Form;
   name: keyof CreatorFormValues;
   label: string;
   options: { value: string; label: string }[];
-  hint?: string;
 }) {
   return (
     <div className="space-y-2">
@@ -106,24 +102,15 @@ function SelectField({
         control={form.control}
         name={name}
         render={({ field }) => (
-          <Select
-            value={field.value ? String(field.value) : NONE}
-            onValueChange={(value) => field.onChange(value === NONE ? "" : value)}
-          >
-            <SelectTrigger id={name} aria-label={label}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {options.map((option) => (
-                <SelectItem key={option.value || NONE} value={option.value || NONE}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <OptionSelect
+            id={name}
+            ariaLabel={label}
+            value={String(field.value ?? "")}
+            onValueChange={field.onChange}
+            options={options}
+          />
         )}
       />
-      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }
@@ -144,6 +131,7 @@ function TextField({
   maxLength?: number;
 }) {
   const error = form.formState.errors[name]?.message;
+  const noteId = `${name}-note`;
   return (
     <div className="space-y-2">
       <Label htmlFor={name}>{label}</Label>
@@ -152,10 +140,10 @@ function TextField({
         placeholder={placeholder}
         maxLength={maxLength}
         aria-invalid={Boolean(error)}
+        aria-describedby={error || hint ? noteId : undefined}
         {...form.register(name)}
       />
-      {hint && !error ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-      <FieldError message={error as string | undefined} />
+      <FieldNote id={noteId} error={error as string | undefined} hint={hint} />
     </div>
   );
 }
@@ -176,6 +164,7 @@ function AreaField({
   rows?: number;
 }) {
   const error = form.formState.errors[name]?.message;
+  const noteId = `${name}-note`;
   return (
     <div className="space-y-2">
       <Label htmlFor={name}>{label}</Label>
@@ -184,10 +173,10 @@ function AreaField({
         rows={rows}
         placeholder={placeholder}
         aria-invalid={Boolean(error)}
+        aria-describedby={error || hint ? noteId : undefined}
         {...form.register(name)}
       />
-      {hint && !error ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-      <FieldError message={error as string | undefined} />
+      <FieldNote id={noteId} error={error as string | undefined} hint={hint} />
     </div>
   );
 }
@@ -260,11 +249,11 @@ export function IdeaStage({
                 rows={8}
                 placeholder="Paste the script, or describe the video idea in a sentence or two…"
                 aria-invalid={Boolean(scriptError)}
-                aria-describedby="script-help"
+                aria-describedby={scriptError ? "script-note script-help" : "script-help"}
                 className="min-h-47.5 resize-y bg-elevated text-[0.9375rem]"
                 {...form.register("script")}
               />
-              <FieldError message={scriptError} />
+              <FieldNote id="script-note" error={scriptError} />
               <p id="script-help" className="text-xs text-muted-foreground">
                 Research queries are derived from this text.
               </p>

@@ -6,6 +6,7 @@ import {
   fieldStateLabel,
   findingSeverity,
   metadataVerdict,
+  publishedFieldState,
   windowLabel,
 } from "./auditFormat";
 import { AUDIT_FIXTURE } from "@/test/fixtures/audit";
@@ -49,6 +50,33 @@ describe("metadataVerdict", () => {
     const unavailable = AUDIT_FIXTURE.comparisons.map((item) => ({ ...item, generated_to_published: "unavailable" }));
     expect(metadataVerdict(unavailable).label).toBe("YouTube data unavailable");
     expect(metadataVerdict([]).label).toBe("YouTube data unavailable");
+  });
+
+  it("judges against the recorded selection, not the primary package", () => {
+    // Package C was selected and published exactly; the primary differs everywhere.
+    const selected = AUDIT_FIXTURE.comparisons.map((item) => ({
+      ...item,
+      generated_to_published: "changed",
+      selected_to_published: "exact_match",
+    }));
+    expect(metadataVerdict(selected, true)).toEqual({
+      label: "Matches your selection",
+      tone: "ok",
+      text: "The title, description, tags and hashtags on YouTube match the package you selected.",
+    });
+    expect(metadataVerdict(selected, false).label).toBe("Differences found");
+    expect(publishedFieldState(selected[0]!, true)).toBe("exact_match");
+    expect(publishedFieldState(selected[0]!, false)).toBe("changed");
+  });
+
+  it("names the fields that differ from the selection", () => {
+    const selected = AUDIT_FIXTURE.comparisons.map((item) => ({
+      ...item,
+      selected_to_published: item.field === "title" ? "changed" : "exact_match",
+    }));
+    expect(metadataVerdict(selected, true).text).toBe(
+      "What's on YouTube differs from the package you selected in: title.",
+    );
   });
 });
 

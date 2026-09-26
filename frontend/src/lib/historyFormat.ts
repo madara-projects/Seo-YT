@@ -1,4 +1,5 @@
 import type { HistoryRun } from "@/api/historyTypes";
+import { UNAVAILABLE } from "./utils";
 
 /**
  * Timestamp formatting for saved packages.
@@ -13,9 +14,9 @@ const DISPLAY_TIME_ZONE = "Asia/Kolkata";
 const DISPLAY_LOCALE = "en-IN";
 
 export function historyDate(value?: string | null): string {
-  if (!value) return "Unknown";
+  if (!value) return UNAVAILABLE;
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "Unknown";
+  if (Number.isNaN(parsed.getTime())) return UNAVAILABLE;
 
   return `${parsed.toLocaleString(DISPLAY_LOCALE, {
     timeZone: DISPLAY_TIME_ZONE,
@@ -29,9 +30,9 @@ export function historyDate(value?: string | null): string {
 
 /** Date only, in the same zone as `historyDate`: "24 Sept 2026". */
 export function shortDate(value?: string | null): string {
-  if (!value) return "Unknown";
+  if (!value) return UNAVAILABLE;
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "Unknown";
+  if (Number.isNaN(parsed.getTime())) return UNAVAILABLE;
 
   return parsed.toLocaleDateString(DISPLAY_LOCALE, {
     timeZone: DISPLAY_TIME_ZONE,
@@ -50,7 +51,7 @@ const ISO_TIMESTAMP = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|
 export function withReadableDates(text: string): string {
   return text.replace(ISO_TIMESTAMP, (match) => {
     const date = shortDate(match);
-    return date === "Unknown" ? match : date;
+    return date === UNAVAILABLE ? match : date;
   });
 }
 

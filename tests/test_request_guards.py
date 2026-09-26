@@ -38,6 +38,12 @@ class CrossSiteCheckTests(unittest.TestCase):
         self.assertTrue(is_cross_site_write(_request("POST", {**host, "origin": "https://evil.example"})))
         self.assertTrue(is_cross_site_write(_request("POST", {**host, "origin": "null"})))
 
+    def test_an_origin_is_compared_without_case_and_a_malformed_one_is_refused(self):
+        host = {"host": "localhost:8000"}
+        self.assertFalse(is_cross_site_write(_request("POST", {**host, "origin": "http://LocalHost:8000"})))
+        # urlsplit raises on an unclosed IPv6 bracket; that used to surface as a 500.
+        self.assertTrue(is_cross_site_write(_request("POST", {**host, "origin": "http://[::1"})))
+
 
 class CrossSiteMiddlewareTests(unittest.TestCase):
     def setUp(self) -> None:

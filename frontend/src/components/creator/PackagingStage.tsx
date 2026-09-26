@@ -1,4 +1,5 @@
 import {
+  Bookmark,
   CalendarClock,
   Clapperboard,
   FileText,
@@ -9,18 +10,19 @@ import {
   Tag,
   Target,
   Type,
-  Bookmark,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/common/Badge";
 import { CopyButton } from "@/components/common/CopyButton";
-import { EvidenceChip } from "@/components/common/EvidenceChip";
+import { EvidenceChip, type EvidenceTone } from "@/components/common/EvidenceChip";
 import { Inset, Panel } from "@/components/common/Panel";
 import { EmptyState, UnavailableNote } from "@/components/common/States";
 import { StatCard } from "@/components/common/StatCard";
-import { asObject, cn, displayValue, formatNumber } from "@/lib/utils";
+import { asObject, cn, displayValue } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
+import { opportunityText, titleScoreText } from "@/lib/dashboardFormat";
 import { copyValue } from "@/lib/packages";
+import { KeywordResearchPanel } from "./KeywordResearchPanel";
 import { ThumbnailMock } from "./ThumbnailMock";
 import type { AnalyzeResponse, PackageOption, SelectionStatus } from "@/api/types";
 
@@ -66,7 +68,7 @@ function FieldHeader({
   );
 }
 
-/** How the selected package might look in a search list. A mock, labelled as one. */
+/** How the package might look in a search list. A mock, labelled as one. */
 function SearchPreview({ option, duration }: { option: PackageOption; duration?: string }) {
   const long = option.title.length > TITLE_TRUNCATION_GUIDE;
   return (
@@ -99,19 +101,33 @@ function SearchPreview({ option, duration }: { option: PackageOption; duration?:
   );
 }
 
+const SELECTION_STATE: Record<SelectionStatus, { tone: EvidenceTone; chip: string }> = {
+  saved: { tone: "ok", chip: "Saved" },
+  saving: { tone: "neutral", chip: "Saving" },
+  error: { tone: "bad", chip: "Not saved" },
+  unrecorded: { tone: "neutral", chip: "Not chosen" },
+};
+
+/**
+ * The generated package. `preview` is the package on show; `chosen` is only
+ * the one the creator explicitly selected, so nothing reads as "Selected"
+ * before a choice is made.
+ */
 export function PackagingStage({
   data,
   options,
-  selected,
+  preview,
+  chosen,
   selectionStatus,
   onSelect,
   durationSeconds,
 }: {
   data: AnalyzeResponse | null;
   options: PackageOption[];
-  selected: PackageOption | null;
+  preview: PackageOption | null;
+  chosen: PackageOption | null;
   selectionStatus: SelectionStatus;
-  onSelect: (packageId: string) => void;
+  onSelect: (optionId: string) => void;
   durationSeconds?: string;
 }) {
   if (!data) {
@@ -123,14 +139,17 @@ export function PackagingStage({
       />
     );
   }
-  if (!selected) {
+  if (!preview) {
     return <EmptyState title="The analysis returned no usable package option." />;
   }
 
   const opportunity = asObject(asObject(data.opportunity_gap_analysis).opportunity_score);
+  const opportunityMeasured = typeof opportunity.score === "number";
   const timing = asObject(data.upload_timing);
   const timingZone = String(timing.timezone ?? timing.today_timezone ?? "").trim();
+  const timingConfidence = String(timing.confidence ?? "").trim().toLowerCase();
   const duration = durationSeconds ? formatSeconds(durationSeconds, "") : "";
+  const titleOnly = options.some((option) => option.packageId === null);
 
   const recurringWindow =
     timing.recommended_time && timingZone
@@ -147,8 +166,9 @@ export function PackagingStage({
       : selectionStatus === "saving"
         ? "Saving to History…"
         : selectionStatus === "error"
-          ? "Could not save; retry selection."
-          : "Preview only until you select it.";
+          ? "Could not save; select it again to retry."
+          : `Nothing is recorded until you select one. Previewing ${preview.label}.`;
+  const selectionState = SELECTION_STATE[selectionStatus];
 
   return (
     <div className="space-y-5">
@@ -156,19 +176,19 @@ export function PackagingStage({
         <StatCard
           label="Opportunity score"
           icon={Target}
-          value={`${displayValue(opportunity.score)} / 100`}
-          caption="Local heuristic, not a performance guarantee."
-          tone="warn"
-          toneLabel="Heuristic"
+          value={opportunityText(opportunity.score)}
+          caption={
+            opportunityMeasured
+              ? "Local heuristic, not a performance guarantee."
+              : "Not measured: no competitor results were returned to score against."
+          }
+          tone={opportunityMeasured ? "warn" : "neutral"}
+          toneLabel={opportunityMeasured ? "Heuristic" : "Unavailable"}
         />
         <StatCard
-          label="Selected title quality"
+          label={chosen ? "Selected title quality" : "Previewed title quality"}
           icon={Type}
-          value={
-            selected.titleQualityScore === null
-              ? "Unavailable"
-              : `${formatNumber(selected.titleQualityScore)} / 10`
-          }
+          value={titleScoreText(preview.titleQualityScore)}
           caption="Local title-quality heuristic, not measured CTR."
           tone="warn"
           toneLabel="Heuristic"
@@ -177,10 +197,10 @@ export function PackagingStage({
           label="Selection"
           icon={Bookmark}
           iconTone={selectionStatus === "saved" ? "ok" : "brand"}
-          value={selected.label}
+          value={chosen ? chosen.label : "None yet"}
           caption={selectionCaption}
-          tone={selectionStatus === "saved" ? "ok" : selectionStatus === "error" ? "bad" : "warn"}
-          toneLabel={selectionStatus === "saved" ? "Saved" : "Local"}
+          tone={selectionState.tone}
+          toneLabel={selectionState.chip}
         />
       </div>
 
@@ -189,14 +209,13 @@ export function PackagingStage({
           <Panel
             icon={Clapperboard}
             title="Generated SEO package"
-            description="Copy each field into YouTube Studio, or copy the whole bundle at once."
+            description={`${chosen ? "Your selection" : `Previewing ${preview.label}`}. Copy each field into YouTube Studio, or copy the whole bundle at once.`}
             aside={
               <>
-                <EvidenceChip tone={data.generation_source === "gemini" ? "info" : "warn"}>
-                  {selected.source}
-                </EvidenceChip>
+                {/* Written by Gemini or the local fallback: generated text either way. */}
+                <EvidenceChip tone="warn">{preview.source}</EvidenceChip>
                 <CopyButton
-                  value={copyValue(selected, "upload-package")}
+                  value={copyValue(preview, "upload-package")}
                   label="Copy all"
                   variant="soft"
                 />
@@ -207,12 +226,12 @@ export function PackagingStage({
               <div className="space-y-2.5">
                 <FieldHeader
                   icon={Type}
-                  label="Selected title"
-                  count={`${selected.title.length} chars`}
-                  action={<CopyButton value={copyValue(selected, "title")} label="Copy title" />}
+                  label={chosen ? "Selected title" : "Title"}
+                  count={`${preview.title.length} chars`}
+                  action={<CopyButton value={copyValue(preview, "title")} label="Copy title" />}
                 />
                 <p className="font-display text-xl font-semibold leading-snug tracking-tight text-foreground">
-                  {selected.title}
+                  {preview.title}
                 </p>
               </div>
 
@@ -220,13 +239,13 @@ export function PackagingStage({
                 <FieldHeader
                   icon={FileText}
                   label="Description"
-                  count={`${selected.description.length} chars`}
+                  count={`${preview.description.length} chars`}
                   action={
-                    <CopyButton value={copyValue(selected, "description")} label="Copy description" />
+                    <CopyButton value={copyValue(preview, "description")} label="Copy description" />
                   }
                 />
                 <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[0.8125rem] leading-relaxed text-muted-foreground scrollbar-thin">
-                  {selected.description || "No description returned."}
+                  {preview.description || "No description returned."}
                 </p>
               </div>
 
@@ -235,23 +254,26 @@ export function PackagingStage({
                   <FieldHeader
                     icon={Tag}
                     label="Video tags"
-                    count={String(selected.tags.length)}
-                    action={<CopyButton value={copyValue(selected, "tags")} label="Copy tags" />}
+                    count={String(preview.tags.length)}
+                    action={<CopyButton value={copyValue(preview, "tags")} label="Copy tags" />}
                   />
-                  <TagList items={selected.tags} emptyLabel="No tags returned." />
+                  <TagList items={preview.tags} emptyLabel="No tags returned." />
                 </div>
                 <div className="space-y-2.5">
                   <FieldHeader
                     icon={Hash}
                     label="Hashtags"
-                    count={String(selected.hashtags.length)}
-                    action={<CopyButton value={copyValue(selected, "hashtags")} label="Copy hashtags" />}
+                    count={String(preview.hashtags.length)}
+                    action={<CopyButton value={copyValue(preview, "hashtags")} label="Copy hashtags" />}
                   />
-                  <TagList items={selected.hashtags} emptyLabel="No hashtags returned." />
+                  <TagList items={preview.hashtags} emptyLabel="No hashtags returned." />
                 </div>
               </div>
             </div>
           </Panel>
+
+          <KeywordResearchPanel research={data.keyword_research} />
+
           <div className="grid gap-4 md:grid-cols-2">
             <Panel
               icon={ImageIcon}
@@ -259,10 +281,10 @@ export function PackagingStage({
               aside={<EvidenceChip tone="warn">Generated</EvidenceChip>}
             >
               <div className="space-y-2 text-[0.8125rem] leading-relaxed text-muted-foreground">
-                <p>{displayValue(selected.thumbnailVisual)}</p>
+                <p>{displayValue(preview.thumbnailVisual)}</p>
                 <p>
                   Suggested text:{" "}
-                  <span className="font-semibold text-foreground">{displayValue(selected.thumbnailText)}</span>
+                  <span className="font-semibold text-foreground">{displayValue(preview.thumbnailText)}</span>
                 </p>
               </div>
             </Panel>
@@ -272,7 +294,7 @@ export function PackagingStage({
               aside={<EvidenceChip tone="warn">Generated</EvidenceChip>}
             >
               <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
-                {displayValue(selected.viewerPromise)}
+                {displayValue(preview.viewerPromise)}
               </p>
             </Panel>
           </div>
@@ -285,7 +307,7 @@ export function PackagingStage({
             description="A mock of the title and thumbnail text at feed size."
             aside={<EvidenceChip tone="warn">Mock-up</EvidenceChip>}
           >
-            <SearchPreview option={selected} duration={duration || undefined} />
+            <SearchPreview option={preview} duration={duration || undefined} />
           </Panel>
 
           <Panel
@@ -293,8 +315,9 @@ export function PackagingStage({
             title="Upload timing guidance"
             data-testid="upload-timing-guidance"
             aside={
-              <EvidenceChip tone={timing.confidence === "HIGH" ? "ok" : "warn"}>
-                {String(timing.confidence ?? "unavailable").toUpperCase()}
+              // A heuristic whatever its confidence; the ok tone is for what the creator supplied.
+              <EvidenceChip tone={timingConfidence ? "warn" : "neutral"}>
+                {timingConfidence ? `Heuristic · ${timingConfidence} confidence` : "Unavailable"}
               </EvidenceChip>
             }
           >
@@ -329,19 +352,21 @@ export function PackagingStage({
         <div className="space-y-2">
           {options.length ? (
             options.map((option) => {
-              const isSelected = option.id === selected.id;
+              const isChosen = option.id === chosen?.id;
+              const recordable = option.packageId !== null;
               return (
                 <div
                   key={option.id}
                   className={cn(
                     "flex flex-col gap-3 rounded-xl border p-3.5 transition-colors sm:flex-row sm:items-center sm:justify-between",
-                    isSelected ? "border-brand-border bg-brand-soft/50" : "border-border bg-elevated",
+                    isChosen ? "border-brand-border bg-brand-soft/50" : "border-border bg-elevated",
                   )}
                 >
                   <div className="min-w-0 space-y-1.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[0.8125rem] font-semibold text-foreground">{option.label}</span>
                       {option.primary ? <Badge variant="brand">Primary</Badge> : null}
+                      {recordable ? null : <Badge variant="outline">Title only</Badge>}
                       <Badge variant="neutral" className="numeric">
                         {option.title.length} chars
                       </Badge>
@@ -352,11 +377,12 @@ export function PackagingStage({
                     <CopyButton value={copyValue(option, "title")} label="Copy" />
                     <Button
                       size="sm"
-                      variant={isSelected ? "default" : "outline"}
+                      variant={isChosen ? "default" : "outline"}
                       onClick={() => onSelect(option.id)}
-                      aria-pressed={isSelected}
+                      aria-pressed={isChosen}
+                      disabled={!recordable}
                     >
-                      {isSelected ? "Selected" : "Select"}
+                      {isChosen ? "Selected" : "Select"}
                     </Button>
                   </div>
                 </div>
@@ -368,6 +394,9 @@ export function PackagingStage({
           <p className="pt-1 text-xs leading-relaxed text-muted-foreground">
             All choices reuse the generated description, tags, and hashtags, because the API returns
             title and thumbnail alternatives rather than separately generated metadata bundles.
+            {titleOnly
+              ? " A title-only alternative has no saved package behind it, so it can't be recorded as your choice; copy its title if you use it."
+              : ""}
           </p>
         </div>
       </Panel>

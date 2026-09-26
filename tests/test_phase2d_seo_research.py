@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -238,35 +239,47 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         self.assertGreaterEqual(sum(topic_scores) / len(topic_scores), 72)
 
     @patch("win_engine.analysis.semantic_research.gemini_client.is_available", return_value=False)
-    def test_local_semantic_fallback_preserves_grief_silence_absence_concepts(self, _available):
+    def test_local_semantic_fallback_invents_no_quote_profile(self, _available):
+        # A profile written for this test quote ("grief", "grief quotes",
+        # "silence in grief") was applied to any source containing its words.
         quote = "Grief teaches you the weight of silence and the shape of absence."
         semantic = analyze_script_semantics(
             quote,
             {"exact_quote": quote, "video_format": "youtube_shorts"},
         )
         self.assertEqual(semantic["source"], "local_fallback")
-        self.assertEqual(semantic["primary_topic"], "grief")
-        self.assertEqual(semantic["secondary_topics"][:2], ["silence", "absence"])
-        self.assertEqual(semantic["search_intents"][:3], ["grief quotes", "silence in grief", "absence in grief"])
+        self.assertEqual(semantic["primary_topic"], "")
+        self.assertEqual(semantic["search_intents"], [])
+        self.assertEqual(semantic["keyword_clusters"], [])
 
-    def test_quote_marker_brief_uses_natural_concept_queries(self):
+    def test_quote_marker_brief_searches_only_the_creators_words(self):
+        # Without a validated topic the plan used a stock concept for any quote
+        # containing "enough" ("knowing when to let go"), whatever it meant.
+        quote = "You don't give up overnight on someone. Your heart quietly says enough."
         queries = plan_research_queries(
             script="You don't give up overnight on someone.",
             creator_brief={
                 "content": "You don't give up overnight on someone.",
-                "exact_quote": "You don't give up overnight on someone. Your heart quietly says enough.",
+                "exact_quote": quote,
                 "topic": "you don't give up overnight on someone",
                 "video_format": "youtube_shorts",
             },
             semantic_analysis={"primary_topic": "don't give overnight someone reach"},
         )
         text = " | ".join(item["query"] for item in queries).casefold()
-        self.assertIn("knowing when to let go", text)
-        self.assertIn("emotional exhaustion", text)
-        self.assertNotIn("don't give overnight someone reach", text)
+        self.assertTrue(queries)
+        self.assertNotIn("knowing when to let go", text)
+        self.assertNotIn("emotional exhaustion", text)
+        creator_words = set(re.findall(r"[a-z']+", f"{quote} reach".casefold())) | {"quotes", "about"}
+        for item in queries:
+            self.assertLessEqual(set(item["query"].casefold().split()), creator_words, item)
 
     @patch("win_engine.analysis.semantic_research.gemini_client.is_available", return_value=False)
-    def test_rarity_quote_gets_natural_semantic_profile_and_queries(self, _available):
+    def test_rarity_quote_gets_no_invented_profile_or_queries(self, _available):
+        # The quote used to receive a profile written for it ("recognizing your
+        # worth", "knowing your worth quotes"). With no validated topic and no
+        # brief topic there is nothing of the creator's to search, so no search
+        # is planned and research reports that no topic survived.
         quote = "You deserve somebody who knows how hard it is to find somebody like you"
         brief = {
             "content": quote,
@@ -275,15 +288,13 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
             "creator_intent": "A reflection about recognizing a person's rarity and worth.",
         }
         semantic = analyze_script_semantics(quote, brief)
-        self.assertEqual(semantic["primary_topic"], "recognizing your worth")
-        self.assertIn("being valued for who you are", semantic["secondary_topics"])
-        self.assertIn("know your worth", semantic["keyword_clusters"][0]["candidates"])
+        self.assertNotEqual(semantic["primary_topic"], "recognizing your worth")
+        self.assertEqual(semantic["keyword_clusters"], [])
         queries = plan_research_queries(script=quote, creator_brief=brief, semantic_analysis=semantic)
         query_text = " | ".join(item["query"] for item in queries)
-        self.assertIn("knowing your worth quotes", query_text)
-        self.assertTrue(any(phrase in query_text for phrase in (
-            "being valued for who you are", "being appreciated for who you are")))
-        self.assertNotIn("deserve somebody knows hard find", query_text)
+        self.assertNotIn("knowing your worth quotes", query_text)
+        self.assertNotIn("being valued for who you are", query_text)
+        self.assertEqual(queries, [])
 
     def test_rarity_quote_semantic_tags_survive_without_copying_quote(self):
         quote = "You deserve somebody who knows how hard it is to find somebody like you"
@@ -437,7 +448,6 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
                 {"type": "primary", "query": "grief quotes"},
                 {"type": "secondary_topic", "query": "silence in grief"},
             ],
-            "evergreen", 3600,
         )
         self.assertEqual(rows[0]["matched_queries"], ["grief quotes", "silence in grief"])
         self.assertEqual(rows[0]["matched_query_types"], ["primary", "secondary_topic"])
@@ -685,7 +695,10 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         tags, _ = select_final_tags(research, generated_tags=["i wasn't abandoned", "i was erased", "feeling forgotten"], title="A quiet emotional quote #shorts", script=quote, creator_brief={"exact_quote": quote})
         self.assertNotIn("i wasn't abandoned", tags)
         self.assertNotIn("i was erased", tags)
-        self.assertIn("feeling forgotten", tags)
+        # A paraphrase that shares no word with the source has no source support;
+        # a word list written for this quote ("erased" -> "feeling forgotten")
+        # used to grant it some.
+        self.assertNotIn("feeling forgotten", tags)
 
     def test_short_quote_fragment_is_rejected_even_when_it_has_one_content_word(self):
         quote = "I wasn't abandoned. I was erased."

@@ -92,6 +92,9 @@ export function ExperimentList({
                   <EvidenceChip tone={kind.tone}>{kind.label}</EvidenceChip>
                   <span className="numeric text-[0.6875rem] text-muted-foreground">
                     {counts.control ?? 0} control · {counts.variant ?? 0} variant
+                    {counts.observational_reference
+                      ? ` · ${counts.observational_reference} ${counts.observational_reference === 1 ? "reference" : "references"}`
+                      : ""}
                   </span>
                 </span>
               </SelectableItem>

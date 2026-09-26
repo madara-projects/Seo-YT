@@ -2,9 +2,6 @@
 
 Run these commands from the repository root.
 
-- `python scripts/quote_quality_probe.py "Your quote"` sends quotes to the running local API and prints compact quality evidence.
-- `python scripts/dev/generate_quote_request.py` runs a manual quote request and writes its response under `runtime/artifacts/manual/`.
-- `python scripts/dev/probe_pieces_quote.py` runs the alternate quote probe and writes its response under `runtime/artifacts/manual/`.
-- `python scripts/dev/evaluate_quote_package.py` exercises package-quality logic with controlled local inputs.
+- `python scripts/quote_quality_probe.py "Your quote" ["Another quote" ...]` sends each quote to the running local API and prints compact quality evidence.
 
-Files under `dev/` are diagnostic helpers, not production entry points. Generated responses belong in `runtime/artifacts/` and are intentionally excluded from Git.
+Each quote is a full `/analyze` request, so it spends YouTube and Gemini quota. For checks that must not, use the tests (`python -m pytest tests`), which never reach the network.

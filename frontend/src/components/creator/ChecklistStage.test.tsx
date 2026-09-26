@@ -7,6 +7,7 @@ import type { PackageOption } from "@/api/types";
 
 const option: PackageOption = {
   id: "package-a",
+  packageId: "package-a",
   label: "Package A",
   primary: true,
   title: "A selected title",
@@ -22,7 +23,7 @@ const option: PackageOption = {
   packageIntent: "Primary",
   bestFor: "Search",
   misleadingRisk: "low",
-  qualityStatus: "pass",
+  qualityStatus: "approved",
   titleQualityScore: 8,
   source: "AI suggestion",
   mechanism: "direct topic framing",

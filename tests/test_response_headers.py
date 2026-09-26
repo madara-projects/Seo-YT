@@ -19,6 +19,16 @@ class ResponseHeaderTests(unittest.TestCase):
         self.assertIn("default-src 'self';", policy)
         self.assertIn("connect-src 'self';", policy)
 
+    def test_scripts_run_only_from_the_apps_own_files(self):
+        policy = self.client.get("/meta").headers["content-security-policy"]
+        self.assertIn("script-src 'self';", policy)
+        # With no 'unsafe-inline', an inline script or handler in either page would not run.
+        pages = [STATIC_DIR / "index.html", STATIC_DIR / "app" / "index.html"]
+        for page in (path for path in pages if path.exists()):
+            html = page.read_text(encoding="utf-8")
+            self.assertNotRegex(html, r"\son[a-z]+\s*=", page.name)
+            self.assertNotRegex(html, r"<script(?![^>]*\bsrc=)[^>]*>", page.name)
+
     def test_only_hashed_build_files_are_cacheable(self):
         assets = sorted((STATIC_DIR / "app" / "assets").glob("*.js"))
         if not assets:

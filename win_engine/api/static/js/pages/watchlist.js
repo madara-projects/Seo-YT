@@ -3,6 +3,10 @@ import { formatApiError } from "../errors.js";
 import { $, arr, chip, esc, num } from "../utils.js";
 
 let selected = { type: null, id: null };
+// Searching waits for a pause in typing, and only the newest request may render.
+const SEARCH_DELAY_MS = 300;
+let loadSequence = 0;
+let searchTimer = null;
 
 const date = (v) => (v ? new Date(v).toLocaleString() : "Not available");
 
@@ -33,6 +37,8 @@ function cards(items, type) {
 }
 
 export async function loadWatchlist() {
+  loadSequence += 1;
+  const sequence = loadSequence;
   const state = $("watchState")?.value ?? "active";
   const q = $("watchSearch")?.value || "";
   try {
@@ -40,9 +46,11 @@ export async function loadWatchlist() {
       apiRequest(`/api/watchlist/channels${state ? `?state=${encodeURIComponent(state)}` : ""}`, { cache: "no-store" }),
       apiRequest(`/api/watchlist/videos?state=${encodeURIComponent(state)}&q=${encodeURIComponent(q)}`, { cache: "no-store" }),
     ]);
+    if (sequence !== loadSequence) return;
     if ($("watchChannels")) $("watchChannels").innerHTML = cards(arr(c.channels), "channel");
     if ($("watchVideos")) $("watchVideos").innerHTML = cards(arr(v.videos), "video");
   } catch (e) {
+    if (sequence !== loadSequence) return;
     if ($("watchStatus")) $("watchStatus").textContent = formatApiError(e, "Watchlist unavailable.");
   }
 }
@@ -183,7 +191,10 @@ export function mountWatchlistPage() {
 
   $("watchRefreshBtn").onclick = loadWatchlist;
   $("watchState").onchange = loadWatchlist;
-  $("watchSearch").oninput = () => loadWatchlist();
+  $("watchSearch").oninput = () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(loadWatchlist, SEARCH_DELAY_MS);
+  };
 
   for (const id of ["watchChannels", "watchVideos"]) {
     $(id).onclick = (e) => {

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { VIEWPORTS, choose, collectErrors, expectNoHorizontalOverflow, stubThumbnails } from "./helpers";
+import { VIEWPORTS, blockWrites, choose, collectErrors, expectNoHorizontalOverflow, stubThumbnails } from "./helpers";
 
 /**
  * The idea backlog against the running backend. Every idea call is
@@ -74,6 +74,11 @@ async function mockIdeas(page: Page, calls: { created: unknown[]; generated: num
   });
   await stubThumbnails(page);
 }
+
+/** Nothing a test does may change saved data: writes are answered by its own routes or aborted. */
+test.beforeEach(async ({ page }) => {
+  await blockWrites(page);
+});
 
 test.describe("Ideas", () => {
   test("saves an idea with its language and region, then generates a package", async ({ page }) => {

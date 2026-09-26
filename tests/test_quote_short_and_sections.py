@@ -71,7 +71,7 @@ class ProcessNarrationTests(unittest.TestCase):
         gate = evaluate_package_quality(
             {"title": "When you love something that can never be #shorts", "variants": [], "tags": [], "hashtags": [],
              "description": f"“{QUOTE}”\n\nA reflection on impossible love, without adding external stories."},
-            script=QUOTE, creator_brief=brief, require_shorts_tags=False, enforce_final_tag_rules=False,
+            script=QUOTE, creator_brief=brief, enforce_final_tag_rules=False,
         )
         self.assertIn("creator_instruction_leakage", {item["code"] for item in gate["issues"]})
 
@@ -305,10 +305,13 @@ class PackagingSectionTests(unittest.TestCase):
             {"title": "Painful love and the ache of things that never can be #shorts", "variants": [],
              "description": f"“{QUOTE}”\n\nLove quotes about impossible love.", "tags": ["love quotes", "impossible love"],
              "hashtags": []},
-            script=QUOTE, creator_brief=build_creator_brief(script=QUOTE), require_shorts_tags=False,
+            script=QUOTE, creator_brief=build_creator_brief(script=QUOTE),
             tag_evidence=evidence, enforce_final_tag_rules=False,
         )
-        self.assertGreaterEqual(gate["final_seo_quality"]["tag_score"], 90)
+        # The measured scores (77 and 100) are reported; the searched tag was
+        # raised to 90 and reported as if measured. It still clears the 72 bar.
+        self.assertEqual(gate["final_seo_quality"]["tag_score"], 88.5)
+        self.assertNotIn("weak_tag_usefulness", [item["code"] for item in gate["final_seo_quality"]["warnings"]])
 
     def test_why_click_is_whole_sentences(self):
         package = build_title_thumbnail_packages(
@@ -323,29 +326,28 @@ class PackagingSectionTests(unittest.TestCase):
 
     def test_quote_short_sections_follow_the_real_tags(self):
         related = ["love quotes", "impossible love", "painful love"]
-        graph = build_content_graph_strategy("there is nothing more painful", "", "Story", [
-            {"keyword": "There Nothing"}, {"keyword": "More Painful"}], related_phrases=related, short_form=True)
+        graph = build_content_graph_strategy("there is nothing more painful", related_phrases=related, short_form=True)
         self.assertEqual(graph["hub_topic"], "love quotes")
         self.assertEqual(graph["supporting_topics"], ["impossible love", "painful love"])
-        text = str(graph) + str(build_session_expansion("t", [], related_phrases=related, short_form=True))
-        text += build_binge_bridge("t", "Story", related_phrases=related, short_form=True)
+        text = str(graph) + str(build_session_expansion(related_phrases=related, short_form=True))
+        text += build_binge_bridge(related_phrases=related, short_form=True)
         for junk in ("There Nothing", "More Painful", "YouTube Growth System", "mistakes to avoid",
                      "packaging teardown", "case study", "tutorial or checklist"):
             self.assertNotIn(junk, text)
         workflow = build_automation_workflow("When you love something that can never be #shorts", ["#shorts"], [],
                                              graph, short_form=True)
-        flat = " ".join(sum(workflow.values(), []))
+        flat = " ".join(line for lines in workflow.values() for line in lines)
         self.assertNotIn("30 seconds", flat)
         self.assertNotIn("timestamps", flat)
 
     def test_long_form_graph_without_tags_does_not_invent_spokes(self):
-        graph = build_content_graph_strategy("cold brew coffee", "", "Tutorial", [], related_phrases=[])
+        graph = build_content_graph_strategy("cold brew coffee", related_phrases=[])
         self.assertEqual(graph["supporting_topics"], [])
         self.assertNotIn("mistakes", str(graph))
 
     def test_quote_short_audit_judges_reading_load(self):
         audit = audit_content_package(f'"{QUOTE}"', "When you love something that can never be #shorts",
-                                      "love", "", "Story", video_format="youtube_shorts", exact_quote=QUOTE)
+                                      "love", "", video_format="youtube_shorts", exact_quote=QUOTE)
         self.assertEqual(audit["pattern_interrupts"]["assessment"], "NOT_APPLICABLE")
         self.assertEqual(audit["retention_risk"]["level"], "MEDIUM")  # 19 words, about 7.6 seconds
         self.assertEqual(audit["alignment"]["package_match"], "STRONG")
@@ -365,7 +367,7 @@ class LongFormSectionTests(unittest.TestCase):
 
     def test_a_clear_tutorial_opening_is_not_rated_high_risk(self):
         audit = audit_content_package(self.COLD_BREW, "Cold brew coffee recipe at home", "cold brew coffee", "",
-                                      "Tutorial", video_format="tutorial")
+                                      video_format="tutorial")
         self.assertEqual(audit["hook_audit"]["hook_strength"], "HIGH")
         self.assertEqual(audit["retention_risk"]["level"], "LOW")
         self.assertEqual(audit["pattern_interrupts"]["assessment"], "NOT_ASSESSED")  # a 30-word summary
@@ -374,10 +376,10 @@ class LongFormSectionTests(unittest.TestCase):
         tags = ["cold brew", "cold brew coffee", "cold brew coffee recipe", "mason jar coffee",
                 "how to strain coffee grounds smoothly", "coffee brewing methods"]
         graph = build_content_graph_strategy("how to make cold brew coffee at home without any special equipment",
-                                             "", "Tutorial", [], related_phrases=tags)
+                                             related_phrases=tags)
         self.assertEqual(graph["hub_topic"], "cold brew")
         self.assertEqual(graph["supporting_topics"], ["mason jar coffee", "how to strain coffee grounds smoothly"])
-        self.assertEqual(build_session_expansion("t", [], related_phrases=tags)["next_video_hook"],
+        self.assertEqual(build_session_expansion(related_phrases=tags)["next_video_hook"],
                          "Watch next: Mason jar coffee")
 
     def test_thumbnail_text_prefers_a_search_phrase_over_a_sentence_slice(self):
@@ -465,15 +467,15 @@ class ResearchCacheTests(unittest.TestCase):
 
         service = ResearchService.__new__(ResearchService)
         service._cache = MagicMock()
-        service._cache.get.return_value = []  # an entry poisoned by an earlier failure
+        service._cache.get.return_value = None
         service._settings = MagicMock(youtube_max_results=5)
         service._youtube = MagicMock()
         service._youtube.search_videos.return_value = []
         service._youtube.runtime_state.return_value = {"warning": "YouTube API request failed: rateLimitExceeded"}
-        results, _ = service._search_research_queries([{"query": "love quotes", "type": "core"}], "evergreen", 60)
+        results, _ = service._search_research_queries([{"query": "love quotes", "type": "core"}])
         self.assertEqual(results, [])
-        service._youtube.search_videos.assert_called_once()  # the empty entry was treated as a miss
-        service._cache.set.assert_not_called()  # and the failure was not cached
+        service._youtube.search_videos.assert_called_once()
+        service._cache.set.assert_not_called()  # the failure was not cached, as an answer or as a page
 
 
 if __name__ == "__main__":

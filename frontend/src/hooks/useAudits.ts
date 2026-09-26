@@ -1,24 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/api/client";
 import type { AuditDetailResponse, AuditListResponse, AuditRefreshResponse } from "@/api/auditTypes";
-import { historyKeys } from "./useHistory";
-
-export const auditKeys = {
-  all: ["audits"] as const,
-  lists: () => [...auditKeys.all, "list"] as const,
-  list: (auditState: string, evidenceState: string) => [...auditKeys.lists(), auditState, evidenceState] as const,
-  detail: (linkId: number) => [...auditKeys.all, "detail", linkId] as const,
-};
+import { auditKeys, historyKeys, mutationKeys } from "./queryKeys";
 
 export function useAuditCandidates(auditState: string, evidenceState: string) {
   return useQuery({
     queryKey: auditKeys.list(auditState, evidenceState),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams();
       if (auditState) params.set("audit_state", auditState);
       if (evidenceState) params.set("evidence_state", evidenceState);
       const search = params.toString();
-      return apiRequest<AuditListResponse>(`/api/audits${search ? `?${search}` : ""}`);
+      return apiRequest<AuditListResponse>(`/api/audits${search ? `?${search}` : ""}`, { signal });
     },
   });
 }
@@ -26,22 +19,24 @@ export function useAuditCandidates(auditState: string, evidenceState: string) {
 export function useAudit(linkId: number | null) {
   return useQuery({
     queryKey: auditKeys.detail(linkId ?? 0),
-    queryFn: () => apiRequest<AuditDetailResponse>(`/api/audits/${linkId}`),
+    queryFn: ({ signal }) => apiRequest<AuditDetailResponse>(`/api/audits/${linkId}`, { signal }),
     enabled: typeof linkId === "number" && linkId > 0,
   });
 }
 
 /**
  * Reads the video from the connected channel, captures any due analytics
- * windows, and saves a new audit version. Spends quota; never retried.
+ * windows, and saves a new audit version. Spends quota; never retried. Keyed
+ * by the video, so its panel finds a refresh still running after switching.
  */
-export function useRefreshAudit() {
+export function useRefreshAudit(linkId: number) {
   const queryClient = useQueryClient();
   return useMutation<AuditRefreshResponse, unknown, number>({
+    mutationKey: mutationKeys.recordAction("audit", linkId, "refresh"),
     retry: false,
-    mutationFn: (linkId) => apiRequest<AuditRefreshResponse>(`/api/audits/${linkId}/refresh`, { method: "POST" }),
-    onSuccess: (data, linkId) => {
-      queryClient.setQueryData(auditKeys.detail(linkId), {
+    mutationFn: (id) => apiRequest<AuditRefreshResponse>(`/api/audits/${id}/refresh`, { method: "POST" }),
+    onSuccess: (data, id) => {
+      queryClient.setQueryData(auditKeys.detail(id), {
         audit: data.audit,
         versions: data.versions,
         status: data.audit ? "available" : "not_run",

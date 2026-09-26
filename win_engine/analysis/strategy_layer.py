@@ -6,6 +6,10 @@ from math import log10
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from win_engine.analysis.numbers import optional_number
+from win_engine.analysis.source_cues import is_short_video
+from win_engine.core.iso_duration import duration_seconds
+
 
 def build_channel_intelligence(youtube_results: list[dict[str, Any]]) -> dict[str, Any]:
     """Summarize repeated patterns across the channels in the current result set."""
@@ -23,17 +27,21 @@ def build_channel_intelligence(youtube_results: list[dict[str, Any]]) -> dict[st
     packaging_counter: Counter[str] = Counter()
 
     for item in youtube_results:
-        size_counter[_channel_size_bucket(int(item.get("subscriber_count") or 0))] += 1
-        length_counter[_duration_bucket(str(item.get("duration") or ""))] += 1
+        # A hidden subscriber count or a failed channel lookup is unknown, not
+        # 0, which made every such channel "small".
+        size_counter[_channel_size_bucket(optional_number(item.get("subscriber_count")))] += 1
+        length_counter[_duration_bucket(item.get("duration"))] += 1
         packaging_counter[_packaging_style(str(item.get("title") or ""))] += 1
 
     dominant_channel_size = size_counter.most_common(1)[0][0]
     dominant_video_length = length_counter.most_common(1)[0][0]
     dominant_packaging_style = packaging_counter.most_common(1)[0][0]
 
+    size_phrase = "channels of unknown size" if dominant_channel_size == "unknown" else f"{dominant_channel_size} channels"
+    length_phrase = "videos of unknown length" if dominant_video_length == "unknown" else f"{dominant_video_length} videos"
     summary = (
-        f"Most visible competitors in this topic are {dominant_channel_size} channels using "
-        f"{dominant_video_length} videos with a {dominant_packaging_style} packaging style."
+        f"Most visible competitors in this topic are {size_phrase} using "
+        f"{length_phrase} with a {dominant_packaging_style} packaging style."
     )
 
     return {
@@ -54,12 +62,18 @@ def build_upload_timing(
     strategy: str = "balanced",
     timezone_name: str | None = None,
     now: datetime | None = None,
+    short_form: bool | None = None,
 ) -> dict[str, Any]:
-    """Return honest, timezone-explicit upload guidance from the best available evidence."""
+    """Return honest, timezone-explicit upload guidance from the best available evidence.
+
+    ``short_form`` is the caller's Short decision; without one the format decides.
+    """
 
     zone_name, zone, timezone_source = _resolve_timezone(timezone_name, channel_analytics)
     local_now = _aware_now(now).astimezone(zone)
-    best_day, start_hour, end_hour = _general_window(video_format, strategy)
+    if short_form is None:
+        short_form = is_short_video("", {"video_format": video_format})
+    best_day, start_hour, end_hour = _general_window(short_form, strategy)
     confidence = "LOW"
     basis = "general_recommendation"
     sample_size = 0
@@ -232,9 +246,9 @@ def _weighted_window(rows: list[tuple[datetime, float]], sample_size: int) -> tu
     return best_day, max(0, best_hour - 1), min(24, best_hour + 2), sample_size
 
 
-def _general_window(video_format: str, strategy: str) -> tuple[str, int, int]:
-    text = f"{video_format} {strategy}".casefold()
-    if any(token in text for token in ("short", "quote")):
+def _general_window(short_form: bool, strategy: str) -> tuple[str, int, int]:
+    text = str(strategy or "").casefold()
+    if short_form:
         return "Thursday", 18, 20
     if "browse" in text:
         return "Friday", 18, 20
@@ -276,11 +290,8 @@ def diverse_followups(hub: str, phrases: list[str], limit: int = 2) -> list[str]
     coffee" or "coffee brewing methods" is a real next video.
     """
 
-    hub_words = set(hub.casefold().split())
-
     def overlap(phrase: str) -> float:
-        words = set(phrase.casefold().split())
-        return len(words & hub_words) / max(len(words | hub_words), 1)
+        return overlap_between(phrase, hub)
 
     candidates = [phrase for phrase in phrases if phrase.casefold() != hub.casefold()]
     distinct = [phrase for phrase in candidates if overlap(phrase) < 0.5]
@@ -303,69 +314,44 @@ def overlap_between(left: str, right: str) -> float:
 
 def build_content_graph_strategy(
     primary_topic: str,
-    secondary_topic: str,
-    angle: str,
-    keyword_signals: list[dict[str, Any]],
     *,
     related_phrases: list[str] | None = None,
     short_form: bool = False,
 ) -> dict[str, Any]:
     """Suggest how this video can branch into a small content graph.
 
-    ``related_phrases`` are the video's validated search phrases. Without them
-    the spokes came from script n-grams, which turned a quote into a series on
-    "There Nothing" and "More Painful".
+    Spokes come only from ``related_phrases``, the video's validated search
+    phrases. Script n-gram keyword signals turned a quote into a series on
+    "There Nothing" and "More Painful", and without phrases the old path
+    invented "<topic> mistakes" and "<topic> tutorial" spokes.
     """
 
     phrases = [" ".join(str(item).split()) for item in (related_phrases or []) if str(item).strip()]
-    if related_phrases is not None:
-        # The strongest validated phrase names the hub; the creator's lead
-        # sentence ("how to make cold brew coffee at home without any special
-        # equipment", or a whole Tamil sentence) is not a series name.
-        hub = (phrases[0] if phrases else primary_topic).strip()
-        spokes = diverse_followups(hub, phrases)
-        if short_form:
-            series = [f"{hub}: this Short"] + [f"{spoke}: a companion Short on the same theme" for spoke in spokes]
-            bridge = ("Group these Shorts into one series so a viewer who finishes one is shown the next."
-                      if spokes else "Group this Short with others on the same theme so viewers move from one to the next.")
-        else:
-            series = [f"{hub}: this video"] + [f"{spoke}: a follow-up video" for spoke in spokes]
-            bridge = (f"Link the follow-ups from this video's end screen and description to keep viewers around {hub}."
-                      if spokes else f"Plan the next video on a closely related search to keep viewers around {hub}.")
-        return {
-            "hub_topic": hub,
-            "supporting_topics": spokes,
-            "series_plan": series,
-            "bridge_strategy": bridge,
-            "basis": "validated_search_phrases",
-        }
-
-    next_topics = [
-        _humanize_keyword(str(item.get("keyword", "")))
-        for item in keyword_signals
-        if str(item.get("keyword", "")).strip()
-    ]
-    next_topics = [topic for topic in next_topics if topic and topic.lower() not in {primary_topic.lower(), secondary_topic.lower()}]
-
-    spoke_one = next_topics[0] if len(next_topics) > 0 else f"{primary_topic} mistakes"
-    spoke_two = next_topics[1] if len(next_topics) > 1 else f"{secondary_topic} tutorial"
-
+    # The strongest validated phrase names the hub; the creator's lead
+    # sentence ("how to make cold brew coffee at home without any special
+    # equipment", or a whole Tamil sentence) is not a series name.
+    hub = (phrases[0] if phrases else primary_topic).strip()
+    spokes = diverse_followups(hub, phrases)
+    if short_form:
+        series = [f"{hub}: this Short"] + [f"{spoke}: a companion Short on the same theme" for spoke in spokes]
+        bridge = ("Group these Shorts into one series so a viewer who finishes one is shown the next."
+                  if spokes else "Group this Short with others on the same theme so viewers move from one to the next.")
+    else:
+        series = [f"{hub}: this video"] + [f"{spoke}: a follow-up video" for spoke in spokes]
+        bridge = (f"Link the follow-ups from this video's end screen and description to keep viewers around {hub}."
+                  if spokes else f"Plan the next video on a closely related search to keep viewers around {hub}.")
     return {
-        "hub_topic": primary_topic,
-        "supporting_topics": [secondary_topic, spoke_one, spoke_two],
-        "series_plan": [
-            f"{primary_topic}: core {angle.lower()} breakdown",
-            f"{spoke_one}: follow-up proof or case study",
-            f"{spoke_two}: tactical tutorial or checklist",
-        ],
-        "bridge_strategy": (
-            f"Use this video as the hub, then branch into {spoke_one} and {spoke_two} to keep viewers "
-            f"inside a tighter topic cluster around {primary_topic}."
-        ),
+        "hub_topic": hub,
+        "supporting_topics": spokes,
+        "series_plan": series,
+        "bridge_strategy": bridge,
+        "basis": "validated_search_phrases",
     }
 
 
-def _channel_size_bucket(subscriber_count: int) -> str:
+def _channel_size_bucket(subscriber_count: float | None) -> str:
+    if subscriber_count is None:
+        return "unknown"
     if subscriber_count < 10000:
         return "small"
     if subscriber_count < 100000:
@@ -373,27 +359,13 @@ def _channel_size_bucket(subscriber_count: int) -> str:
     return "large"
 
 
-def _duration_bucket(duration: str) -> str:
-    if "PT" not in duration:
+def _duration_bucket(duration: Any) -> str:
+    seconds = duration_seconds(duration)
+    if seconds is None:
         return "unknown"
-    if "M" not in duration and "H" not in duration:
+    if seconds < 120:
         return "short-form"
-
-    minutes = 0
-    if "H" in duration:
-        hour_part = duration.split("PT", 1)[1].split("H", 1)[0]
-        minutes += int(hour_part or 0) * 60
-        remainder = duration.split("H", 1)[1]
-    else:
-        remainder = duration.split("PT", 1)[1]
-
-    if "M" in remainder:
-        minutes_part = remainder.split("M", 1)[0]
-        minutes += int(minutes_part or 0)
-
-    if minutes <= 1:
-        return "short-form"
-    if minutes <= 8:
+    if seconds < 540:
         return "mid-length"
     return "long-form"
 
@@ -407,7 +379,3 @@ def _packaging_style(title: str) -> str:
     if any(token in lower for token in ["why", "shocking", "secret", "mistake"]):
         return "curiosity-led"
     return "hybrid"
-
-
-def _humanize_keyword(value: str) -> str:
-    return " ".join(part.capitalize() for part in value.replace("_", " ").split())

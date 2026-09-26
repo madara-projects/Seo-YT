@@ -7,13 +7,20 @@ copied directly into the final tag list.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any, Iterable
 
 from win_engine.analysis.generation_quality import (
     has_unsupported_instructional_framing,
     is_short_content,
-    is_silent_quote_only_short,
     source_requires_noninstructional_framing,
+)
+from win_engine.analysis.search_opportunities import UNSUPPORTED_ADJACENT_CONTEXT
+from win_engine.analysis.text_tokens import (
+    is_word_character,
+    normalize_unicode,
+    strip_stray_joiners,
+    unicode_words,
 )
 from win_engine.analysis.topic_lock import infer_category, source_casing_map
 from win_engine.analysis.transliteration import has_tamil, phonetic_keys, phonetic_match
@@ -39,7 +46,6 @@ _CREATOR_META_PHRASES = (
     "according to the prompt", "without context", "no specific life problem", "silent reflective quote",
     "minimal reflection",
 )
-_FRAGMENT_EXAMPLES = {"fast near", "one room", "slow one", "then one", "used talk", "checking same", "evening even", "same empty", "between tcp", "udp user"}
 _FRAGMENT_ENDINGS = {"near", "one", "then", "every", "same", "even", "empty", "while", "neither", "after", "before", "with", "without", "of", "for", "to"}
 _ABSTRACT_CONCEPTS = {"heartbreak", "loneliness", "rejection", "healing", "loss", "abandonment", "forgotten", "unseen", "erased", "distance", "absence", "grief", "betrayal"}
 _PHRASE_CONCEPTS = (
@@ -72,7 +78,7 @@ def build_keyword_research(
     query_rows = [item for item in research_queries if isinstance(item, dict)]
     content_terms = _content_terms(sem, script, brief)
     source_terms = _source_terms(script, brief)
-    entity_rows = [row for row in entity_signals]
+    entity_rows = list(entity_signals)
     reflective = bool(quote) or source_requires_noninstructional_framing(script, brief)
     subjects = subject_terms(
         sem, entity_rows, source_terms, themes=quote_themes(quote, script) if reflective else (),
@@ -227,6 +233,7 @@ def select_final_tags(
     }
     demand_index = suggestion_index(research.get("search_demand"))
     subjects = set(research.get("subject_terms") or [])
+    source_terms = _source_terms(script, brief)
 
     # Model tags are suggestions, not authority. They need semantic support and
     # cannot create an unsupported niche or bypass the same validation rules.
@@ -245,7 +252,7 @@ def select_final_tags(
                     "source": "model_suggestion",
                 })
                 continue
-            entry = _model_entry(key, classification, content_terms, visual_terms)
+            entry = _model_entry(key, classification, content_terms, visual_terms, source_terms)
             _annotate_demand(entry, demand_index, subjects)
             indexed[key] = entry
 
@@ -569,15 +576,20 @@ def _platform_tag_entry(text: str) -> dict[str, Any]:
     }
 
 
-def _model_entry(text: str, classification: str, content_terms: set[str], visual_terms: set[str]) -> dict[str, Any]:
+def _model_entry(
+    text: str, classification: str, content_terms: set[str], visual_terms: set[str], source_terms: set[str],
+) -> dict[str, Any]:
     content = _content_score(text, content_terms)
     visual = _visual_score(text, visual_terms)
     intent = _intent_score(classification)
     specificity = _specificity_score(text)
+    # Measured like every other candidate. A flat 100 let "startup hiring
+    # mistakes" pass as fully grounded on a script that never says "mistakes".
+    support_score, support = _source_support(text, source_terms)
     return {
         "keyword": text, "sources": ["model"], "source": "model", "source_classification": "script_derived", "classification": classification,
         "content_relevance_score": content, "visual_relevance_score": visual, "research_evidence_score": 0,
-        "source_support_score": 100, "source_support": "generated suggestion has direct semantic support",
+        "source_support_score": support_score, "source_support": support,
         "intent_score": intent, "specificity_score": specificity, "diversity_score": None,
         "keyword_relevance_score": content + intent + specificity, "evidence_count": 0,
         "cluster": _family(text), "intent": _intent_label(classification),
@@ -867,7 +879,11 @@ def _content_terms(semantic: dict[str, Any], script: str, brief: dict[str, Any])
     if _brief_field_is_creator_supplied(brief, "viewer_promise"):
         values.append(brief.get("viewer_promise"))
     values.append(script)
-    visual_context = set(_tokens(brief.get("visual_requirements") or "")) | _VISUAL_TERMS
+    # Only the creator's own visual notes are set aside. A visual requirement
+    # the brief read out of the script ("Visual Studio Code tutorial", "this
+    # video is about budgeting") took the subject's words out of the content.
+    supplied_visual = brief.get("visual_requirements") if _brief_field_is_creator_supplied(brief, "visual_requirements") else ""
+    visual_context = set(_tokens(supplied_visual or "")) | _VISUAL_TERMS
     # Declared language/format terms are deliberately NOT content terms: they
     # may complete a phrase ("... in tamil") but must never make a tag relevant
     # on their own ("tamil songs" on a biryani video).
@@ -940,35 +956,15 @@ def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
     }
     # A related search result cannot add an unrelated domain, use case, or
     # decision frame merely because it is popular in YouTube search.
-    unsupported_context = {"gaming", "performance", "region", "choosing", "correct", "best"}
-    if any(word in unsupported_context and word not in source_terms for word in words):
+    if any(word in UNSUPPORTED_ADJACENT_CONTEXT and word not in source_terms for word in words):
         return 0, "unsupported adjacent context"
     ratio = len(matched) / len(words)
     if ratio >= 1.0:
         return 100, "direct creator-source support"
-    # A few narrow semantic bridges preserve natural search wording for an
-    # explicitly supplied emotional idea. They are source-led, documented,
-    # and never introduce a new life context, diagnosis, or relationship fact.
-    source_roots = {_term_root(word) for word in source_terms}
-    word_roots = {_term_root(word) for word in words}
-    if word_roots <= {"feel", "forgotten"} and source_roots & {"erase", "abandon", "forgotten", "unseen"}:
-        return 70, "emotional-absence semantic bridge"
-    if word_roots <= {"unspoken", "feel"} and source_roots & {"heart", "imagine", "life", "knew"}:
-        return 70, "unspoken-feelings semantic bridge"
-    if word_roots <= {"being", "need", "but", "not", "chosen"} and source_roots & {"need", "choose", "chos"}:
-        return 70, "needed-not-chosen semantic bridge"
-    worth_source = bool(source_roots & {"deserve", "worth", "rare", "find"})
-    if worth_source and word_roots <= {
-        "know", "worth", "being", "value", "hard", "replace", "rare", "person",
-        "genuine", "appreciation", "appreciate",
-    }:
-        return 80, "rarity-and-worth semantic bridge"
-    # Narrow, documented semantic bridges preserve useful search language
-    # without converting an adjacent use case into the video's subject.
-    if {"tcp", "udp", "connection"} & source_terms and words <= {"tcp", "udp", "connection", "oriented", "connectionless"}:
-        return 80, "network connection semantic bridge"
-    if {"mechanical", "membrane", "keyboard"} & source_terms and words <= {"mechanical", "membrane", "keyboard", "tactile", "typing", "quiet", "quieter"}:
-        return 80, "keyboard comparison semantic bridge"
+    # Support is the share of the phrase the creator's source contains. Word
+    # lists written for particular test scripts ("feeling forgotten" for
+    # "erased", "know your worth", tcp/udp, keyboards) granted support to any
+    # source that shared one word with them.
     return int(round(ratio * 100)), "partial creator-source overlap"
 
 
@@ -1068,11 +1064,11 @@ def _creator_instruction_leak(text: str) -> bool:
 
 def _fragmented(text: str) -> bool:
     folded = _normalize(text)
-    if folded in _FRAGMENT_EXAMPLES:
-        return True
     words = _tokens(folded)
     if not words:
         return False
+    # A phrase cannot end on a connective ("fast near"). A list of fragments
+    # from particular test scripts ("between tcp", "udp user") caught nothing else.
     if words[-1] in _FRAGMENT_ENDINGS and len(words) <= 6:
         return True
     temporal_word_soup = {"used", "talk", "every", "then", "neither", "same", "kept", "checking"}
@@ -1205,17 +1201,36 @@ def _reason(classification: str, evidence_count: int, query_support: int, source
 
 
 def _normalize(value: Any) -> str:
-    # Tamil script is kept. Stripping everything outside [A-Za-z0-9] turned a
-    # Tamil script into an empty string, so a Tamil video had no source terms
-    # at all and every tag was automatically "unsupported".
-    return re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9஀-௿' -]", " ", str(value or "").casefold())).strip(" -")
+    return _normalized_text(str(value or ""))
+
+
+# Research scoring normalizes the same result titles and descriptions once per
+# candidate, so both steps are memoized; without it Unicode handling made tag
+# selection about ten times slower.
+@lru_cache(maxsize=4096)
+def _normalized_text(text: str) -> str:
+    # Letters, vowel signs and digits of every script are kept. An allow-list
+    # of ASCII plus the Tamil block turned "Pokémon cards" into the final tag
+    # "pok mon cards" and a Hindi phrase into an empty string.
+    if text.isascii():
+        kept = re.sub(r"[^a-z0-9' -]", " ", text.casefold())
+    else:
+        # Emoji variation selectors are dropped with their emoji ("cold brew" after a coffee emoji
+        # became a tag with an invisible U+FE0F); a joiner stays only inside a word.
+        kept = strip_stray_joiners("".join(
+            char if char in "' -" or is_word_character(char) else " "
+            for char in normalize_unicode(text).casefold()
+        ))
+    return re.sub(r"\s+", " ", kept).strip(" -")
+
+
+@lru_cache(maxsize=4096)
+def _words(text: str) -> tuple[str, ...]:
+    return tuple(unicode_words(_normalized_text(text)))
 
 
 def _tokens(value: Any) -> list[str]:
-    return [
-        word for word in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?|[஀-௿]+", _normalize(value))
-        if word not in _STOP and len(word) > 1
-    ]
+    return [word for word in _words(str(value or "")) if word not in _STOP]
 
 
 def _cross_script_keys(terms: Iterable[str]) -> set[str]:
@@ -1335,8 +1350,8 @@ def subject_terms(
 
     sem = semantic or {}
     phrases: list[Any] = [sem.get("primary_topic"), *(sem.get("secondary_topics") or [])[:2]]
-    for entity in sem.get("entities") or []:
-        phrases.append(entity.get("name") or entity.get("entity") if isinstance(entity, dict) else entity)
+    # semantic_research already reduces entity objects to their names.
+    phrases.extend(sem.get("entities") or [])
     for row in entity_signals or []:
         if isinstance(row, dict):
             phrases.append(row.get("entity"))
@@ -1532,7 +1547,4 @@ _EVIDENCE_STOP = {
 def _evidence_tokens(value: Any) -> list[str]:
     """Keep topic and search-intent words while removing only grammar words."""
 
-    return [
-        word for word in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", _normalize(value))
-        if word not in _EVIDENCE_STOP and len(word) > 1
-    ]
+    return [word for word in _words(str(value or "")) if word not in _EVIDENCE_STOP]

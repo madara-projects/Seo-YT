@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { App } from "./App";
@@ -107,22 +107,22 @@ describe("App shell", () => {
     );
   });
 
-  it("renders the migrated History page rather than a placeholder", async () => {
+  it("renders the History page and names the browser tab after it", async () => {
     renderApp("/history");
 
     expect(
       await screen.findByRole("heading", { name: "Package library", level: 1 }, LAZY),
     ).toBeInTheDocument();
-    expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
+    expect(document.title).toBe("History · Win-Engine");
   });
 
-  it("renders the migrated Dashboard page", async () => {
+  it("renders the Dashboard page", async () => {
     renderApp("/dashboard");
 
     expect(
       await screen.findByRole("heading", { name: "Dashboard", level: 1 }, LAZY),
     ).toBeInTheDocument();
-    expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
+    expect(document.title).toBe("Dashboard · Win-Engine");
   });
 
   it.each([
@@ -130,12 +130,12 @@ describe("App shell", () => {
     ["/watchlist", "Watchlist", "Watch something new"],
     ["/audits", "Audits", "Published videos"],
     ["/experiments", "Experiments", "Comparisons"],
-  ])("renders the migrated %s page", async (route, title, section) => {
+  ])("renders the %s page", async (route, title, section) => {
     renderApp(route);
 
     expect(await screen.findByRole("heading", { name: title, level: 1 }, LAZY)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: section })).toBeInTheDocument();
-    expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
+    expect(document.title).toBe(`${title} · Win-Engine`);
   });
 
   it("marks no page in the navigation as legacy", async () => {
@@ -145,22 +145,20 @@ describe("App shell", () => {
     expect(nav).not.toHaveTextContent(/legacy/i);
   });
 
-  it("renders the Settings page instead of the legacy placeholder", async () => {
+  it("renders the Settings page with its section navigation", async () => {
     renderApp("/settings");
 
     expect(
       await screen.findByRole("heading", { name: "Settings", level: 1 }, LAZY),
     ).toBeInTheDocument();
-    expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
   });
 
-  it("renders the Demand page instead of the legacy placeholder", async () => {
+  it("renders the Demand page with its research form", async () => {
     renderApp("/demand");
 
     expect(await screen.findByRole("heading", { name: "Demand", level: 1 }, LAZY)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Research a topic" })).toBeInTheDocument();
-    expect(screen.queryByText("Not migrated yet")).not.toBeInTheDocument();
   });
 
   it("renders the Channel page", async () => {
@@ -184,6 +182,64 @@ describe("App shell", () => {
       await screen.findByRole("heading", { name: "Package library", level: 1 }, LAZY),
     ).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Search pages and actions" })).not.toBeInTheDocument();
+  });
+
+  it("opens the classic dashboard at /app from the palette", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByRole("heading", { name: "Creator", level: 1 });
+
+    await user.keyboard("{Control>}k{/Control}");
+    await user.type(await screen.findByRole("combobox", { name: "Search pages and actions" }), "classic");
+    await user.keyboard("{Enter}");
+
+    // /app is the static classic dashboard; the old embedded route no longer exists.
+    expect(open).toHaveBeenCalledWith("/app", "_blank", "noopener");
+    open.mockRestore();
+  });
+
+  it("returns focus to the menu button when the navigation drawer closes", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    const menu = await screen.findByRole("button", { name: "Open navigation" });
+
+    await user.click(menu);
+    expect(await screen.findByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    expect(menu).toHaveFocus();
+  });
+
+  it("closes the drawer when the window widens past the sidebar breakpoint", async () => {
+    const listeners: Array<(event: { matches: boolean }) => void> = [];
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: (_: string, listener: (event: { matches: boolean }) => void) => {
+        if (query === "(min-width: 64rem)") listeners.push(listener);
+      },
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      const user = userEvent.setup();
+      renderApp();
+      await user.click(await screen.findByRole("button", { name: "Open navigation" }));
+      expect(await screen.findByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+
+      // A hidden drawer would still hold the page inert, so it closes instead.
+      act(() => listeners.forEach((listener) => listener({ matches: true })));
+
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    } finally {
+      window.matchMedia = original;
+    }
   });
 
   it("offers a skip link for keyboard users", async () => {

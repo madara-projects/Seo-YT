@@ -23,6 +23,7 @@ import { SectionTitle } from "@/components/common/SectionTitle";
 import { CardSkeleton, EmptyState, ErrorState, UnavailableNote } from "@/components/common/States";
 import { VideoThumb } from "@/components/common/VideoThumb";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
+import { useRecordActivity } from "@/hooks/useRecordActivity";
 import {
   useAssignVideo,
   useCompareExperiment,
@@ -30,6 +31,7 @@ import {
   useUpdateExperimentStatus,
 } from "@/hooks/useExperiments";
 import { historyDate, shortDate } from "@/lib/historyFormat";
+import { humanize } from "@/lib/labels";
 import { asArray } from "@/lib/utils";
 import { candidateTitle } from "@/lib/auditFormat";
 import {
@@ -53,6 +55,7 @@ import type {
   ExperimentAssignment,
   ExperimentDetailResponse,
   ExperimentMetricResult,
+  MissingMetric,
 } from "@/api/experimentTypes";
 
 function GroupCard({
@@ -60,13 +63,17 @@ function GroupCard({
   title,
   definition,
   assignments,
+  closed,
 }: {
   experimentId: number;
   title: string;
   definition?: string;
   assignments: ExperimentAssignment[];
+  /** A closed comparison keeps its sides as they were compared. */
+  closed: boolean;
 }) {
-  const remove = useRemoveAssignment();
+  const remove = useRemoveAssignment(experimentId);
+  const busy = useRecordActivity("experiment", experimentId).pending !== null;
   const onRemove = async (assignment: ExperimentAssignment) => {
     try {
       await remove.mutateAsync({ id: experimentId, assignmentId: assignment.id });
@@ -89,22 +96,24 @@ function GroupCard({
             const label = assignment.title || assignment.youtube_video_id || `Link #${assignment.published_video_link_id}`;
             return (
               <li key={assignment.id} className="flex items-center gap-2.5 rounded-lg bg-card p-1.5 pr-1">
-                <VideoThumb videoId={assignment.youtube_video_id} title={label} className="w-14" />
+                <VideoThumb videoId={assignment.youtube_video_id} className="w-14" />
                 <span className="min-w-0 flex-1">
                   <span className="line-clamp-2 text-xs font-medium leading-snug text-foreground">{label}</span>
                   <span className="block text-[0.6875rem] text-muted-foreground">
                     Published {shortDate(assignment.published_at)}
                   </span>
                 </span>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => void onRemove(assignment)}
-                  disabled={remove.isPending}
-                  aria-label={`Remove ${label}`}
-                >
-                  <X aria-hidden="true" />
-                </Button>
+                {closed ? null : (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => void onRemove(assignment)}
+                    disabled={busy}
+                    aria-label={`Remove ${label}`}
+                  >
+                    <X aria-hidden="true" />
+                  </Button>
+                )}
               </li>
             );
           })}
@@ -127,7 +136,10 @@ function AssignForm({
   channelId: string | null;
   connected: boolean | null;
 }) {
-  const assign = useAssignVideo();
+  const assign = useAssignVideo(experiment.id);
+  const activity = useRecordActivity("experiment", experiment.id);
+  const busy = activity.pending !== null;
+  const lastAssign = activity.latestOf("assign");
   const [linkId, setLinkId] = useState("");
   const [role, setRole] = useState("control");
   const assigned = new Set(asArray<ExperimentAssignment>(experiment.assignments).map((item) => item.published_video_link_id));
@@ -155,8 +167,9 @@ function AssignForm({
       await assign.mutateAsync({ id: experiment.id, linkId: id, role });
       setLinkId("");
       toast.success(`Added to ${role === "variant" ? "the variant" : role === "control" ? "the control" : "the references"}. It counts once its ${observationWindowLabel(experiment.observation_window).toLowerCase()} window completes.`);
-    } catch {
-      /* Shown below with its request ID. */
+    } catch (error) {
+      // Also shown below; the toast reaches the creator if they've opened another comparison.
+      toast.error(formatApiError(error, "The video could not be added."));
     }
   };
 
@@ -192,14 +205,14 @@ function AssignForm({
           <FormField id="assign-role" label="Side">
             <OptionSelect id="assign-role" ariaLabel="Side" value={role} onValueChange={setRole} options={roles} />
           </FormField>
-          <Button variant="outline" onClick={() => void onAssign()} disabled={!linkId || assign.isPending}>
-            {assign.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Plus aria-hidden="true" />}
+          <Button variant="outline" onClick={() => void onAssign()} disabled={!linkId || busy}>
+            {lastAssign?.status === "pending" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Plus aria-hidden="true" />}
             Add video
           </Button>
         </div>
       )}
-      {assign.isError ? (
-        <ErrorState message={apiErrorMessage(assign.error, "The video could not be added.")} requestId={apiRequestId(assign.error)} />
+      {lastAssign?.status === "error" && !blocker ? (
+        <ErrorState message={apiErrorMessage(lastAssign.error, "The video could not be added.")} requestId={apiRequestId(lastAssign.error)} />
       ) : null}
     </section>
   );
@@ -254,6 +267,13 @@ function ResultSection({ experiment, versionCount }: { experiment: Experiment; v
   const sample = result.sample ?? {};
   const metrics = asArray<ExperimentMetricResult>(result.metrics);
   const limitations = asArray<string>(result.limitations);
+  const missing = asArray<MissingMetric>(sample.missing_metrics);
+  const titles = new Map(
+    asArray<ExperimentAssignment>(experiment.assignments).map((item) => [
+      item.published_video_link_id,
+      item.title || item.youtube_video_id || `Link #${item.published_video_link_id}`,
+    ]),
+  );
 
   return (
     <section className="space-y-3" data-testid="experiment-result">
@@ -261,6 +281,11 @@ function ResultSection({ experiment, versionCount }: { experiment: Experiment; v
         Result
       </SectionTitle>
       <Inset className="space-y-2 p-4">
+        {result.label ? (
+          <p className="text-[0.6875rem] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            {result.label}
+          </p>
+        ) : null}
         <p className="text-sm leading-relaxed text-foreground">{result.interpretation}</p>
         <p className="text-xs text-muted-foreground">
           Compared {historyDate(result.captured_at)} · {sample.eligible_control ?? 0} control and{" "}
@@ -268,6 +293,22 @@ function ResultSection({ experiment, versionCount }: { experiment: Experiment; v
           per side are needed.
         </p>
       </Inset>
+      {missing.length ? (
+        <div className="space-y-1.5 rounded-xl border border-dashed border-border px-3.5 py-3">
+          <p className="text-xs font-medium text-foreground">
+            Left out: {missing.length} assigned {missing.length === 1 ? "video has" : "videos have"} no completed{" "}
+            {observationWindowLabel(experiment.observation_window).toLowerCase()} window yet
+          </p>
+          <ul className="space-y-0.5">
+            {missing.map((item, index) => (
+              <li key={`${item.link_id}-${index}`} className="text-xs text-muted-foreground">
+                {(item.link_id != null && titles.get(item.link_id)) || `Link #${item.link_id ?? "unknown"}`} ·{" "}
+                {item.role === "variant" ? "variant" : item.role === "control" ? "control" : humanize(String(item.role ?? ""))}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {metrics.length ? (
         <ul className="space-y-2" aria-label="Metrics compared">
           {metrics.map((item) => (
@@ -308,13 +349,27 @@ function ResultSection({ experiment, versionCount }: { experiment: Experiment; v
   );
 }
 
-/** Compare and status changes. Keyed by experiment, so another experiment's error never shows here. */
+const ACTION_FAILURES: Record<string, string> = {
+  compare: "The comparison could not be saved.",
+  status: "The status could not be changed.",
+};
+
+/**
+ * Compare and status changes. Their state is read from the mutation cache
+ * for this experiment, so opening another comparison and coming back still
+ * shows one in flight, with the buttons disabled, and the error it ended with.
+ */
 function ExperimentActions({ experiment, connected }: { experiment: Experiment; connected: boolean | null }) {
-  const compare = useCompareExperiment();
-  const update = useUpdateExperimentStatus();
+  const compare = useCompareExperiment(experiment.id);
+  const update = useUpdateExperimentStatus(experiment.id);
+  const activity = useRecordActivity("experiment", experiment.id);
   const [confirming, setConfirming] = useState<Transition | null>(null);
-  const [failure, setFailure] = useState<{ error: unknown; fallback: string } | null>(null);
-  const busy = compare.isPending || update.isPending;
+  const busy = activity.pending !== null;
+  const comparing = activity.pending?.action === "compare";
+  const lastRun = activity.latest;
+  const failure = lastRun?.status === "error" && ACTION_FAILURES[lastRun.action] ? lastRun : null;
+  // A closed comparison keeps its last result: comparing again would rewrite it.
+  const closed = isClosed(experiment.status);
   const transitions = transitionsFrom(experiment.status);
   const next = transitions.find((transition) => transition.primary);
   const others = transitions.filter((transition) => !transition.primary);
@@ -322,34 +377,34 @@ function ExperimentActions({ experiment, connected }: { experiment: Experiment; 
     transition.final ? setConfirming(transition) : void onTransition(transition);
 
   const onCompare = async () => {
-    setFailure(null);
     try {
       const data = await compare.mutateAsync(experiment.id);
       toast.success(`Comparison saved: ${resultStateLabel(data.result?.state).label.toLowerCase()}.`);
     } catch (error) {
-      setFailure({ error, fallback: "The comparison could not be saved." });
+      toast.error(formatApiError(error, ACTION_FAILURES.compare));
     }
   };
 
   const onTransition = async (transition: Transition) => {
-    setFailure(null);
     try {
       await update.mutateAsync({ id: experiment.id, status: transition.to });
       toast.success(`Status changed to ${experimentStatusLabel(transition.to).label.toLowerCase()}.`);
       setConfirming(null);
     } catch (error) {
       setConfirming(null);
-      setFailure({ error, fallback: "The status could not be changed." });
+      toast.error(formatApiError(error, ACTION_FAILURES.status));
     }
   };
 
   return (
     <div className="space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="experiment-actions">
       <div className="grid gap-2 sm:flex sm:flex-wrap">
-        <Button variant="gradient" onClick={() => void onCompare()} disabled={busy || connected === false}>
-          {compare.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <GitCompareArrows aria-hidden="true" />}
-          {compare.isPending ? "Comparing…" : "Compare saved evidence"}
-        </Button>
+        {closed ? null : (
+          <Button variant="gradient" onClick={() => void onCompare()} disabled={busy || connected === false}>
+            {comparing ? <Loader2 className="animate-spin" aria-hidden="true" /> : <GitCompareArrows aria-hidden="true" />}
+            {comparing ? "Comparing…" : "Compare saved evidence"}
+          </Button>
+        )}
         {next ? (
           <Button variant="outline" onClick={() => request(next)} disabled={busy}>
             {next.label}
@@ -366,12 +421,17 @@ function ExperimentActions({ experiment, connected }: { experiment: Experiment; 
         </div>
       ) : null}
       <p className="text-xs leading-relaxed text-muted-foreground">
-        {connected === false
-          ? "Comparing needs your channel connected, so only videos verified for it are counted."
-          : "Comparing reads the completed snapshots already saved for each assigned video. It makes no YouTube call."}
+        {closed
+          ? "This comparison is closed, so its saved result stays as it is: it can't be compared again or take new videos."
+          : connected === false
+            ? "Comparing needs your channel connected, so only videos verified for it are counted."
+            : "Comparing reads the completed snapshots already saved for each assigned video. It makes no YouTube call."}
       </p>
       {failure ? (
-        <ErrorState message={apiErrorMessage(failure.error, failure.fallback)} requestId={apiRequestId(failure.error)} />
+        <ErrorState
+          message={apiErrorMessage(failure.error, ACTION_FAILURES[failure.action])}
+          requestId={apiRequestId(failure.error)}
+        />
       ) : null}
       <ConfirmDialog
         open={confirming !== null}
@@ -385,7 +445,7 @@ function ExperimentActions({ experiment, connected }: { experiment: Experiment; 
         }
         confirmLabel={confirming?.label ?? "Confirm"}
         pendingLabel="Saving…"
-        pending={update.isPending}
+        pending={activity.pending?.action === "status"}
         destructive={confirming?.to === "cancelled"}
         onConfirm={() => (confirming ? void onTransition(confirming) : undefined)}
       />
@@ -455,6 +515,7 @@ export function ExperimentDetail({
   const kind = modeLabel(experiment.mode);
   const assignments = asArray<ExperimentAssignment>(experiment.assignments);
   const observational = experiment.mode === "observational";
+  const closed = isClosed(experiment.status);
   const secondary = asArray<string>(experiment.secondary_metrics);
 
   return (
@@ -493,12 +554,14 @@ export function ExperimentDetail({
         <div className="grid gap-3 md:grid-cols-2">
           <GroupCard
             experimentId={experiment.id}
+            closed={closed}
             title="Control"
             definition={experiment.control_definition}
             assignments={assignments.filter((item) => item.role === "control")}
           />
           <GroupCard
             experimentId={experiment.id}
+            closed={closed}
             title="Variant"
             definition={experiment.variant_definition}
             assignments={assignments.filter((item) => item.role === "variant")}
@@ -507,6 +570,7 @@ export function ExperimentDetail({
         {observational ? (
           <GroupCard
             experimentId={experiment.id}
+            closed={closed}
             title="References"
             definition="Kept for context; references are not counted on either side."
             assignments={assignments.filter((item) => item.role === "observational_reference")}

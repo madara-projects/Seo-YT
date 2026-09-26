@@ -27,22 +27,30 @@ from typing import Any, Iterable
 
 import httpx
 
+from win_engine.analysis.text_tokens import is_word_character, normalize_unicode, strip_stray_joiners
 from win_engine.ingestion.cache import CacheBackend
+from win_engine.ingestion.youtube_client import youtube_region_code
 
 logger = logging.getLogger(__name__)
 
 ENDPOINT = "https://suggestqueries.google.com/complete/search"
 SCOPE = "youtube_search_suggestions_not_volume"
 
-_LANGUAGE_CODES = {"english": "en", "tamil": "en", "tanglish": "en", "hindi": "en"}
-_REGION_CODES = {"india": "IN", "in": "IN", "us": "US", "usa": "US", "uk": "GB", "gb": "GB"}
+# hl is the language viewers type in. Tanglish viewers type Tamil in Latin letters.
+_LANGUAGE_CODES = {"english": "en", "tamil": "ta", "tanglish": "en", "hindi": "hi"}
 
 
 def normalize_phrase(value: Any) -> str:
-    """Lower-case, single-spaced phrase for matching suggestions to tags."""
+    """Lower-case, single-spaced phrase for matching suggestions to tags.
 
-    text = re.sub(r"[^\w஀-௿' ]+", " ", str(value or "").casefold())
-    return re.sub(r"\s+", " ", text).strip()
+    Vowel signs are combining marks, not word characters. Treating them as
+    separators split Hindi words apart ("हिन्दी गाना" became "ह न द ग न").
+    """
+
+    text = normalize_unicode(value).casefold().replace("’", "'")
+    # An emoji's variation selector is a mark too, but belongs to no word.
+    kept = "".join(char if char in "' " or is_word_character(char) else " " for char in text)
+    return re.sub(r"\s+", " ", strip_stray_joiners(kept)).strip()
 
 
 class SearchSuggestClient:
@@ -89,8 +97,8 @@ class SearchSuggestClient:
                 result["status"] = "no_seed_queries"
             return result
 
-        hl = _LANGUAGE_CODES.get(str(language or "").casefold(), "en")
-        gl = _REGION_CODES.get(str(region or "").casefold(), "")
+        hl = _LANGUAGE_CODES.get(str(language or "").strip().casefold(), "en")
+        gl = youtube_region_code(region) or ""
         pending: list[str] = []
         for query in wanted:
             cached = self._cache.get(self._cache_key(query, hl, gl)) if self._cache else None

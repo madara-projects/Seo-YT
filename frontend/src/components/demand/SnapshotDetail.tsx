@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   BadgeCheck,
   Binoculars,
@@ -24,6 +23,7 @@ import { StepFlow } from "@/components/research/StepFlow";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { useGenerateFromDemand } from "@/hooks/useDemand";
 import { formatDuration, useElapsedSeconds } from "@/hooks/useElapsed";
+import { useRecordActivity } from "@/hooks/useRecordActivity";
 import { asArray, formatNumber } from "@/lib/utils";
 import { historyDate } from "@/lib/historyFormat";
 import {
@@ -34,7 +34,14 @@ import {
   signalName,
   sourceLabel,
 } from "@/lib/demandFormat";
+import {
+  formatMultiplier,
+  OUTLIER_MINIMUM_PEERS,
+  OUTLIER_THRESHOLD,
+  outlierLabel,
+} from "@/lib/watchlistFormat";
 import type {
+  DemandGenerateResponse,
   DemandPublicResult,
   DemandSignal,
   DemandSnapshot,
@@ -69,22 +76,23 @@ function SignalTile({ signal }: { signal: DemandSignal }) {
   );
 }
 
-function outlierLabel(status?: string): string {
-  if (status === "possible_outlier") return "Possible outlier";
-  if (!status || status === "not_analyzed") return "Not analysed";
-  return status.replaceAll("_", " ");
-}
-
+/**
+ * Keyed by snapshot. The generation's state is read from the mutation cache
+ * for this snapshot, so opening another snapshot and coming back still shows
+ * a run in flight (with the button disabled, so Gemini isn't called twice),
+ * its error, or the package it saved.
+ */
 function GenerateAction({ snapshot }: { snapshot: DemandSnapshot }) {
-  const generate = useGenerateFromDemand();
-  const elapsed = useElapsedSeconds(generate.isPending);
-  const [runId, setRunId] = useState<number | null>(null);
+  const generate = useGenerateFromDemand(snapshot.id);
+  const activity = useRecordActivity("demand-snapshot", snapshot.id);
+  const latest = activity.latestOf("generate");
+  const pending = latest?.status === "pending";
+  const elapsed = useElapsedSeconds(pending, latest?.submittedAt);
+  const saved = (latest?.data as DemandGenerateResponse | undefined)?.analysis?.history_run_id;
 
   const onGenerate = async () => {
     try {
-      const result = await generate.mutateAsync(snapshot.id);
-      const saved = result.analysis?.history_run_id;
-      setRunId(typeof saved === "number" ? saved : null);
+      await generate.mutateAsync(snapshot.id);
       toast.success("Package generated and saved to History.");
     } catch (error) {
       toast.error(formatApiError(error, "Package generation failed."));
@@ -97,7 +105,7 @@ function GenerateAction({ snapshot }: { snapshot: DemandSnapshot }) {
         <div className="min-w-0 space-y-0.5">
           <p className="text-sm font-semibold text-foreground">Turn this topic into a package</p>
           <p className="text-xs leading-relaxed text-muted-foreground" aria-live="polite">
-            {generate.isPending
+            {pending
               ? `Writing the package with Gemini… ${formatDuration(elapsed)}. This can take a minute or two.`
               : snapshot.idea_id
                 ? "This snapshot belongs to an idea, so the idea's own research is used (collected fresh if it has none) and the package is linked back to it. Saved to History; publishing stays manual."
@@ -107,26 +115,26 @@ function GenerateAction({ snapshot }: { snapshot: DemandSnapshot }) {
         <Button
           variant="gradient"
           onClick={() => void onGenerate()}
-          disabled={generate.isPending}
+          disabled={pending}
           className="shrink-0"
         >
-          {generate.isPending ? (
+          {pending ? (
             <Loader2 className="animate-spin" aria-hidden="true" />
           ) : (
             <Sparkles aria-hidden="true" />
           )}
-          {generate.isPending ? "Generating…" : "Generate package"}
+          {pending ? "Generating…" : "Generate package"}
         </Button>
       </div>
 
-      {generate.isError ? (
+      {latest?.status === "error" ? (
         <ErrorState
-          message={apiErrorMessage(generate.error, "Package generation failed.")}
-          requestId={apiRequestId(generate.error)}
+          message={apiErrorMessage(latest.error, "Package generation failed.")}
+          requestId={apiRequestId(latest.error)}
         />
       ) : null}
 
-      {generate.isSuccess ? <SavedRunNotice runId={runId} /> : null}
+      {latest?.status === "success" ? <SavedRunNotice runId={typeof saved === "number" ? saved : null} /> : null}
     </div>
   );
 }
@@ -269,7 +277,8 @@ export function SnapshotDetail({
 
         <div className="grid gap-4 md:grid-cols-2">
           <Inset className="space-y-2.5 p-4">
-            <SectionTitle aside={<EvidenceChip tone="info">Public observation</EvidenceChip>}>
+            {/* The outlier status is this tool's own check on the watched videos' views. */}
+            <SectionTitle aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}>
               Watchlist matches
             </SectionTitle>
             <p className="text-sm text-foreground">
@@ -282,9 +291,9 @@ export function SnapshotDetail({
                   <li key={item.video_id ?? index} className="flex items-center justify-between gap-2 text-xs">
                     <span className="min-w-0 truncate text-foreground">{item.title || item.video_id}</span>
                     <span className="shrink-0 text-muted-foreground">
-                      {outlierLabel(item.outlier_status)}
+                      {outlierLabel(item.outlier_status).label}
                       {typeof item.relative_multiplier === "number"
-                        ? ` · ${item.relative_multiplier.toFixed(1)}× peers`
+                        ? ` · ${formatMultiplier(item.relative_multiplier)} the peer median`
                         : ""}
                     </span>
                   </li>
@@ -292,7 +301,9 @@ export function SnapshotDetail({
               </ul>
             ) : null}
             <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-              Outliers show observed engagement speed, not a prediction that a video will go viral.
+              An outlier has views per day at least {OUTLIER_THRESHOLD}× the median of {OUTLIER_MINIMUM_PEERS} or more
+              watched videos from its channel, measured at a similar age. It shows unusual reach, not a prediction
+              that a video will go viral.
             </p>
           </Inset>
 
@@ -313,7 +324,7 @@ export function SnapshotDetail({
                 : "Not enough mature, comparable history from your published videos exists for this topic yet."}
             </p>
             <p className="text-xs text-muted-foreground">
-              Comparable videos: {formatNumber(personal.sample_size ?? 0)}
+              Comparable videos: {formatNumber(personal.sample_size)}
             </p>
           </Inset>
         </div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, ClipboardCheck, Unplug } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { AuditDetail } from "@/components/audits/AuditDetail";
 import { AuditList } from "@/components/audits/AuditList";
 import { useAudit, useAuditCandidates } from "@/hooks/useAudits";
 import { useSelectedId } from "@/hooks/useSelection";
+import { useUrlState } from "@/hooks/useUrlState";
 import { useChannelStatus } from "@/hooks/useSystem";
 import { asArray } from "@/lib/utils";
 import type { AuditCandidate } from "@/api/auditTypes";
@@ -19,8 +20,10 @@ import type { AuditCandidate } from "@/api/auditTypes";
  */
 export default function AuditsPage() {
   const { selectedId, select, detailRef } = useSelectedId("link");
-  const [auditState, setAuditState] = useState("");
-  const [evidenceState, setEvidenceState] = useState("");
+  // The filters live in the URL too, so a reload or shared link keeps them.
+  const url = useUrlState();
+  const auditState = url.get("state");
+  const evidenceState = url.get("evidence");
 
   const list = useAuditCandidates(auditState, evidenceState);
   // The open video's facts come from the unfiltered list, so a filter that
@@ -76,9 +79,9 @@ export default function AuditsPage() {
         <AuditList
           candidates={candidates}
           auditState={auditState}
-          onAuditStateChange={setAuditState}
+          onAuditStateChange={(value) => url.set({ state: value })}
           evidenceState={evidenceState}
-          onEvidenceStateChange={setEvidenceState}
+          onEvidenceStateChange={(value) => url.set({ evidence: value })}
           isPending={list.isPending}
           isFetching={list.isFetching}
           error={list.error}

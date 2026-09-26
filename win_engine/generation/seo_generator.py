@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict
 
@@ -12,32 +13,83 @@ from win_engine.analysis.generation_quality import (
     focused_short_hashtags,
     is_short_content,
 )
-from win_engine.analysis.package_builder import build_title_thumbnail_packages
+from win_engine.analysis.package_builder import build_title_thumbnail_packages, title_gate_status
 from win_engine.analysis.strategy_layer import build_content_graph_strategy
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.keyword_research import select_final_tags, synchronize_tag_evidence
 from win_engine.analysis.research_planner import brief_research_text
 from win_engine.analysis.topic_lock import (
-    _is_junk_tag,
-    expand_idea_to_script,
+    is_junk_tag,
     extract_main_topic,
-    fallback_keyword_signals,
     force_hashtags,
     force_topic_in_description,
-    force_topic_in_tags,
     force_topic_in_title,
     infer_category,
-    is_short_idea,
     normalize_hashtag,
     normalize_risk_terms,
     source_casing_map,
+    unsupported_risk_terms,
 )
 from win_engine.core.schemas import AnalyzeResponse
+from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES
 from win_engine.feedback.history_store import HistoryStore
+from win_engine.feedback.learning_engine import build_feedback_package
 from win_engine.generation.automation_engine import build_automation_workflow
 from win_engine.generation.expansion_engine import build_binge_bridge, build_session_expansion
-from win_engine.generation.strategy_engine import build_seo_package
+from win_engine.generation.strategy_engine import build_seo_package, resolve_output_language, title_quality_score
 from win_engine.generation.quality_refinement import refine_package, enforce_quality_target
+from win_engine.llm.seo_writer import with_extra_call
+
+
+logger = logging.getLogger(__name__)
+
+# Why the writer used its local package, keyed by the provider status or the
+# strategy stage's fallback reason. A quality rejection is the only case where
+# Gemini actually produced a package.
+_QUALITY_FALLBACK_REASONS = {
+    "quality_gate_rejection", "gemini_invalid_repair_response",
+    "final_quality_red", "final_quality_red_after_deterministic_fallback",
+}
+_PROVIDER_FALLBACK_CAUSES = {
+    "gemini_unavailable": "Gemini is not configured",
+    "gemini_cooldown": "Gemini is paused after repeated failures",
+    "gemini_rate_limited": "Gemini rate-limited the request",
+    "gemini_timeout": "Gemini timed out",
+    "gemini_transport_error": "Gemini could not be reached",
+    "gemini_permanent_error": "Gemini rejected the request (check the API key and model)",
+    "gemini_invalid_response": "Gemini returned an unusable response",
+    "gemini_truncated": "Gemini's response was cut off",
+    "gemini_application_error": "The Gemini request failed",
+}
+
+
+def _without_risk_terms(titles: list[str], source: str) -> list[str]:
+    """Titles that add no risk phrase; reworded only when none is clean.
+
+    Rewording mid-title reads badly ("Get earn diamonds safely?"), so a clean
+    alternative is preferred whenever one exists.
+    """
+
+    clean = [title for title in titles if not unsupported_risk_terms(title, source)]
+    return clean or [normalize_risk_terms(title, source=source) for title in titles]
+
+
+def _fallback_warning(trace: dict[str, Any]) -> str:
+    """Why this run shipped the local package, as the writer's diagnostics recorded it."""
+
+    status = str(trace.get("status") or "")
+    reason = str(trace.get("fallback_reason") or "")
+    # A rejected local package rewrites the fallback reason to
+    # "final_quality_red", but the provider status still says why Gemini
+    # produced nothing in the first place.
+    if trace.get("initial_quality_rejection") or (
+        reason in _QUALITY_FALLBACK_REASONS and status not in _PROVIDER_FALLBACK_CAUSES
+    ):
+        cause = "No Gemini package passed the local validation checks"
+    else:
+        cause = (_PROVIDER_FALLBACK_CAUSES.get(status) or _PROVIDER_FALLBACK_CAUSES.get(reason)
+                 or "Gemini did not return a usable package")
+    return f"{cause}, so this run used the content-specific local fallback."
 
 
 def generate_seo_suggestions(
@@ -47,22 +99,30 @@ def generate_seo_suggestions(
 ) -> Dict[str, object]:
     """Generate first-pass SEO suggestions from local research signals."""
 
-    # ---- Topic-lock pre-process ----------------------------------------
-    safe_script = normalize_risk_terms(script or "")          # Fix 6
-    if is_short_idea(safe_script):                            # Fix 4
-        safe_script = expand_idea_to_script(safe_script)
+    # The creator's words reach analysis, the prompts and History as written.
+    # Rewriting risky phrases here turned "never install a mod apk" into
+    # "never install a official method"; the generated copy is constrained
+    # after refinement instead.
+    script_text = (script or "").strip()
 
     ctx = context or {}
+    # "auto" is resolved to the video's language exactly as the writer stage
+    # resolves it: the literal "auto" matched no package, so the one the UI
+    # shows kept the writer's copy, unrefined and never risk-filtered or gated.
+    selected_language = resolve_output_language(ctx)
     creator_brief = ctx.get("creator_brief")
     topic_source = brief_research_text(
-        safe_script,
+        script_text,
         creator_brief if isinstance(creator_brief, dict) else None,
     )
-    category = infer_category(topic_source, hint=ctx.get("category"))   # Fix 2
-    main_topic = creator_topic(creator_brief if isinstance(creator_brief, dict) else None) or extract_main_topic(topic_source)  # Fix 1
-    # --------------------------------------------------------------------
+    category = infer_category(topic_source, hint=ctx.get("category"))
+    main_topic = creator_topic(creator_brief if isinstance(creator_brief, dict) else None) or extract_main_topic(topic_source)
+    # The brief's format (or a stated length) decides, never the topic category:
+    # "lessons" or "thoughts" made a startup talk "quotes", and then a Short
+    # with #shorts and yt/shorts tags.
+    short_form = is_short_content(script_text, creator_brief if isinstance(creator_brief, dict) else None)
 
-    intent = classify_intent(safe_script)
+    intent = classify_intent(script_text)
     history_store = research.get("history_store")
     if not isinstance(history_store, HistoryStore):
         raise ValueError("History store missing from research payload.")
@@ -75,26 +135,31 @@ def generate_seo_suggestions(
     if isinstance(creator_brief, dict):
         research_payload["creator_brief"] = creator_brief
 
-    # Fix 3: API fallback — seed keyword signals from category presets when
-    # YouTube returned nothing usable.
+    # With no YouTube results and no script phrases there are no keyword
+    # signals, and none are made up: category presets ("tech review", "study
+    # tips") were shown as research and then grounded tags, named chapters and
+    # fed the gap analysis.
     yt_results = research_payload.get("youtube_results") or []
-    existing_signals = research_payload.get("keyword_signals") or []
-    if not yt_results and not existing_signals:
-        research_payload["keyword_signals"] = fallback_keyword_signals(category)
+    keyword_signals_unavailable = not yt_results and not research_payload.get("keyword_signals")
+    competitor_titles = [str(item.get("title") or "") for item in yt_results if isinstance(item, dict)]
 
-    seo_package = build_seo_package(intent, safe_script, research_payload, history_store)
+    seo_package = build_seo_package(intent, script_text, research_payload, history_store)
+    # Recent and published titles as they stood before this run was recorded,
+    # so the final title is not compared with this run's own writer title.
+    channel_learning = seo_package.get("channel_learning") or {}
 
     # ---- Topic-lock post-process ---------------------------------------
-    # force_topic_in_title now only regenerates if the LLM title is broken
-    # (empty, < 10 chars, or all-junk). LLM output is preserved otherwise.
+    # force_topic_in_title only regenerates a title that is missing or shorter
+    # than six characters; any other generated title is kept as written.
     # force_hashtags accepts the LLM's hashtags and only tops up if missing.
-    locked_title = force_topic_in_title(seo_package["title"], main_topic, category)
+    locked_title = force_topic_in_title(seo_package["title"], main_topic, category, short_form=short_form)
     locked_description = force_topic_in_description(seo_package["description"], main_topic)
+    creator_content = str(creator_brief.get("content") or "") if isinstance(creator_brief, dict) else ""
     # Hashtags are built from lowercase tags; names keep the creator's casing.
-    casing = source_casing_map(
-        safe_script, str(creator_brief.get("content") or "") if isinstance(creator_brief, dict) else "",
-    )
-    tag_context = [safe_script]
+    casing = source_casing_map(script_text, creator_content)
+    # A risky phrase the creator wrote is their subject; one the copy adds is not.
+    risk_source = f"{script_text}\n{creator_content}"
+    tag_context = [script_text]
     if isinstance(creator_brief, dict):
         tag_context.extend(str(creator_brief.get(field) or "") for field in (
             "content", "target_audience", "viewer_promise", "unique_angle", "proof",
@@ -110,16 +175,16 @@ def generate_seo_suggestions(
         seo_package.get("keyword_research") or research_payload.get("keyword_research") or {},
         generated_tags=seo_package.get("tags") or [],
         title=locked_title,
-        script=safe_script,
+        script=script_text,
         creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
-        is_short=category in {"quotes", "shorts", "youtube_shorts"},
+        is_short=short_form,
     )
     locked_hashtags = filter_source_hashtags(
         force_hashtags(seo_package.get("hashtags") or [], main_topic, category, tags=locked_tags, casing=casing),
-        safe_script,
+        script_text,
         creator_brief if isinstance(creator_brief, dict) else None,
     )
-    if category in {"quotes", "shorts", "youtube_shorts"}:
+    if short_form:
         locked_hashtags = focused_short_hashtags(locked_tags, casing)
     locked_description = format_upload_ready_description(
         locked_description,
@@ -127,38 +192,56 @@ def generate_seo_suggestions(
         category=category,
         topic=main_topic,
     )
-    locked_variants = [
-        force_topic_in_title(v["title"], main_topic, category, variant_index=i)
+    # Unusable variants all fall back to the same topic title; keep it once.
+    locked_variants = list(dict.fromkeys(
+        force_topic_in_title(v["title"], main_topic, category, variant_index=i, short_form=short_form)
         for i, v in enumerate(seo_package["title_variants"])
-    ]
+    ))
+    generation_source = str(seo_package.get("generation_source") or "fallback")
     refined, refinement_trace = refine_package(
         {"title": locked_title, "variants": locked_variants, "description": locked_description,
          "tags": locked_tags, "hashtags": locked_hashtags},
-        script=safe_script, brief=creator_brief if isinstance(creator_brief, dict) else {},
-        language=str(ctx.get("language") or "english"), region=str(ctx.get("region") or "global"),
+        script=script_text, brief=creator_brief if isinstance(creator_brief, dict) else {},
+        language=selected_language, region=str(ctx.get("region") or "global"),
         evidence=keyword_research, competitors=yt_results,
+        channel_learning=channel_learning, local_fallback=generation_source == "fallback",
     )
-    locked_title, locked_variants = refined["title"], refined["variants"]
-    locked_tags = refined.get("tags") or locked_tags
+    # Generated copy may not add an exploit promise ("unlimited diamonds") the
+    # creator never made. Tags keep their research provenance, so an offending
+    # tag is dropped rather than reworded.
+    locked_title = _without_risk_terms([refined["title"], *refined["variants"]], risk_source)[0]
+    locked_variants = _without_risk_terms(refined["variants"], risk_source)
+    locked_tags = [
+        tag for tag in (refined.get("tags") or locked_tags) if not unsupported_risk_terms(tag, risk_source)
+    ]
     keyword_research = synchronize_tag_evidence(keyword_research, locked_tags)
     locked_hashtags = (focused_short_hashtags(locked_tags, casing)
-        if category in {"quotes", "shorts", "youtube_shorts"}
+        if short_form
         else (refined.get("hashtags") or locked_hashtags))
-    locked_description = format_upload_ready_description(refined["description"], locked_hashtags,
+    locked_hashtags = [tag for tag in locked_hashtags if not unsupported_risk_terms(tag, risk_source)]
+    locked_description = format_upload_ready_description(
+        normalize_risk_terms(refined["description"], source=risk_source), locked_hashtags,
         category=category, topic=main_topic)
-    seo_package["generation_trace"] = {**(seo_package.get("generation_trace") or {}),
-                                        "quality_refinement": refinement_trace}
+    trace = seo_package["generation_trace"] = {**(seo_package.get("generation_trace") or {}),
+                                               "quality_refinement": refinement_trace}
+    if refinement_trace.get("attempted"):
+        # The repair request is a Gemini call like the writer's own, with its
+        # own attempts and retries.
+        trace.update(with_extra_call(trace, refinement_trace.get("provider_call") or {}))
+        trace["gemini_attempted"] = True
     final_gate = evaluate_package_quality(
         {
             "title": locked_title, "variants": locked_variants,
             "description": locked_description, "tags": locked_tags, "hashtags": locked_hashtags,
         },
-        script=safe_script,
+        script=script_text,
         creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
-        language=str(ctx.get("language") or "english"),
-        require_shorts_tags=False,
+        language=selected_language,
+        recent_titles=channel_learning.get("recent_titles") or [],
+        published_titles=channel_learning.get("published_titles") or [],
         tag_context=tag_context,
         tag_evidence=keyword_research,
+        competitor_titles=competitor_titles,
     )
     gated = apply_quality_gate(
         {"title": locked_title, "variants": locked_variants, "description": locked_description,
@@ -170,50 +253,84 @@ def generate_seo_suggestions(
     final_gate = enforce_quality_target(final_gate)
     # The writer stage records its own verdict under this key; the package the
     # creator receives is the one judged here, after tag selection and refinement.
-    trace = seo_package["generation_trace"]
     trace["writer_quality_verdict"] = trace.get("final_quality_verdict")
     trace["final_quality_verdict"] = final_gate.get("verdict")
     trace["final_quality_reasons"] = [
         item.get("code") for item in final_gate.get("issues") or [] if isinstance(item, dict)
     ]
 
-    # Patch title_optimization so best_title + scored_variants are also topic-locked.
-    title_opt = dict(seo_package.get("title_optimization") or {})
-    if title_opt.get("best_title"):
-        title_opt["best_title"] = force_topic_in_title(
-            title_opt["best_title"], main_topic, category)
-    sv = list(title_opt.get("scored_variants") or [])
-    for i, item in enumerate(sv):
-        if isinstance(item, dict) and item.get("title"):
-            item["title"] = force_topic_in_title(
-                item["title"], main_topic, category, variant_index=i)
-    title_opt["scored_variants"] = sv
-    title_opt["best_title"] = locked_title
+    # One package per final title. Filtering the writer-stage variants by the
+    # final list left a single package whenever refinement produced new titles
+    # (1 of 4 for a quote Short), and packages are what the creator picks from.
+    # Each final title is scored and judged here: writer-stage scores belonged
+    # to titles refinement may have replaced (a new title showed 0), and every
+    # package was labelled approved even when the final gate rejected it.
+    writer_variants = {
+        str(item.get("title") or "").casefold(): item
+        for item in (seo_package.get("title_variants") or []) if isinstance(item, dict)
+    }
+    final_variants_data = []
+    for title in dict.fromkeys([locked_title, *locked_variants]):
+        if not title:
+            continue
+        row = dict(writer_variants.get(title.casefold()) or {"estimated_ctr": None, "package_intent": "Alternative"})
+        row.update(
+            title=title, character_count=len(title),
+            score=title_quality_score(title, seo_package.get("title_scoring")),
+            quality_gate=title_gate_status(title, final_gate, source="final_quality_gate"),
+        )
+        final_variants_data.append(row)
+    title_opt = {
+        "best_title": locked_title,
+        "scored_variants": [
+            {field: row.get(field) for field in ("title", "score", "estimated_ctr", "character_count")}
+            for row in final_variants_data
+        ],
+    }
+    # Rebuilt from the final titles with the history the writer stage read, so
+    # the CTR guidance and A/B pair describe what the creator receives.
+    feedback_package = build_feedback_package(
+        seo_package={
+            "title": locked_title,
+            "content_angle": seo_package["content_angle"],
+            "title_optimization": title_opt,
+            "opportunity_gap_analysis": seo_package["opportunity_gap_analysis"],
+        },
+        research=research_payload,
+        learning_summary=seo_package.get("learning_summary") or {},
+        internal_scorecard=seo_package.get("internal_scorecard") or {},
+    )
 
     # Strip junk from any keyword_signals that came back from research.
     locked_signals = [
         s for s in (research_payload.get("keyword_signals") or [])
-        if not _is_junk_tag(str(s.get("keyword", "")))
+        if not is_junk_tag(str(s.get("keyword", "")))
     ]
 
     # ---- Selected-language package -------------------------------------
     def _lock_pkg(p: dict[str, Any], lang: str) -> dict[str, Any]:
         if not isinstance(p, dict):
             return {}
-        title = force_topic_in_title(p.get("title", ""), main_topic, category)
-        variants = [
-            force_topic_in_title(v, main_topic, category, variant_index=i)
+        title = force_topic_in_title(p.get("title", ""), main_topic, category, short_form=short_form)
+        variants = list(dict.fromkeys(
+            force_topic_in_title(v, main_topic, category, variant_index=i, short_form=short_form)
             for i, v in enumerate(p.get("variants", []) or [])
+        ))
+        # Every language package gets the risk filter the selected one gets.
+        title = _without_risk_terms([title, *variants], risk_source)[0]
+        variants = _without_risk_terms(variants, risk_source)
+        tags = locked_tags if lang == selected_language else [
+            tag for tag in p.get("tags", []) or [] if not unsupported_risk_terms(tag, risk_source)
         ]
-        tags = locked_tags if lang == str(ctx.get("language") or "english").lower() else p.get("tags", []) or []
         hashtags = filter_source_hashtags(
             force_hashtags(p.get("hashtags", []) or [], main_topic, category, tags=tags, casing=casing),
-            safe_script,
+            script_text,
             creator_brief if isinstance(creator_brief, dict) else None,
         )
-        if category in {"quotes", "shorts", "youtube_shorts"}:
+        if short_form:
             hashtags = focused_short_hashtags(tags, casing)
-        description = p.get("description", "") or ""
+        hashtags = [tag for tag in hashtags if not unsupported_risk_terms(tag, risk_source)]
+        description = normalize_risk_terms(p.get("description", "") or "", source=risk_source)
         # Only English gets the topic-presence fallback; Tamil / Tanglish
         # descriptions stay in their own language, untouched.
         if lang == "english":
@@ -237,7 +354,6 @@ def generate_seo_suggestions(
         for lang, p in (seo_package.get("multilang") or {}).items()
     }
 
-    selected_language = str(ctx.get("language") or "english").lower()
     if selected_language in multilang_packages:
         multilang_packages[selected_language].update(title=locked_title, variants=locked_variants,
             description=locked_description, tags=locked_tags, hashtags=locked_hashtags)
@@ -246,14 +362,18 @@ def generate_seo_suggestions(
     research_warnings = list(research_payload.get("research_warnings", []) or [])
     if isinstance(creator_brief, dict):
         research_warnings.extend(creator_brief.get("warnings", []))
+    if keyword_signals_unavailable:
+        research_warnings.append(
+            "Keyword signals are unavailable: YouTube returned no results and no phrases could be "
+            "extracted from the script."
+        )
     non_english_fallback = [
         lang for lang in (seo_package.get("fallback_languages") or []) if lang != "english"
     ]
-    generation_source = str(seo_package.get("generation_source") or "fallback")
     if generation_source == "fallback":
-        research_warnings.append(
-            "No Gemini package passed the local validation checks, so this run used the content-specific local fallback."
-        )
+        # The reason matters: "no package passed validation" was reported when
+        # Gemini was not configured, cooling down, rate-limited or timed out.
+        research_warnings.append(_fallback_warning(trace))
     if non_english_fallback:
         provider_hint = "Gemini" if generation_source == "fallback" else "the configured AI provider"
         research_warnings.append(
@@ -263,41 +383,30 @@ def generate_seo_suggestions(
         )
     # --------------------------------------------------------------------
 
-    # One package per final title. Filtering the writer-stage variants by the
-    # final list left a single package whenever refinement produced new titles
-    # (1 of 4 for a quote Short), and packages are what the creator picks from.
-    writer_variants = {
-        str(item.get("title") or "").casefold(): item
-        for item in (seo_package.get("title_variants") or []) if isinstance(item, dict)
-    }
-    final_variants_data = [
-        writer_variants.get(title.casefold()) or {
-            "title": title, "score": 0.0, "estimated_ctr": None,
-            "character_count": len(title), "package_intent": "Alternative",
-        }
-        for title in dict.fromkeys([locked_title, *locked_variants]) if title
-    ]
+    # The final gate has already judged every title, so the package builder's
+    # own checks are skipped and each package carries that gate's verdict.
     final_packages = build_title_thumbnail_packages(
         final_variants_data,
         creator_brief if isinstance(creator_brief, dict) else None,
-        competitor_titles=[str(item.get("title") or "") for item in research_payload.get("youtube_results", []) if isinstance(item, dict)],
+        competitor_titles=competitor_titles,
         validated=True,
         focus_phrases=[tag for tag in locked_tags if tag not in {"yt", "shorts"}],
     )
     try:
         retention_learning = history_store.retention_learning_summary(
             format_filter=str((creator_brief or {}).get("video_format") or "").strip() or None,
-            language_filter=str(ctx.get("language") or "english").strip().lower(),
+            language_filter=selected_language,
             snapshot_window="24h",
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("Retention learning is unavailable: %s", type(exc).__name__)
         retention_learning = {
             "status": "insufficient_evidence", "learning_allowed": False,
-            "sample_size": 0, "minimum_samples": 5,
+            "sample_size": 0, "minimum_samples": EARLY_SIGNAL_MIN_SAMPLES,
             "message": "Retention evidence could not be evaluated for this run; no historical pattern was applied.",
         }
     retention_assistant = analyze_retention_assistant(
-        safe_script,
+        script_text,
         creator_brief=creator_brief if isinstance(creator_brief, dict) else None,
         content_angle=str(seo_package.get("content_angle") or ""),
         packages=final_packages,
@@ -306,19 +415,12 @@ def generate_seo_suggestions(
 
     # Follow-up suggestions are rebuilt from what the creator will actually
     # publish: the locked title, the validated final tags and hashtags.
-    short_form = category in {"quotes", "shorts", "youtube_shorts"} or is_short_content(
-        safe_script, creator_brief if isinstance(creator_brief, dict) else None,
-    )
     related_phrases = [tag for tag in locked_tags if tag not in {"yt", "shorts"}]
-    angle = str(seo_package.get("content_angle") or "")
     content_graph_strategy = build_content_graph_strategy(
-        primary_topic=main_topic, secondary_topic="", angle=angle, keyword_signals=[],
-        related_phrases=related_phrases, short_form=short_form,
+        main_topic, related_phrases=related_phrases, short_form=short_form,
     )
-    session_expansion = build_session_expansion(
-        locked_title, [], related_phrases=related_phrases, short_form=short_form,
-    )
-    binge_bridge = build_binge_bridge(locked_title, angle, related_phrases=related_phrases, short_form=short_form)
+    session_expansion = build_session_expansion(related_phrases=related_phrases, short_form=short_form)
+    binge_bridge = build_binge_bridge(related_phrases=related_phrases, short_form=short_form)
     automation_workflow = build_automation_workflow(
         title=locked_title, hashtags=locked_hashtags, chapters=seo_package["chapters"],
         content_graph_strategy=content_graph_strategy, short_form=short_form,
@@ -360,13 +462,13 @@ def generate_seo_suggestions(
         session_expansion=session_expansion,
         binge_bridge=binge_bridge,
         automation_workflow=automation_workflow,
-        performance_sync=seo_package["feedback_package"]["performance_sync"],
-        learning_engine=seo_package["feedback_package"]["learning_engine"],
-        winning_patterns=seo_package["feedback_package"]["winning_patterns"],
-        ctr_prediction=seo_package["feedback_package"]["ctr_prediction"],
-        ab_test_pack=seo_package["feedback_package"]["ab_test_pack"],
-        internal_scorecard=seo_package["feedback_package"]["internal_scorecard"],
-        historical_comparison=seo_package["feedback_package"]["historical_comparison"],
+        performance_sync=feedback_package["performance_sync"],
+        learning_engine=feedback_package["learning_engine"],
+        winning_patterns=feedback_package["winning_patterns"],
+        ctr_prediction=feedback_package["ctr_prediction"],
+        ab_test_pack=feedback_package["ab_test_pack"],
+        internal_scorecard=feedback_package["internal_scorecard"],
+        historical_comparison=feedback_package["historical_comparison"],
         history_run_id=seo_package.get("history_run_id"),
         generation_quality=final_gate,
         personalization=seo_package.get("personalization") or {},
@@ -376,7 +478,12 @@ def generate_seo_suggestions(
     history_store = research_payload.get("history_store")
     history_run_id = seo_package.get("history_run_id")
     if isinstance(history_store, HistoryStore) and isinstance(history_run_id, int):
-        history_store.update_analysis_payload(history_run_id, response["title"], response)
+        # The run was recorded with the writer-stage score; refinement may have
+        # replaced that title, so the score of the one delivered goes with it.
+        history_store.update_analysis_payload(
+            history_run_id, response["title"], response,
+            title_score=(response.get("ctr_prediction") or {}).get("title_quality_score"),
+        )
     return response
 
 

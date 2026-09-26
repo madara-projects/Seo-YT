@@ -48,9 +48,13 @@ export interface WatchOutlier {
   analyzed_at?: string | null;
   status?: OutlierStatus | string | null;
   observed_views?: number | null;
+  /** The median of peer views, each scaled to this video's age. */
   baseline_median_views?: number | null;
   relative_multiplier?: number | null;
+  /** Peers matched at a similar age only. */
   sample_size?: number | null;
+  /** How peers were measured, e.g. "peer_snapshot_nearest_same_age". */
+  observation_window?: string | null;
   explanation?: string | null;
   provenance?: string | null;
   signals?: { engagement_ratio?: number | null; limitation?: string | null } | null;
@@ -64,8 +68,10 @@ export interface WatchVideo {
   channel_title?: string | null;
   title?: string | null;
   published_at?: string | null;
+  /** Null for a live or upcoming video (P0D). */
   duration_seconds?: number | null;
   language?: string | null;
+  /** From the duration: "youtube_shorts" up to 180 s, "long_form", or "unknown". */
   format?: string | null;
   notes?: string | null;
   state: WatchState | string;
@@ -73,6 +79,7 @@ export interface WatchVideo {
   last_researched_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  /** Every snapshot from the detail endpoint; the list holds only the latest. */
   snapshots?: WatchVideoSnapshot[];
   latest_snapshot?: WatchVideoSnapshot | null;
   outlier?: WatchOutlier | null;

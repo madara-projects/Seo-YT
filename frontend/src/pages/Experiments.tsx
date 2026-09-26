@@ -9,6 +9,7 @@ import { ExperimentList } from "@/components/experiments/ExperimentList";
 import { useAuditCandidates } from "@/hooks/useAudits";
 import { useExperiment, useExperiments } from "@/hooks/useExperiments";
 import { useSelectedId } from "@/hooks/useSelection";
+import { useUrlState } from "@/hooks/useUrlState";
 import { useChannelStatus } from "@/hooks/useSystem";
 import { asArray } from "@/lib/utils";
 import type { AuditCandidate } from "@/api/auditTypes";
@@ -20,8 +21,10 @@ import type { Experiment } from "@/api/experimentTypes";
  */
 export default function ExperimentsPage() {
   const { selectedId, select, detailRef } = useSelectedId("experiment");
-  const [status, setStatus] = useState("");
-  const [mode, setMode] = useState("");
+  // The filters live in the URL too, so a reload or shared link keeps them.
+  const url = useUrlState();
+  const status = url.get("status");
+  const mode = url.get("mode");
   const [formOpen, setFormOpen] = useState(false);
 
   const list = useExperiments(status, mode);
@@ -63,9 +66,9 @@ export default function ExperimentsPage() {
         <ExperimentList
           experiments={experiments}
           status={status}
-          onStatusChange={setStatus}
+          onStatusChange={(value) => url.set({ status: value })}
           mode={mode}
-          onModeChange={setMode}
+          onModeChange={(value) => url.set({ mode: value })}
           isPending={list.isPending}
           isFetching={list.isFetching}
           error={list.error}
@@ -93,9 +96,8 @@ export default function ExperimentsPage() {
         open={formOpen}
         onOpenChange={setFormOpen}
         onCreated={(experiment) => {
-          setStatus("");
-          setMode("");
-          select(experiment.id);
+          // Clear the filters so the new draft is listed, in one navigation.
+          select(experiment.id, { status: null, mode: null });
         }}
       />
     </div>

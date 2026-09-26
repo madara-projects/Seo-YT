@@ -1,11 +1,14 @@
 import { apiRequest } from "../api.js";
-import { formatApiError } from "../errors.js";
+import { formatApiError, renderApiError } from "../errors.js";
 import { $, arr, chip, esc, num } from "../utils.js";
 
 let selectedExperimentId = null;
 let publishedCandidates = [];
 let connectedChannel = null;
 const label = (value) => String(value || "unavailable").replaceAll("_", " ").toUpperCase();
+// A closed experiment's videos and recorded result are final: the server refuses
+// assigning, removing, and comparing (422), so those controls are not offered.
+const CLOSED_STATUSES = new Set(["completed", "cancelled", "inconclusive"]);
 
 function cards(items) {
   if (!items.length) {
@@ -39,7 +42,8 @@ export async function loadExperiments() {
       apiRequest("/youtube/channel/status", { cache: "no-store" }),
     ]);
     connectedChannel = channel.connected ? channel.channel : null;
-    publishedCandidates = arr(audits.candidates).filter((item) => item.ownership_verified && item.verified_channel_id === connectedChannel?.id);
+    // Only videos verified for the connected channel; with no channel connected there are none.
+    publishedCandidates = connectedChannel ? arr(audits.candidates).filter((item) => item.ownership_verified && item.verified_channel_id === connectedChannel.id) : [];
     $("experimentList").innerHTML = cards(arr(data.experiments));
     if ($("experimentChannelStatus")) $("experimentChannelStatus").textContent = connectedChannel
       ? `Connected: ${connectedChannel.title} · ${num(publishedCandidates.length)} verified linked video(s) available`
@@ -56,7 +60,7 @@ function assignmentOptions(experiment) {
   return available.map((item) => `<option value="${Number(item.id)}">${esc(item.youtube_metadata?.title || item.package_topic || item.youtube_video_id)}</option>`).join("");
 }
 
-function groupRows(items, role) {
+function groupRows(items, role, closed = false) {
   const rows = arr(items).filter((item) => item.role === role);
   if (!rows.length) return '<div class="creator-empty-state" style="padding:14px">No explicitly assigned videos in this group.</div>';
   return rows.map((item) => `
@@ -65,7 +69,7 @@ function groupRows(items, role) {
         <strong>${esc(item.title || item.youtube_video_id)}</strong>
         <span style="display:block;font-size:11px;color:var(--text-muted)">ID: ${esc(item.youtube_video_id)} &bull; Role: ${esc(label(item.role))}</span>
       </div>
-      <button type="button" class="btn btn-sm btn-danger" data-remove-assignment="${Number(item.id)}">Remove</button>
+      ${closed ? "" : `<button type="button" class="btn btn-sm btn-danger" data-remove-assignment="${Number(item.id)}">Remove</button>`}
     </div>`).join("");
 }
 
@@ -85,6 +89,7 @@ function renderExperiment(item, versions = []) {
   const result = item.latest_result;
   const next = { draft: "planned", planned: "active", active: "completed", paused: "active" }[item.status];
   const isObservational = item.mode === "observational";
+  const closed = CLOSED_STATUSES.has(item.status);
 
   $("experimentDetail").innerHTML = `
     <div class="card-title">
@@ -106,17 +111,18 @@ function renderExperiment(item, versions = []) {
       <div class="creator-analysis-card">
         <div class="creator-card-heading">Control definition &amp; assignments</div>
         <p class="metric-sub" style="margin-bottom:8px">${esc(item.control_definition)}</p>
-        ${groupRows(item.assignments, "control")}
+        ${groupRows(item.assignments, "control", closed)}
       </div>
       <div class="creator-analysis-card">
         <div class="creator-card-heading">Variant definition &amp; assignments</div>
         <p class="metric-sub" style="margin-bottom:8px">${esc(item.variant_definition)}</p>
-        ${groupRows(item.assignments, "variant")}
+        ${groupRows(item.assignments, "variant", closed)}
       </div>
     </div>
 
-    ${isObservational ? `<h3 class="creator-section-heading">Observational references</h3>${groupRows(item.assignments, "observational_reference")}` : ""}
+    ${isObservational ? `<h3 class="creator-section-heading">Observational references</h3>${groupRows(item.assignments, "observational_reference", closed)}` : ""}
 
+    ${closed ? `<p class="metric-sub" style="margin:14px 0">This comparison is ${esc(label(item.status).toLowerCase())}, so it is closed: it takes no new videos, keeps the videos it was compared on, and keeps its recorded result.</p>` : `
     <div class="phase8-assign">
       <select id="experimentAssignVideo"><option value="">Select a channel-verified video</option>${assignmentOptions(item)}</select>
       <select id="experimentAssignRole">
@@ -130,7 +136,7 @@ function renderExperiment(item, versions = []) {
     <div class="creator-inline-actions ideas-actions" style="margin:14px 0">
       <button type="button" class="btn btn-primary audit-refresh-button" data-experiment-action="compare">Compare saved evidence</button>
       ${next ? `<button type="button" class="btn" data-experiment-action="status" data-next-status="${next}">Mark ${esc(next)}</button>` : ""}
-    </div>
+    </div>`}
     <div id="experimentActionStatus" class="metric-sub" aria-live="polite"></div>
 
     <h3 class="creator-section-heading">Result</h3>
@@ -211,8 +217,8 @@ async function action(button) {
     const status = $("experimentActionStatus");
     if (status) status.textContent = message;
   } catch (error) {
-    const status = $("experimentActionStatus");
-    if (status) status.textContent = formatApiError(error, error.message || "Experiment action failed.");
+    // A refusal (such as a 422 for an experiment closed elsewhere) keeps the server's reason.
+    renderApiError($("experimentActionStatus"), error, "Experiment action failed.");
   } finally {
     button.disabled = false;
   }
@@ -226,8 +232,7 @@ async function removeAssignment(id, button) {
     await openExperiment(selectedExperimentId);
     await loadExperiments();
   } catch (error) {
-    const status = $("experimentActionStatus");
-    if (status) status.textContent = formatApiError(error, "Assignment could not be removed.");
+    renderApiError($("experimentActionStatus"), error, "Assignment could not be removed.");
   } finally {
     button.disabled = false;
   }

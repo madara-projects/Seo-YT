@@ -27,7 +27,9 @@ export const demandFormDefaults: DemandFormValues = {
 };
 
 /**
- * An empty option means "any"; the backend treats a blank field the same way.
+ * An empty option leaves the choice to the backend, which does not mean
+ * "any": a blank language is researched in English, a blank region as global,
+ * and a blank format adds no format to the queries. The labels say so.
  *
  * The legacy form took free text, but the research engine only acts on the
  * values listed here: `tamil` and `tanglish` add Tamil queries, and each
@@ -35,7 +37,7 @@ export const demandFormDefaults: DemandFormValues = {
  * Anything else was saved and then ignored, so these are choices instead.
  */
 export const DEMAND_LANGUAGE_OPTIONS = [
-  { value: "", label: "Any language" },
+  { value: "", label: "English (default)" },
   { value: "english", label: "English" },
   { value: "tamil", label: "Tamil" },
   { value: "tanglish", label: "Tanglish" },

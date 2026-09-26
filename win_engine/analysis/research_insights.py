@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import Counter
-import re
 from typing import Any
 
 
@@ -32,17 +31,22 @@ def build_research_decision(
 
     quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip()
     visual = str(brief.get("visual_requirements") or "").strip(" .")
-    audience = str(brief.get("target_audience") or "viewers who relate to the emotion").strip()
-    promise = str(brief.get("viewer_promise") or "a brief moment of emotional recognition").strip()
+    # The emotional defaults describe a quote video. A tutorial or review with
+    # no stated audience used to be pitched "for viewers who relate to the emotion".
+    audience = str(brief.get("target_audience") or ("viewers who relate to the emotion" if quote else "")).strip()
+    promise = str(
+        brief.get("viewer_promise") or ("a brief moment of emotional recognition" if quote else "the payoff the title promises")
+    ).strip()
     unique_angle = str(brief.get("unique_angle") or "").strip()
     proof = str(brief.get("proof") or visual or "the creator-supplied video").strip()
 
     if quote:
-        core = "silence and private thoughts" if re.search(r"\bsilence\b", quote, re.IGNORECASE) else "the exact emotional idea in the quote"
-        recommended_angle = f"Center the package on {core} for {audience}."
+        # "silence and private thoughts" for any quote with "silence" in it read
+        # a meaning into the quote that the creator never gave.
+        recommended_angle = f"Center the package on the exact emotional idea in the quote for {audience}."
     else:
         topic = str(brief.get("topic") or "the supplied topic").strip()
-        recommended_angle = f"Lead with {unique_angle or topic} for {audience}."
+        recommended_angle = f"Lead with {unique_angle or topic} for {audience}." if audience else f"Lead with {unique_angle or topic}."
     reason = f"Use {proof} to deliver {promise}, without copying competitor wording or adding an unsupported story."
     avoid = [f"Do not copy the dominant {dominant} title structure."] if titles else ["Research data is unavailable; keep the promise specific and evidence-based."]
     if repeated_patterns:

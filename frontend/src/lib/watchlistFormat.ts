@@ -5,24 +5,39 @@ import type { WatchChannel } from "@/api/watchlistTypes";
 
 /**
  * Wording for the watchlist. The outlier rule is quoted from
- * `IntelligenceStore.analyze_outlier`: a video is compared with the median
- * latest views of at least five other watched videos from the same channel,
- * and flagged at 2.5 times that median or more.
+ * `IntelligenceStore.analyze_outlier`: a video's views per day are compared
+ * with those of at least five other watched videos from the same channel,
+ * published within 180 days of it and measured at a similar age, and it is
+ * flagged at 2.5 times their median or more.
  */
 
 export const OUTLIER_THRESHOLD = 2.5;
 export const OUTLIER_MINIMUM_PEERS = 5;
+export const OUTLIER_PEER_WINDOW_DAYS = 180;
+/** The backend calls anything up to this long a Short. */
+const SHORT_MAX_SECONDS = 180;
 
 const OUTLIERS: Record<string, { label: string; tone: EvidenceTone }> = {
   possible_outlier: { label: "Possible outlier", tone: "warn" },
   observed_normal: { label: "Within normal range", tone: "info" },
-  insufficient_evidence: { label: "Not enough peers", tone: "neutral" },
+  // Too few peers is one cause; an unknown channel, view count or publish time
+  // are others. The analysis's own explanation says which.
+  insufficient_evidence: { label: "Not enough evidence", tone: "neutral" },
+  not_analyzed: { label: "Not analysed", tone: "neutral" },
 };
 
 export function outlierLabel(status: unknown): { label: string; tone: EvidenceTone } {
   const key = String(status ?? "").trim();
   if (!key) return { label: "Not analysed", tone: "neutral" };
   return OUTLIERS[key] ?? { label: humanize(key), tone: "neutral" };
+}
+
+/**
+ * 2.45 → "2.45×". Two decimals, as the backend rounds it: one decimal would
+ * show 2.45 as "2.5×" beside "Within normal range" and a 2.5× threshold.
+ */
+export function formatMultiplier(value: number): string {
+  return `${value.toFixed(2)}×`;
 }
 
 let languageNames: Intl.DisplayNames | null | undefined;
@@ -70,4 +85,12 @@ export function watchFormatLabel(format: unknown): string {
   if (format === "youtube_shorts") return "Short";
   if (format === "long_form") return "Long form";
   return "Unknown format";
+}
+
+/** Says the format is an inference from duration, not something YouTube reported. */
+export function watchFormatBasis(format: unknown): string | null {
+  if (format === "youtube_shorts" || format === "long_form") {
+    return `Inferred from its duration: up to ${SHORT_MAX_SECONDS / 60} minutes counts as a Short.`;
+  }
+  return null;
 }

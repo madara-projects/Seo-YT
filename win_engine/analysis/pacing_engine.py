@@ -3,17 +3,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from win_engine.analysis.source_cues import is_short_video, source_quote
 
-def analyze_script_pacing(script: str, video_format: str = "") -> dict[str, Any]:
+
+def analyze_script_pacing(script: str, video_format: str = "", exact_quote: str = "") -> dict[str, Any]:
     """Analyze spoken-script pacing or quote-Short readability as appropriate."""
 
-    quote = _extract_on_screen_quote(script)
-    lowered_context = f"{video_format} {script}".lower()
-    is_quote_short = bool(quote) and any(
-        marker in lowered_context
-        for marker in ("short", "reel", "quote", "on-screen", "on screen", "vertical")
-    )
-    if is_quote_short:
+    format_brief = {"video_format": video_format}
+    quote = exact_quote.strip() or source_quote(script, format_brief)
+    if quote and is_short_video(script, format_brief):
         quote_words = re.findall(r"\b[\w'’]+\b", quote)
         word_count = len(quote_words)
         reading_seconds = max(3, round(word_count / 2.8))
@@ -101,13 +99,6 @@ def analyze_script_pacing(script: str, video_format: str = "") -> dict[str, Any]
         "pattern_interrupts": pattern_interrupts,
         "recommendation": recommendation,
     }
-
-
-def _extract_on_screen_quote(script: str) -> str:
-    matches = re.findall(r'["“]([^"“”]{12,})["”]', script or "")
-    if not matches:
-        matches = re.findall(r"(?<![A-Za-z])'([^'\n]{12,})'(?![A-Za-z])", script or "")
-    return max((re.sub(r"\s+", " ", item).strip() for item in matches), key=len, default="")
 
 
 def _pacing_recommendation(pace_label: str, hook_density: str, pattern_interrupts: int) -> str:

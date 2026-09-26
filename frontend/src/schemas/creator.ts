@@ -3,8 +3,10 @@ import { z } from "zod";
 /**
  * Creator form contract.
  *
- * Limits mirror the Pydantic `AnalyzeRequest` model exactly, so a value the
- * backend would reject with a 422 is caught in the field instead.
+ * The text limits mirror the Pydantic `AnalyzeRequest` model, so a value the
+ * backend would reject with a 422 is caught in the field instead. The 40-
+ * character caps on the language and region choices are this form's own:
+ * the backend sets none, and the selects only produce short keys.
  *
  * Note: the API also accepts `on_screen_text` and `audience_type`, but the
  * legacy form never wired them up. They are left out here to keep strict

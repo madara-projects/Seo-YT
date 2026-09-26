@@ -1,10 +1,13 @@
 /** Normalized frontend error contract shared by every page. */
 export class FrontendApiError extends Error {
-  constructor(message, requestId = "", status = 0) {
+  constructor(message, requestId = "", status = 0, code = "", details = null) {
     super(message);
     this.name = "FrontendApiError";
     this.requestId = requestId || "";
     this.status = status || 0;
+    // The server's machine-readable error code and details, when it sent them.
+    this.code = code || "";
+    this.details = details ?? null;
   }
 }
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Any, Iterable
+from typing import Iterable
+
+from win_engine.analysis.text_tokens import unicode_words
 
 
 _STOP_WORDS = {
@@ -38,6 +40,17 @@ _STOP_WORDS = {
     "with",
     "you",
     "your",
+    # Tamil scripts are tokenized too; without these the top signal of a
+    # Tamil script was "இந்த வீடியோவில்" ("in this video").
+    "இந்த",
+    "அந்த",
+    "ஒரு",
+    "என்று",
+    "மற்றும்",
+    "பற்றி",
+    "எப்படி",
+    "வீடியோ",
+    "வீடியோவில்",
 }
 
 _NOISE_TOKENS = {
@@ -86,19 +99,14 @@ _PHRASE_PATTERNS = [
     r"\bproductivity\s+and\s+mindset\b",
 ]
 
-# Regional keyword priority boosters
-_REGION_PRIORITY_KEYWORDS = {
-    "india": {"growth", "strategy", "tips", "guide", "channel", "views", "audience"},
-    "tamil nadu": {"tamil", "local", "culture", "community", "trending", "regional"},
-    "sri lanka": {"growth", "diaspora", "cultural", "strategy", "community"},
-    "gulf": {"diaspora", "expat", "culture", "community", "entertainment"},
-    "global": {"growth", "strategy", "tips", "international", "audience"},
-}
-
 
 def _tokenize(text: str) -> list[str]:
-    tokens = re.findall(r"[A-Za-z0-9]{3,}", text.lower())
-    return [token for token in tokens if token not in _STOP_WORDS and token not in _NOISE_TOKENS]
+    # Every script: an ASCII-only pattern found no words at all in a Tamil
+    # script, and an empty script then let every competitor phrase through.
+    return [
+        token for token in unicode_words(text)
+        if len(token) >= 3 and token not in _STOP_WORDS and token not in _NOISE_TOKENS
+    ]
 
 
 def _extract_phrases(text: str) -> list[str]:
@@ -126,8 +134,8 @@ def _extract_phrases(text: str) -> list[str]:
     return phrases
 
 
-def extract_keyword_signals(script: str, youtube_results: Iterable[dict[str, object]], region: str = "global", primary_language: str = "english") -> list[dict[str, object]]:
-    """Extract recurring phrase-level keyword signals from script and YouTube metadata, with region-aware prioritization."""
+def extract_keyword_signals(script: str, youtube_results: Iterable[dict[str, object]]) -> list[dict[str, object]]:
+    """Extract recurring phrase-level keyword signals from script and YouTube metadata."""
 
     counter: Counter[str] = Counter()
     script_phrases = _extract_phrases(script)
@@ -141,40 +149,24 @@ def extract_keyword_signals(script: str, youtube_results: Iterable[dict[str, obj
         desc_phrases = _extract_phrases(description)
         for phrase in title_phrases + desc_phrases:
             phrase_tokens = set(_tokenize(phrase))
-            # Require topic relevance with the input script if script is non-empty
-            if script_tokens and not (phrase_tokens & script_tokens):
+            # A result phrase counts only when it shares a word with the script.
+            # A script with no words to share gives nothing to be relevant to,
+            # so competitor wording never stands in for the creator's topic.
+            if not (phrase_tokens & script_tokens):
                 continue
             counter[phrase] += 1
 
     signals: list[dict[str, object]] = []
-    region_keywords = _REGION_PRIORITY_KEYWORDS.get(region.lower(), _REGION_PRIORITY_KEYWORDS["global"])
-    
     for keyword, count in counter.most_common(15):
         if len(keyword.split()) == 1 and keyword in _NOISE_TOKENS:
             continue
         if keyword in _GENERIC_PHRASES:
             continue
-        source_strength = "high" if count >= 5 else "medium" if count >= 3 else "low"
-        
-        # Apply region-aware priority boost
-        regional_boost = 0
-        keyword_lower = keyword.lower()
-        for region_keyword in region_keywords:
-            if region_keyword in keyword_lower:
-                regional_boost = 1
-                source_strength = "high"
-                break
-        
         signals.append(
             {
                 "keyword": keyword,
                 "mentions": count,
-                "strength": source_strength,
-                "region_relevant": regional_boost == 1,
+                "strength": "high" if count >= 5 else "medium" if count >= 3 else "low",
             }
         )
-
-    # Sort by regional relevance first, then by mention count
-    signals.sort(key=lambda x: (x["region_relevant"], x["mentions"]), reverse=True)
-    
-    return signals[:10]  # Return top 10
+    return signals[:10]

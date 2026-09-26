@@ -1,6 +1,7 @@
 """Entry point for the YouTube SEO Analyzer backend (FastAPI)."""
 
 import os
+
 import uvicorn
 
 from win_engine.api.app import create_app
@@ -10,11 +11,14 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    # Use a direct local run by default. The Windows auto-reloader has
-    # been unreliable in this environment due to named-pipe permissions.
     settings = get_settings()
     uvicorn.run(
         app,
         host=settings.bind_host,
         port=int(os.getenv("PORT", "8000")),
+        # Keep the app's own logging configuration. Access lines are off: they
+        # would log every health check, and full query strings, which carry the
+        # OAuth code on the way back from Google.
+        log_config=None,
+        access_log=False,
     )

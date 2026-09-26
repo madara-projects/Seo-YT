@@ -157,6 +157,40 @@ describe("AuditsPage", () => {
     expect(within(detail).getByRole("link", { name: "Active topic" })).toHaveAttribute("href", "/demand?snapshot=12");
   });
 
+  it("checks what went live against the package the creator selected", async () => {
+    const route = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    const selected = {
+      ...AUDIT_FIXTURE,
+      intent: { ...AUDIT_FIXTURE.intent, selection_attribution: "creator_selected" },
+      // Package C was selected and published exactly; the primary package differs.
+      comparisons: AUDIT_FIXTURE.comparisons.map((item) => ({
+        ...item,
+        selected: item.published,
+        selected_to_published: "exact_match",
+        generated_to_published: "changed",
+      })),
+      learning_candidates: [
+        { variable: "format", value: "youtube_shorts", evidence_state: "mature_comparable_evidence", sample_size: 6 },
+        { variable: "title_mechanism", value: "question", evidence_state: "hypothesis_only", sample_size: 0 },
+      ],
+    };
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      String(url) === "/api/audits/5"
+        ? Promise.resolve(json({ audit: selected, versions: [], status: "available" }))
+        : route(url, init),
+    );
+    renderPage("/audits?link=5");
+
+    const detail = await screen.findByTestId("audit-detail");
+    expect(within(detail).getByText("Matches your selection")).toBeInTheDocument();
+    expect(within(detail).queryByText("Differences found")).not.toBeInTheDocument();
+    for (const field of within(detail).getAllByTestId("audit-field")) {
+      expect(within(field).getByText("Matches")).toBeInTheDocument();
+    }
+    expect(within(detail).getByText("Compared with 6 of your videos")).toBeInTheDocument();
+    expect(within(detail).getByText("Hypothesis, not compared")).toBeInTheDocument();
+  });
+
   it("runs the first audit of a video", async () => {
     const user = userEvent.setup();
     renderPage("/audits?link=6");

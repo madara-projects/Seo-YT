@@ -12,6 +12,7 @@ import logging
 import re
 from typing import Any
 
+from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.transliteration import has_tamil, phonetic_keys, phonetic_match
 from win_engine.llm import gemini_client
 
@@ -20,7 +21,12 @@ logger = logging.getLogger(__name__)
 
 _FIELDS = ("primary_topic", "secondary_topics", "entities", "audience", "search_intents", "keyword_clusters")
 _EVIDENCE_RELATIONSHIPS = {"direct", "paraphrase", "metaphor"}
-_UNSUPPORTED_CONTEXT_TERMS = {
+# Keys holding the text when Gemini answers with labelled objects
+# ({"name": ..., "type": ...}) where a list of strings was asked for.
+_LABEL_KEYS = ("name", "entity", "concept", "topic", "label", "phrase", "text", "value")
+# Words a semantic concept may use only when the creator's source does.
+# generation_quality keeps a different list for the final copy.
+_SOURCE_ONLY_CONTEXT_TERMS = {
     "breakup", "breakups", "unhealthy", "love", "lover", "romance", "romantic", "unrequited", "right", "wrong",
     "abuse", "abusive", "affair", "anxiety", "betrayal", "boyfriend", "cheating",
     "depression", "diagnosis", "divorce", "ex", "girlfriend", "grief", "husband",
@@ -67,11 +73,11 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
             system="You are a careful semantic research analyst. Return compact valid JSON only.",
             max_tokens=2200,
             temperature=0.2,
+            purpose="research",
         )
         parsed = _parse(raw)
         if parsed:
             parsed = _ground_semantics(parsed, source, script=script, brief=creator_brief)
-            parsed = _apply_quote_meaning_profile(parsed, source)
         if not parsed or not usable_research_topic(parsed.get("primary_topic")):
             repaired = _parse(gemini_client.generate(
                 prompt=(
@@ -86,7 +92,7 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
                     f"Creator source:\n{source[:8000]}"
                 ),
                 system="Return valid JSON only. Every proposed concept needs a source anchor.",
-                max_tokens=2200, temperature=0.1,
+                max_tokens=2200, temperature=0.1, purpose="research",
             ))
             if repaired:
                 parsed = _ground_semantics(repaired, source, script=script, brief=creator_brief)
@@ -100,20 +106,8 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
 
 
 def _parse(raw: str) -> dict[str, Any] | None:
-    if not raw:
-        return None
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            return None
-        try:
-            value = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    if not isinstance(value, dict) or not isinstance(value.get("primary_topic"), str):
+    value = gemini_client.parse_json_object(raw)
+    if value is None or not isinstance(value.get("primary_topic"), str):
         return None
     result: dict[str, Any] = {"primary_topic": _clean(value["primary_topic"])[:180]}
     if not result["primary_topic"]:
@@ -167,11 +161,11 @@ def _fallback(source: str, brief: dict[str, Any] | None) -> dict[str, Any]:
         "search_intents": _strings((brief or {}).get("viewer_promise"), limit=2),
         "keyword_clusters": [],
         "concept_evidence": [],
-        "viewer_intent": _fallback_intent(source),
+        "viewer_intent": fallback_viewer_intent(source),
         "source": "local_fallback",
         "confidence": "limited_without_gemini",
     }
-    return _apply_quote_meaning_profile(result, source)
+    return result
 
 
 def usable_research_topic(value: Any) -> bool:
@@ -206,67 +200,13 @@ def refine_research_semantics(script: str, brief: dict[str, Any], previous_queri
             "Every concept needs a verbatim source_phrase and direct/paraphrase/metaphor relationship. "
             "These are proposals, not claims of search volume.\n"
             f"Previous searches: {json.dumps(previous_queries)}\nCreator source:\n{source[:8000]}"),
-        system="Return valid semantic JSON only.", max_tokens=1600, temperature=0.1)
+        system="Return valid semantic JSON only.", max_tokens=1600, temperature=0.1, purpose="research")
     parsed = _parse(raw)
     return _ground_semantics(parsed, source, script=script, brief=brief) if parsed else {}
 
 
-def _apply_quote_meaning_profile(value: dict[str, Any], source: str) -> dict[str, Any]:
-    """Add narrow, source-proven concepts for recognizable quote meanings."""
-
-    lowered = source.casefold()
-    grief_silence_absence = all(
-        re.search(rf"\b{term}\b", lowered) for term in ("grief", "silence", "absence")
-    )
-    if grief_silence_absence:
-        result = dict(value)
-        result["primary_topic"] = "grief"
-        result["secondary_topics"] = _merge_strings(
-            ["silence", "absence"], result.get("secondary_topics") or [],
-        )
-        result["search_intents"] = _merge_strings(
-            ["grief quotes", "silence in grief", "absence in grief"],
-            result.get("search_intents") or [],
-        )
-        result["keyword_clusters"] = [
-            {"cluster": "grief and absence", "candidates": ["silence in grief", "absence in grief"]},
-            *(result.get("keyword_clusters") or []),
-        ][:8]
-        result["viewer_intent"] = "emotional_relatable"
-        return result
-    rarity_worth = bool(
-        re.search(r"\bdeserve\b", lowered)
-        and re.search(r"\bhard\s+(?:it\s+is\s+)?to\s+find\b", lowered)
-        and re.search(r"\b(?:somebody|someone)\s+like\s+you\b", lowered)
-    )
-    if not rarity_worth:
-        return value
-    result = dict(value)
-    result["primary_topic"] = "recognizing your worth"
-    result["secondary_topics"] = _merge_strings(
-        ["being valued for who you are", "rare personal qualities", "genuine appreciation"],
-        result.get("secondary_topics") or [],
-    )
-    result["search_intents"] = _merge_strings(
-        ["knowing your worth quotes", "being appreciated for who you are", "hard to replace quotes"],
-        result.get("search_intents") or [],
-    )
-    result["keyword_clusters"] = [
-        {
-            "cluster": "personal worth",
-            "candidates": ["know your worth", "being valued", "hard to replace", "rare person quotes"],
-        },
-        *(result.get("keyword_clusters") or []),
-    ][:8]
-    result["viewer_intent"] = "emotional_relatable"
-    return result
-
-
-def _merge_strings(preferred: list[str], existing: list[str]) -> list[str]:
-    return list(dict.fromkeys([*preferred, *existing]))[:12]
-
-
-def _fallback_intent(source: str) -> str:
+def fallback_viewer_intent(source: str) -> str:
+    """Viewer intent read from source wording, for when no model supplied one."""
     text = source.casefold()
     if re.search(r"\b(?:how to|tutorial|guide|steps?)\b", text):
         return "how_to"
@@ -378,19 +318,16 @@ def _validated_concept_evidence(
 
 
 def _introduces_unsupported_context(concept: str, source: str) -> bool:
-    source_words = set(re.findall(r"[a-z0-9']+", source.casefold()))
-    concept_words = set(re.findall(r"[a-z0-9']+", concept.casefold()))
-    return bool((concept_words & _UNSUPPORTED_CONTEXT_TERMS) - source_words)
+    source_words = set(unicode_words(source, min_length=1))
+    concept_words = set(unicode_words(concept, min_length=1))
+    return bool((concept_words & _SOURCE_ONLY_CONTEXT_TERMS) - source_words)
 
 
 def _ground_tokens(value: str) -> set[str]:
-    # Tamil words are anchors too. An [A-Za-z]-only pattern gave a Tamil source
-    # no anchors, so every semantic concept Gemini proposed was discarded as
-    # ungrounded and Tamil videos always fell back to local analysis.
-    return {
-        word.casefold() for word in re.findall(r"[A-Za-z][A-Za-z'-]*|[஀-௿]+", value)
-        if len(word) > 2 and word.casefold() not in _GROUNDING_STOPWORDS
-    }
+    # Words of every script are anchors. A Latin-only pattern gave a Tamil
+    # source no anchors, and a Latin-and-Tamil one a Hindi source, so every
+    # concept Gemini proposed was discarded as ungrounded.
+    return {word for word in unicode_words(value, min_length=3) if word not in _GROUNDING_STOPWORDS}
 
 
 def _grounded(value: Any, anchors: set[str]) -> bool:
@@ -433,7 +370,7 @@ def _strings(value: Any, *, limit: int) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for item in values:
-        text = _clean(item)[:160]
+        text = _clean(_label(item))[:160]
         key = text.casefold()
         if text and key not in seen:
             result.append(text)
@@ -441,6 +378,14 @@ def _strings(value: Any, *, limit: int) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def _label(item: Any) -> Any:
+    # Stringified, such an object read "{'name': ...}" and grounding then
+    # discarded it, losing the entity itself.
+    if isinstance(item, dict):
+        return next((item[key] for key in _LABEL_KEYS if isinstance(item.get(key), str)), "")
+    return item if isinstance(item, (str, int, float)) and not isinstance(item, bool) else ""
 
 
 def _clean(value: Any) -> str:

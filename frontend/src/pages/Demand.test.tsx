@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { toast } from "sonner";
 import DemandPage from "./Demand";
 
 // Produced by the real `analyze_demand` from public results of a saved
@@ -85,6 +86,44 @@ function renderPage(route = "/demand") {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/** Demand and one other page, with links between them, as in the app. */
+function renderWithElsewhere() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/demand"]}>
+        <Routes>
+          <Route
+            path="/demand"
+            element={
+              <>
+                <DemandPage />
+                <Link to="/ideas">Go to Ideas</Link>
+              </>
+            }
+          />
+          <Route path="/ideas" element={<Link to="/demand">Back to Demand</Link>} />
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+/** Holds the research POST open until the test calls the returned function. */
+function holdResearch() {
+  const release: Array<() => void> = [];
+  const route = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+  fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+    String(url) === "/api/demand/research" && init?.method === "POST"
+      ? new Promise((resolve) => {
+          release.push(() => resolve(route(url, init)));
+        })
+      : route(url, init),
+  );
+  return () => release.shift()?.();
 }
 
 beforeEach(() => {
@@ -194,6 +233,74 @@ describe("DemandPage", () => {
 
     expect(await screen.findByText("Gemini is cooling down.")).toBeInTheDocument();
     expect(screen.getByText("Request ID: req-9")).toBeInTheDocument();
+  });
+
+  it("pages through snapshots beyond the first fifty", async () => {
+    const route = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      String(url).startsWith("/api/demand/research?")
+        ? Promise.resolve(json({ research: snapshots, total: 73 }))
+        : route(url, init),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText("1–1 of 73")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/demand?offset=50"));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => String(url) === "/api/demand/research?limit=50&offset=50")).toBe(true),
+    );
+  });
+
+  it("steps back to the last page when the URL's offset is past the end", async () => {
+    const route = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      const path = String(url);
+      if (path === "/api/demand/research?limit=50&offset=500") return Promise.resolve(json({ research: [], total: 73 }));
+      if (path === "/api/demand/research?limit=50&offset=50") return Promise.resolve(json({ research: snapshots, total: 73 }));
+      return route(url, init);
+    });
+    renderPage("/demand?offset=500");
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(/^\/demand\?offset=50$/));
+    expect(await screen.findByText("painful love quotes")).toBeInTheDocument();
+  });
+
+  it("stays on the page the creator moved to when research finishes", async () => {
+    const saved = vi.spyOn(toast, "success");
+    const finish = holdResearch();
+    const user = userEvent.setup();
+    renderWithElsewhere();
+
+    await user.type(await screen.findByLabelText("Topic or phrase"), "heartbreak quotes");
+    await user.click(screen.getByRole("button", { name: "Research demand" }));
+    await waitFor(() => expect(posts("/api/demand/research")).toHaveLength(1));
+    await user.click(screen.getByRole("link", { name: "Go to Ideas" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/ideas"));
+
+    finish();
+    // Still announced, but the creator isn't pulled back to /demand?snapshot=8.
+    await waitFor(() => expect(saved).toHaveBeenCalledWith("Demand snapshot saved."));
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/ideas$/);
+    saved.mockRestore();
+  });
+
+  it("keeps research in flight across leaving and coming back, so it isn't paid for twice", async () => {
+    const finish = holdResearch();
+    const user = userEvent.setup();
+    renderWithElsewhere();
+
+    await user.type(await screen.findByLabelText("Topic or phrase"), "heartbreak quotes");
+    await user.click(screen.getByRole("button", { name: "Research demand" }));
+    await user.click(screen.getByRole("link", { name: "Go to Ideas" }));
+    await user.click(await screen.findByRole("link", { name: "Back to Demand" }));
+
+    expect(await screen.findByRole("button", { name: /Researching/ })).toBeDisabled();
+    expect(posts("/api/demand/research")).toHaveLength(1);
+    finish();
+    expect(await screen.findByRole("button", { name: "Research demand" })).toBeEnabled();
   });
 
   it("says how an idea's snapshot is turned into a package", async () => {

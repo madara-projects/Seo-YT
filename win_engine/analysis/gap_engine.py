@@ -5,6 +5,9 @@ from typing import Any
 
 from win_engine.ai_enhancement import find_content_similarity
 from win_engine.analysis.dynamic_thresholds import get_dynamic_kill_switch
+from win_engine.analysis.numbers import optional_number
+from win_engine.analysis.source_cues import is_short_duration
+from win_engine.core.iso_duration import duration_seconds
 
 
 def analyze_opportunity_gaps(
@@ -20,29 +23,24 @@ def analyze_opportunity_gaps(
     language_context = language_context or {}
     keyword_gaps = _keyword_gaps(keyword_signals, youtube_results)
     competition = _competition_meter(youtube_results, language_context)
-    
-    niche = language_context.get('niche', 'general') if isinstance(language_context, dict) else 'general'
     idea_kill_switch = get_dynamic_kill_switch(
         top_opportunities=top_opportunities,
         competition=competition,
         keyword_gaps=keyword_gaps,
-        youtube_results=youtube_results,
-        niche=niche,
     )
-    
+
     # Uniqueness = how different the chosen title is from the top competitor
-    # titles (1.0 = fully distinct, 0.0 = near-duplicate). Uses the existing
-    # word-overlap (Jaccard) similarity — no extra dependency, no fake constant.
-    uniqueness_score = 0.5
+    # titles (1.0 = fully distinct, 0.0 = near-duplicate), by word overlap
+    # (Jaccard), not a model. With nothing to compare it is unknown; a fixed
+    # 0.5 used to stand in for it.
+    uniqueness_score = None
     competitor_titles = [
         str(item.get("title", "")).strip()
         for item in (youtube_results or [])[:5]
         if isinstance(item, dict) and item.get("title")
     ]
     if target_title and competitor_titles:
-        sims = [find_content_similarity(target_title, c) for c in competitor_titles]
-        if sims:
-            uniqueness_score = round(1.0 - max(sims), 3)
+        uniqueness_score = round(1.0 - max(find_content_similarity(target_title, c) for c in competitor_titles), 3)
 
     differentiation = _differentiation_plan(keyword_gaps, competition, youtube_results)
     opportunity_score = _opportunity_score(keyword_gaps, competition, top_opportunities)
@@ -114,18 +112,23 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
     repeated_title_patterns = sum(
         1 for item in youtube_results if "30 days" in str(item.get("title", "")).lower()
     )
-    big_channel_count = sum(
-        1 for item in youtube_results if int(item.get("subscriber_count") or 0) >= 250000
-    )
-    average_outlier = sum(float(item.get("outlier_score") or 0) for item in youtube_results[:5]) / max(len(youtube_results[:5]), 1)
+    # A hidden or unfetched subscriber count is unknown, not a small channel.
+    subscriber_counts = [optional_number(item.get("subscriber_count")) for item in youtube_results]
+    big_channel_count = sum(1 for count in subscriber_counts if count is not None and count >= 250000)
+    unknown_channel_sizes = sum(1 for count in subscriber_counts if count is None)
+    outlier_scores = [
+        score for item in youtube_results[:5] if (score := optional_number(item.get("outlier_score"))) is not None
+    ]
 
     score = (repeated_title_patterns * 20) + (big_channel_count * 15)
-    if average_outlier > 100000:
-        score += 25
-    elif average_outlier > 10000:
-        score += 15
-    else:
-        score += 5
+    if outlier_scores:
+        average_outlier = sum(outlier_scores) / len(outlier_scores)
+        if average_outlier > 100000:
+            score += 25
+        elif average_outlier > 10000:
+            score += 15
+        else:
+            score += 5
 
     audience_type = str(language_context.get("audience_type", "")).strip().lower()
     region = str(language_context.get("region", "")).strip().lower()
@@ -144,13 +147,22 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
     else:
         label = "UNDERSERVED"
         reason = "There is still room to differentiate packaging and angle."
+    if unknown_channel_sizes:
+        reason += f" Channel size was unavailable for {unknown_channel_sizes} result(s), so large channels may be undercounted."
 
     return {
         "score": round(score, 2),
         "label": label,
         "reason": reason,
+        "confidence": "low",
+        "evidence_state": "heuristic",
+        "basis": (
+            f"Counts of '30 days' titles and 250K+ subscriber channels in {len(youtube_results)} sampled "
+            "results, plus the average outlier score of the first five; not a measurement of market size or demand."
+        ),
         "repeated_title_patterns": repeated_title_patterns,
         "big_channel_count": big_channel_count,
+        "unknown_channel_size_count": unknown_channel_sizes,
     }
 
 
@@ -195,9 +207,11 @@ def _opportunity_score(
     top_opportunities: list[dict[str, Any]],
 ) -> dict[str, Any]:
     opportunities = [item for item in top_opportunities[:3] if isinstance(item, dict)]
+    # An unmeasured velocity is left out rather than averaged in as zero.
     velocity_scores = [
-        min(100.0, 25.0 * math.log10(1.0 + max(float(item.get("views_per_day") or 0), 0.0)))
+        min(100.0, 25.0 * math.log10(1.0 + max(views_per_day, 0.0)))
         for item in opportunities
+        if (views_per_day := optional_number(item.get("views_per_day"))) is not None
     ]
     demand_score = sum(velocity_scores) / len(velocity_scores) if velocity_scores else 0.0
     gap_score = min((len(keyword_gaps) / 6.0) * 100.0, 100.0)
@@ -302,13 +316,20 @@ def _format_lock_in(
 
     short_form_count = 0
     long_form_count = 0
+    unknown_duration_count = 0
     first_person_count = 0
     proof_count = 0
 
     for item in candidates:
-        duration = str(item.get("duration") or "")
+        is_short = is_short_duration(duration_seconds(item.get("duration")))
         title = str(item.get("title") or "").lower()
-        if _is_short_form_duration(duration):
+        # Live, upcoming and unfetched videos have no length to vote with;
+        # they used to count as long-form and lock "6-12 minutes". A Short is
+        # up to three minutes, as everywhere else; a 60-second cut called a
+        # 90-second Short long-form.
+        if is_short is None:
+            unknown_duration_count += 1
+        elif is_short:
             short_form_count += 1
         else:
             long_form_count += 1
@@ -317,16 +338,23 @@ def _format_lock_in(
         if any(token in title for token in ["result", "truth", "worth it", "what happened", "mistake"]):
             proof_count += 1
 
-    recommended_format = "short-form" if short_form_count > long_form_count else "long-form"
-    recommended_length = "under 60s" if recommended_format == "short-form" else "6-12 minutes"
+    if short_form_count or long_form_count:
+        recommended_format = "short-form" if short_form_count > long_form_count else "long-form"
+        recommended_length = "3 minutes or less" if recommended_format == "short-form" else "6-12 minutes"
+    else:
+        recommended_format = recommended_length = "unknown"
     title_style = "first-person proof" if first_person_count >= 2 else "outcome-led"
     if proof_count >= 2:
         title_style = f"{title_style} with clear payoff"
 
-    if str(competition.get("label", "UNKNOWN")).upper() == "SATURATED":
+    if recommended_format == "unknown":
+        reason = "None of the compared videos had a known duration, so no format or length is locked."
+    elif str(competition.get("label", "UNKNOWN")).upper() == "SATURATED":
         reason = "Competition is heavy, so the format should match proven behavior while the angle stays narrower."
     else:
         reason = "Competitor patterns are strong enough to guide packaging without forcing a copycat title."
+    if unknown_duration_count and recommended_format != "unknown":
+        reason += f" {unknown_duration_count} compared video(s) had no known duration and were left out of the format vote."
 
     return {
         "recommended_format": recommended_format,
@@ -365,12 +393,3 @@ def _viability_verdict(
         "summary": summary,
         "proceed": proceed,
     }
-
-
-def _is_short_form_duration(duration: str) -> bool:
-    if not duration:
-        return False
-    normalized = duration.strip().upper()
-    if not normalized.startswith("PT"):
-        return False
-    return "M" not in normalized and "H" not in normalized

@@ -7,18 +7,21 @@ const VIDEO_ID = /^[A-Za-z0-9_-]{6,20}$/;
 /**
  * A public YouTube thumbnail, falling back to a branded placeholder when the
  * id is missing or the image cannot load (offline, blocked, or removed).
+ *
+ * Decorative: every use prints the video's title beside it, so alt text
+ * would only make a screen reader say the title twice.
  */
 export function VideoThumb({
   videoId,
-  title,
   className,
 }: {
   videoId?: string | null;
-  title?: string;
   className?: string;
 }) {
-  const [failed, setFailed] = useState(false);
-  const usable = Boolean(videoId && VIDEO_ID.test(videoId)) && !failed;
+  // Remembers which video failed, so an inspector reused for the next video
+  // tries that video's image instead of keeping the placeholder.
+  const [failedId, setFailedId] = useState<string | null>(null);
+  const usable = Boolean(videoId && VIDEO_ID.test(videoId)) && failedId !== videoId;
 
   return (
     <div
@@ -30,11 +33,11 @@ export function VideoThumb({
       {usable ? (
         <img
           src={`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`}
-          alt={title ? `Thumbnail: ${title}` : ""}
+          alt=""
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
+          onError={() => setFailedId(videoId ?? null)}
           className="size-full object-cover"
         />
       ) : (

@@ -159,6 +159,58 @@ describe("ChannelPage", () => {
     expect(screen.getByText("18.4K")).toBeInTheDocument();
   });
 
+  it("says which parts of a sync failed instead of showing them as empty", async () => {
+    status = connected(minutesAgo(1), {
+      ...SYNC,
+      channel: { ...SYNC.channel, subscribers: null },
+      current_28_days: {},
+      previous_28_days: {},
+      recent_videos: { rows: [] },
+      partial_failures: ["uploads", "analytics"],
+    });
+    renderChannel();
+
+    expect(await screen.findByText(/YouTube Analytics could not be read during the last sync/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Uploads could not be read from YouTube/)).toHaveLength(2);
+    expect(screen.queryByText(/No uploads were returned/)).not.toBeInTheDocument();
+    // A hidden subscriber count is unavailable, not zero.
+    const banner = screen.getByRole("heading", { name: "Studio Fixture Channel" }).closest("section") as HTMLElement;
+    expect(within(banner).getByText("Unavailable")).toBeInTheDocument();
+  });
+
+  it("never starts a second refresh while one is already running", async () => {
+    status = connected(minutesAgo(120));
+    const session = newClient();
+    // A refresh started from Settings that hasn't answered yet: both pages share its key.
+    void session
+      .getMutationCache()
+      .build(session, { mutationKey: ["channel-refresh"], mutationFn: () => new Promise(() => {}) })
+      .execute(undefined);
+    renderChannel(session);
+
+    await screen.findByRole("heading", { name: "Studio Fixture Channel" });
+    expect(refreshCalls()).toBe(0);
+    expect(screen.getAllByRole("button", { name: "Refreshing…" })[0]).toBeDisabled();
+  });
+
+  it("says when learning has reached its top level instead of an unavailable next step", async () => {
+    status = connected(minutesAgo(1));
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = String(url);
+      if (path === "/youtube/channel/status") return json(status);
+      if (path === "/youtube/channel/refresh" && init?.method === "POST") return json(SYNC);
+      if (path === "/api/learning/cohorts") {
+        return json({ sample_size: 40, next_threshold: null, confidence_label: "Strong evidence", learning_allowed: true });
+      }
+      if (path === "/api/published-videos") return json({ links: [], total: 0 });
+      return json({});
+    });
+    renderChannel();
+
+    expect(await screen.findByText("Top evidence level reached")).toBeInTheDocument();
+    expect(screen.queryByText(/Unavailable\s*needed/)).not.toBeInTheDocument();
+  });
+
   it("refreshes a stale sync once per session", async () => {
     status = connected(minutesAgo(120));
     const session = newClient();

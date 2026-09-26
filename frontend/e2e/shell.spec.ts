@@ -1,4 +1,5 @@
-import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { VIEWPORTS, blockWrites, collectErrors, expectNoHorizontalOverflow } from "./helpers";
 
 /**
  * Renders the real app from the running backend and checks the things a unit
@@ -8,20 +9,9 @@ import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
  * Requires the stack to be up: `docker compose up -d` at the repository root.
  */
 
-const VIEWPORTS = {
-  desktop: { width: 1440, height: 900 },
-  tablet: { width: 834, height: 1112 },
-  mobile: { width: 390, height: 844 },
-} as const;
-
-function collectErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on("console", (message: ConsoleMessage) => {
-    if (message.type() === "error") errors.push(message.text());
-  });
-  page.on("pageerror", (error) => errors.push(String(error)));
-  return errors;
-}
+test.beforeEach(async ({ page }) => {
+  await blockWrites(page);
+});
 
 test.describe("React shell", () => {
   test("mounts the Creator page with no console errors", async ({ page }) => {
@@ -55,10 +45,7 @@ test.describe("React shell", () => {
       await page.goto("/next/creator");
       await expect(page.getByRole("heading", { name: "Creator", level: 1 })).toBeVisible();
 
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
-      expect(overflow).toBeLessThanOrEqual(1);
+      await expectNoHorizontalOverflow(page);
 
       await page.screenshot({ path: `screenshots/creator-${name}.png`, fullPage: false });
     });
@@ -78,6 +65,26 @@ test.describe("React shell", () => {
 
     await page.keyboard.press("Escape");
     await expect(drawer).toBeHidden();
+  });
+
+  test("keeps keyboard focus inside the open navigation drawer", async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS.mobile);
+    await page.goto("/next/creator");
+
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    const drawer = page.getByRole("dialog", { name: "Navigation" });
+    await expect(drawer).toBeVisible();
+    // More presses than the drawer has stops: focus must wrap, never reach the page behind.
+    for (let press = 0; press < 30; press += 1) await page.keyboard.press("Tab");
+    expect(await drawer.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+  });
+
+  test("serves the page with no inline script or event handler", async ({ request }) => {
+    // The Content Security Policy allows only scripts served as files by this server.
+    const html = await (await request.get("/next/creator")).text();
+    expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/i);
+    expect(html).not.toMatch(/\son[a-z]+\s*=/i);
+    expect(html).toContain("/app-assets/theme-init.js");
   });
 
   test("shows the desktop sidebar at full width", async ({ page }) => {

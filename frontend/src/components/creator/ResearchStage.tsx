@@ -14,7 +14,7 @@ import { EvidenceChip, SourceLegend, type EvidenceTone } from "@/components/comm
 import { Inset, Panel } from "@/components/common/Panel";
 import { EmptyState, ErrorState, UnavailableNote } from "@/components/common/States";
 import { VideoThumb } from "@/components/common/VideoThumb";
-import { asArray, asObject, cn, displayValue, formatNumber } from "@/lib/utils";
+import { asArray, asObject, displayValue, formatNumber, UNAVAILABLE } from "@/lib/utils";
 import { shortDate } from "@/lib/historyFormat";
 import type { AnalyzeResponse, ResearchStatus } from "@/api/types";
 import type {
@@ -72,10 +72,11 @@ const STATUS_COPY: Record<ResearchStatus, string> = {
   error: "The Analyze request failed; research is unavailable for this run.",
 };
 
+/** A date YouTube sent in a form that doesn't parse is shown as sent rather than dropped. */
 function publishedLabel(value?: string): string {
-  if (!value) return "Unavailable";
+  if (!value) return UNAVAILABLE;
   const formatted = shortDate(value);
-  return formatted === "Unknown" ? value : formatted;
+  return formatted === UNAVAILABLE ? value : formatted;
 }
 
 export function ResearchStage({
@@ -120,7 +121,8 @@ export function ResearchStage({
       : data.generation_source === "fallback"
         ? "Local fallback"
         : "Unavailable";
-  const generationTone: EvidenceTone = data.generation_source === "gemini" ? "info" : "warn";
+  // Gemini's text is generated like the fallback's; only an observation of YouTube is "info".
+  const generationTone: EvidenceTone = generationSource === "Unavailable" ? "neutral" : "warn";
 
   return (
     <div className="space-y-5">
@@ -198,14 +200,20 @@ export function ResearchStage({
       <Panel
         icon={Youtube}
         title="Public YouTube observations"
-        aside={<EvidenceChip tone="info">Public observation</EvidenceChip>}
+        aside={
+          <>
+            <EvidenceChip tone="info">Public observation</EvidenceChip>
+            {/* The views are YouTube's; the outlier score is this tool's own arithmetic on them. */}
+            <EvidenceChip tone="warn">Outlier score: local heuristic</EvidenceChip>
+          </>
+        }
       >
         {results.length ? (
           <>
             <ul className="divide-y divide-border">
               {results.slice(0, 8).map((row, index) => (
                 <li key={row.video_id ?? index} className="flex items-center gap-3.5 py-3 first:pt-0">
-                  <VideoThumb videoId={row.video_id} title={row.title} className="w-28 sm:w-32" />
+                  <VideoThumb videoId={row.video_id} className="w-28 sm:w-32" />
                   <div className="min-w-0 flex-1">
                     <p className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
                       {displayValue(row.title)}
@@ -219,20 +227,23 @@ export function ResearchStage({
                       <p className="numeric text-[0.8125rem] font-semibold text-foreground">
                         {formatNumber(row.view_count)}
                       </p>
-                      <p className="text-[0.6875rem] text-muted-foreground">Views</p>
+                      <p className="text-[0.6875rem] text-muted-foreground">
+                        {row.captured_at ? `Views on ${shortDate(row.captured_at)}` : "Views"}
+                      </p>
                     </div>
                     <div>
                       <p className="numeric text-[0.8125rem] font-semibold text-foreground">
                         {displayValue(row.outlier_score)}
                       </p>
-                      <p className="text-[0.6875rem] text-muted-foreground">Outlier</p>
+                      <p className="text-[0.6875rem] text-muted-foreground">Outlier (heuristic)</p>
                     </div>
                   </div>
                 </li>
               ))}
             </ul>
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-              These are public observations returned by YouTube research. They do not prove
+              These are public observations returned by YouTube research; a result YouTube returned
+              without enough statistics to score is listed last as Unavailable. They do not prove
               causation, ranking, or future performance.
             </p>
           </>
@@ -309,7 +320,7 @@ export function ResearchStage({
               ))}
             </ul>
           ) : (
-            <UnavailableNote>No keyword signals were returned.</UnavailableNote>
+            <UnavailableNote>Unavailable: research found no keyword signals for this script.</UnavailableNote>
           )}
         </Panel>
 
@@ -376,7 +387,8 @@ export function ResearchStage({
           iconTone={warnings.length ? "warn" : "ok"}
           title="Research warnings and limits"
           aside={
-            <EvidenceChip tone={warnings.length ? "warn" : "ok"}>
+            // "ok" means creator-supplied; an empty warning list is not a creator fact.
+            <EvidenceChip tone={warnings.length ? "warn" : "neutral"}>
               {warnings.length ? "Review required" : "No warnings"}
             </EvidenceChip>
           }
@@ -386,9 +398,7 @@ export function ResearchStage({
               {warnings.map((warning, index) => (
                 <li
                   key={index}
-                  className={cn(
-                    "rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground",
-                  )}
+                  className="rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground"
                 >
                   {warning}
                 </li>

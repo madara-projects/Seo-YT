@@ -1,4 +1,4 @@
-import { AlertTriangle, Inbox, Loader2, SearchX } from "lucide-react";
+import { AlertTriangle, Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -106,24 +106,6 @@ export function ErrorState({
         </Button>
       ) : null}
     </div>
-  );
-}
-
-export function NoResults({ label = "No results" }: { label?: string }) {
-  return (
-    <div className="flex items-center gap-2 px-1 py-6 text-[0.8125rem] text-muted-foreground">
-      <SearchX className="size-4" aria-hidden="true" />
-      {label}
-    </div>
-  );
-}
-
-export function InlineSpinner({ label }: { label?: string }) {
-  return (
-    <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-      {label}
-    </span>
   );
 }
 

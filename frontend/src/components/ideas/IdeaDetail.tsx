@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Archive,
@@ -25,7 +24,7 @@ import { CardSkeleton, EmptyState, ErrorState, UnavailableNote } from "@/compone
 import { PublicVideoList } from "@/components/research/PublicVideoList";
 import { SavedRunNotice } from "@/components/research/SavedRunNotice";
 import { StepFlow } from "@/components/research/StepFlow";
-import { apiErrorMessage, apiRequestId } from "@/api/client";
+import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import {
   useGenerateIdeaPackage,
   useIdeaDemandResearch,
@@ -33,6 +32,7 @@ import {
   useUpdateIdeaStatus,
 } from "@/hooks/useIdeas";
 import { formatDuration, useElapsedSeconds } from "@/hooks/useElapsed";
+import { useRecordActivity } from "@/hooks/useRecordActivity";
 import { relativeTime } from "@/lib/format";
 import { historyDate, withReadableDates } from "@/lib/historyFormat";
 import { asArray, formatNumber } from "@/lib/utils";
@@ -46,7 +46,8 @@ import {
   ideaRegionLabel,
   ideaStatusLabel,
 } from "@/lib/ideaFormat";
-import type { Idea, IdeaPublicResult } from "@/api/ideaTypes";
+import type { Idea, IdeaDemandResponse, IdeaGenerateResponse } from "@/api/ideaTypes";
+import type { PublicVideoResult } from "@/api/researchTypes";
 
 function TextList({ items }: { items: [string, string | null | undefined][] }) {
   return (
@@ -75,6 +76,7 @@ function ResearchSection({ idea }: { idea: Idea }) {
   const kept = idea.research_snapshots?.length ?? 0;
   const signals = evidence?.signals ?? {};
   const personal = evidence?.personal_evidence ?? {};
+  const warnings = asArray<string>(evidence?.research_warnings);
 
   return (
     <section className="space-y-3">
@@ -127,14 +129,27 @@ function ResearchSection({ idea }: { idea: Idea }) {
             </div>
             <p className="text-sm text-foreground">{personal.message || "Not enough personal evidence."}</p>
             <p className="text-xs text-muted-foreground">
-              {formatNumber(personal.sample_size ?? 0)} comparable{" "}
+              {formatNumber(personal.sample_size)} comparable{" "}
               {personal.sample_size === 1 ? "video" : "videos"} · {personal.confidence_label || "Collecting evidence"}
               {personal.snapshot_window ? ` · ${personal.snapshot_window} window` : ""}
             </p>
           </Inset>
 
+          {warnings.length ? (
+            <div className="space-y-1.5 rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-3">
+              <p className="text-xs font-medium text-foreground">This research ran into problems</p>
+              <ul className="space-y-1">
+                {warnings.map((warning) => (
+                  <li key={warning} className="text-[0.8125rem] leading-relaxed text-foreground">
+                    {warning}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <PublicVideoList
-            videos={asArray<IdeaPublicResult>(evidence.youtube_results)}
+            videos={asArray<PublicVideoResult>(evidence.youtube_results)}
             empty="No relevant public results were returned in this snapshot."
           />
         </>
@@ -200,31 +215,45 @@ function DemandSection({ idea }: { idea: Idea }) {
   );
 }
 
+const FAILURES: Record<string, string> = {
+  research: "Research failed.",
+  demand: "The demand check failed.",
+  generate: "Package generation failed.",
+  status: "The status could not be changed.",
+};
+
 /**
- * What the creator can do next. Keyed by idea, so switching ideas starts from
- * a clean slate instead of showing another idea's result.
+ * What the creator can do next. Keyed by idea, and its state is read from
+ * the mutation cache for this idea, not from the component: opening another
+ * idea and coming back still shows a request in flight (with the buttons
+ * disabled, so quota and Gemini are not spent twice), its error, or its result.
  */
 function IdeaActionBar({ idea }: { idea: Idea }) {
-  const research = useResearchIdea();
-  const demand = useIdeaDemandResearch();
-  const generate = useGenerateIdeaPackage();
-  const update = useUpdateIdeaStatus();
-  const [runId, setRunId] = useState<number | null>(null);
-  const [demandId, setDemandId] = useState<number | null>(null);
-  const [failure, setFailure] = useState<{ error: unknown; fallback: string } | null>(null);
+  const research = useResearchIdea(idea.id);
+  const demand = useIdeaDemandResearch(idea.id);
+  const generate = useGenerateIdeaPackage(idea.id);
+  const update = useUpdateIdeaStatus(idea.id);
+  const activity = useRecordActivity("idea", idea.id);
 
-  const working = research.isPending || demand.isPending || generate.isPending;
-  const busy = working || update.isPending;
-  const elapsed = useElapsedSeconds(working);
+  const pendingAction = activity.pending?.action ?? null;
+  const working = pendingAction === "research" || pendingAction === "demand" || pendingAction === "generate";
+  const busy = pendingAction !== null;
+  const elapsed = useElapsedSeconds(working, activity.pending?.submittedAt);
   const actions = ideaActions(idea);
   const hasResearch = Boolean(idea.latest_research?.evidence);
+  const lastRun = activity.latest;
+  const failure = lastRun?.status === "error" ? lastRun : null;
+  const generated = activity.latestOf("generate");
+  const runId = (generated?.data as IdeaGenerateResponse | undefined)?.analysis?.history_run_id;
+  const checked = activity.latestOf("demand");
+  const demandId = (checked?.data as IdeaDemandResponse | undefined)?.research?.id ?? null;
 
   const run = async (action: () => Promise<void>, fallback: string) => {
-    setFailure(null);
     try {
       await action();
     } catch (error) {
-      setFailure({ error, fallback });
+      // Also shown below; the toast reaches the creator if they've opened another idea.
+      toast.error(formatApiError(error, fallback));
     }
   };
 
@@ -232,54 +261,52 @@ function IdeaActionBar({ idea }: { idea: Idea }) {
     run(async () => {
       await research.mutateAsync(idea.id);
       toast.success("Research saved as a dated snapshot.");
-    }, "Research failed.");
+    }, FAILURES.research!);
 
   const onDemand = () =>
     run(async () => {
-      const data = await demand.mutateAsync(idea.id);
-      setDemandId(data.research?.id ?? null);
+      await demand.mutateAsync(idea.id);
       toast.success("Demand snapshot saved.");
-    }, "The demand check failed.");
+    }, FAILURES.demand!);
 
   const onGenerate = () =>
     run(async () => {
-      const data = await generate.mutateAsync(idea.id);
-      const saved = data.analysis?.history_run_id;
-      setRunId(typeof saved === "number" ? saved : null);
+      await generate.mutateAsync(idea.id);
       toast.success("Package generated and saved to History.");
-    }, "Package generation failed.");
+    }, FAILURES.generate!);
 
   const onStatus = (status: string, message: string) =>
     run(async () => {
       await update.mutateAsync({ id: idea.id, status });
       toast.success(message);
-    }, "The status could not be changed.");
+    }, FAILURES.status!);
 
-  const note = research.isPending
-    ? `Researching YouTube for this idea… ${formatDuration(elapsed)}`
-    : demand.isPending
-      ? `Checking demand on YouTube… ${formatDuration(elapsed)}`
-      : generate.isPending
-        ? `${hasResearch ? "" : "Researching first, then "}writing the package with Gemini… ${formatDuration(elapsed)}. This can take a minute or two.`
-        : `Research and demand checks run live YouTube searches, which spend API quota. Generating also uses Gemini${
-            hasResearch ? "" : ", and researches first because this idea has no current research"
-          }.`;
+  const note =
+    pendingAction === "research"
+      ? `Researching YouTube for this idea… ${formatDuration(elapsed)}`
+      : pendingAction === "demand"
+        ? `Checking demand on YouTube… ${formatDuration(elapsed)}`
+        : pendingAction === "generate"
+          ? `${hasResearch ? "" : "Researching first, then "}writing the package with Gemini… ${formatDuration(elapsed)}. This can take a minute or two.`
+          : `Research and demand checks run live YouTube searches, which spend API quota. Generating also uses Gemini${
+              hasResearch ? "" : ", and researches first because this idea has no current research"
+            }.`;
 
   return (
     <div className="space-y-3 rounded-2xl border border-border bg-elevated p-4" data-testid="idea-actions">
       {/* Full-width and stacked on phones; one row from `sm`. */}
       <div className="grid gap-2 sm:flex sm:flex-wrap">
         <Button variant="outline" onClick={() => void onResearch()} disabled={busy || !actions.canResearch}>
-          {research.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Telescope aria-hidden="true" />}
-          {research.isPending ? "Researching…" : "Research now"}
+          {pendingAction === "research" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Telescope aria-hidden="true" />}
+          {pendingAction === "research" ? "Researching…" : "Research now"}
         </Button>
         <Button variant="outline" onClick={() => void onDemand()} disabled={busy || !actions.canResearch}>
-          {demand.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <TrendingUp aria-hidden="true" />}
-          {demand.isPending ? "Checking…" : "Check demand"}
+          {pendingAction === "demand" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <TrendingUp aria-hidden="true" />}
+          {pendingAction === "demand" ? "Checking…" : "Check demand"}
         </Button>
         <Button variant="gradient" onClick={() => void onGenerate()} disabled={busy || !actions.canGenerate}>
-          {generate.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Sparkles aria-hidden="true" />}
-          {generate.isPending ? "Generating…" : idea.analysis_run_id ? "Generate again" : "Generate package"}
+          {pendingAction === "generate" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Sparkles aria-hidden="true" />}
+          {pendingAction === "generate" ? "Generating…" : idea.analysis_run_id ? "Generate again" : "Generate package"}
         </Button>
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground" aria-live="polite">
@@ -332,10 +359,13 @@ function IdeaActionBar({ idea }: { idea: Idea }) {
       ) : null}
 
       {failure ? (
-        <ErrorState message={apiErrorMessage(failure.error, failure.fallback)} requestId={apiRequestId(failure.error)} />
+        <ErrorState
+          message={apiErrorMessage(failure.error, FAILURES[failure.action] ?? "The request failed.")}
+          requestId={apiRequestId(failure.error)}
+        />
       ) : null}
-      {generate.isSuccess ? <SavedRunNotice runId={runId} /> : null}
-      {demand.isSuccess && demandId ? (
+      {generated?.status === "success" ? <SavedRunNotice runId={typeof runId === "number" ? runId : null} /> : null}
+      {checked?.status === "success" && demandId ? (
         <div
           role="status"
           className="flex flex-col gap-3 rounded-xl border border-tone-ok-border bg-tone-ok-bg p-3.5 sm:flex-row sm:items-center sm:justify-between"

@@ -3,15 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { ArrowRight, Wand2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { OptionSelect } from "@/components/common/OptionSelect";
 import { Panel } from "@/components/common/Panel";
-import { TEMPLATE_TEXT } from "@/lib/creatorConstants";
+import { LANGUAGE_OPTIONS, REGION_OPTIONS, TEMPLATE_TEXT } from "@/lib/creatorConstants";
 
 /**
  * Shortcut from the Dashboard into the Creator workflow.
@@ -71,26 +65,22 @@ export function QuickLaunch({ className }: { className?: string }) {
         </div>
 
         <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+          {/* The Creator's own lists, so every choice made here exists there too. */}
           <div className="grid grid-cols-2 gap-2 sm:flex">
-            <Select value={language} onValueChange={setLanguage}>
-              <SelectTrigger className="sm:w-36" aria-label="Output language">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="english">English</SelectItem>
-                <SelectItem value="tamil">Tamil</SelectItem>
-                <SelectItem value="tanglish">Tanglish</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={region} onValueChange={setRegion}>
-              <SelectTrigger className="sm:w-36" aria-label="Target region">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="global">Global</SelectItem>
-                <SelectItem value="india">India</SelectItem>
-              </SelectContent>
-            </Select>
+            <OptionSelect
+              ariaLabel="Output language"
+              value={language}
+              onValueChange={setLanguage}
+              options={LANGUAGE_OPTIONS}
+              className="sm:w-44"
+            />
+            <OptionSelect
+              ariaLabel="Target region"
+              value={region}
+              onValueChange={setRegion}
+              options={REGION_OPTIONS}
+              className="sm:w-40"
+            />
           </div>
 
           <Button variant="gradient" onClick={launch} disabled={!script.trim()}>

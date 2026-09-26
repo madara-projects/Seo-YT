@@ -1,3 +1,4 @@
+import { shortDate } from "./historyFormat";
 import { UNAVAILABLE } from "./utils";
 
 /**
@@ -16,16 +17,22 @@ export function toFiniteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-const compactFormatter = new Intl.NumberFormat("en", {
+/**
+ * One locale for both ranges, so the exact and the compact forms agree on
+ * separators. "en" keeps YouTube's K/M style rather than lakh and crore.
+ */
+const COMPACT_LOCALE = "en";
+
+const compactFormatter = new Intl.NumberFormat(COMPACT_LOCALE, {
   notation: "compact",
   maximumFractionDigits: 1,
 });
 
-/** 1234 → "1.2K". Small values stay exact. */
+/** 1234 → "1,234", 18432 → "18.4K". Small values stay exact. */
 export function formatCompact(value: unknown, fallback: string = UNAVAILABLE): string {
   const number = toFiniteNumber(value);
   if (number === null) return fallback;
-  return Math.abs(number) < 10_000 ? number.toLocaleString() : compactFormatter.format(number);
+  return Math.abs(number) < 10_000 ? number.toLocaleString(COMPACT_LOCALE) : compactFormatter.format(number);
 }
 
 /**
@@ -59,12 +66,15 @@ export function formatSeconds(value: unknown, fallback: string = UNAVAILABLE): s
   return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${ss}` : `${minutes}:${ss}`;
 }
 
-/** Watch time from minutes: 45 → "45 mins", 750 → "12.5 hrs". */
+/** Watch time from minutes: 1 → "1 min", 45 → "45 mins", 60 → "1 hr", 750 → "12.5 hrs". */
 export function formatMinutes(value: unknown, fallback: string = UNAVAILABLE): string {
   const minutes = toFiniteNumber(value);
   if (minutes === null || minutes < 0) return fallback;
-  if (minutes >= 60) return `${(minutes / 60).toLocaleString(undefined, { maximumFractionDigits: 1 })} hrs`;
-  return `${Math.round(minutes).toLocaleString()} mins`;
+  // Rounded first, so 59.7 minutes reads as "1 hr" rather than "60 mins".
+  const whole = Math.round(minutes);
+  if (whole < 60) return `${whole.toLocaleString()} ${whole === 1 ? "min" : "mins"}`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return `${hours.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${hours === 1 ? "hr" : "hrs"}`;
 }
 
 export function formatBytes(value: unknown, fallback: string = UNAVAILABLE): string {
@@ -106,24 +116,59 @@ export function relativeTime(value: string | null | undefined, now: number = Dat
   const diff = time - now;
   const future = diff > 0;
   const seconds = Math.abs(diff) / 1000;
-
-  let phrase: string;
   if (seconds < 45) return future ? "in a moment" : "just now";
-  if (seconds < 3600) phrase = `${Math.round(seconds / 60)} min`;
-  else if (seconds < 86_400) phrase = `${Math.round(seconds / 3600)} h`;
-  else if (seconds < 86_400 * 30) phrase = `${Math.round(seconds / 86_400)} d`;
-  else if (seconds < 86_400 * 365) phrase = `${Math.round(seconds / (86_400 * 30))} mo`;
-  else phrase = `${Math.round(seconds / (86_400 * 365))} y`;
+
+  // Each unit is chosen after rounding, so 59.6 minutes becomes "1 h", never "60 min".
+  const minutes = Math.round(seconds / 60);
+  const hours = Math.round(seconds / 3600);
+  const days = Math.round(seconds / 86_400);
+  const months = Math.round(seconds / (86_400 * 30));
+  const phrase =
+    minutes < 60
+      ? `${minutes} min`
+      : hours < 24
+        ? `${hours} h`
+        : days < 30
+          ? `${days} d`
+          : months < 12
+            ? `${months} mo`
+            : `${Math.max(1, Math.round(seconds / (86_400 * 365)))} y`;
 
   return future ? `in ${phrase}` : `${phrase} ago`;
 }
 
-/** Engagement per 100 views; null when views are missing or zero. */
+/**
+ * When a scheduled check will run. A time that has already passed means the
+ * status was read before it ran, so it says "due now" instead of "4 min ago".
+ */
+export function scheduledTime(value: string | null | undefined, now: number = Date.now()): string {
+  if (!value) return UNAVAILABLE;
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) return UNAVAILABLE;
+  return time <= now ? "Due now" : relativeTime(value, now);
+}
+
+/**
+ * "1.2K views on 23 Aug 2026". A stored count is only as current as its
+ * capture, so it never appears without the date it was read.
+ */
+export function viewsAsOf(views: unknown, capturedAt: string | null | undefined): string {
+  const count = `${formatCompact(views)} views`;
+  const date = shortDate(capturedAt);
+  return date === UNAVAILABLE ? `${count}, capture date unavailable` : `${count} on ${date}`;
+}
+
+/**
+ * Engagement per 100 views; null when views are missing or zero, or when
+ * neither likes nor comments are known (hidden counts are not zero).
+ */
 export function engagementRate(likes: unknown, comments: unknown, views: unknown): number | null {
   const viewCount = toFiniteNumber(views);
   if (viewCount === null || viewCount <= 0) return null;
-  const interactions = (toFiniteNumber(likes) ?? 0) + (toFiniteNumber(comments) ?? 0);
-  return (interactions / viewCount) * 100;
+  const likeCount = toFiniteNumber(likes);
+  const commentCount = toFiniteNumber(comments);
+  if (likeCount === null && commentCount === null) return null;
+  return (((likeCount ?? 0) + (commentCount ?? 0)) / viewCount) * 100;
 }
 
 /** Initial for an avatar tile, tolerant of empty or emoji-led names. */

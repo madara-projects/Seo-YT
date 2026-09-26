@@ -21,7 +21,7 @@ import { asArray, asObject, normalizeTitle } from "./utils";
 
 const MAX_OPTIONS = 5;
 
-export function selectedLanguagePackage(
+function selectedLanguagePackage(
   data: AnalyzeResponse,
   submitted: { language?: string; video_language?: string } = {},
 ): Required<LanguagePackage> & { language: string } {
@@ -62,21 +62,35 @@ export function titleScore(data: AnalyzeResponse, title: string): number | null 
   return null;
 }
 
+type Candidate = TitleThumbnailPackage & { primary?: boolean; serverId?: string };
+
+/**
+ * Options are built from the language package's title, the rich packages and
+ * the plain title variants. Only a rich package is a package the server can
+ * record as the creator's choice: `select_generated_package` looks the ID up
+ * in `title_thumbnail_packages`, falling back to `package-a`, `package-b`… by
+ * position. That fallback is mirrored here. The primary title and a variant
+ * that match no rich package by title are title-only alternatives with no ID;
+ * inventing one would record a different package than the one shown (the
+ * primary under "match the video language" is not always package A).
+ */
 export function buildPackageOptions(
   data: AnalyzeResponse,
   submitted: { language?: string; video_language?: string } = {},
 ): PackageOption[] {
   const base = selectedLanguagePackage(data, submitted);
   const brief = asObject(data.creator_brief);
-  const rich = asArray<TitleThumbnailPackage>(data.title_thumbnail_packages).map(
-    (item) => asObject(item) as TitleThumbnailPackage,
-  );
+  // Indexed over the raw list, as the server's own fallback IDs are.
+  const rich: Candidate[] = asArray<unknown>(data.title_thumbnail_packages).map((item, index) => {
+    const pkg = asObject(item) as TitleThumbnailPackage;
+    return { ...pkg, serverId: String(pkg.package_id || `package-${String.fromCharCode(97 + index)}`) };
+  });
   const richByTitle = new Map(rich.map((item) => [normalizeTitle(item.title), item]));
 
-  const candidates: (TitleThumbnailPackage & { primary?: boolean })[] = [
+  const candidates: Candidate[] = [
     { title: base.title, primary: true, ...richByTitle.get(normalizeTitle(base.title)) },
     ...rich,
-    ...base.variants.map((title) => ({ title })),
+    ...base.variants.map((title) => ({ title, ...richByTitle.get(normalizeTitle(title)) })),
   ];
 
   const generationLabel = data.generation_source === "gemini" ? "AI suggestion" : "Generated suggestion";
@@ -90,8 +104,11 @@ export function buildPackageOptions(
     seen.add(key);
 
     const index = options.length;
+    const packageId = candidate.serverId ?? null;
     options.push({
-      id: String(candidate.package_id || `package-${String.fromCharCode(97 + index)}`),
+      // A title-only key can't be mistaken for a server ID ("package-a"…).
+      id: packageId ?? `title-only-${index + 1}`,
+      packageId,
       label: `Package ${String.fromCharCode(65 + index)}`,
       primary: Boolean(candidate.primary) || key === normalizeTitle(base.title),
       title,
@@ -126,7 +143,7 @@ export function buildPackageOptions(
 }
 
 /** Plain-text bundle for pasting into YouTube Studio. */
-export function uploadPackageText(option: PackageOption): string {
+function uploadPackageText(option: PackageOption): string {
   return uploadBundleText({
     title: option.title,
     description: option.description,

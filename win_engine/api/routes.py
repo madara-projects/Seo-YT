@@ -1,62 +1,69 @@
 from __future__ import annotations
 
+import functools
 import hmac
 import json
+import logging
 import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlencode
+from typing import get_args
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from google.auth.exceptions import RefreshError
 
 from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.analysis.idea_workspace import build_idea_evidence, evidence_to_research, idea_script
 from win_engine.analysis.demand_explorer import analyze_demand, idea_fingerprint
 from win_engine.core.config import get_settings
-from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest
+from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest, ExperimentMode, ExperimentStatus
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.ingestion.cache import probe_cache_backend
-from win_engine.feedback.intelligence_store import IntelligenceStore
+from win_engine.feedback.intelligence_store import AlreadyWatched, IntelligenceStore
 from win_engine.feedback.audit_experiment_store import AuditExperimentStore
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.ingestion.research_service import ResearchService
 from win_engine.ingestion.youtube_client import YouTubeClient
 from win_engine.llm import gemini_client
-from win_engine.api.dashboard_html import DASHBOARD_HTML
-from win_engine.integrations.youtube_channel import YouTubeChannelService
+from win_engine.integrations.youtube_channel import ChannelConnectError, YouTubeChannelService, YouTubeUnavailable
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _APP_START = time.time()
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
-_NO_CACHE_HEADERS = {
-    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-    "Pragma": "no-cache",
-    "Expires": "0",
-}
 # Pages the YouTube OAuth callback may return the browser to. Anything else
 # falls back to the legacy dashboard root, so the value can never become an
 # open redirect.
 _OAUTH_RETURN_PATHS = frozenset({"/", "/next/settings", "/next/channel"})
 _OAUTH_RETURN_COOKIE = "win_engine_oauth_return"
+_OAUTH_REASON = re.compile(r"[a-z_]{1,40}")
+
+
+def _gemini_budget(route):
+    """One Gemini allowance per request, shared by every call the route makes.
+
+    Without it one package could make dozens of provider requests, retries
+    and backup-model attempts included, and run for more than ten minutes.
+    """
+
+    @functools.wraps(route)
+    def budgeted(*args, **kwargs):
+        with gemini_client.request_budget():
+            return route(*args, **kwargs)
+
+    return budgeted
 
 
 @router.get("/", response_class=HTMLResponse)
 @router.get("/app", response_class=HTMLResponse)
 @router.get("/dashboard_view", response_class=HTMLResponse)
 def dashboard():
-    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html", headers=_NO_CACHE_HEADERS)
-
-
-@router.get("/dashboard_legacy", response_class=HTMLResponse)
-def legacy_dashboard():
-    """Rollback route for the pre-Phase-3C embedded dashboard."""
-    return HTMLResponse(content=DASHBOARD_HTML, headers=_NO_CACHE_HEADERS)
+    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
 
 
 @router.get("/next", response_class=HTMLResponse)
@@ -80,13 +87,22 @@ def react_app(spa_path: str = ""):
             status_code=404,
             detail="The React frontend has not been built. Run 'npm run build' in frontend/.",
         )
-    return FileResponse(index, media_type="text/html", headers=_NO_CACHE_HEADERS)
+    return FileResponse(index, media_type="text/html")
+
+
+def _database_status(database_path: str) -> dict[str, object]:
+    """The database's state for status pages; a database that cannot open is reported, not raised."""
+    try:
+        return HistoryStore(database_path).system_status()
+    except Exception as exc:
+        logger.warning("Database is unavailable: %s", type(exc).__name__)
+        return {"database_ok": False, "snapshot_count": None, "analysis_count": None, "error": type(exc).__name__}
 
 
 @router.get("/health")
 def health_check():
     settings = get_settings()
-    history = HistoryStore(settings.database_path).system_status()
+    history = _database_status(settings.database_path)
     # None means no Redis is configured, which is a supported setup rather than a fault.
     cache_ok = probe_cache_backend(settings.redis_url)
     # Research still runs without Redis, just uncached, so a cache outage is reported
@@ -132,7 +148,7 @@ def run_cloud_sync(request: Request):
 def readiness_check(request: Request):
     settings = get_settings()
     _require_admin(request, settings)
-    history = HistoryStore(settings.database_path).system_status()
+    history = _database_status(settings.database_path)
     youtube_keys_present = bool(settings.youtube_api_key_pool)
     ready = history["database_ok"] and youtube_keys_present
 
@@ -152,18 +168,12 @@ def metadata():
         "app_name": settings.app_name,
         "version": settings.app_version,
         "environment": settings.app_environment,
-        "docker_optional": True,
-        "capabilities": [
-            "youtube research",
-            "seo generation",
-            "outlier scoring",
-            "feedback loop",
-            "advanced strategy layer",
-        ],
     }
 
 
-@router.get("/diagnostics")
+# POST, so the cross-site guard and the costly-request budget apply: the check
+# calls YouTube and Gemini with the configured keys.
+@router.post("/diagnostics")
 def diagnostics():
     settings = get_settings()
     research = ResearchService(settings)
@@ -175,15 +185,8 @@ def diagnostics():
 def settings_status(request: Request):
     """Return configuration and local state without exposing any secret value."""
     settings = get_settings()
-    store = HistoryStore(settings.database_path)
-    with store._connect() as connection:
-        schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        counts = {
-            "packages": int(connection.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0]),
-            "ideas": int(connection.execute("SELECT COUNT(*) FROM content_ideas").fetchone()[0]),
-            "published_links": int(connection.execute("SELECT COUNT(*) FROM published_video_links").fetchone()[0]),
-            "performance_snapshots": int(connection.execute("SELECT COUNT(*) FROM video_performance_snapshots").fetchone()[0]),
-        }
+    database = _database_status(settings.database_path)
+    stats = HistoryStore(settings.database_path).record_counts() if database["database_ok"] else {}
     database_path = Path(settings.database_path)
     try:
         database_bytes = database_path.stat().st_size
@@ -191,18 +194,21 @@ def settings_status(request: Request):
         database_bytes = None
     backup_dir = database_path.resolve().parent / "backups"
     backups = sorted(backup_dir.glob(f"{database_path.stem}.backup-*.sqlite3"), key=lambda item: item.stat().st_mtime, reverse=True) if backup_dir.exists() else []
-    youtube = YouTubeChannelService(settings).status()
+    # The channel connection is stored in the database: while that cannot be
+    # read, the YouTube state is unknown (null) and the database block says why.
+    youtube = YouTubeChannelService(settings).status() if database["database_ok"] else {}
     collector = getattr(request.app.state, "snapshot_collector", None)
     cloud = getattr(request.app.state, "cloud_sync", None)
     return {
         "app": {"name": settings.app_name, "version": settings.app_version, "environment": settings.app_environment},
-        "database": {"healthy": True, "name": database_path.name, "schema_version": schema_version,
-                     "size_bytes": database_bytes, "counts": counts,
+        "database": {"healthy": bool(database["database_ok"]), "error": database.get("error"),
+                     "name": database_path.name, "schema_version": stats.get("schema_version"),
+                     "size_bytes": database_bytes, "counts": stats.get("counts"),
                      "last_backup_at": datetime.fromtimestamp(backups[0].stat().st_mtime, timezone.utc).isoformat() if backups else None},
         "providers": {"gemini": gemini_client.diagnostics(),
                       "youtube_data_api": {"configured": bool(settings.youtube_api_key_pool), "key_count": len(settings.youtube_api_key_pool)},
                       "local_fallback": {"available": True}, "redis": {"configured": bool(settings.redis_url)}},
-        "youtube_oauth": {"configured": youtube.get("configured", False), "connected": youtube.get("connected", False),
+        "youtube_oauth": {"configured": youtube.get("configured"), "connected": youtube.get("connected"),
                           "channel_title": (youtube.get("channel") or {}).get("title"),
                           "last_synced_at": (youtube.get("latest_sync") or {}).get("synced_at")},
         "collector": collector.status() if collector else {"state": "disabled", "enabled": False},
@@ -215,13 +221,35 @@ def youtube_channel_status():
     return YouTubeChannelService(get_settings()).status()
 
 
+def _host_and_port(netloc: str, default_port: int) -> tuple[str, int] | None:
+    """("localhost", 8000) for "LocalHost:8000"; None for a malformed port or IPv6 address."""
+    try:
+        parts = urlsplit(f"//{netloc}")
+        return parts.hostname or "", default_port if parts.port is None else parts.port
+    except ValueError:
+        return None
+
+
 @router.get("/youtube/channel/connect")
-def connect_youtube_channel(return_to: str = "/"):
-    service = YouTubeChannelService(get_settings())
+def connect_youtube_channel(request: Request, return_to: str = "/"):
+    settings = get_settings()
+    # Google returns to the redirect URI's host. Starting from another name for
+    # this machine (localhost vs 127.0.0.1) would put the return cookie on the
+    # wrong origin, so the browser moves to the redirect host first.
+    redirect = urlsplit(settings.youtube_oauth_redirect_uri)
+    # Compared as browsers send Host: lower-cased, without a default port.
+    # Comparing the raw text redirected LocalHost:8000 or 127.0.0.1:80 to itself forever.
+    default_port = 443 if redirect.scheme == "https" else 80
+    here = _host_and_port(request.headers.get("host", ""), default_port)
+    if redirect.netloc and here != _host_and_port(redirect.netloc, default_port):
+        return RedirectResponse(redirect._replace(path=request.url.path, query=request.url.query).geturl())
+    service = YouTubeChannelService(settings)
     try:
         response = RedirectResponse(service.authorization_url())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError:
+        # A browser followed this link: send it back with a reason, not a JSON error page.
+        base = return_to if return_to in _OAUTH_RETURN_PATHS else "/"
+        return RedirectResponse(f"{base}?{urlencode({'youtube': 'error', 'reason': 'not_configured'})}")
     # Remember which page started the flow. A connect without a valid
     # return_to clears any earlier choice so the callback cannot reuse it.
     if return_to in _OAUTH_RETURN_PATHS and return_to != "/":
@@ -242,11 +270,16 @@ def youtube_oauth_callback(request: Request, code: str = "", state: str = "", er
         return response
 
     if error:
-        return finish(youtube="error", reason=error)
+        # Google's error codes are short snake_case words; anything else is not echoed.
+        return finish(youtube="error", reason=error if _OAUTH_REASON.fullmatch(error) else "unknown")
     try:
         YouTubeChannelService(get_settings()).complete_authorization(code=code, state=state)
-    except Exception:
-        return finish(youtube="error")
+    except ChannelConnectError as exc:
+        return finish(youtube="error", reason=exc.reason)
+    except Exception as exc:
+        # Type only: the exception text can carry the token exchange response.
+        logger.warning("YouTube authorization could not be completed: %s", type(exc).__name__)
+        return finish(youtube="error", reason="connect_failed")
     return finish(youtube="connected")
 
 
@@ -256,11 +289,6 @@ def refresh_youtube_channel():
         return YouTubeChannelService(get_settings()).refresh()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RefreshError as exc:
-        raise HTTPException(
-            status_code=401,
-            detail="Your YouTube connection has expired or was revoked. Select Connect Channel to reconnect it.",
-        ) from exc
 
 
 @router.post("/youtube/channel/disconnect")
@@ -270,8 +298,13 @@ def disconnect_youtube_channel():
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
+@_gemini_budget
 def analyze_script(payload: AnalyzeRequest):
     settings = get_settings()
+    # "auto" writes in the video's language. The brief and research need that
+    # language itself: as "auto" the brief lost its search words ("tamil") and
+    # research its language bias.
+    language = payload.video_language if payload.language.strip().lower() == "auto" else payload.language
     creator_brief = build_creator_brief(
         script=payload.script,
         target_audience=payload.target_audience,
@@ -281,7 +314,7 @@ def analyze_script(payload: AnalyzeRequest):
         video_format=payload.video_format,
         title_style=payload.title_style,
         thumbnail_idea=payload.thumbnail_idea,
-        language=payload.language,
+        language=language,
         region=payload.region,
         duration_seconds=payload.duration_seconds,
         exact_quote=payload.exact_quote,
@@ -297,7 +330,7 @@ def analyze_script(payload: AnalyzeRequest):
     research_data = research.gather(
         payload.script,
         region=payload.region,
-        primary_language=payload.language,
+        primary_language=language,
         creator_brief=creator_brief,
     )
 
@@ -340,7 +373,12 @@ def get_history_summary():
 @router.get("/api/history/runs")
 def get_history_runs(limit: int = 50, offset: int = 0):
     store = HistoryStore(get_settings().database_path)
-    return {"runs": store.history_runs(limit=limit, offset=offset), "limit": min(max(limit, 1), 100), "offset": max(offset, 0)}
+    return {
+        "runs": store.history_runs(limit=limit, offset=offset),
+        "total": store.history_run_count(),
+        "limit": min(max(limit, 1), 100),
+        "offset": max(offset, 0),
+    }
 
 
 @router.get("/api/history/runs/{run_id}")
@@ -349,7 +387,7 @@ def get_history_run(run_id: int):
     run = store.history_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Saved package not found.")
-    run["linked_video_report"] = store.linked_package_report(run_id)
+    run["linked_video_report"] = store.linked_package_report(run_id, run=run)
     return run
 
 
@@ -409,6 +447,7 @@ def update_idea(idea_id: int, payload: UpdateIdeaRequest):
 
 
 @router.post("/api/ideas/{idea_id}/research")
+@_gemini_budget
 def research_idea(idea_id: int):
     settings = get_settings()
     store = HistoryStore(settings.database_path)
@@ -422,6 +461,7 @@ def research_idea(idea_id: int):
 
 
 @router.post("/api/ideas/{idea_id}/generate")
+@_gemini_budget
 def generate_idea_package(idea_id: int, payload: GenerateIdeaRequest):
     settings = get_settings()
     store = HistoryStore(settings.database_path)
@@ -460,24 +500,30 @@ def _idea_creator_brief(idea: dict[str, object], script: str) -> dict[str, objec
     return build_creator_brief(
         script=script,
         target_audience=str(idea.get("audience_angle") or ""),
-        viewer_promise="",
         unique_angle=str(idea.get("browse_angle") or idea.get("search_angle") or ""),
-        proof="",
         video_format=str(idea.get("format") or ""),
-        title_style="balanced",
         thumbnail_idea=str(idea.get("visual_or_background") or ""),
         language=str(idea.get("language") or "english"),
         region=str(idea.get("region") or "global"),
         duration_seconds=idea.get("target_duration_seconds"),
-        exact_quote="",
         on_screen_text=str(idea.get("on_screen_text") or ""),
-        voice_over="",
         visual_requirements=str(idea.get("visual_or_background") or ""),
-        factual_claims="",
-        claim_restrictions="",
         creator_intent=str(idea.get("emotion_or_intent") or ""),
-        content_constraints="",
     )
+
+
+def _personal_evidence(store: HistoryStore, video_format: object, language: object) -> dict[str, object]:
+    """The creator's own 24h cohort for this format and language.
+
+    A blank or "unknown" value filters nothing (history_store.known_filter): as
+    a filter it would match only videos whose format is unknown, which cohorts
+    exclude, so the sample was always empty.
+    """
+    try:
+        return store.cohort_analytics(format_filter=video_format, language_filter=language, snapshot_window="24h")
+    except ValueError:
+        return {"learning_allowed": False, "sample_size": 0, "confidence_label": "Collecting evidence",
+                "snapshot_window": "24h", "recommendation": "Not enough personal evidence."}
 
 
 def _collect_idea_research(idea: dict[str, object], store: HistoryStore, settings) -> dict[str, object]:
@@ -489,14 +535,7 @@ def _collect_idea_research(idea: dict[str, object], store: HistoryStore, setting
         primary_language=str(idea.get("language") or "english"),
         creator_brief=creator_brief,
     )
-    try:
-        personal = store.cohort_analytics(
-            format_filter=str(idea.get("format") or "unknown"),
-            language_filter=str(idea.get("language") or "unknown"),
-            snapshot_window="24h",
-        )
-    except ValueError:
-        personal = {"learning_allowed": False, "sample_size": 0, "confidence_label": "Collecting evidence", "snapshot_window": "24h", "recommendation": "Not enough personal evidence."}
+    personal = _personal_evidence(store, idea.get("format"), idea.get("language"))
     evidence = build_idea_evidence(research, personal)
     snapshot = store.save_content_idea_research(int(idea["id"]), evidence)
     if not snapshot:
@@ -514,7 +553,8 @@ def create_watch_channel(payload: CreateWatchChannelRequest):
     settings=get_settings(); metadata=_public_client(settings).get_channel(payload.channel_id, raise_on_error=False)
     if not metadata: raise HTTPException(status_code=400, detail="The public channel could not be resolved with the configured YouTube Data API.")
     try: item=IntelligenceStore(HistoryStore(settings.database_path)).create_channel(metadata,payload.notes)
-    except ValueError as exc: raise HTTPException(status_code=409 if "already" in str(exc) else 422,detail=str(exc)) from exc
+    except AlreadyWatched as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+    except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
     return {"status":"created","channel":item}
 
 @router.get("/api/watchlist/channels")
@@ -540,8 +580,10 @@ def update_watch_channel(item_id:int,payload:UpdateWatchRequest):
 def research_watch_channel(item_id:int):
     settings=get_settings(); store=IntelligenceStore(HistoryStore(settings.database_path)); item=store.channel(item_id)
     if not item:raise HTTPException(status_code=404,detail="Watched channel not found.")
-    client=_public_client(settings); metadata=client.get_channel(item['channel_id']); videos=client.list_channel_videos(item['channel_id'],20)
+    client=_public_client(settings); metadata=client.get_channel(item['channel_id'])
+    # Checked before listing uploads, so a failed lookup spends no more quota.
     if not metadata:raise HTTPException(status_code=400,detail="Public channel research is unavailable; no snapshot was created.")
+    videos=client.list_channel_videos(item['channel_id'],20)
     return {"status":"researched","channel":store.snapshot_channel(item_id,metadata,videos),"observed_videos":len(videos)}
 
 @router.post("/api/watchlist/videos", status_code=201)
@@ -551,7 +593,8 @@ def create_watch_video(payload:CreateWatchVideoRequest):
     settings=get_settings(); metadata=_public_client(settings).get_video(video_id)
     if not metadata:raise HTTPException(status_code=400,detail="The public video could not be resolved with the configured YouTube Data API.")
     try:item=IntelligenceStore(HistoryStore(settings.database_path)).create_video(metadata,payload.notes)
-    except ValueError as exc:raise HTTPException(status_code=409 if "already" in str(exc) else 422,detail=str(exc)) from exc
+    except AlreadyWatched as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
+    except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
     return {"status":"created","video":item}
 
 @router.get("/api/watchlist/videos")
@@ -591,12 +634,16 @@ def analyze_watch_video_outlier(item_id:int):
 
 # --- Phase 7 G5: honest topic-demand explorer ---
 
+def _topic_brief(topic:str,values:dict[str,object])->dict[str,object]:
+    """A creator brief for a bare demand topic: its format, language, region and audience only."""
+    return build_creator_brief(script=topic,video_format=str(values.get('format') or ''),language=str(values.get('language') or 'english'),region=str(values.get('region') or 'global'),target_audience=str(values.get('audience_context') or ''))
+
 def _run_demand(values:dict[str,object],idea:dict[str,object]|None=None):
     settings=get_settings(); history=HistoryStore(settings.database_path); intelligence=IntelligenceStore(history)
-    topic=str(values.get('topic') or '').strip(); brief=build_creator_brief(script=topic,video_format=str(values.get('format') or ''),language=str(values.get('language') or 'english'),region=str(values.get('region') or 'global'),target_audience=str(values.get('audience_context') or ''),creator_intent='',viewer_promise='',unique_angle='',proof='',title_style='balanced',thumbnail_idea='',duration_seconds=None,exact_quote='',on_screen_text='',voice_over='',visual_requirements='',factual_claims='',claim_restrictions='',content_constraints='')
-    research=ResearchService(settings).gather(topic,region=str(values.get('region') or 'global'),primary_language=str(values.get('language') or 'english'),creator_brief=brief)
-    try:personal=history.cohort_analytics(format_filter=str(values.get('format') or 'unknown'),language_filter=str(values.get('language') or 'unknown'),snapshot_window='24h')
-    except ValueError:personal={"learning_allowed":False,"sample_size":0,"confidence_label":"Collecting evidence"}
+    topic=str(values.get('topic') or '').strip(); brief=_topic_brief(topic,values)
+    # Demand reads only the public results, so nothing else is fetched or generated.
+    research=ResearchService(settings).gather(topic,region=str(values.get('region') or 'global'),primary_language=str(values.get('language') or 'english'),creator_brief=brief,results_only=True)
+    personal=_personal_evidence(history,values.get('format'),values.get('language'))
     classification,evidence=analyze_demand(topic,research,intelligence.videos(state='active'),personal)
     fingerprint=idea_fingerprint(idea) if idea else None
     return intelligence.save_demand(values,classification,evidence,fingerprint)
@@ -619,19 +666,22 @@ def get_demand_research(research_id:int):
 def create_idea_demand_research(idea_id:int):
     idea=HistoryStore(get_settings().database_path).content_idea(idea_id)
     if not idea:raise HTTPException(status_code=404,detail="Idea not found.")
+    if idea.get('status')=="archived":raise HTTPException(status_code=409,detail="Restore this archived idea before researching it.")
     values={"idea_id":idea_id,"topic":idea['topic'],"language":idea.get('language'),"format":idea.get('format'),"region":idea.get('region'),"audience_context":idea.get('audience_angle')}
     return {"status":"researched","research":_run_demand(values,idea)}
 
 @router.post("/api/demand/research/{research_id}/generate")
+@_gemini_budget
 def generate_from_demand(research_id:int):
     settings=get_settings(); history=HistoryStore(settings.database_path); intelligence=IntelligenceStore(history); item=intelligence.demand(research_id)
     if not item:raise HTTPException(status_code=404,detail="Demand research snapshot not found.")
     if item.get('idea_id'):
         idea=history.content_idea(int(item['idea_id']))
         if not idea:raise HTTPException(status_code=409,detail="The related idea is unavailable.")
-        return generate_idea_package(int(item['idea_id']),GenerateIdeaRequest())
+        generated=generate_idea_package(int(item['idea_id']),GenerateIdeaRequest())
+        return {"status":"package_generated","analysis":generated["analysis"],"idea":generated["idea"],"demand_research_id":research_id}
     evidence=item.get('evidence') or {}; research={"youtube_results":evidence.get('public_results') or [],"top_opportunities":[],"keyword_signals":[],"entity_signals":[],"upload_timing":{},"thumbnail_intelligence":{},"research_queries":[],"research_decision":{},"research_warnings":[],"cache_policy":"demand-research-snapshot","history_store":history}
-    brief=build_creator_brief(script=item['topic'],video_format=item.get('format') or '',language=item.get('language') or 'english',region=item.get('region') or 'global',target_audience=item.get('audience_context') or '',viewer_promise='',unique_angle='',proof='',title_style='balanced',thumbnail_idea='',duration_seconds=None,exact_quote='',on_screen_text='',voice_over='',visual_requirements='',factual_claims='',claim_restrictions='',creator_intent='',content_constraints='')
+    brief=_topic_brief(item['topic'],item)
     analysis=generate_seo_suggestions(item['topic'],research,context={"language":item.get('language') or 'english',"video_language":item.get('language') or 'english',"region":item.get('region') or 'global',"audience_type":'general',"creator_brief":brief})
     return {"status":"package_generated","analysis":analysis,"demand_research_id":research_id}
 
@@ -640,9 +690,17 @@ def generate_from_demand(research_id:int):
 def reset_database(request: Request):
     settings = get_settings()
     _require_admin(request, settings)
-    store = HistoryStore(settings.database_path)
-    store.reset_database()
-    return {"status": "cleared", "message": "All historical test records wiped cleanly."}
+    cloud = getattr(request.app.state, "cloud_sync", None)
+    if cloud and cloud.status().get("enabled"):
+        # The next pull would bring every synced package back, while ideas,
+        # audits and experiments stayed deleted: a reset that half happened.
+        raise HTTPException(
+            status_code=409,
+            detail="Cloud sync is on, so the next sync would restore the packages. Turn cloud sync off first, "
+                   "or delete packages in History to remove them on every device.",
+        )
+    HistoryStore(settings.database_path).reset_database()
+    return {"status": "cleared", "message": "All local records were deleted. The YouTube channel connection was kept."}
 
 
 # --- Stage A: Published Video Linking Endpoints ---
@@ -658,6 +716,9 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
     clean_vid = _extract_youtube_video_id(payload.youtube_video_id)
     if not clean_vid:
         raise HTTPException(status_code=422, detail="Enter a valid 11-character YouTube video ID or video URL.")
+    if not payload.replace_existing_evidence:
+        # Ask first: the confirmed request would otherwise pay for the lookup again.
+        store.check_relink(run_id, clean_vid)
     service = YouTubeChannelService(settings)
     try:
         channel_connected = bool(service.status().get("connected"))
@@ -665,8 +726,10 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    pub_at = payload.published_at or owned_video.get("published_at")
-    ownership_verified = bool(owned_video.get("ownership_verified") and owned_video.get("channel_id"))
+    verified_now = bool(owned_video.get("ownership_verified") and owned_video.get("channel_id"))
+    # The owner's own YouTube record is the authority on when it was published.
+    youtube_published_at = owned_video.get("published_at")
+    pub_at = youtube_published_at if verified_now and youtube_published_at else (payload.published_at or youtube_published_at)
     if not pub_at:
         raise HTTPException(status_code=400, detail="YouTube did not return a publication time. Enter it manually or connect the owning channel.")
     saved_package = run.get("package") if isinstance(run.get("package"), dict) else {}
@@ -680,6 +743,10 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
     format_value = payload.format or saved_brief.get("video_format") or run.get("content_angle")
     language_value = payload.language or saved_brief.get("language")
     region_value = payload.region or saved_brief.get("region")
+    # A video linked to another package moves here, with its evidence.
+    moved_from_run_id = store.linked_run_for_video(clean_vid)
+    if moved_from_run_id == run_id:
+        moved_from_run_id = None
     link_id = store.link_published_video(
         analysis_run_id=run_id,
         youtube_video_id=clean_vid,
@@ -693,35 +760,44 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
         language=str(language_value) if language_value else None,
         region=str(region_value) if region_value else None,
         notes=payload.notes,
-        ownership_state="verified" if ownership_verified else "unverified",
-        ownership_verified=ownership_verified,
-        verified_channel_id=str(owned_video.get("channel_id") or "") if ownership_verified else None,
-        ownership_verified_at=datetime.now(timezone.utc).isoformat() if ownership_verified else None,
+        ownership_state="verified" if verified_now else "unverified",
+        ownership_verified=verified_now,
+        verified_channel_id=str(owned_video.get("channel_id") or "") if verified_now else None,
+        ownership_verified_at=datetime.now(timezone.utc).isoformat() if verified_now else None,
+        replace_existing_evidence=payload.replace_existing_evidence,
     )
     store.update_linked_video_metadata(link_id, owned_video)
+    # A relink without a connected channel keeps an ownership check that
+    # already succeeded, so report what is stored rather than this call alone.
+    link = store.published_video_link(link_id) or {}
+    ownership_verified = bool(link.get("ownership_verified"))
     refresh_warning = None
-    try:
-        link = store.published_video_link(link_id)
-        if link and ownership_verified:
+    if ownership_verified:
+        try:
             service.refresh_linked_video_performance(link)
-    except Exception as exc:
-        refresh_warning = (
-            "The package was linked, but live analytics could not be refreshed yet: "
-            + str(exc)
-        )
+        except Exception as exc:
+            logger.warning("Refresh after linking failed: %s", type(exc).__name__)
+            reason = str(exc) if isinstance(exc, (ValueError, YouTubeUnavailable)) else "use Refresh data to try again."
+            refresh_warning = "The package was linked, but live analytics could not be refreshed yet: " + reason
 
     return {
         "status": "linked",
         "link_id": link_id,
         "analysis_run_id": run_id,
         "youtube_video_id": clean_vid,
-        "published_at": pub_at,
+        "published_at": link.get("published_at") or pub_at,
         "ownership_verified": ownership_verified,
         "ownership_state": "verified" if ownership_verified else "unverified",
+        "moved_from_run_id": moved_from_run_id,
         "ownership_message": (
-            "Ownership verified against the connected YouTube channel."
-            if ownership_verified else
-            "Video linked as unverified. Connect the owning YouTube channel before analytics or learning uses this video."
+            (
+                f"This video was linked to saved package #{moved_from_run_id} and is now linked to this one, "
+                "with the evidence collected for it. " if moved_from_run_id else ""
+            ) + (
+                "Ownership verified against the connected YouTube channel."
+                if ownership_verified else
+                "Video linked as unverified. Connect the owning YouTube channel before analytics or learning uses this video."
+            )
         ),
         "refresh_warning": refresh_warning,
         "report": store.linked_package_report(run_id),
@@ -729,8 +805,9 @@ def link_published_video(run_id: int, payload: LinkVideoRequest):
 
 
 def _delete_sync_result(request: Request) -> dict:
+    """Queue the cloud deletion without making the request wait for a push and pull."""
     cloud = getattr(request.app.state, "cloud_sync", None)
-    return cloud.run_once() if cloud else {"state": "disabled", "counts": {}}
+    return cloud.request_run() if cloud else {"state": "disabled", "counts": {}, "run_requested": False}
 
 
 @router.delete("/api/history/runs/{run_id}")
@@ -857,7 +934,13 @@ def record_experiment(payload: RecordExperimentRequest):
         old_thumbnail=payload.old_thumbnail,
         new_thumbnail=payload.new_thumbnail,
         reason=payload.reason,
-        performance_before_json=json.dumps(payload.performance_before or store.latest_performance_snapshot(payload.youtube_video_id)),
+        # What the video showed before the change: its current count, or its
+        # best completed window when no current count was ever refreshed.
+        performance_before_json=json.dumps(
+            payload.performance_before
+            or store.current_performance_snapshot(payload.youtube_video_id)
+            or store.latest_performance_snapshot(payload.youtube_video_id)
+        ),
     )
     return {"status": "recorded", "experiment_id": exp_id}
 
@@ -934,9 +1017,9 @@ def create_structured_experiment(payload: CreateStructuredExperimentRequest):
 
 @router.get("/api/experiment-center/experiments")
 def list_structured_experiments(status: str | None = None, mode: str | None = None):
-    if status and status not in {"draft", "planned", "active", "paused", "completed", "cancelled", "inconclusive"}:
+    if status and status not in get_args(ExperimentStatus):
         raise HTTPException(status_code=422, detail="Invalid experiment status filter.")
-    if mode and mode not in {"controlled", "observational"}:
+    if mode and mode not in get_args(ExperimentMode):
         raise HTTPException(status_code=422, detail="Invalid experiment mode filter.")
     items = AuditExperimentStore(HistoryStore(get_settings().database_path)).experiments(status=status, mode=mode)
     return {"experiments": items, "total": len(items)}
@@ -966,7 +1049,7 @@ def update_structured_experiment(experiment_id: int, payload: UpdateStructuredEx
 @router.post("/api/experiment-center/experiments/{experiment_id}/assignments", status_code=201)
 def assign_structured_experiment_video(experiment_id: int, payload: AssignExperimentVideoRequest):
     settings = get_settings()
-    channel = (YouTubeChannelService(settings).status().get("channel") or {}).get("id")
+    channel = YouTubeChannelService(settings).connected_channel_id()
     if not channel:
         raise HTTPException(status_code=409, detail="Connect the YouTube channel before assigning experiment videos.")
     store = AuditExperimentStore(HistoryStore(settings.database_path))
@@ -988,7 +1071,11 @@ def assign_structured_experiment_video(experiment_id: int, payload: AssignExperi
 @router.delete("/api/experiment-center/experiments/{experiment_id}/assignments/{assignment_id}")
 def remove_structured_experiment_assignment(experiment_id: int, assignment_id: int):
     store = AuditExperimentStore(HistoryStore(get_settings().database_path))
-    if not store.remove_assignment(experiment_id, assignment_id):
+    try:
+        removed = store.remove_assignment(experiment_id, assignment_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not removed:
         raise HTTPException(status_code=404, detail="Experiment assignment not found.")
     return {"status": "removed", "assignment_id": assignment_id}
 
@@ -996,7 +1083,7 @@ def remove_structured_experiment_assignment(experiment_id: int, assignment_id: i
 @router.post("/api/experiment-center/experiments/{experiment_id}/compare", status_code=201)
 def compare_structured_experiment(experiment_id: int):
     settings = get_settings()
-    channel = (YouTubeChannelService(settings).status().get("channel") or {}).get("id")
+    channel = YouTubeChannelService(settings).connected_channel_id()
     if not channel:
         raise HTTPException(status_code=409, detail="Connect the YouTube channel before comparing experiment results.")
     store = AuditExperimentStore(HistoryStore(settings.database_path))
@@ -1009,9 +1096,30 @@ def compare_structured_experiment(experiment_id: int):
     return {"status": "compared", "result": result, "experiment": store.experiment(experiment_id)}
 
 
+_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_YOUTUBE_HOSTS = frozenset({"youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com"})
+
+
 def _extract_youtube_video_id(value: str) -> str | None:
+    """An 11-character video ID, alone or in a YouTube URL; anything else is None.
+
+    Only YouTube hosts count, and a longer ID is refused rather than cut to 11.
+    """
     candidate = value.strip()
-    match = re.search(r"(?:youtu\.be/|[?&]v=|/shorts/|/embed/)([A-Za-z0-9_-]{11})", candidate)
-    if match:
-        return match.group(1)
-    return candidate if re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate) else None
+    if _VIDEO_ID.fullmatch(candidate):
+        return candidate
+    try:
+        parts = urlsplit(candidate if "://" in candidate else f"https://{candidate}")
+    except ValueError:  # a stray "[" or "]" reads as a malformed IPv6 host
+        return None
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    if host == "youtu.be":
+        match = re.fullmatch(r"/([A-Za-z0-9_-]{11})/?", parts.path)
+        return match.group(1) if match else None
+    if host not in _YOUTUBE_HOSTS:
+        return None
+    video_id = parse_qs(parts.query).get("v", [""])[0]
+    if _VIDEO_ID.fullmatch(video_id):
+        return video_id
+    match = re.fullmatch(r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})/?", parts.path)
+    return match.group(1) if match else None
