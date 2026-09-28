@@ -98,11 +98,16 @@ class FallbackCopyTests(unittest.TestCase):
                 for narration in ("exact words shown on screen", "built only from the words", "supplied by the creator"):
                     self.assertNotIn(narration, description)
 
-    def test_minimal_package_keeps_the_scene(self):
-        brief = build_creator_brief(script=self.QUOTE, exact_quote=self.QUOTE, video_format="youtube_shorts",
-                                    visual_requirements="One person walking alone in quiet streets.")
-        description = _safe_minimal_package(creator_topic(brief), brief)["description"]
-        self.assertEqual(description, f"“{self.QUOTE}”\n\nA lone person walks through quiet streets.")
+    def test_minimal_package_names_the_scene_only_for_a_long_video(self):
+        # A Short's viewers are watching the scene; describing it is a production note.
+        visual = "One person walking alone in quiet streets."
+        short = build_creator_brief(script=self.QUOTE, exact_quote=self.QUOTE, video_format="youtube_shorts",
+                                    visual_requirements=visual)
+        self.assertEqual(_safe_minimal_package(creator_topic(short), short)["description"], f"“{self.QUOTE}”")
+        story = build_creator_brief(script=self.QUOTE, exact_quote=self.QUOTE, video_format="story",
+                                    visual_requirements=visual)
+        self.assertEqual(_safe_minimal_package(creator_topic(story), story)["description"],
+                         f"“{self.QUOTE}”\n\nA lone person walks through quiet streets.")
 
 
 class ThumbnailTextTests(unittest.TestCase):

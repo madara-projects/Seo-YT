@@ -1,43 +1,51 @@
 from __future__ import annotations
 
-import re
 from itertools import pairwise
 from typing import Any
 
 from win_engine.analysis.generation_quality import is_short_content
+from win_engine.analysis.source_cues import timestamp_line, timestamp_seconds
 from win_engine.analysis.strategy_layer import diverse_followups
 
-# A stripped line that opens with a timestamp: "0:00 Intro", "01:30 - Mixing",
-# "1:02:15 Taste test". Matched on the stripped line with a greedy title: a lazy
-# title before optional trailing space backtracked quadratically on long lines.
-_CHAPTER_LINE_RE = re.compile(r"[\[(]?((?:\d{1,2}:)?\d{1,2}:\d{2})[\])]?\s*[-–—:|.]?\s*(\S.*)")
 
-
-def _timestamp_seconds(value: str) -> int | None:
-    """Seconds from the start, or None when minutes or seconds reach 60 ("0:75")."""
-
-    *hours, minutes, seconds = (int(part) for part in value.split(":"))
-    if minutes >= 60 or seconds >= 60:
-        return None
-    return (hours[0] if hours else 0) * 3600 + minutes * 60 + seconds
-
-
-def _timestamp_runs(text: str) -> list[list[tuple[int, dict[str, str]]]]:
+def _timestamp_runs(text: str) -> list[list[dict[str, str]]]:
     """Consecutive timestamp lines, one run per block; blank lines do not end a run."""
 
-    runs: list[list[tuple[int, dict[str, str]]]] = [[]]
+    runs: list[list[dict[str, str]]] = [[]]
     for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
+        if not line.strip():
             continue
-        match = _CHAPTER_LINE_RE.fullmatch(stripped)
-        seconds = _timestamp_seconds(match.group(1)) if match else None
-        if seconds is None:
+        parsed = timestamp_line(line)
+        if parsed is None:
             if runs[-1]:
                 runs.append([])
             continue
-        runs[-1].append((seconds, {"timestamp": match.group(1), "title": match.group(2)}))
+        runs[-1].append({"timestamp": parsed[1], "title": parsed[2]})
     return [run for run in runs if run]
+
+
+def valid_chapters(chapters: Any) -> bool:
+    """Whether YouTube builds chapters from this list (support.google.com/youtube/answer/9884579).
+
+    The first timestamp is 0:00, there are at least three, and each chapter
+    starts at least ten seconds after the one before it.
+    """
+
+    if not isinstance(chapters, list) or len(chapters) < 3:
+        return False
+    if not all(isinstance(item, dict) and str(item.get("title") or "").strip() for item in chapters):
+        return False
+    seconds = [timestamp_seconds(item.get("timestamp")) for item in chapters]
+    return (None not in seconds and seconds[0] == 0
+            and all(later - earlier >= 10 for earlier, later in pairwise(seconds)))
+
+
+def chapter_block(chapters: Any) -> str:
+    """The description lines for the creator's chapters ("0:00 Intro"), or "" when YouTube would reject them."""
+
+    if not valid_chapters(chapters):
+        return ""
+    return "\n".join(f"{item['timestamp']} {' '.join(str(item['title']).split())}" for item in chapters)
 
 
 def build_chapters(
@@ -59,9 +67,8 @@ def build_chapters(
     # list is one block of timestamp lines: a narration line elsewhere ("7:45
     # the flight took off late") neither joins it nor, out of order, voids it.
     for run in _timestamp_runs(str(brief.get("content") or script or "")):
-        seconds = [value for value, _ in run]
-        if len(run) >= 3 and seconds[0] == 0 and all(later - earlier >= 10 for earlier, later in pairwise(seconds)):
-            return [chapter for _, chapter in run]
+        if valid_chapters(run):
+            return run
     return []
 
 

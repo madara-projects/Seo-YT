@@ -19,6 +19,8 @@ import { EvidenceChip, type EvidenceTone } from "@/components/common/EvidenceChi
 import { Inset, Panel } from "@/components/common/Panel";
 import { EmptyState } from "@/components/common/States";
 import { StatCard } from "@/components/common/StatCard";
+import { OpportunityBreakdownDisclosure } from "@/components/common/OpportunityBreakdown";
+import { parseOpportunityBreakdown } from "@/lib/opportunityFormat";
 import { asObject, cn, displayValue } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
 import { opportunityText, titleScoreText } from "@/lib/dashboardFormat";
@@ -331,9 +333,15 @@ export function PackagingStage({
               label="Opportunity score"
               icon={Target}
               value={opportunityText(opportunity.score)}
+              footer={
+                <OpportunityBreakdownDisclosure
+                  breakdown={parseOpportunityBreakdown(opportunity.breakdown)}
+                  missingText="This result did not include a score breakdown."
+                />
+              }
               caption={
                 opportunityMeasured
-                  ? "Local heuristic, not a performance guarantee."
+                  ? "Local heuristic, not a prediction of views."
                   : "Not measured: no competitor results were returned to score against."
               }
               tone={opportunityMeasured ? "warn" : "neutral"}

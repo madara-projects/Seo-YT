@@ -11,7 +11,7 @@ from collections import Counter
 from functools import lru_cache
 from typing import Iterable, List
 
-from win_engine.analysis.source_cues import source_quote
+from win_engine.analysis.source_cues import source_quote, timestamp_line
 from win_engine.analysis.text_tokens import is_word_character, strip_stray_joiners, unicode_words
 
 # ---------------------------------------------------------------------------
@@ -521,7 +521,9 @@ what when where which while who why will would yes yet you your go goes going ne
 free live win use used set run let put see way big hot cold easy full fast post posts show
 shows home part step steps day days time life love good great real true make watch look
 """.split())
-_CASING_BREAK_RE = re.compile(r"(?<=[.!?:;])\s+|[\n\"“”|]+|\s[-–—]\s")
+# A label's dash opens a sentence too, spaced or not: "the quote is- Stop …",
+# "the quote is -Stop …", "Video – Stop motion".
+_CASING_BREAK_RE = re.compile(r"(?<=[.!?:;])\s+|[\n\"“”|]+|(?<=\w)[-–—](?=\s)|\s[-–—]")
 
 
 def source_casing_map(*sources: str) -> dict[str, str]:
@@ -536,6 +538,10 @@ def source_casing_map(*sources: str) -> dict[str, str]:
     forms: dict[str, set[str]] = {}
     for source in sources:
         for segment in _CASING_BREAK_RE.split(str(source or "")):
+            # A chapter title opens its own sentence: the capital in "0:45
+            # Download and install OBS" became "how to Download" in the prose.
+            chapter = timestamp_line(segment)
+            segment = chapter[2] if chapter else segment
             matches = list(_CASING_TOKEN_RE.finditer(segment))
             # A Title Case heading capitalises every major word; a sentence
             # that merely names "Samsung Galaxy S25 Ultra" still has lowercase ones.

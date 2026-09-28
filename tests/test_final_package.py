@@ -224,6 +224,19 @@ class RefinementBudgetTests(unittest.TestCase):
         self.assertEqual(response["generation_trace"]["quality_refinement"]["skipped_reason"], "provider_cooling_down")
         self.assertEqual(response["title"], WRITER_TITLE)
 
+    def test_the_titles_the_writer_discarded_reach_the_refinement_request(self):
+        # One title passed the writer's gate, so the one refinement request asks
+        # for alternatives and names the discarded ones.
+        discarded = {"title": "Cold brew coffee guaranteed to go viral", "codes": ["invented_outcome"]}
+        writer = {**_writer_package(), "generation_trace": {"rejected_titles": [discarded]}}
+        response, refinement_call = _run(_research(HistoryStore(":memory:")), writer, repaired=None)
+        refinement_call.assert_called_once()
+        feedback = " ".join(item["message"] for item in refinement_call.call_args.kwargs["repair_feedback"])
+        self.assertIn("Only 1 distinct title(s) passed", feedback)
+        self.assertIn(discarded["title"], feedback)
+        self.assertNotIn("the quote", feedback)  # not a quote Short
+        self.assertEqual(response["generation_trace"]["rejected_titles"], [discarded])
+
 
 class FallbackWarningTests(unittest.TestCase):
     def _warnings(self, diagnostics):

@@ -37,6 +37,10 @@ import { windowLabel } from "@/lib/auditFormat";
 import { youtubeWatchUrl } from "@/lib/channelFormat";
 import { uploadBundleText } from "@/lib/packages";
 import type { HistoryRunDetail, LinkedVideoReport } from "@/api/historyTypes";
+import { HistoryOpportunityBreakdown } from "./HistoryOpportunityBreakdown";
+import { LinkedVideoLearning } from "@/components/learning/LinkedVideoLearning";
+import { StudioTestPanel } from "@/components/learning/StudioTestPanel";
+import type { LinkedTrafficEvidence } from "@/api/learningTypes";
 
 /** Older records predate full-package history, so absent fields say so plainly. */
 const NOT_STORED = "Not stored in this older record.";
@@ -256,6 +260,12 @@ function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoReport; 
             </p>
           </div>
         ) : null}
+
+        <LinkedVideoLearning
+          evidence={report as LinkedVideoReport & LinkedTrafficEvidence}
+          linkId={typeof report.link_id === "number" ? report.link_id : null}
+          verified={Boolean(report.ownership_verified)}
+        />
       </div>
     </Section>
   );
@@ -326,6 +336,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
           note="Pre-publish guidance"
         />
       </div>
+      <HistoryOpportunityBreakdown run={run} />
 
       <div className="space-y-2.5">
         <Callout
@@ -371,6 +382,8 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
           fallbackTitle={String(selectedData?.title || pkg.title || run.title || "Saved package")}
         />
       ) : null}
+
+      {hasPackage ? <StudioTestPanel runId={run.id} /> : null}
 
       <Section
         icon={FileText}

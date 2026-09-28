@@ -18,6 +18,7 @@ from win_engine.analysis.strategy_layer import build_content_graph_strategy
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.keyword_research import select_final_tags, synchronize_tag_evidence
 from win_engine.analysis.research_planner import brief_research_text
+from win_engine.analysis.source_cues import timestamp_line
 from win_engine.analysis.topic_lock import (
     is_junk_tag,
     extract_main_topic,
@@ -35,7 +36,7 @@ from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.learning_engine import build_feedback_package
 from win_engine.generation.automation_engine import build_automation_workflow
-from win_engine.generation.expansion_engine import build_binge_bridge, build_session_expansion
+from win_engine.generation.expansion_engine import build_binge_bridge, build_session_expansion, chapter_block
 from win_engine.generation.strategy_engine import build_seo_package, resolve_output_language, title_quality_score
 from win_engine.generation.quality_refinement import refine_package, enforce_quality_target
 from win_engine.llm.seo_writer import with_extra_call
@@ -186,11 +187,14 @@ def generate_seo_suggestions(
     )
     if short_form:
         locked_hashtags = focused_short_hashtags(locked_tags, casing)
+    # Every description the creator can copy carries the chapters; a Short has none.
+    chapters = [] if short_form else list(seo_package.get("chapters") or [])
     locked_description = format_upload_ready_description(
         locked_description,
         locked_hashtags,
         category=category,
         topic=main_topic,
+        chapters=chapters,
     )
     # Unusable variants all fall back to the same topic title; keep it once.
     locked_variants = list(dict.fromkeys(
@@ -205,6 +209,7 @@ def generate_seo_suggestions(
         language=selected_language, region=str(ctx.get("region") or "global"),
         evidence=keyword_research, competitors=yt_results,
         channel_learning=channel_learning, local_fallback=generation_source == "fallback",
+        rejected_titles=(seo_package.get("generation_trace") or {}).get("rejected_titles") or [],
     )
     # Generated copy may not add an exploit promise ("unlimited diamonds") the
     # creator never made. Tags keep their research provenance, so an offending
@@ -221,7 +226,7 @@ def generate_seo_suggestions(
     locked_hashtags = [tag for tag in locked_hashtags if not unsupported_risk_terms(tag, risk_source)]
     locked_description = format_upload_ready_description(
         normalize_risk_terms(refined["description"], source=risk_source), locked_hashtags,
-        category=category, topic=main_topic)
+        category=category, topic=main_topic, chapters=chapters)
     trace = seo_package["generation_trace"] = {**(seo_package.get("generation_trace") or {}),
                                                "quality_refinement": refinement_trace}
     if refinement_trace.get("attempted"):
@@ -250,7 +255,7 @@ def generate_seo_suggestions(
     )
     locked_title = gated["title"]
     locked_variants = gated["variants"]
-    final_gate = enforce_quality_target(final_gate)
+    final_gate = enforce_quality_target(final_gate, short_form=short_form)
     # The writer stage records its own verdict under this key; the package the
     # creator receives is the one judged here, after tag selection and refinement.
     trace["writer_quality_verdict"] = trace.get("final_quality_verdict")
@@ -340,6 +345,7 @@ def generate_seo_suggestions(
             hashtags,
             category=category,
             topic=main_topic,
+            chapters=chapters,
         )
         return {
             "title": title,
@@ -493,12 +499,20 @@ def format_upload_ready_description(
     *,
     category: str = "general",
     topic: str = "",
+    chapters: list[dict[str, str]] | None = None,
 ) -> str:
-    """Add restrained visual structure and the selected hashtags to a description."""
+    """Add restrained visual structure, the creator's chapters and the selected hashtags to a description.
+
+    ``chapters`` are the creator's own timestamps (never a Short's). They are
+    checked against YouTube's rules again here and pasted as one block before
+    the hashtags; a creator who copied the description got no chapters. Any
+    other timestamp line is removed, since YouTube would read it as a chapter.
+    """
 
     text = (description or "").strip()
     if not text:
         return text
+    block = chapter_block(chapters)
 
     # Gemini may put hashtags in its prose even though hashtags are returned
     # separately. Remove hashtag-only lines so we can render one clean final line.
@@ -509,8 +523,13 @@ def format_upload_ready_description(
         line for line in text.splitlines()
         if not re.fullmatch(r"\s*(?:#[^\s#]+\s*)+", line)
         and not re.fullmatch(r"\s*(?:yt|shorts?|youtube(?:\s+shorts?)?)\s*", line, re.IGNORECASE)
+        # Only the creator's validated list may become chapters: timestamp lines
+        # already here (the writer's, or this block from an earlier pass) go,
+        # with their heading, so none is invented and none appears twice.
+        and not timestamp_line(line)
+        and not re.fullmatch(r"\s*(?:chapters|timestamps)\s*:?\s*", line, re.IGNORECASE)
     ]
-    text = "\n".join(prose_lines).strip()
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(prose_lines)).strip()
 
     emoji_by_category = {
         "gaming": "🎮",
@@ -533,6 +552,8 @@ def format_upload_ready_description(
         else:
             emoji = emoji_by_category[category_key]
         text = f"{emoji} {text}"
+    if block:
+        text = f"{text}\n\n{block}"
 
     selected: list[str] = []
     existing = {match.casefold().rstrip(".,!?;:") for match in re.findall(r"#[^\s#]+", text)}

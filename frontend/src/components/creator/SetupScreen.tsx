@@ -326,7 +326,8 @@ export function SetupScreen({
 
   const reason = (
     <p id="generate-reason" className="text-xs leading-relaxed text-muted-foreground" aria-live="polite">
-      {blocker ?? "Uses YouTube quota and a few Gemini calls. Nothing is uploaded or published."}
+      {blocker ??
+        "Uses YouTube quota: a Short plans at most 3 searches and a long video about 5–7, out of 100 a day by default. Also a few Gemini calls. Nothing is uploaded or published."}
     </p>
   );
 

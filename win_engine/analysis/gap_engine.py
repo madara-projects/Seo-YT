@@ -43,7 +43,10 @@ def analyze_opportunity_gaps(
         uniqueness_score = round(1.0 - max(find_content_similarity(target_title, c) for c in competitor_titles), 3)
 
     differentiation = _differentiation_plan(keyword_gaps, competition, youtube_results)
-    opportunity_score = _opportunity_score(keyword_gaps, competition, top_opportunities)
+    opportunity_score = _opportunity_score(
+        keyword_gaps, competition, top_opportunities,
+        research_result_count=len(youtube_results or []), keyword_signal_count=len(keyword_signals or []),
+    )
     format_lock = _format_lock_in(top_opportunities, youtube_results, competition)
     viability_verdict = _viability_verdict(opportunity_score, competition, idea_kill_switch, keyword_gaps)
     if not youtube_results:
@@ -52,7 +55,9 @@ def analyze_opportunity_gaps(
         # keep pursuing". Neither was measured; say so instead.
         unmeasured = "No competitor results were available, so demand and competition could not be measured."
         opportunity_score = {**opportunity_score, "score": None, "label": "UNMEASURED", "confidence": "NONE",
-                             "measured": False, "reason": unmeasured}
+                             "measured": False, "reason": unmeasured,
+                             "breakdown": {**opportunity_score["breakdown"], "score": None, "confidence": "none",
+                                           "confidence_reason": "No score was calculated.", "warnings": [unmeasured]}}
         idea_kill_switch = {**idea_kill_switch, "proceed": True, "status": "insufficient_evidence",
                             "reason": unmeasured + " This is not a verdict on the idea.", "confidence": "none",
                             "recommended_action": "Re-run research when YouTube results are available before making a go/no-go call."}
@@ -205,6 +210,9 @@ def _opportunity_score(
     keyword_gaps: list[dict[str, Any]],
     competition: dict[str, Any],
     top_opportunities: list[dict[str, Any]],
+    *,
+    research_result_count: int | None = None,
+    keyword_signal_count: int | None = None,
 ) -> dict[str, Any]:
     opportunities = [item for item in top_opportunities[:3] if isinstance(item, dict)]
     # An unmeasured velocity is left out rather than averaged in as zero.
@@ -227,14 +235,15 @@ def _opportunity_score(
         if opportunities else 0.0
     )
 
-    score = round(
-        (demand_score * 0.35)
-        + (competition_room * 0.25)
-        + (gap_score * 0.20)
-        + (breakout_score * 0.10)
-        + (relevance_score * 0.10),
-        2,
-    )
+    values = {
+        "demand_velocity": demand_score,
+        "competition_room": competition_room,
+        "keyword_gap": gap_score,
+        "small_channel_breakout": breakout_score,
+        "research_relevance": relevance_score,
+    }
+    # Summed in the order the formula always used, so the score is unchanged.
+    score = round(sum(values[key] * weight for key, _, weight in OPPORTUNITY_INPUTS), 2)
     score = min(max(score, 0.0), 100.0)
 
     if score >= 70:
@@ -244,20 +253,155 @@ def _opportunity_score(
     else:
         label = "WEAK"
 
-    confidence = "HIGH" if len(opportunities) >= 3 and relevance_score >= 50 else "MEDIUM" if len(opportunities) >= 2 else "LOW"
+    breakdown = _opportunity_breakdown(
+        values, score, keyword_gaps, competition, opportunities, len(velocity_scores),
+        research_result_count=research_result_count, keyword_signal_count=keyword_signal_count,
+    )
 
     return {
         "score": score,
         "label": label,
-        "confidence": confidence,
+        "confidence": breakdown["confidence"].upper(),
         "reason": "Weighted from current view velocity, competition room, keyword gaps, small-channel breakouts, and research relevance.",
-        "components": {
-            "demand_velocity": round(demand_score, 2),
-            "competition_room": round(competition_room, 2),
-            "keyword_gap": round(gap_score, 2),
-            "small_channel_breakout": round(breakout_score, 2),
-            "research_relevance": round(relevance_score, 2),
-        },
+        "components": {key: round(value, 2) for key, value in values.items()},
+        "breakdown": breakdown,
+    }
+
+
+# The heuristic's five inputs, in the order the score sums them, and their weights.
+OPPORTUNITY_INPUTS = (
+    ("demand_velocity", "Demand (view velocity)", 0.35),
+    ("competition_room", "Competition room", 0.25),
+    ("keyword_gap", "Keyword gaps", 0.20),
+    ("small_channel_breakout", "Small-channel breakouts", 0.10),
+    ("research_relevance", "Research relevance", 0.10),
+)
+OPPORTUNITY_SCORE_STATEMENT = (
+    "A local heuristic that weighs five signals from this idea's YouTube research. "
+    "It is not a prediction of views, reach or click-through rate."
+)
+# Sources of an input: counts YouTube reported, a local rule applied to the
+# research, or a stand-in value because the data was missing.
+MEASURED, HEURISTIC, DEFAULT = "youtube_measured", "local_heuristic", "missing_default"
+
+
+def _opportunity_breakdown(
+    values: dict[str, float],
+    score: float,
+    keyword_gaps: list[dict[str, Any]],
+    competition: dict[str, Any],
+    opportunities: list[dict[str, Any]],
+    velocity_count: int,
+    *,
+    research_result_count: int | None,
+    keyword_signal_count: int | None,
+) -> dict[str, Any]:
+    """Each input's value, weight, contribution and source, what was missing, and how complete it was."""
+    top = len(opportunities)
+    warnings: list[str] = []
+    if not top:
+        warnings.append("No research video qualified as a top opportunity, so demand, breakouts and relevance counted as 0.")
+    elif top < 3:
+        warnings.append(f"Only {top} top research video(s) were available; the score uses up to 3.")
+    if top and not velocity_count:
+        warnings.append("None of the top videos had a view velocity (no view count or publish date), so demand counted as 0.")
+    elif velocity_count < top:
+        warnings.append(
+            f"View velocity was unavailable for {top - velocity_count} of the top {top} video(s) "
+            "(no view count or publish date); they were left out of demand."
+        )
+    # A hidden subscriber or view count cannot show a breakout, so it counted as none.
+    unknown_breakouts = sum(
+        1 for item in opportunities
+        if not item.get("small_channel_outlier")
+        and (optional_number(item.get("subscriber_count")) is None or optional_number(item.get("view_count")) is None)
+    )
+    if unknown_breakouts:
+        warnings.append(
+            f"Subscriber or view count was unavailable for {unknown_breakouts} of the top {top} video(s), "
+            "so they counted as non-breakouts."
+        )
+    competition_measured = (
+        optional_number(competition.get("score")) is not None and str(competition.get("label") or "").upper() != "UNKNOWN"
+    )
+    if not competition_measured:
+        warnings.append("Competition was not measured, so competition room counted as the maximum (100).")
+    elif unknown_sizes := int(optional_number(competition.get("unknown_channel_size_count")) or 0):
+        warnings.append(
+            f"Channel size was unavailable for {unknown_sizes} sampled result(s), so large channels may be "
+            "undercounted and competition room overstated."
+        )
+    if keyword_signal_count == 0:
+        warnings.append("No keywords were extracted from your script, so keyword gaps counted as 0.")
+    if research_result_count is not None and research_result_count < 5:
+        warnings.append(f"Only {research_result_count} YouTube research result(s) were sampled.")
+
+    sources = {
+        "demand_velocity": MEASURED if velocity_count else DEFAULT,
+        "competition_room": HEURISTIC if competition_measured else DEFAULT,
+        "keyword_gap": DEFAULT if keyword_signal_count == 0 else HEURISTIC,
+        "small_channel_breakout": MEASURED if top and unknown_breakouts < top else DEFAULT,
+        "research_relevance": HEURISTIC if top else DEFAULT,
+    }
+    sampled = f"{research_result_count} sampled results" if research_result_count is not None else "the sampled results"
+    bases = {
+        "demand_velocity": (
+            f"Average of 25 × log10(1 + views per day), capped at 100, for {velocity_count} of the top {top} research video(s)."
+            if velocity_count else "No top research video had a view velocity, so this counted as 0."
+        ),
+        "competition_room": (
+            f"100 minus the competition heuristic ({round(100.0 - values['competition_room'], 2):g}/100 from '30 days' titles, "
+            f"250K+ subscriber channels and outlier scores in {sampled})."
+            if competition_measured else "Competition was not measured, so this counted as 100."
+        ),
+        "keyword_gap": (
+            f"{len(keyword_gaps)} keyword(s) from your script that competitor titles and descriptions underuse, out of 6 counted."
+            if sources["keyword_gap"] == HEURISTIC else "No keywords were extracted from your script, so this counted as 0."
+        ),
+        "small_channel_breakout": (
+            f"{sum(1 for item in opportunities if item.get('small_channel_outlier'))} of the top {top} research video(s) came "
+            "from channels with 10K or fewer subscribers and reached 100K+ views."
+            if sources["small_channel_breakout"] == MEASURED
+            else "No top research video had a subscriber and view count, so this counted as 0."
+        ),
+        "research_relevance": (
+            f"How many of this idea's research queries (up to 3) found each of the top {top} video(s)."
+            if top else "No top research videos were available, so this counted as 0."
+        ),
+    }
+    inputs = [
+        {
+            "key": key, "name": name, "value": round(values[key], 2), "weight": weight,
+            "contribution": round(values[key] * weight, 4), "source": sources[key], "basis": bases[key],
+        }
+        for key, name, weight in OPPORTUNITY_INPUTS
+    ]
+
+    with_data = sum(1 for item in inputs if item["source"] != DEFAULT)
+    if with_data == len(inputs) and top >= 3 and not warnings and (research_result_count or 0) >= 10:
+        confidence = "high"
+    elif with_data >= 4 and top >= 2:
+        confidence = "medium"
+    else:
+        confidence = "low"
+    backing = f"{top} top research video(s)" + (
+        f" from {research_result_count} sampled result(s)" if research_result_count is not None else ""
+    )
+    return {
+        "version": "opportunity-heuristic-v1",
+        "kind": "local_heuristic",
+        "statement": OPPORTUNITY_SCORE_STATEMENT,
+        "score": score,
+        "inputs": inputs,
+        "warnings": warnings,
+        "confidence": confidence,
+        "confidence_reason": (
+            f"{with_data} of {len(inputs)} inputs had data, backed by {backing}. Confidence describes how complete "
+            "the inputs were, not how likely the video is to get views."
+        ),
+        "inputs_with_data": with_data,
+        "top_videos_used": top,
+        "research_results": research_result_count,
     }
 
 

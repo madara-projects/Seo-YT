@@ -22,10 +22,12 @@ import { formatMinutes, relativeTime, toFiniteNumber } from "@/lib/format";
 import {
   linkedWatchCaption,
   opportunityText,
-  savedAnalysesCaption,
   titleScoreText,
   watchTimeSource,
 } from "@/lib/dashboardFormat";
+import { averageHeuristicCaption } from "@/lib/opportunityFormat";
+import { OpportunityWeightsNote } from "@/components/common/OpportunityBreakdown";
+import { ScoreCalibrationCard } from "@/components/dashboard/ScoreCalibrationCard";
 import type {
   AngleEffectiveness,
   OwnedPerformance,
@@ -129,11 +131,14 @@ export default function DashboardPage() {
             icon={Target}
             value={opportunityText(scorecard.avg_opportunity_score)}
             footer={
-              opportunityDelta !== null ? (
-                <Delta value={opportunityDelta} unit="points" label="vs previous window" />
-              ) : undefined
+              <div className="space-y-2">
+                {opportunityDelta !== null ? (
+                  <Delta value={opportunityDelta} unit="points" label="vs previous window" />
+                ) : null}
+                <OpportunityWeightsNote />
+              </div>
             }
-            caption={savedAnalysesCaption(totalRuns)}
+            caption={averageHeuristicCaption(totalRuns)}
             tone="warn"
             toneLabel="Heuristic"
           />
@@ -219,6 +224,8 @@ export default function DashboardPage() {
           isError={failed}
         />
       </div>
+
+      <ScoreCalibrationCard />
     </div>
   );
 }

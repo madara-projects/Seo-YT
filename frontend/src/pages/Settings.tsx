@@ -27,6 +27,7 @@ import { useIsMutating } from "@tanstack/react-query";
 import { PageHeader } from "@/components/common/PageHeader";
 import { EvidenceChip, type EvidenceTone } from "@/components/common/EvidenceChip";
 import { Field, Inset, Panel } from "@/components/common/Panel";
+import { Meter } from "@/components/common/Meter";
 import { CardSkeleton, ErrorState, UnavailableNote } from "@/components/common/States";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,7 +50,8 @@ import { useOAuthReturnNotice } from "@/hooks/useOAuthReturn";
 import { mutationKeys } from "@/hooks/queryKeys";
 import { useRemPx } from "@/hooks/useRemPx";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
-import { cn, formatNumber } from "@/lib/utils";
+import type { QuotaBucket, QuotaSource, YouTubeQuota } from "@/api/systemTypes";
+import { asArray, cn, formatNumber, UNAVAILABLE } from "@/lib/utils";
 import { formatBytes, formatUptime, initialOf, relativeTime, scheduledTime } from "@/lib/format";
 import { historyDate } from "@/lib/historyFormat";
 import { cloudSyncRunOutcome, cloudSyncState, collectorState, geminiFailureLabel } from "@/lib/systemFormat";
@@ -396,6 +398,100 @@ function ProviderTile({
   );
 }
 
+function QuotaMeter({ label, name, bucket, noun }: { label: string; name: string; bucket?: QuotaBucket; noun: string }) {
+  const used = typeof bucket?.used === "number" ? bucket.used : null;
+  const limit = typeof bucket?.limit === "number" ? bucket.limit : null;
+  const nearLimit = used !== null && limit !== null && used >= 0.9 * limit;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        {used !== null && limit !== null ? (
+          <span className="numeric text-foreground">
+            <span>{`${formatNumber(used)} of ${formatNumber(limit)} ${noun}`}</span>
+            <span className="text-muted-foreground"> · </span>
+            <span className="text-muted-foreground">{`${formatNumber(bucket?.remaining)} left`}</span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground">{UNAVAILABLE}</span>
+        )}
+      </div>
+      <Meter
+        value={used}
+        max={limit ?? 1}
+        label={`${name} ${noun} used`}
+        tone={nearLimit ? "warn" : "brand"}
+        size="sm"
+      />
+    </div>
+  );
+}
+
+/**
+ * Today's YouTube quota, as the app counted it: YouTube doesn't report what
+ * is left. A count that couldn't be read is Unavailable, never 0.
+ */
+function QuotaToday({ quota }: { quota?: YouTubeQuota }) {
+  const available = quota?.available === true;
+  const sources = available ? asArray<QuotaSource>(quota?.sources) : [];
+  const warnings = available ? asArray<string>(quota?.warnings) : [];
+
+  return (
+    <Inset className="space-y-3" data-quota="">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-[0.8125rem] font-semibold text-foreground">YouTube quota today</p>
+        <p className="text-xs text-muted-foreground">
+          Resets at midnight Pacific time
+          {quota?.resets_at ? ` · ${historyDate(quota.resets_at)} (${relativeTime(quota.resets_at)})` : ""}
+        </p>
+      </div>
+      {!available ? (
+        <UnavailableNote>Unavailable: today's YouTube usage couldn't be read.</UnavailableNote>
+      ) : sources.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No YouTube API key or channel is configured, so nothing has been counted.
+        </p>
+      ) : (
+        <ul className="grid gap-3 md:grid-cols-2">
+          {sources.map((item) => {
+            const name = item.label || item.source || "YouTube";
+            const channel = item.source === "oauth";
+            return (
+              <li key={item.source ?? name} className="space-y-2.5 rounded-lg border border-border bg-card p-3">
+                <p className="text-xs font-semibold text-foreground">{name}</p>
+                {/* The channel connection never searches; only a real search is worth a row. */}
+                {!channel || (item.search?.used ?? 0) > 0 ? (
+                  <QuotaMeter label="Searches" name={name} bucket={item.search} noun="searches" />
+                ) : null}
+                <QuotaMeter label="Other requests" name={name} bucket={item.default} noun="units" />
+                {channel || (item.analytics?.calls ?? 0) > 0 ? (
+                  <p className="flex items-baseline justify-between gap-3 text-xs">
+                    <span className="text-muted-foreground">Analytics calls</span>
+                    <span className="numeric text-foreground">{formatNumber(item.analytics?.calls)}</span>
+                  </p>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {warnings.map((warning) => (
+        <p
+          key={warning}
+          className="rounded-xl border border-tone-warn-border bg-tone-warn-bg px-3.5 py-2.5 text-xs leading-relaxed text-foreground"
+        >
+          {warning}
+        </p>
+      ))}
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Limits come from settings (<code className="numeric">WIN_ENGINE_YOUTUBE_SEARCH_CALLS_PER_DAY</code>,{" "}
+        <code className="numeric">WIN_ENGINE_YOUTUBE_UNITS_PER_DAY</code>) that should match your quotas in Google Cloud
+        Console; only requests this app sent are counted.
+      </p>
+    </Inset>
+  );
+}
+
 function ProvidersSection() {
   const settings = useSettingsStatus();
   const health = useHealth();
@@ -510,6 +606,8 @@ function ProvidersSection() {
               }
             />
           </div>
+
+          <QuotaToday quota={settings.data?.youtube_quota} />
 
           <Inset className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">

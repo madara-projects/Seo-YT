@@ -39,7 +39,14 @@ _SNAPSHOT_COLUMNS = (
     "impressions", "impressions_ctr", "snapshot_window", "captured_at",
     "snapshot_status", "attempt_count", "last_failure_reason",
     "last_attempted_at", "completed_at", "source_start_date", "source_end_date", "youtube_video_id",
+    "traffic_sources_json",
 )
+# Everyday names for YouTube Analytics' insightTrafficSourceType values.
+TRAFFIC_SOURCE_ALIASES = {
+    "SUGGESTED": "RELATED_VIDEO", "SUGGESTED_VIDEOS": "RELATED_VIDEO", "BROWSE": "SUBSCRIBER",
+    "BROWSE_FEATURES": "SUBSCRIBER", "SEARCH": "YT_SEARCH", "YOUTUBE_SEARCH": "YT_SEARCH",
+    "EXTERNAL": "EXT_URL", "SHORTS_FEED": "SHORTS",
+}
 COMPARABLE_FIELDS = ("language", "format", "duration_bucket", "topic_category")
 # The stored spelling of each format. Cohorts group by exact values, so every
 # writer stores this spelling and every reader compares it (comparable_format).
@@ -1440,7 +1447,9 @@ class HistoryStore:
         failure_reason: str | None = None,
         source_start_date: str | None = None,
         source_end_date: str | None = None,
+        traffic_sources: list[dict[str, Any]] | None = None,
     ) -> int:
+        """Record a measurement. `traffic_sources` is a completed window's breakdown by source."""
         captured_at = datetime.now(timezone.utc).isoformat()
         if snapshot_status is None:
             if snapshot_window == "current":
@@ -1452,6 +1461,8 @@ class HistoryStore:
         if snapshot_status == "complete" and views is None:
             snapshot_status = "empty_retryable"
             failure_reason = failure_reason or "analytics_returned_no_rows"
+        traffic = traffic_source_summary(traffic_sources) if snapshot_status == "complete" else None
+        traffic_json = json.dumps(traffic) if traffic else None
 
         with self._connect() as connection:
             # The collector and a manual refresh can write the same window at
@@ -1482,6 +1493,7 @@ class HistoryStore:
                                impressions = ?, impressions_ctr = ?, snapshot_status = ?,
                                attempt_count = ?, last_failure_reason = ?, last_attempted_at = ?,
                                completed_at = ?, source_start_date = ?, source_end_date = ?,
+                               traffic_sources_json = ?,
                                captured_at = CASE WHEN ? = 'complete' THEN ? ELSE captured_at END
                            WHERE id = ?""",
                         (
@@ -1489,7 +1501,7 @@ class HistoryStore:
                             avg_view_duration_seconds, avg_view_percentage, likes, comments,
                             shares, subscribers_gained, impressions, impressions_ctr,
                             snapshot_status, attempt_count, failure_reason, captured_at,
-                            completed_at, source_start_date, source_end_date,
+                            completed_at, source_start_date, source_end_date, traffic_json,
                             snapshot_status, captured_at,
                             int(existing[0]),
                         ),
@@ -1508,8 +1520,8 @@ class HistoryStore:
                     avg_view_duration_seconds, avg_view_percentage, likes, comments,
                     shares, subscribers_gained, impressions, impressions_ctr, snapshot_window,
                     snapshot_status, attempt_count, last_failure_reason, last_attempted_at,
-                    completed_at, source_start_date, source_end_date, captured_at
-                ) VALUES ((SELECT id FROM published_video_links WHERE youtube_video_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    completed_at, source_start_date, source_end_date, captured_at, traffic_sources_json
+                ) VALUES ((SELECT id FROM published_video_links WHERE youtube_video_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     youtube_video_id,
@@ -1534,6 +1546,7 @@ class HistoryStore:
                     source_start_date,
                     source_end_date,
                     captured_at,
+                    traffic_json,
                 ),
             )
             return int(cursor.lastrowid or 0)
@@ -1732,6 +1745,8 @@ class HistoryStore:
             ).fetchall()
         snapshots = [dict(zip(_SNAPSHOT_COLUMNS, row, strict=True)) for row in rows]
         for snapshot in snapshots:
+            # Null when YouTube refused or had no breakdown, and for every window but a completed one.
+            snapshot["traffic_sources"] = _json_value(snapshot.pop("traffic_sources_json")) or None
             # Only the scheduled windows are collected again; "current" is replaced on each refresh.
             snapshot["retry_allowed"] = (
                 snapshot.get("snapshot_window") in _SCHEDULED_WINDOWS
@@ -1849,6 +1864,7 @@ class HistoryStore:
         )
 
         diagnosis_policy = confidence_payload(baseline.get("sample_size", 0))
+        traffic_sources, traffic_cohort = self._traffic_source_evidence(link, evidence, comparable)
         try:
             retention_learning = self.retention_learning_summary(
                 format_filter=comparable.get("format"),
@@ -1913,6 +1929,8 @@ class HistoryStore:
             },
             "current_performance": current or None,
             "learning_evidence": evidence or None,
+            "traffic_sources": traffic_sources,
+            "traffic_source_cohort": traffic_cohort,
             "retention_learning": retention_learning,
             "baseline": baseline,
             "diagnosis": {
@@ -1934,6 +1952,43 @@ class HistoryStore:
                 ),
             },
             "snapshots": snapshots,
+        }
+
+    def _traffic_source_evidence(
+        self, link: dict[str, Any], evidence: dict[str, Any], comparable: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """The evidence window's traffic sources, and its peers led by the same source.
+
+        Peers share the video's format and language; their medians appear only
+        once the evidence policy's minimum of them exists.
+        """
+        traffic = evidence.get("traffic_sources") if evidence else None
+        if not traffic:
+            return None, None
+        breakdown = {
+            **traffic, "window": evidence.get("snapshot_window"),
+            "source_start_date": evidence.get("source_start_date"), "source_end_date": evidence.get("source_end_date"),
+        }
+        dominant = traffic.get("dominant_source")
+        if not dominant or any(known_filter(comparable.get(field)) is None for field in ("format", "language")):
+            return breakdown, None
+        try:
+            cohort = self.cohort_analytics(
+                format_filter=comparable.get("format"), language_filter=comparable.get("language"),
+                snapshot_window=str(evidence.get("snapshot_window")), exclude_video_id=str(link.get("youtube_video_id") or ""),
+                traffic_source_filter=dominant,
+            )
+        except (ValueError, sqlite3.Error):
+            return breakdown, None
+        allowed = bool(cohort["learning_allowed"])
+        return breakdown, {
+            key: cohort[key] for key in (
+                "traffic_source", "snapshot_window", "format", "language", "sample_size", "minimum_samples",
+                "more_needed", "learning_allowed", "confidence_label",
+            )
+        } | {
+            "median_views": cohort["median_views"] if allowed else None,
+            "median_retention_percentage": cohort["median_retention_percentage"] if allowed else None,
         }
 
     def _comparable_snapshot_baseline(
@@ -1985,16 +2040,19 @@ class HistoryStore:
         topic_category_filter: str | None = None,
         snapshot_window: str = "24h",
         exclude_video_id: str | None = None,
+        traffic_source_filter: str | None = None,
     ) -> dict[str, Any]:
         """Verified videos with completed evidence that match every given filter.
 
         `exclude_video_id` leaves one video out of the count and the medians, so
         a video is compared with its peers rather than with itself. A blank or
         "unknown" filter selects every video (known_filter), and a format filter
-        is read as format_filter_values reads it.
+        is read as format_filter_values reads it. `traffic_source_filter` keeps
+        the videos whose views in that window came mostly from one source.
         """
         if snapshot_window not in _SCHEDULED_WINDOWS:
             raise ValueError("Cohorts require a 24h, 7d, or 28d evidence window.")
+        traffic_source = traffic_source_key(traffic_source_filter)
         formats = format_filter_values(format_filter)
         format_filter = comparable_format(format_filter) or known_filter(format_filter)
         language_filter = known_filter(language_filter)
@@ -2014,11 +2072,21 @@ class HistoryStore:
         if exclude_video_id:
             filters += " AND p.youtube_video_id != ?"
             filter_params.append(exclude_video_id)
+        if traffic_source:
+            # One completed row per video and window (idx_perf_complete_window_unique), so
+            # this is the snapshot the cohort reads.
+            filters += """ AND EXISTS (
+                SELECT 1 FROM video_performance_snapshots t
+                WHERE t.youtube_video_id = p.youtube_video_id AND t.snapshot_window = ?
+                  AND t.snapshot_status = 'complete'
+                  AND json_extract(t.traffic_sources_json, '$.dominant_source') = ?)"""
+            filter_params.extend([snapshot_window, traffic_source])
         with self._connect() as connection:
             query = f"""
                 SELECT p.youtube_video_id, m.format, m.language, m.duration_bucket, m.topic_category,
                        s.views, s.likes, s.avg_view_percentage,
-                       m.format_source, m.language_source, m.duration_bucket_source, m.topic_category_source
+                       m.format_source, m.language_source, m.duration_bucket_source, m.topic_category_source,
+                       json_extract(s.traffic_sources_json, '$.dominant_source')
                 FROM published_video_links p
                 JOIN published_video_comparable_metadata m ON m.published_video_link_id = p.id
                 JOIN video_performance_snapshots s ON s.id = (
@@ -2050,8 +2118,10 @@ class HistoryStore:
             median_retention = _median(retention_list)
             median_likes = _median(likes_list)
 
+            more_needed = max(0, EARLY_SIGNAL_MIN_SAMPLES - count)
             recommendation = (
-                f"Collect verified completed {snapshot_window} snapshots until at least {EARLY_SIGNAL_MIN_SAMPLES} comparable videos are available."
+                f"Collect verified completed {snapshot_window} snapshots until at least {EARLY_SIGNAL_MIN_SAMPLES} comparable videos are available"
+                + (f": {more_needed} more needed." if more_needed else ".")
             )
             if policy["learning_allowed"] and median_retention is not None:
                 recommendation = (
@@ -2065,8 +2135,11 @@ class HistoryStore:
                 "language": language_filter or "all",
                 "duration_bucket": duration_bucket_filter or "all",
                 "topic_category": topic_category_filter or "all",
+                "traffic_source": traffic_source or "all",
                 "snapshot_window": snapshot_window,
                 "sample_size": count,
+                "minimum_samples": EARLY_SIGNAL_MIN_SAMPLES,
+                "more_needed": more_needed,
                 "confidence_label": policy["confidence_label"],
                 "confidence_level": policy["evidence_level"],
                 "learning_allowed": policy["learning_allowed"],
@@ -2084,6 +2157,8 @@ class HistoryStore:
                     "topic_category": sorted({r[11] for r in rows}),
                 },
                 "recommendation": recommendation,
+                "traffic_source_groups": _traffic_source_groups(rows, snapshot_window),
+                "without_traffic_sources": sum(1 for r in rows if not r[12]),
             }
 
     # --- Stage D: Package Experiments ---
@@ -2234,6 +2309,44 @@ def _median(values: list[float | int]) -> float | None:
     return round((float(values[middle - 1]) + float(values[middle])) / 2, 2)
 
 
+def _traffic_source_groups(rows: list[tuple], snapshot_window: str) -> list[dict[str, Any]]:
+    """Cohort rows grouped by format, language and dominant traffic source (column 12), largest group first.
+
+    A Short and a long video led by the same source are not comparable, so
+    each group holds one format and one language. A group's medians are given
+    only once it holds the evidence policy's minimum of comparable videos;
+    until then it says how many more it needs.
+    """
+    groups: dict[tuple[str, str, str], list[tuple]] = {}
+    for row in rows:
+        if row[12]:
+            groups.setdefault((str(row[1]), str(row[2]), str(row[12])), []).append(row)
+    result = []
+    for (video_format, language, source), members in groups.items():
+        policy = confidence_payload(len(members))
+        allowed = bool(policy["learning_allowed"])
+        more_needed = max(0, EARLY_SIGNAL_MIN_SAMPLES - len(members))
+        result.append({
+            "format": video_format,
+            "language": language,
+            "traffic_source": source,
+            "snapshot_window": snapshot_window,
+            "sample_size": len(members),
+            "minimum_samples": EARLY_SIGNAL_MIN_SAMPLES,
+            "more_needed": more_needed,
+            "learning_allowed": allowed,
+            "confidence_label": policy["confidence_label"],
+            "median_views": _median(sorted(r[5] for r in members if r[5] is not None)) if allowed else None,
+            "median_retention_percentage": _median(sorted(r[7] for r in members if r[7] is not None)) if allowed else None,
+            "message": (
+                f"{policy['confidence_label']}: {len(members)} comparable videos led by this source."
+                if allowed else
+                f"{len(members)} of {EARLY_SIGNAL_MIN_SAMPLES} comparable videos so far; {more_needed} more needed before comparing."
+            ),
+        })
+    return sorted(result, key=lambda item: (-item["sample_size"], item["format"], item["language"], item["traffic_source"]))
+
+
 def _json_value(value: str | None) -> dict[str, Any]:
     if not value:
         return {}
@@ -2308,6 +2421,42 @@ def known_filter(value: Any) -> str | None:
     """
     text = str(value or "").strip()
     return text if text and text != "unknown" else None
+
+
+def traffic_source_summary(sources: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """A window's views by traffic source, largest first, with the dominant source; None without usable rows."""
+    rows = []
+    # Rows can come from a synced package, so anything that is not a row is skipped.
+    for item in sources if isinstance(sources, list) else []:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or "").strip().upper()
+        views = _optional_int(item.get("views"))
+        if source and views is not None and views >= 0:
+            rows.append({"source": source, "views": views, "watch_time_minutes": _optional_number(item.get("watch_time_minutes"))})
+    if not rows:
+        return None
+    rows.sort(key=lambda row: (-row["views"], -(row["watch_time_minutes"] or 0), row["source"]))
+    total = sum(row["views"] for row in rows)
+    for row in rows:
+        row["share_percent"] = round(row["views"] * 100 / total, 1) if total else None
+    return {
+        "sources": rows,
+        "total_views": total,
+        "dominant_source": rows[0]["source"] if total else None,
+        "dominant_share_percent": rows[0]["share_percent"] if total else None,
+    }
+
+
+def traffic_source_key(value: Any) -> str | None:
+    """A traffic-source filter as YouTube names it ("suggested" -> RELATED_VIDEO), or None for all."""
+    key = re.sub(r"[\s-]+", "_", str(value or "").strip().upper())
+    if key in {"", "ALL", "UNKNOWN"}:
+        return None
+    key = TRAFFIC_SOURCE_ALIASES.get(key, key)
+    if not re.fullmatch(r"[A-Z][A-Z_]{1,39}", key):
+        raise ValueError("Unknown traffic source. Use YouTube's name for it, such as YT_SEARCH or RELATED_VIDEO.")
+    return key
 
 
 def comparable_format(value: Any) -> str | None:
@@ -2455,6 +2604,8 @@ def _link_evidence(connection: sqlite3.Connection, link_id: int, youtube_video_i
         ("audits", "SELECT COUNT(*) FROM published_video_audits WHERE published_video_link_id = ?", link_id),
         ("experiment assignments", "SELECT COUNT(*) FROM experiment_video_assignments WHERE published_video_link_id = ?", link_id),
         ("metadata edits", "SELECT COUNT(*) FROM published_video_metadata_edits WHERE published_video_link_id = ?", link_id),
+        # A Studio test outlives its link, but its result belongs to that video only.
+        ("studio test results", "SELECT COUNT(*) FROM youtube_studio_tests WHERE published_video_link_id = ? AND result_json IS NOT NULL", link_id),
     )
     return {label: int(connection.execute(sql, (value,)).fetchone()[0]) for label, sql, value in counts}
 

@@ -67,7 +67,11 @@ _INSTRUCTIONAL_CUES = re.compile(
 # quotes while the writer inserted only 12-character ones could never pass.
 MIN_QUOTE_CHARS = 6
 _DOUBLE_QUOTED_RE = re.compile(r'["“]([^"“”\n]{%d,})["”]' % MIN_QUOTE_CHARS)
-_SINGLE_QUOTED_RE = re.compile(r"(?<![A-Za-z])'([^'\n]{%d,})'(?![A-Za-z])" % MIN_QUOTE_CHARS)
+# Straight or curly single quotes. An apostrophe between two letters ("you're")
+# belongs to the quote; only a mark with no letter after it can close one.
+_SINGLE_QUOTED_RE = re.compile(
+    r"(?<![A-Za-z])['‘]((?:[^'‘’\n]|(?<=[A-Za-z])['’](?=[A-Za-z])){%d,})['’](?![A-Za-z])" % MIN_QUOTE_CHARS
+)
 # "the quote is- ...", "Quote on screen: ...", "On-screen text: ...".
 _QUOTE_LABEL_RE = re.compile(
     r"(?is)\b(?:the\s+)?(?:quote|on[- ]screen\s+text|screen\s+text)(?:\s+(?:on|in)\s+(?:the\s+)?(?:screen|reel|video))?"
@@ -89,6 +93,10 @@ _VISUAL_LABEL_RE = re.compile(
     r"[ \t]*(?::|[–—-](?=\s))\s*([^\n]+)"
 )
 _VISUAL_END_RE = re.compile(r"[.;](?:\s|$)|\s+(?:and|with)\s+(?=.*\b(?:quote|text|screen)\b)", re.IGNORECASE)
+# A stripped line that opens with a timestamp: "0:00 Intro", "01:30 - Mixing",
+# "1:02:15 Taste test". Matched on the stripped line with a greedy title: a lazy
+# title before optional trailing space backtracked quadratically on long lines.
+_TIMESTAMP_LINE_RE = re.compile(r"[\[(]?((?:\d{1,2}:)?\d{1,2}:\d{2})[\])]?\s*[-–—:|.]?\s*(\S.*)")
 
 
 def format_key(value: Any) -> str:
@@ -117,6 +125,12 @@ def looks_like_standalone_quote(text: Any, visual_requirements: Any = "") -> boo
     if _STRONG_QUOTE_WORDS.search(value):
         return True
     return bool(str(visual_requirements or "").strip()) and bool(_WEAK_QUOTE_WORDS.search(value))
+
+
+def feeling_words(text: Any) -> list[str]:
+    """The strong emotional words of a text ("betrayal", "hurts"): the feeling a quote carries."""
+
+    return [match.group(0).casefold() for match in _STRONG_QUOTE_WORDS.finditer(normalize_unicode(text))]
 
 
 def _stated_duration(brief: dict[str, Any]) -> float | None:
@@ -218,6 +232,29 @@ def source_quote(script: Any = "", creator_brief: dict[str, Any] | None = None) 
         return normalize_unicode(brief.get("exact_quote"))
     text = str(brief.get("content") or script or "")
     return normalize_unicode(extract_quote(text, short=is_short_video(text, brief)))
+
+
+def timestamp_seconds(value: Any) -> int | None:
+    """Seconds from the start of "1:30" or "1:02:15"; None for anything else, such as "0:75"."""
+
+    if not re.fullmatch(r"(?:\d{1,2}:)?\d{1,2}:\d{2}", str(value or "")):
+        return None
+    *hours, minutes, seconds = (int(part) for part in str(value).split(":"))
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return (hours[0] if hours else 0) * 3600 + minutes * 60 + seconds
+
+
+def timestamp_line(line: Any) -> tuple[int, str, str] | None:
+    """(seconds, timestamp, title) of a line that opens with a timestamp, else None.
+
+    One reading for the chapter list, the description it is pasted into, and
+    the casing map, where "0:45 Download and install OBS" opens a sentence.
+    """
+
+    match = _TIMESTAMP_LINE_RE.fullmatch(str(line or "").strip())
+    seconds = timestamp_seconds(match.group(1)) if match else None
+    return None if seconds is None else (seconds, match.group(1), match.group(2))
 
 
 def labelled_visual(text: Any) -> str:

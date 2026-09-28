@@ -43,6 +43,7 @@ Implemented and available now:
 - Phase 4 generation quality gate checks quote fidelity, unsupported claims, title repetition/diversity, template leakage, description/tag contamination, hashtags, the Shorts title hashtag, contradictions, and Unicode-aware Tamil/Tanglish behavior.
 - Phase 5 deterministic hook, first-frame, pacing, quote-presentation, package-alignment, and retention-risk guidance is integrated into the existing Creator workflow. It distinguishes creator facts, local inference, heuristics, unavailable data, and mature post-publish evidence.
 - Retention learning uses only verified, comparable, completed-window videos with real average-view-percentage data. Fewer than five eligible videos remains `insufficient_evidence`; observed associations are never presented as causation.
+- Outcome learning also keeps each completed window's traffic sources (YouTube Analytics `insightTrafficSourceType`) and compares comparable videos by their dominant source once five exist; a retention-curve probe and YouTube Studio Test & Compare records (long videos only) are described under YouTube linking and personal learning.
 - Stage G1 Ideas Workspace saves original topics and creator fields in SQLite, supports status filtering and pagination, preserves immutable dated research snapshots, generates through the existing Creator engine, and automatically links the idea lifecycle to its History run and verified published-video record.
 - Idea opportunity explanations show only captured public-result counts, query angles, publication dates, possible-outlier observations, and eligible personal evidence. Missing research remains unavailable; monthly search volume, trend percentages, and outcome confidence are never guessed.
 - Phase 7 private Watchlist saves verified public channels and videos, appends immutable research snapshots, and evaluates a video only against at least five comparable uploads from the same channel. Sparse evidence returns `insufficient_evidence`; observed multiples are never described as causation or guaranteed virality.
@@ -56,11 +57,11 @@ Implemented and available now:
 Planned but not yet complete:
 
 - Daily opportunity summaries derived from the completed Watchlist and Demand evidence.
-- Thumbnail/first-frame draft laboratory and creator-visible Test & Compare import.
-- Advanced retention-curve/drop-point analysis if an official source later exposes that data.
+- Thumbnail/first-frame draft laboratory. (Test & Compare results are entered by hand; the app does not read them from YouTube.)
+- Learning across many retention curves; today one curve is probed and observed at a time, and nothing from it is stored.
 - Personal AI coach and weekly private report.
 - Remaining page-level frontend modularization, installable PWA, and an approved Android architecture.
-- Encrypted backup/restore and quota dashboard.
+- Encrypted backup/restore.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the exact implementation sequence, data rules, and acceptance checks.
 
@@ -155,10 +156,18 @@ The linked report can show:
 - Views, likes, comments, like rate, average view duration, average percentage viewed, and subscribers gained when available.
 - Current, 24-hour, 7-day, and 28-day snapshots when collected.
 - A conservative diagnosis, comparison baseline, sample size, and confidence.
+- Traffic sources for the most mature completed window, and how the video compares with other comparable videos led by the same source once enough of them exist.
+- A retention-curve probe (see below).
 
 YouTube APIs report video-level outcomes; they do not prove that an individual tag, title, background, or upload time caused the views. Missing or delayed Analytics values are displayed as unavailable rather than guessed.
 
 Only a verified owned link with comparable format/language metadata and a completed named snapshot window can become learning evidence. Current metrics are display-only. Confidence is `Collecting evidence` below five comparable videos, `Early signal` at 5, `Moderate evidence` at 10, and `Strong historical pattern` at 20. Existing links migrated from the older unversioned schema remain unverified until they are verified again; old snapshots are retained but are not silently promoted into mature evidence.
+
+Traffic sources: whenever a 24-hour, 7-day or 28-day window completes for a linked, verified video (from the snapshot collector or a manual refresh), one more YouTube Analytics request reads that window's views and watch time by traffic source (`dimensions=insightTrafficSourceType`). The breakdown is stored with the snapshot; when YouTube refuses it or has none, it stays empty and the snapshot is kept. `GET /api/learning/cohorts` accepts `traffic_source` (YouTube's name, such as `YT_SEARCH`, `RELATED_VIDEO` for suggested videos, `SUBSCRIBER` for browse features, or `SHORTS`) and groups comparable videos by their dominant source; a group shows medians only at five or more videos and otherwise says how many more it needs. The Channel page shows these groups per window.
+
+Retention curves: a linked, ownership-verified video's report in History has a "Check retention curve" action, which makes one YouTube Analytics request (`dimensions=elapsedVideoTimeRatio`, `metrics=audienceWatchRatio,relativeRetentionPerformance`, filtered to that video; `POST /api/published-videos/{link_id}/retention-probe`) and no Data API call. It answers available, with the curve drawn and observations on where the biggest drop falls relative to the hook (the first 15%) and to the package's chapter timestamps for long videos, or unavailable with the reason: the channel is not connected, the video is not the connected channel's, the connection lacks the Analytics permission, YouTube has no data yet (common for new or little-watched videos), or the request failed. Availability therefore depends on the channel, the video and the granted scope. Nothing from the probe is stored, and the observations say where viewers left, not why.
+
+YouTube Studio tests: YouTube's own Test & Compare shows up to three title/thumbnail variants of one long video to viewers over the same period and picks by watch-time share; it is not available for Shorts. In the Creator's "Before you publish" tab, or in a saved package in History, choose two or three saved packages (the app warns when two titles are too similar), copy each title and thumbnail text into Studio, and save them as a prepared test. After publishing, link the test to the package's published video and record what Studio shows: the winning variant or no clear winner, each variant's watch-time share, and notes. The app only records this; it never runs the test or changes a video. Its own before/after comparisons (experiments and snapshots) compare different periods, so they are not equivalent to YouTube's test. Endpoints: `GET`/`POST /api/history/runs/{run_id}/studio-tests` and `PATCH /api/studio-tests/{test_id}`.
 
 ## Architecture
 
@@ -225,6 +234,8 @@ Important variables:
 | `WIN_ENGINE_YOUTUBE_API_KEY` | Primary YouTube Data API research key. | For live research |
 | `WIN_ENGINE_YOUTUBE_API_KEYS` | Optional comma-separated key pool; duplicates are removed. | Optional |
 | `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Public research results used per query. | Optional; default `5` |
+| `WIN_ENGINE_YOUTUBE_SEARCH_CALLS_PER_DAY` | Daily `search.list` calls allowed per key's Google Cloud project; copy it from Cloud Console. | Default `100` |
+| `WIN_ENGINE_YOUTUBE_UNITS_PER_DAY` | Daily units of the shared bucket (every other Data API method) per project; copy it from Cloud Console. | Default `10000` |
 | `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_ID` | Google OAuth web-client ID. | For channel connection |
 | `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_SECRET` | Google OAuth web-client secret. | For channel connection |
 | `WIN_ENGINE_YOUTUBE_OAUTH_REDIRECT_URI` | Exact OAuth callback registered in Google Cloud. | Default `http://127.0.0.1:8000/oauth/youtube/callback` |
@@ -271,6 +282,14 @@ http://127.0.0.1:8000/oauth/youtube/callback
 7. Put the API key, client ID, client secret, redirect URI, and generated encryption key in `.env`.
 
 The application requests read-only YouTube and YouTube Analytics scopes. It cannot upload videos or change live metadata through these scopes.
+
+### YouTube quota
+
+Since June 2026 the YouTube Data API has separate daily quota buckets per Google Cloud project: `search.list` has its own allowance of calls (100 a day by default), and every other method draws units from a shared bucket (10,000 a day by default; each read this app makes costs 1 unit). The YouTube Analytics API has a quota of its own. All of them reset at midnight Pacific time.
+
+YouTube does not report what is left, so the app counts every request it sends (refused ones included, cache hits not) per Pacific day, per bucket and per source: `key1`, `key2`… for the API keys in their order in the key pool (never the key itself), and `oauth` for the connected channel. Settings → AI & data providers shows today's searches, other units and Analytics calls against `WIN_ENGINE_YOUTUBE_SEARCH_CALLS_PER_DAY` and `WIN_ENGINE_YOUTUBE_UNITS_PER_DAY`, and when a bucket reaches 90% of its limit the Creator and Ideas research carries a warning. Nothing is blocked: the limits are estimates, so set them to match your project's quotas in Google Cloud Console. Keys from the same project share one quota, and other apps using the project also spend it.
+
+A Short plans at most 3 searches and a long video about 5–7 (5 planned plus up to 2 refinements), so the default allowance covers roughly 14–30 packages a day per project.
 
 ## Run with Docker
 
@@ -407,7 +426,7 @@ Example analysis request:
 - The interface loads its typefaces from Google Fonts; without internet access it falls back to system fonts.
 - Deleting a saved package also deletes its linked video's collected snapshots, audits, and experiment assignments.
 - Creator package selection is persisted in History; checklist acknowledgments remain browser-session state and never claim that YouTube was changed.
-- Phase 5 opening and pacing scores are deterministic pre-publish heuristics, not measured retention or performance predictions. Detailed retention curves and drop timestamps are unavailable through the current data source.
+- Phase 5 opening and pacing scores are deterministic pre-publish heuristics, not measured retention or performance predictions. A published video's measured retention curve can be probed with one YouTube Analytics request; whether it is available depends on the channel, the video's age and views, and the connection's Analytics permission.
 - Idea research depends on the configured YouTube Data API quota. An empty or unavailable research response is saved honestly and does not become a demand estimate. Editing creator idea fields marks the current evidence stale while retaining older dated snapshots.
 - The application is not yet an Android app and remains bound to the local laptop.
 

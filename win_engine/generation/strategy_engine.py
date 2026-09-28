@@ -24,7 +24,7 @@ from win_engine.analysis.language_engine import build_language_strategy
 from win_engine.analysis.keyword_research import select_final_tags
 from win_engine.analysis.topic_lock import hashtag_from_phrase, source_lead_phrase, strip_lead_in
 from win_engine.analysis.pacing_engine import analyze_script_pacing
-from win_engine.analysis.source_cues import source_quote
+from win_engine.analysis.source_cues import source_quote, timestamp_line
 from win_engine.analysis.strategy_layer import build_channel_intelligence
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.thumbnail_classifier import build_thumbnail_strategy
@@ -797,7 +797,15 @@ def _fallback_quote_variants(quote: str, topic: str, suffix: str, *, semantic_va
         and semantic_topic.casefold() not in {"video topic", quote_focus.casefold()}
     ):
         return [_fit_title(semantic_topic[:1].upper() + semantic_topic[1:], suffix)]
-    return [_fit_quote_title(quote_focus, suffix) if quote_focus else _fit_title("A Quiet Reflection", suffix)]
+    if not quote_focus:
+        return [_fit_title("A Quiet Reflection", suffix)]
+    # The creator's whole quote reads better than a cut one with an emoji, so
+    # the emoji goes first when it is all that stops the quote fitting.
+    plain = " #shorts" if suffix.endswith(" #shorts") else suffix
+    whole = re.sub(r"\s+", " ", quote_focus).strip(" .:-")
+    if len(whole) + len(suffix) > 70 >= len(whole) + len(plain):
+        suffix = plain
+    return [_fit_quote_title(quote_focus, suffix)]
 
 
 def _fallback_topic_variants(topic: str, suffix: str, instructional: bool) -> list[str]:
@@ -976,10 +984,14 @@ def _fallback_description(content: str, promise: str = "", max_words: int = 220)
 
     The previous fallback sliced the script at 220 characters and appended an
     ellipsis ("four cups of…"), which is what a viewer would have seen in
-    search. Sentences are now kept whole and grouped two per paragraph.
+    search. Sentences are now kept whole and grouped two per paragraph. The
+    creator's timestamp lines are left out: flattened into prose they read
+    "0:00 Intro 0:45 Download and install OBS", and the chapters are added as
+    their own block.
     """
 
-    text = re.sub(r"\s+", " ", content or "").strip()
+    lines = [line for line in str(content or "").splitlines() if not timestamp_line(line)]
+    text = re.sub(r"\s+", " ", " ".join(lines)).strip()
     sentences = [part.strip() for part in re.split(r"(?<=[.!?।])\s+", text) if part.strip()]
     kept: list[str] = []
     words = 0
@@ -1012,15 +1024,19 @@ def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | No
     if quote:
         safe_topic = "" if has_unsupported_instructional_framing(primary_topic) else primary_topic
         variants = _fallback_quote_variants(quote, safe_topic, suffix, semantic_validated=bool(safe_topic))
+        # The title may have dropped its emoji to keep the whole quote.
+        suffix = next((tail for tail in (suffix, " #shorts") if suffix and variants[0].endswith(tail)), suffix)
         body = variants[0][:-len(suffix)] if suffix and variants[0].endswith(suffix) else variants[0]
-        # The viewer gets the quote and the scene, never a note on how the
-        # description was assembled ("built only from the words supplied...").
-        description = "\n\n".join(
-            part for part in (f"“{quote}”", _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))) if part
-        )
+        # The viewer gets the quote, never a note on how the description was
+        # assembled ("built only from the words supplied..."). A Short's viewers
+        # are watching the scene, so only a long video's description names it.
+        scene = "" if is_shorts else _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))
+        description = "\n\n".join(part for part in (f"“{quote}”", scene) if part)
     else:
         body = re.sub(r"\s+", " ", primary_topic or content).strip(" .") or "The Video Topic"
-        excerpt = re.sub(r"\s+", " ", content).strip(" .")
+        # Timestamp lines are the chapter list, not a sentence (see _fallback_description).
+        prose = " ".join(line for line in content.splitlines() if not timestamp_line(line))
+        excerpt = re.sub(r"\s+", " ", prose).strip(" .")
         description = (excerpt or body).rstrip(".") + "."
     title = _fit_title(body, suffix)
     return {
@@ -1060,7 +1076,9 @@ def _content_specific_fallback(
     if quote:
         fallback_title_topic = seo_targets[0] if seo_targets else topic
         variants = _fallback_quote_variants(quote, fallback_title_topic, suffix, semantic_validated=bool(seo_targets))
-        visual_line = _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))
+        # A Short's description speaks to viewers who are watching the scene;
+        # describing it there is a production note.
+        visual_line = "" if is_shorts else _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))
         # Only themes research validated against the source are named; lines
         # written for particular test quotes ("knowing your worth", "the silence
         # described by the words on screen") read meaning into any quote.

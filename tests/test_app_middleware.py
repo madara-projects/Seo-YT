@@ -51,7 +51,8 @@ class PureHelperTests(unittest.TestCase):
 
     def test_quota_spending_writes_are_costly(self):
         for path in ("/analyze", "/diagnostics", "/api/ideas/4/generate", "/api/watchlist/videos/2/research",
-                     "/api/history/runs/9/link-video", "/api/audits/5/refresh", "/api/watchlist/videos"):
+                     "/api/history/runs/9/link-video", "/api/audits/5/refresh", "/api/watchlist/videos",
+                     "/api/published-videos/3/retention-probe"):
             self.assertTrue(is_costly(_request("POST", path)), path)
         self.assertFalse(is_costly(_request("GET", "/api/watchlist/videos")))
         self.assertFalse(is_costly(_request("POST", "/api/watchlist/videos/2/analyze-outlier")))

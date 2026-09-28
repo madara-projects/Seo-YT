@@ -135,26 +135,38 @@ class Phase4QualityTests(unittest.TestCase):
         )
 
     def test_green_requires_average_subject_tag_score_of_72(self):
-        package = valid_package()
-        package["tags"] = ["bare minimum quote", "one sided effort", "emotional hurt"]
-        evidence = {
-            "selected_keywords": [
-                {
-                    "keyword": tag, "classification": "secondary_topic", "source_classification": "combined",
-                    "source_support_score": 85, "source_support": "creator-source support",
-                    "keyword_relevance_score": 70,
-                }
-                for tag in package["tags"]
-            ]
-        }
-        gate = evaluate_package_quality(
-            package,
-            script='Quote: "Didn\'t I at least deserve the bare minimum from them?" Shorts',
-            creator_brief={"creator_intent": "A reflection on one-sided effort and emotional hurt."},
-            tag_evidence=evidence,
-        )
+        def judged(score, video_format, title):
+            package = valid_package(title)
+            package["variants"] = [title]
+            package["tags"] = ["bare minimum quote", "one sided effort", "emotional hurt"]
+            evidence = {
+                "selected_keywords": [
+                    {
+                        "keyword": tag, "classification": "secondary_topic", "source_classification": "combined",
+                        "source_support_score": 85, "source_support": "creator-source support",
+                        "keyword_relevance_score": score,
+                    }
+                    for tag in package["tags"]
+                ]
+            }
+            gate = evaluate_package_quality(
+                package,
+                script='Quote: "Didn\'t I at least deserve the bare minimum from them?" Shorts',
+                creator_brief={"creator_intent": "A reflection on one-sided effort and emotional hurt.",
+                               "video_format": video_format},
+                tag_evidence=evidence,
+            )
+            return gate, {item["code"]: item["severity"] for item in gate["final_seo_quality"]["warnings"]}
+
+        gate, notes = judged(70, "story", "Did I Deserve More Than the Bare Minimum?")
         self.assertEqual(gate["verdict"], "YELLOW")
-        self.assertIn("weak_tag_usefulness", {item["code"] for item in gate["final_seo_quality"]["warnings"]})
+        self.assertEqual(notes["weak_tag_usefulness"], "warning")
+        # Tags play a minimal role in a Short's discovery: the weak score is
+        # reported, but it does not decide the Short's verdict.
+        weak, notes = judged(70, "youtube_shorts", "Did I Deserve More Than the Bare Minimum? 💔 #shorts")
+        strong, _ = judged(95, "youtube_shorts", "Did I Deserve More Than the Bare Minimum? 💔 #shorts")
+        self.assertEqual(notes["weak_tag_usefulness"], "info")
+        self.assertEqual(weak["verdict"], strong["verdict"])
 
     def test_unquoted_quote_marker_is_separated_from_visual_direction(self):
         brief = build_creator_brief(
@@ -219,7 +231,8 @@ class Phase4QualityTests(unittest.TestCase):
         # written for this test quote and given to any quote about silence.
         self.assertTrue(package["title"].casefold().startswith("at the end, it's only me and the silence "))
         self.assertTrue(package["title"].endswith(" #shorts"))
-        self.assertIn("A lone person walks through quiet streets.", package["description"])
+        # A Short's viewers are watching the street; the description does not narrate it.
+        self.assertNotIn("A lone person walks", package["description"])
         self.assertNotIn("A One person", package["description"])
         self.assertNotIn("inner silence", package["tags"])
         self.assertEqual(package["hashtags"], ["#shorts"])

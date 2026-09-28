@@ -4,24 +4,21 @@ import html
 import logging
 import threading
 import time
-from datetime import date, datetime, timedelta, timezone, tzinfo
+from datetime import date, datetime, timezone
 from typing import Any, List
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
+from win_engine.core.config import get_settings
 # Creator-facing region names as ISO 3166-1 codes, shared with request validation.
 from win_engine.core.regions import REGION_CODES as _REGION_CODES
+# The daily quota resets at midnight Pacific time, not UTC.
+from win_engine.feedback.quota_ledger import QUOTA_ZONE as _QUOTA_ZONE
+from win_engine.feedback.quota_ledger import QuotaLedger, api_key_source
 
 
 logger = logging.getLogger(__name__)
 _ESCAPED_TEXT_FIELDS = ("title", "description", "channel_title")
-
-try:
-    # The daily quota resets at midnight Pacific time, not UTC.
-    _QUOTA_ZONE: tzinfo = ZoneInfo("America/Los_Angeles")
-except ZoneInfoNotFoundError:  # no tz database: standard time, an hour early in summer
-    _QUOTA_ZONE = timezone(timedelta(hours=-8))
 
 # The language of the videos, for relevanceLanguage. Tanglish is Tamil written
 # in Latin letters.
@@ -97,9 +94,11 @@ class YouTubeClient:
     _RATE_LIMIT_BACKOFF_SECONDS = 1.0
     _MAX_REASON_LENGTH = 120
 
-    def __init__(self, api_keys: List[str], timeout_seconds: int) -> None:
+    def __init__(self, api_keys: List[str], timeout_seconds: int, *, database_path: str | None = None) -> None:
         self._api_keys = list(api_keys)
         self._timeout = timeout_seconds
+        # Every request sent is counted against its key's quota, by default in the app's database.
+        self._ledger = QuotaLedger(database_path or get_settings().database_path)
         self._last_warning: str | None = None
         self._uploads_playlists: dict[str, str] = {}
         with _ROTATIONS_LOCK:
@@ -170,7 +169,7 @@ class YouTubeClient:
         """Rows of an earlier search with their statistics looked up again.
 
         Two 1-unit lookups: a search whose statistics lookup failed no longer
-        has to be repeated for 100 units to fill the gaps.
+        has to be repeated, spending another of the day's searches, to fill the gaps.
         """
 
         self._last_warning = None
@@ -264,7 +263,7 @@ class YouTubeClient:
         """Return recent public uploads for an observational channel baseline.
 
         Reads the channel's uploads playlist, newest first, for 1 unit a page.
-        search.list by channelId cost 100 units and is known to miss uploads.
+        search.list by channelId spent one of the day's searches and is known to miss uploads.
         """
         if not self._api_keys:
             self._last_warning = "YouTube API key is missing."
@@ -293,7 +292,7 @@ class YouTubeClient:
     def ping(self) -> None:
         """Prove that a key and the network work, for one quota unit.
 
-        Raises on failure. The health check used to run a search: 102 units.
+        Raises on failure. The health check used to run a search, one of the day's few.
         """
 
         self._last_warning = None
@@ -379,7 +378,7 @@ class YouTubeClient:
             key_index = (start_index + offset) % len(self._api_keys)
 
             try:
-                response = self._get_with_backoff(url, params, self._api_keys[key_index])
+                response = self._get_with_backoff(url, params, key_index)
                 self._rotation.active_index = key_index
                 if warnings:
                     self._last_warning = " ".join(warnings)
@@ -413,18 +412,28 @@ class YouTubeClient:
             raise last_error
         return {}
 
-    def _get_with_backoff(self, url: str, params: dict[str, Any], api_key: str) -> requests.Response:
+    def _get_with_backoff(self, url: str, params: dict[str, Any], key_index: int) -> requests.Response:
         """GET once, retrying briefly when YouTube reports a burst rate limit.
 
         A research run fires several searches back to back; without a retry a
         momentary "rateLimitExceeded" silently dropped that query's evidence.
         The key travels in a header: in the URL, requests copied it into the
         text of every exception.
+
+        Every request sent is counted against its key's slot, refusals and retries included.
         """
 
-        headers = {"X-Goog-Api-Key": api_key}
+        headers = {"X-Goog-Api-Key": self._api_keys[key_index]}
+        source = api_key_source(key_index + 1)
+        method = f"{url.rsplit('/', 1)[-1]}.list"  # ".../youtube/v3/search" -> "search.list"
         for attempt in range(self._RATE_LIMIT_RETRIES + 1):
-            response = requests.get(url, params=params, headers=headers, timeout=self._timeout)
+            try:
+                response = requests.get(url, params=params, headers=headers, timeout=self._timeout)
+            except requests.ReadTimeout:
+                # Sent, but the answer never came: YouTube may well have counted it.
+                self._ledger.record(source, method)
+                raise
+            self._ledger.record(source, method)
             if response.status_code in {403, 429} and attempt < self._RATE_LIMIT_RETRIES:
                 if response.status_code == 429 or self._BURST_LIMIT_REASONS & set(self._error_reasons(response)):
                     time.sleep(self._RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1))

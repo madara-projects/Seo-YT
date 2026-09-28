@@ -30,6 +30,7 @@ from win_engine.core.config import Settings
 from win_engine.feedback.channel_learning import learning_summary, save_video_snapshots
 from win_engine.feedback.history_store import ANALYTICS_ZONE, SNAPSHOT_WINDOWS, reportable_window
 from win_engine.feedback.migrations import connect_managed
+from win_engine.feedback.quota_ledger import OAUTH_SOURCE, api_key_source, recording_request_builder
 
 # Google's consent screen lets a creator untick one permission. oauthlib would
 # then refuse the whole token; with this set, complete_authorization checks
@@ -46,6 +47,11 @@ _CHANNEL_METRICS = "views,estimatedMinutesWatched,averageViewDuration,subscriber
 _VIDEO_METRICS = (
     "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
 )
+# Per window: where the views came from (dimension insightTrafficSourceType).
+_TRAFFIC_METRICS = "views,estimatedMinutesWatched"
+# The audience-retention report: one video per query, by elapsedVideoTimeRatio.
+_RETENTION_METRICS = "audienceWatchRatio,relativeRetentionPerformance"
+_ANALYTICS_SCOPE = "https://www.googleapis.com/auth/yt-analytics.readonly"
 # YouTube Analytics reports whole days in Pacific time.
 _ANALYTICS_ZONE = ANALYTICS_ZONE
 _WINDOWS = SNAPSHOT_WINDOWS
@@ -177,7 +183,7 @@ class YouTubeChannelService:
                 "Both YouTube permissions are needed. Connect again and allow access to your channel and its analytics.",
             )
         try:
-            items = build("youtube", "v3", credentials=credentials, cache_discovery=False).channels().list(
+            items = self._build("youtube", "v3", credentials=credentials).channels().list(
                 part="snippet", mine=True, maxResults=1
             ).execute().get("items") or []
         except _UPSTREAM_ERRORS as exc:
@@ -205,8 +211,8 @@ class YouTubeChannelService:
     def refresh(self) -> dict[str, Any]:
         credentials = self._fresh_credentials()
         try:
-            youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
-            analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
+            youtube = self._build("youtube", "v3", credentials=credentials)
+            analytics = self._build("youtubeAnalytics", "v2", credentials=credentials)
             channel_items = youtube.channels().list(
                 part="snippet,statistics,contentDetails", mine=True, maxResults=1
             ).execute().get("items") or []
@@ -285,7 +291,7 @@ class YouTubeChannelService:
             raise ValueError("Connect the YouTube channel that owns this video before linking it.")
         credentials = self._fresh_credentials()
         try:
-            items = build("youtube", "v3", credentials=credentials, cache_discovery=False).videos().list(
+            items = self._build("youtube", "v3", credentials=credentials).videos().list(
                 part="snippet,statistics,contentDetails,status",
                 id=youtube_video_id,
                 maxResults=1,
@@ -314,7 +320,7 @@ class YouTubeChannelService:
         """
         for index, api_key in enumerate(self.settings.youtube_api_key_pool, start=1):
             try:
-                items = build("youtube", "v3", developerKey=api_key, cache_discovery=False).videos().list(
+                items = self._build("youtube", "v3", source=api_key_source(index), developerKey=api_key).videos().list(
                     part="snippet,statistics,contentDetails,status",
                     id=youtube_video_id,
                     maxResults=1,
@@ -428,8 +434,8 @@ class YouTubeChannelService:
             )
         credentials = self._fresh_credentials()
         try:
-            youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
-            analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
+            youtube = self._build("youtube", "v3", credentials=credentials)
+            analytics = self._build("youtubeAnalytics", "v2", credentials=credentials)
             items = youtube.videos().list(
                 part="snippet,statistics,contentDetails,status",
                 id=video_id,
@@ -508,6 +514,7 @@ class YouTubeChannelService:
                 snapshot_status="complete",
                 source_start_date=start.isoformat(),
                 source_end_date=end.isoformat(),
+                traffic_sources=self._traffic_sources(analytics, video_id, label, start, end),
             )
             snapshot = store.completed_evidence_snapshot(video_id, label) or {}
             captured.append(snapshot)
@@ -570,11 +577,124 @@ class YouTubeChannelService:
             ),
         }
 
+    def _build(self, name: str, version: str, *, source: str = OAUTH_SOURCE, **kwargs: Any):
+        """A googleapiclient service whose every request is counted against ``source``'s quota."""
+        return build(name, version, cache_discovery=False,
+                     requestBuilder=recording_request_builder(self.settings.database_path, source), **kwargs)
+
     def _query(self, analytics, start: date, end: date, metrics: str, **kwargs: Any) -> dict[str, Any]:
         response = analytics.reports().query(ids="channel==MINE", startDate=start.isoformat(), endDate=end.isoformat(), metrics=metrics, **kwargs).execute()
         headers = [item.get("name") for item in response.get("columnHeaders", [])]
         rows = response.get("rows", [])
         return dict(zip(headers, rows[0], strict=False)) if rows else {}
+
+    def _query_rows(self, analytics, start: date, end: date, metrics: str, **kwargs: Any) -> list[dict[str, Any]]:
+        """Every row of one Analytics report, each keyed by its column names."""
+        response = analytics.reports().query(ids="channel==MINE", startDate=start.isoformat(), endDate=end.isoformat(), metrics=metrics, **kwargs).execute()
+        headers = [item.get("name") for item in response.get("columnHeaders", [])]
+        return [dict(zip(headers, row, strict=False)) for row in response.get("rows", []) or []]
+
+    def _traffic_sources(self, analytics, video_id: str, label: str, start: date, end: date) -> list[dict[str, Any]] | None:
+        """Views and watch time by traffic source over a completed window, or None.
+
+        One more Analytics request per completed window. A refusal (a missing
+        scope, a report YouTube does not offer for this video), an outage or
+        no rows leave the breakdown unknown; the window's snapshot is kept.
+        """
+        try:
+            rows = self._query_rows(
+                analytics, start, end, _TRAFFIC_METRICS,
+                dimensions="insightTrafficSourceType", filters=f"video=={video_id}", sort="-views",
+            )
+        except Exception as exc:
+            logger.warning("Traffic sources for the %s window are unavailable: %s", label, _describe(exc))
+            return None
+        sources = [
+            {
+                "source": str(row.get("insightTrafficSourceType") or "").strip().upper(),
+                "views": _optional_int(row.get("views")),
+                "watch_time_minutes": _optional_float(row.get("estimatedMinutesWatched")),
+            }
+            for row in rows
+        ]
+        sources = [item for item in sources if item["source"] and item["views"] is not None]
+        return sources or None
+
+    def probe_retention_curve(self, link: dict[str, Any]) -> dict[str, Any]:
+        """Ask YouTube Analytics once for one video's audience-retention curve.
+
+        At most one Analytics request (and no Data API call): the video's
+        ownership is the one verified when it was linked. The answer is
+        "available" with the curve, or "unavailable" with a reason:
+        not_connected, not_channel_video, missing_scope, no_data_yet or api_error.
+        `requests` says whether the request was made.
+        """
+        video_id = str(link.get("youtube_video_id") or "")
+
+        def unavailable(reason: str, message: str, requests: int = 0) -> dict[str, Any]:
+            return {"status": "unavailable", "reason": reason, "message": message, "requests": requests,
+                    "video_id": video_id, "points": []}
+
+        connected = self._connection()
+        if not self._is_configured() or not connected or not connected[1]:
+            return unavailable("not_connected", "Connect the YouTube channel that owns this video first.")
+        verified_for = str(link.get("verified_channel_id") or "")
+        if not (link.get("ownership_verified") and link.get("ownership_state") == "verified") or verified_for != str(connected[1]):
+            return unavailable(
+                "not_channel_video",
+                "Only a video verified as the connected channel's own has a retention report. Verify the link first.",
+            )
+        published_at = _parse_timestamp(str(link.get("published_at") or ""))
+        first_day = published_at.astimezone(_ANALYTICS_ZONE).date() if published_at else None
+        last_day = datetime.now(timezone.utc).astimezone(_ANALYTICS_ZONE).date() - timedelta(days=1)
+        if not first_day or last_day < first_day:
+            return unavailable("no_data_yet", "YouTube Analytics has not reported a full day for this video yet.")
+        try:
+            credentials = self._fresh_credentials()
+        except RefreshError as exc:
+            if "invalid_scope" not in str(exc).lower():
+                raise
+            return unavailable("missing_scope", "The YouTube connection lacks the Analytics permission. Connect again and allow it.")
+        except YouTubeUnavailable as exc:
+            return unavailable("api_error", str(exc))
+        granted = getattr(credentials, "granted_scopes", None)
+        if isinstance(granted, (list, tuple, set, frozenset, str)) and granted:
+            scopes = set(granted.split() if isinstance(granted, str) else granted)
+            if _ANALYTICS_SCOPE not in scopes:
+                return unavailable("missing_scope", "The YouTube connection lacks the Analytics permission. Connect again and allow it.")
+        try:
+            analytics = self._build("youtubeAnalytics", "v2", credentials=credentials)
+            rows = self._query_rows(
+                analytics, first_day, last_day, _RETENTION_METRICS,
+                dimensions="elapsedVideoTimeRatio", filters=f"video=={video_id}", sort="elapsedVideoTimeRatio",
+            )
+        except _UPSTREAM_ERRORS as exc:
+            logger.warning("Retention curve request failed: %s", _describe(exc))
+            reason, message = _retention_refusal(exc)
+            return unavailable(reason, message, requests=1)
+        points = [
+            {
+                "elapsed_ratio": _optional_float(row.get("elapsedVideoTimeRatio")),
+                "audience_watch_ratio": _optional_float(row.get("audienceWatchRatio")),
+                "relative_retention_performance": _optional_float(row.get("relativeRetentionPerformance")),
+            }
+            for row in rows
+        ]
+        points = sorted(
+            (point for point in points if point["elapsed_ratio"] is not None and point["audience_watch_ratio"] is not None),
+            key=lambda point: point["elapsed_ratio"],
+        )
+        if not points:
+            return unavailable(
+                "no_data_yet",
+                "YouTube returned no retention data for this video yet. New or little-watched videos often have none.",
+                requests=1,
+            )
+        return {
+            "status": "available", "reason": None, "requests": 1, "video_id": video_id,
+            "start_date": first_day.isoformat(), "end_date": last_day.isoformat(), "points": points,
+            "message": "YouTube Analytics returned the audience-retention curve for this video.",
+        }
 
     def _flow(self, *, state: str, code_verifier: str) -> Flow:
         client_config = {
@@ -670,6 +790,18 @@ class YouTubeChannelService:
     def _require_configured(self) -> None:
         if not self._is_configured():
             raise ValueError("YouTube OAuth is not configured. Check the local .env setup instructions.")
+
+
+def _retention_refusal(exc: BaseException) -> tuple[str, str]:
+    """The reason a retention request failed, in the probe's terms."""
+    status = int(getattr(getattr(exc, "resp", None), "status", 0) or 0)
+    text = f"{getattr(exc, 'reason', '')} {getattr(exc, 'error_details', '')}".lower()
+    if status in {401, 403} and ("insufficient" in text or "scope" in text):
+        return "missing_scope", "The YouTube connection lacks the Analytics permission. Connect again and allow it."
+    upstream = _unavailable(exc)
+    if status == 403 and upstream.status_code not in {429, 503} and "not enabled" not in str(upstream):
+        return "not_channel_video", "YouTube refused the retention report for this video; it may not belong to the connected channel."
+    return "api_error", str(upstream)
 
 
 def _granted_scopes(credentials: Credentials, flow: Flow) -> set[str] | None:

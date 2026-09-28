@@ -184,7 +184,7 @@ class SearchTests(_ClientTestCase):
 
         (row,) = YouTubeClient(["key"], timeout_seconds=5).attach_statistics(page)
 
-        self.assertEqual([call.args[0] for call in get.call_args_list], [VIDEOS, CHANNELS])  # 2 units, not 102
+        self.assertEqual([call.args[0] for call in get.call_args_list], [VIDEOS, CHANNELS])  # 2 units, and no search call
         self.assertEqual((row["view_count"], row["subscriber_count"], row["title"]), ("10", "5", "A & B"))
         self.assertIsNotNone(row["captured_at"])
 

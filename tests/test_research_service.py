@@ -90,7 +90,7 @@ class CacheTests(_ServiceTestCase):
 
         self.assertEqual(diagnostics["query_attempts"][0]["status"], "partial")
         self.assertEqual(diagnostics["queries_partial"], 1)
-        # Only the statistics are asked for again, never the 100-unit search.
+        # Only the statistics are asked for again, never another search call.
         self.assertEqual((second._youtube.calls, second._youtube.statistics_calls), ([], [["v1"]]))
         self.assertEqual(again["query_attempts"][0]["status"], "partial")
         self.assertIsNone(rows[0]["view_count"])  # still unknown, not zero
@@ -169,7 +169,7 @@ def _http(status, payload):
 
 
 class QuotaTests(_ServiceTestCase):
-    """The real client over mocked HTTP: search.list costs 100 units, videos and channels 1 each."""
+    """The real client over mocked HTTP: search.list spends one call of its own bucket, videos and channels 1 unit each."""
 
     def setUp(self):
         super().setUp()
@@ -205,7 +205,7 @@ class QuotaTests(_ServiceTestCase):
 
         self.assertEqual(runs, [
             (["search", "videos"], None),  # the statistics failed: unknown, not zero
-            (["videos", "channels"], "10"),  # 2 units, not another 102
+            (["videos", "channels"], "10"),  # 2 units, and no second search call
             ([], "10"),  # complete now, so served from the cache
         ])
 
@@ -317,7 +317,7 @@ class GatherTests(_ServiceTestCase):
                          [settings.cache_ttl_trending_seconds, settings.cache_ttl_evergreen_seconds])
 
     @staticmethod
-    def refine(service, plans):
+    def refine(service, plans, creator_brief=None):
         """A full run whose first pass finds too little evidence, so the refinement pass runs."""
 
         service._suggest = MagicMock(fetch=MagicMock(return_value={"status": "disabled"}))
@@ -327,8 +327,40 @@ class GatherTests(_ServiceTestCase):
             "demand_seed_phrases": [], "extract_keyword_signals": [], "extract_entity_signals": [],
             "build_upload_timing": {}, "analyze_thumbnails": {}, "build_research_decision": {},
         }.items()}
-        with patch.multiple(research_service, plan_research_queries=MagicMock(side_effect=plans), **local):
-            return service.gather("topic")
+        planner = MagicMock(side_effect=plans)
+        with patch.multiple(research_service, plan_research_queries=planner, **local):
+            research = service.gather("topic", creator_brief=creator_brief)
+        research["planner_limits"] = [call.kwargs.get("max_queries") for call in planner.call_args_list]
+        return research
+
+    FIRST_PASS = ["grief quotes", "silence grief", "grief poetry", "missing someone", "empty chair"]
+    REFINEMENT = ["quiet loss", "unsaid words", "late goodbye"]
+
+    def plans(self, first):
+        return [[{"type": "primary", "query": query} for query in first],
+                [{"type": "secondary_topic", "query": query} for query in self.REFINEMENT]]
+
+    def test_a_short_spends_at_most_three_searches_refinement_included(self):
+        # search.list has its own bucket of 100 calls a day per project.
+        short = {"video_format": "youtube_shorts"}
+        for first, expected in (
+            (self.FIRST_PASS, self.FIRST_PASS[:3]),                # a planner that over-delivers is cut to three
+            (self.FIRST_PASS[:1], ["grief quotes", *self.REFINEMENT[:2]]),
+            (self.FIRST_PASS[:2], [*self.FIRST_PASS[:2], self.REFINEMENT[0]]),
+        ):
+            with self.subTest(first=first):
+                cache_module._SHARED_CACHES.clear()  # each run pays for its own searches
+                service = self.service({}, youtube_max_research_queries=5)
+                research = self.refine(service, self.plans(first), creator_brief=short)
+                self.assertEqual([call["query"] for call in service._youtube.calls], expected)
+                self.assertEqual([item["query"] for item in research["research_queries"]], expected)
+                self.assertEqual(research["planner_limits"][0], 3)
+
+    def test_long_form_research_is_unchanged(self):
+        service = self.service({}, youtube_max_research_queries=5)
+        research = self.refine(service, self.plans(self.FIRST_PASS), creator_brief={"video_format": "tutorial"})
+        self.assertEqual([call["query"] for call in service._youtube.calls], [*self.FIRST_PASS, *self.REFINEMENT[:2]])
+        self.assertEqual(research["planner_limits"][0], 5)
 
     def test_refinement_keeps_the_first_pass_queries_of_a_video(self):
         row = _row("same", "Silence in grief")

@@ -37,6 +37,7 @@ import {
 import { PeriodComparison } from "@/components/channel/PeriodComparison";
 import { UploadsChart } from "@/components/channel/UploadsChart";
 import { UploadsTable } from "@/components/channel/UploadsTable";
+import { TrafficSourceLearning } from "@/components/learning/TrafficSourceLearning";
 import { useChannelStatus, useRefreshChannel } from "@/hooks/useSystem";
 import { useCohortLearning, usePublishedVideos } from "@/hooks/useHistory";
 import { useOAuthReturnNotice } from "@/hooks/useOAuthReturn";
@@ -506,6 +507,7 @@ export default function ChannelPage() {
               <div className="grid content-start gap-5 lg:grid-cols-2 2xl:grid-cols-1">
                 <div className="space-y-5">
                   <ChannelLearning />
+                  <TrafficSourceLearning />
                   {asArray<LearningVideo>(syncData.video_learning?.best_videos).length ? (
                     <Panel icon={GraduationCap} title="Leading comparable videos" headingLevel={3}>
                       <BestVideos videos={asArray<LearningVideo>(syncData.video_learning?.best_videos)} />

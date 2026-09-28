@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from win_engine.core.config import Settings
-from win_engine.feedback.history_store import DatabaseUnavailable, HistoryStore, comparable_format
+from win_engine.feedback.history_store import DatabaseUnavailable, HistoryStore, comparable_format, traffic_source_summary
 from win_engine.feedback.migrations import connect_managed
+from win_engine.feedback.studio_tests import MAX_VARIANTS, MIN_VARIANTS
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,69 @@ def _now() -> str:
 
 def _hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _json_or_none(value: Any) -> Any:
+    try:
+        return json.loads(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _snapshot_payload(keys: tuple[str, ...], row: tuple[Any, ...]) -> dict[str, Any]:
+    """A snapshot row for the cloud; its traffic sources only when recorded, so older hashes hold."""
+    snapshot = dict(zip(keys, row))
+    traffic = _json_or_none(row[len(keys)])
+    if traffic:
+        snapshot["traffic_sources"] = traffic
+    return snapshot
+
+
+def _traffic_json(value: Any) -> str | None:
+    """A synced traffic-source breakdown, rebuilt from its rows as a local refresh would store it."""
+    summary = traffic_source_summary(value.get("sources")) if isinstance(value, dict) else None
+    return json.dumps(summary) if summary else None
+
+
+_STUDIO_TEST_STATUSES = frozenset({"prepared", "linked", "completed"})
+
+
+def _studio_variants(value: Any) -> list[dict[str, Any]]:
+    """A synced test's variants when they are whole (two or three, each labelled and titled), else none."""
+    if not isinstance(value, list):
+        return []
+    variants = [
+        item for item in value
+        if isinstance(item, dict) and isinstance(item.get("label"), str) and str(item.get("title") or "").strip()
+    ]
+    return variants if len(variants) == len(value) and MIN_VARIANTS <= len(variants) <= MAX_VARIANTS else []
+
+
+def _adds_to_cloud_copy(local: dict[str, Any], remote: dict[str, Any]) -> bool:
+    """Whether the package kept here holds studio tests or traffic sources its cloud copy lacks.
+
+    A version without them drops them when it pushes an edit, so this device
+    sends them back. Only additions count: two devices that each kept their own
+    observation of a window never push it back and forth.
+    """
+    remote_tests = {
+        str(test.get("created_at")): str(test.get("updated_at") or "")
+        for test in (remote.get("studio_tests") if isinstance(remote.get("studio_tests"), list) else [])
+        if isinstance(test, dict)
+    }
+    for test in local.get("studio_tests") or []:
+        created = str(test["created_at"])
+        if created not in remote_tests or str(test["updated_at"] or "") > remote_tests[created]:
+            return True
+    remote_video = remote.get("linked_video") if isinstance(remote.get("linked_video"), dict) else {}
+    with_traffic = {
+        str(item.get("snapshot_window")) for item in remote_video.get("snapshots") or []
+        if isinstance(item, dict) and item.get("traffic_sources")
+    }
+    return any(
+        item.get("traffic_sources") and str(item.get("snapshot_window")) not in with_traffic
+        for item in (local.get("linked_video") or {}).get("snapshots") or []
+    )
 
 
 def _tombstone_hash(sync_uuid: str, revision: int, deleted_at: str) -> str:
@@ -297,7 +361,7 @@ class CloudSyncService:
                 """SELECT age_hours,views,watch_time_minutes,avg_view_duration_seconds,avg_view_percentage,
                           likes,comments,shares,subscribers_gained,impressions,impressions_ctr,snapshot_window,
                           snapshot_status,attempt_count,last_failure_reason,last_attempted_at,completed_at,
-                          source_start_date,source_end_date,captured_at
+                          source_start_date,source_end_date,captured_at,traffic_sources_json
                    FROM video_performance_snapshots WHERE youtube_video_id = ? ORDER BY captured_at,id""", (link[1],),
             ).fetchall()
             keys = ("age_hours", "views", "watch_time_minutes", "avg_view_duration_seconds", "avg_view_percentage",
@@ -319,9 +383,15 @@ class CloudSyncService:
                     "sources": {"language": comparable[4], "format": comparable[5],
                                 "duration_bucket": comparable[6], "topic_category": comparable[7]},
                     "updated_at": comparable[8]} if comparable else None),
-                "snapshots": [dict(zip(keys, row)) for row in snapshot_rows],
+                "snapshots": [_snapshot_payload(keys, row) for row in snapshot_rows],
             }
-        return {
+        studio_rows = connection.execute(
+            """SELECT t.variants_json, t.status, t.winner_variant, t.result_json, t.notes, t.created_at, t.updated_at,
+                      p.analysis_run_id = t.analysis_run_id
+               FROM youtube_studio_tests t LEFT JOIN published_video_links p ON p.id = t.published_video_link_id
+               WHERE t.analysis_run_id = ? ORDER BY t.created_at, t.id""", (run_id,),
+        ).fetchall()
+        payload = {
             "schema": 2,
             "analysis": {"query": row[0], "created_at": row[1], "intent": row[2], "content_angle": row[3],
                          "title": row[4], "title_score": row[5], "retention_risk": row[6],
@@ -333,6 +403,15 @@ class CloudSyncService:
                           if selection else None),
             "linked_video": linked_video,
         }
+        # Present only when recorded, so a package without tests keeps the hash it had before.
+        if studio_rows:
+            payload["studio_tests"] = [
+                {"variants": _json_or_none(row[0]) or [], "status": row[1], "winner_variant": row[2],
+                 "result": _json_or_none(row[3]), "notes": row[4] or "", "created_at": row[5],
+                 "updated_at": row[6], "linked": bool(row[7])}
+                for row in studio_rows
+            ]
+        return payload
 
     def _stage_local_packages(self) -> int:
         queued = 0
@@ -708,6 +787,15 @@ class CloudSyncService:
             if existing:
                 newer_display = window == "current" and str(captured_at) > str(existing[2] or "")
                 if str(existing[1]) == "complete" or not (incoming_status == "complete" or newer_display):
+                    # A completed window stays as observed here; only the traffic
+                    # sources it lacks (read by a newer version) are filled in.
+                    traffic = _traffic_json(snapshot.get("traffic_sources"))
+                    if str(existing[1]) == "complete" and incoming_status == "complete" and traffic:
+                        local.execute(
+                            """UPDATE video_performance_snapshots SET traffic_sources_json = ?
+                               WHERE id = ? AND traffic_sources_json IS NULL""",
+                            (traffic, int(existing[0])),
+                        )
                     continue
             values = (
                 link_id, video_id, snapshot.get("age_hours") or 0, snapshot.get("views"),
@@ -718,6 +806,7 @@ class CloudSyncService:
                 snapshot.get("attempt_count") or 0, snapshot.get("last_failure_reason"),
                 snapshot.get("last_attempted_at"), snapshot.get("completed_at"),
                 snapshot.get("source_start_date"), snapshot.get("source_end_date"), captured_at,
+                _traffic_json(snapshot.get("traffic_sources")) if incoming_status == "complete" else None,
             )
             try:
                 with _savepoint(local, "cloud_item"):
@@ -726,7 +815,8 @@ class CloudSyncService:
                             """UPDATE video_performance_snapshots SET published_video_link_id=?,age_hours=?,views=?,
                                watch_time_minutes=?,avg_view_duration_seconds=?,avg_view_percentage=?,likes=?,comments=?,
                                shares=?,subscribers_gained=?,impressions=?,impressions_ctr=?,snapshot_status=?,attempt_count=?,
-                               last_failure_reason=?,last_attempted_at=?,completed_at=?,source_start_date=?,source_end_date=?,captured_at=?
+                               last_failure_reason=?,last_attempted_at=?,completed_at=?,source_start_date=?,source_end_date=?,captured_at=?,
+                               traffic_sources_json=?
                                WHERE id=?""",
                             (values[0], *values[2:13], values[14], *values[15:], int(existing[0])),
                         )
@@ -736,14 +826,53 @@ class CloudSyncService:
                                    published_video_link_id,youtube_video_id,age_hours,views,watch_time_minutes,
                                    avg_view_duration_seconds,avg_view_percentage,likes,comments,shares,subscribers_gained,
                                    impressions,impressions_ctr,snapshot_window,snapshot_status,attempt_count,last_failure_reason,
-                                   last_attempted_at,completed_at,source_start_date,source_end_date,captured_at)
-                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                   last_attempted_at,completed_at,source_start_date,source_end_date,captured_at,traffic_sources_json)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                             values,
                         )
             except sqlite3.IntegrityError:
                 # A status this version does not know, or a second completed copy
                 # of one window; the rest of the package still applies.
                 continue
+
+    @staticmethod
+    def _apply_studio_tests(local, run_id: int, tests: Any, fallback_time: str) -> None:
+        """Merge a package's YouTube Studio tests: add new ones and take newer edits, deleting none.
+
+        A test is known by when it was prepared. A version without studio tests
+        sends none, and that must not erase the ones recorded here.
+        """
+        if not isinstance(tests, list):
+            return
+        link = local.execute("SELECT id FROM published_video_links WHERE analysis_run_id = ?", (run_id,)).fetchone()
+        for test in tests:
+            variants = _studio_variants(test.get("variants")) if isinstance(test, dict) else []
+            if (not variants or not test.get("created_at") or test.get("status") not in _STUDIO_TEST_STATUSES
+                    or test.get("winner_variant") not in {None, *(variant["label"] for variant in variants)}):
+                continue
+            updated_at = str(test.get("updated_at") or fallback_time)
+            values = (
+                int(link[0]) if link and test.get("linked") else None, json.dumps(variants, ensure_ascii=False),
+                test["status"], test.get("winner_variant"),
+                json.dumps(test["result"], ensure_ascii=False) if isinstance(test.get("result"), dict) else None,
+                str(test.get("notes") or ""), updated_at,
+            )
+            existing = local.execute(
+                "SELECT id, updated_at FROM youtube_studio_tests WHERE analysis_run_id = ? AND created_at = ?",
+                (run_id, str(test["created_at"])),
+            ).fetchone()
+            if existing is None:
+                local.execute(
+                    """INSERT INTO youtube_studio_tests(published_video_link_id,variants_json,status,winner_variant,
+                           result_json,notes,updated_at,analysis_run_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                    (*values, run_id, str(test["created_at"])),
+                )
+            elif updated_at > str(existing[1] or ""):
+                local.execute(
+                    """UPDATE youtube_studio_tests SET published_video_link_id=?,variants_json=?,status=?,winner_variant=?,
+                           result_json=?,notes=?,updated_at=? WHERE id=?""",
+                    (*values, int(existing[0])),
+                )
 
     @staticmethod
     def _remote_payload(payload_json: Any, content_hash: str) -> dict[str, Any]:
@@ -883,10 +1012,14 @@ class CloudSyncService:
                 (run_id,selection["generated_package_id"],json.dumps(selection.get("package") or {},ensure_ascii=False),json.dumps(selection.get("quality_gate") or {},ensure_ascii=False),"creator",selection.get("selected_at") or updated_at,selection.get("updated_at") or updated_at))
         if int(payload.get("schema") or 1) >= 2:
             self._apply_linked_video(local, run_id, payload.get("linked_video"), updated_at)
+            self._apply_studio_tests(local, run_id, payload.get("studio_tests"), updated_at)
         # What was stored can differ from the cloud version where local
         # evidence was kept; staging compares with this hash, so it does not
-        # mistake that difference for an edit and push the package back.
-        stored_hash = _hash(self._package_payload(local, run_id))
+        # mistake that difference for an edit and push the package back. Data
+        # the cloud copy lost to an older version is the exception: comparing
+        # with the cloud's own hash stages it once, to send it back.
+        stored = self._package_payload(local, run_id)
+        stored_hash = content_hash if _adds_to_cloud_copy(stored, payload) else _hash(stored)
         now = _now()
         if mapping:
             local.execute("UPDATE cloud_sync_packages SET revision=?,content_hash=?,last_synced_hash=?,remote_updated_at=?,updated_at=? WHERE sync_uuid=?", (revision,content_hash,stored_hash,updated_at,now,sync_uuid))

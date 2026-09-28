@@ -42,7 +42,7 @@ def plan_research_queries(
     # Without a validated semantic topic the searches use the creator's own
     # words (the brief's topic, taken from the quote or main phrase). A table of
     # stock "quote concepts" searched "knowing when to let go" for "I can't get
-    # enough of you": the opposite meaning, at 100 quota units a query.
+    # enough of you": the opposite meaning, each query one of the day's searches.
     topic = next((value for value in [proven_semantic_topic,
         _search_phrase(semantic_primary, 6), structured_topic,
         *(semantic.get("secondary_topics") or [])] if usable_research_topic(value)), "")

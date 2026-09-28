@@ -195,6 +195,20 @@ class QuoteExtractionTests(unittest.TestCase):
         self.assertEqual(extract_quote(script, short=True), "")
         self.assertEqual(build_creator_brief(script=script, video_format="Short")["exact_quote"], "")
 
+    def test_a_single_quoted_quote_keeps_its_apostrophes(self):
+        # A contraction's apostrophe is not the closing mark, straight or curly.
+        line = "You can miss someone and still know you're better without them."
+        for opening, closing, apostrophe in (("'", "'", "'"), ("‘", "’", "’"), ("'", "'", "’")):
+            quote = line.replace("'", apostrophe)
+            script = (
+                "Vertical YouTube Short: a man walking alone through green hills. "
+                f"The exact on-screen quote appears in a typewriter reveal: {opening}{quote}{closing}"
+            )
+            with self.subTest(opening=opening, apostrophe=apostrophe):
+                self.assertEqual(extract_quote(script, short=True), quote.rstrip("."))
+        # Apostrophes outside a quoted span still open or close nothing.
+        self.assertEqual(extract_quote("It's the creator's video, don't worry", short=True), "")
+
     def test_quote_shorts_keep_their_quotes(self):
         brief = build_creator_brief(script=PAINFUL)
         self.assertEqual(

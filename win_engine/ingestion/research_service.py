@@ -22,6 +22,7 @@ from win_engine.analysis.transliteration import has_tamil, phonetic_keys, phonet
 from win_engine.core.config import Settings
 from win_engine.core.iso_duration import duration_seconds
 from win_engine.feedback.history_store import HistoryStore
+from win_engine.feedback.quota_ledger import quota_warnings
 from win_engine.ingestion.cache import shared_cache
 from win_engine.ingestion.search_suggest import SearchSuggestClient
 from win_engine.ingestion.youtube_client import YouTubeClient, youtube_language_code, youtube_region_code
@@ -40,6 +41,9 @@ _GENERIC_QUERY_TERMS = frozenset({
     "what", "when", "where", "which", "with", "would", "youtube",
 })
 _MAX_REFINEMENT_QUERIES = 2
+# A Short gets the primary search and the two best others, refinement
+# included: search.list has its own bucket of 100 calls a day per project.
+_SHORT_MAX_SEARCHES = 3
 _UNKNOWN_TIME = datetime.min.replace(tzinfo=timezone.utc)
 _NO_TOPIC_WARNING = (
     "No usable research topic survived semantic validation. Review the supplied topic before relying on "
@@ -68,12 +72,16 @@ def _ranked(results: list[dict[str, object]]) -> list[dict[str, object]]:
     return [row for row in results if row.get("outlier_score") is not None]
 
 
-def _research_warnings(attempts: list[dict[str, object]], research_queries: list[dict[str, str]]) -> list[str]:
+def _research_warnings(
+    attempts: list[dict[str, object]], research_queries: list[dict[str, str]], settings: Settings,
+) -> list[str]:
     # The client keeps only its latest call's warning, so a failed first query
     # followed by a good one used to leave the run looking clean.
     warnings = list(dict.fromkeys(str(item["warning"]) for item in attempts if item.get("warning")))
     if not research_queries:
         warnings.append(_NO_TOPIC_WARNING)
+    # A key near its configured daily limit: said, never blocked.
+    warnings.extend(quota_warnings(settings))
     return warnings
 
 
@@ -87,7 +95,9 @@ class ResearchService:
             redis_url=settings.redis_url,
             key_prefix=settings.redis_key_prefix,
         )
-        self._youtube = YouTubeClient(settings.youtube_api_key_pool, settings.request_timeout_seconds)
+        self._youtube = YouTubeClient(
+            settings.youtube_api_key_pool, settings.request_timeout_seconds, database_path=settings.database_path,
+        )
         self._history = HistoryStore(settings.database_path)
         self._suggest = SearchSuggestClient(
             enabled=settings.search_suggest_enabled,
@@ -116,14 +126,20 @@ class ResearchService:
         # Without a semantic analysis the planner works from the creator brief,
         # as it does whenever Gemini is unavailable.
         semantic_analysis = {} if results_only else analyze_script_semantics(script, creator_brief)
+        short_form = is_short_content(script, creator_brief)
+        max_searches = self._settings.youtube_max_research_queries
+        if short_form:
+            max_searches = min(max_searches, _SHORT_MAX_SEARCHES)
         research_queries = plan_research_queries(
             script=script,
             creator_brief=creator_brief,
             semantic_analysis=semantic_analysis,
             region=region,
             primary_language=primary_language,
-            max_queries=self._settings.youtube_max_research_queries,
+            max_queries=max_searches,
         )
+        if short_form:
+            research_queries = research_queries[:max_searches]
         query = research_queries[0]["query"] if research_queries else script[:120]
         # Reported only: each query is cached for its own policy.
         cache_policy, _ = self._select_cache_policy(query)
@@ -142,7 +158,7 @@ class ResearchService:
                 "top_opportunities": _ranked(scored_results)[:3],
                 "research_queries": research_queries,
                 "research_diagnostics": query_diagnostics,
-                "research_warnings": _research_warnings(attempts, research_queries),
+                "research_warnings": _research_warnings(attempts, research_queries, self._settings),
                 "cache_policy": cache_policy,
                 "youtube_runtime": self._youtube.runtime_state(),
             }
@@ -170,7 +186,10 @@ class ResearchService:
         # stronger evidence for weak tags. Extra queries are explicitly capped.
         strong = [row for row in keyword_research.get("candidates", [])
                   if row.get("keyword_relevance_score", 0) >= 90 and row.get("evidence_count", 0) > 0]
-        if len(strong) < 3 and research_queries:
+        # A Short's refinement spends only what its three searches leave.
+        max_extra = (min(_MAX_REFINEMENT_QUERIES, max_searches - len(research_queries)) if short_form
+                     else _MAX_REFINEMENT_QUERIES)
+        if len(strong) < 3 and research_queries and max_extra > 0:
             refinement = refine_research_semantics(script, creator_brief or {}, research_queries)
             proposed = plan_research_queries(script=script, creator_brief=creator_brief,
                 semantic_analysis=refinement, region=region, primary_language=primary_language,
@@ -186,7 +205,7 @@ class ResearchService:
                     and terms not in previous_terms):
                     extra_queries.append(item)
                     previous_terms.append(terms)
-                if len(extra_queries) == _MAX_REFINEMENT_QUERIES:
+                if len(extra_queries) == max_extra:
                     break
             if extra_queries:
                 extra_results, extra_diagnostics = self._search_research_queries(extra_queries, **locale)
@@ -204,7 +223,7 @@ class ResearchService:
                 if refinement.get("primary_topic"):
                     semantic_analysis["secondary_topics"].append(refinement["primary_topic"])
                 query_diagnostics["refinement"] = {"queries": extra_queries, "diagnostics": extra_diagnostics,
-                    "maximum_extra_queries": _MAX_REFINEMENT_QUERIES}
+                    "maximum_extra_queries": max_extra}
                 top_opportunities = _ranked(scored_results)[:3]
                 keyword_research = build_keyword_research(script=script, semantic=semantic_analysis,
                     youtube_results=scored_results, research_queries=research_queries, entity_signals=entity_signals,
@@ -242,7 +261,7 @@ class ResearchService:
         )
         thumbnail_intelligence = analyze_thumbnails(scored_results)
         runtime_state = self._youtube.runtime_state()
-        research_warnings = _research_warnings(attempts, research_queries)
+        research_warnings = _research_warnings(attempts, research_queries, self._settings)
 
         logger.info(
             "Research gathered: youtube=%s",
@@ -290,7 +309,7 @@ class ResearchService:
             attempts.append(attempt)
             if not self._query_terms(query):
                 # No word of this query can anchor a result, so the relevance
-                # filter would drop everything a 100-unit search returned.
+                # filter would drop everything a search, one of the day's few, returned.
                 attempt.update({"cache": "skipped", "result_count": 0, "status": "skipped"})
                 continue
             cache_input = "|".join([query.casefold(), str(max_results), *(value or "" for value in locale.values())])
@@ -305,7 +324,7 @@ class ResearchService:
                 results, status = entry["rows"], "success"
             else:
                 # A page kept after a failed statistics lookup costs only the
-                # two 1-unit lookups again, not another 100-unit search.
+                # two 1-unit lookups again, not another search.
                 results = (
                     self._youtube.attach_statistics(page["rows"]) if page
                     else self._youtube.search_videos(query, max_results, **locale) or []
@@ -354,7 +373,8 @@ class ResearchService:
             "query_attempts": attempts,
             "quota_policy": (
                 "Queries are de-duplicated and bounded by YOUTUBE_MAX_RESEARCH_QUERIES, plus at most "
-                f"{_MAX_REFINEMENT_QUERIES} refinement queries; each returns at most YOUTUBE_MAX_RESULTS results. "
+                f"{_MAX_REFINEMENT_QUERIES} refinement queries; a Short gets at most {_SHORT_MAX_SEARCHES} searches "
+                "in all, refinement included. Each returns at most YOUTUBE_MAX_RESULTS results. "
                 "Queries without a searchable word are skipped. Results with complete statistics are cached "
                 "in Redis when configured, otherwise in this process's memory. A search whose statistics lookup "
                 "failed is kept, so a later run repeats only the 1-unit statistics lookups."

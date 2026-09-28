@@ -7,9 +7,28 @@ import tempfile
 import unittest
 
 from win_engine.core.config import Settings
-from win_engine.feedback.cloud_sync import CloudSyncService
+from win_engine.feedback.cloud_sync import CloudSyncService, _hash
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.migrations import CURRENT_SCHEMA_VERSION
+from win_engine.feedback.studio_tests import StudioTestStore
+
+
+class _Remote:
+    """A cloud database that answers every pull with the given rows (sync_uuid, origin, revision, hash, payload)."""
+
+    def __init__(self, rows):
+        self.rows = [(*row, "2026-08-20T10:00:00+00:00", None) for row in rows]
+
+    def cursor(self):
+        rows = self.rows
+
+        class Cursor:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def execute(self, *_args): return None
+            def fetchall(self): return rows
+
+        return Cursor()
 
 
 class CloudSyncTests(unittest.TestCase):
@@ -92,6 +111,9 @@ class CloudSyncTests(unittest.TestCase):
         self.assertEqual(payload["schema"], 2)
         self.assertEqual(payload["linked_video"]["youtube_video_id"], "video-123")
         self.assertEqual(len(payload["linked_video"]["snapshots"]), 2)
+        # Packages without the version 11 data keep the payload, and so the hash, they had before.
+        self.assertNotIn("studio_tests", payload)
+        self.assertTrue(all("traffic_sources" not in item for item in payload["linked_video"]["snapshots"]))
 
         target_handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         target_path = target_handle.name
@@ -119,6 +141,100 @@ class CloudSyncTests(unittest.TestCase):
         self.assertEqual(report["youtube"]["title"], "Published rainy title")
         self.assertEqual(len(report["snapshots"]), 2)
         self.assertEqual(report["comparable_metadata"]["duration_bucket"], "under_60s")
+
+    def test_traffic_sources_and_studio_tests_travel_with_the_package(self):
+        run_id = self.store.record_analysis_run(
+            "obs setup", "search", "tutorial", "Set up OBS", 8.0, "LOW", "WORKABLE", 60,
+            {"description": "Package", "creator_brief": {"video_format": "tutorial", "content": "OBS tutorial"},
+             "title_thumbnail_packages": [
+                 {"package_id": "package-a", "title": "Set up OBS for your first live stream", "thumbnail_text": "GO LIVE"},
+                 {"package_id": "package-b", "title": "The OBS settings I use on a mid-range laptop", "thumbnail_text": "MY SETTINGS"},
+             ]},
+        )
+        self.store.link_published_video(
+            run_id, "video-obs", "2026-08-20T10:00:00+00:00", format_val="tutorial", language="english",
+            ownership_state="verified", ownership_verified=True, verified_channel_id="channel-1",
+        )
+        self.store.record_performance_snapshot(
+            "video-obs", 168, views=900, snapshot_window="7d",
+            traffic_sources=[{"source": "YT_SEARCH", "views": 600}, {"source": "RELATED_VIDEO", "views": 300}],
+        )
+        studio = StudioTestStore(self.store)
+        test_id = studio.create(run_id, ["package-a", "package-b"])["id"]
+        studio.update(test_id, {"link_video": True})
+        studio.update(test_id, {"outcome": "winner", "winner_variant": "B", "watch_time_share": {"A": 45, "B": 55}})
+
+        self.assertEqual(CloudSyncService(self.settings())._stage_local_packages(), 1)
+        with sqlite3.connect(self.path) as connection:
+            sync_uuid, revision, content_hash, payload_json = connection.execute(
+                "SELECT sync_uuid,revision,content_hash,payload_json FROM cloud_sync_outbox"
+            ).fetchone()
+        target_path = self._temporary_database()
+        target = CloudSyncService(self.settings(database_path=target_path, cloud_sync_device_id="laptop-b"))
+        self.assertEqual(target._pull(_Remote([(sync_uuid, "laptop-a", revision, content_hash, payload_json)])), 1)
+
+        target_store = HistoryStore(target_path)
+        target_run = target_store.history_runs()[0]["id"]
+        report = target_store.linked_package_report(target_run)
+        seven_day = next(item for item in report["snapshots"] if item["snapshot_window"] == "7d")
+        self.assertEqual(seven_day["traffic_sources"]["dominant_source"], "YT_SEARCH")
+        [synced] = StudioTestStore(target_store).tests(target_run)
+        self.assertEqual((synced["status"], synced["winner_variant"]), ("completed", "B"))
+        self.assertEqual(synced["result"]["watch_time_share"], {"A": 45.0, "B": 55.0})
+        self.assertEqual(synced["linked_video"]["youtube_video_id"], "video-obs")
+
+        # A later revision from a version without studio tests adds or erases none.
+        older = json.loads(payload_json)
+        del older["studio_tests"]
+        older["analysis"]["title"] = "Set up OBS Studio"
+        self.assertEqual(target._pull(_Remote([(sync_uuid, "laptop-c", revision + 1, _hash(older), json.dumps(older))])), 1)
+        self.assertEqual(len(StudioTestStore(target_store).tests(target_run)), 1)
+        # This device holds what the cloud copy lost, so it sends it back once.
+        self.assertEqual(target._stage_local_packages(), 1)
+        with sqlite3.connect(target_path) as connection:
+            restored = json.loads(connection.execute("SELECT payload_json FROM cloud_sync_outbox").fetchone()[0])
+        self.assertEqual(restored["analysis"]["title"], "Set up OBS Studio")
+        self.assertEqual(restored["studio_tests"][0]["winner_variant"], "B")
+        self.assertEqual(target._stage_local_packages(), 0)
+
+    def test_a_synced_window_fills_missing_traffic_sources_and_bad_studio_tests_are_skipped(self):
+        run_id = self.store.record_analysis_run("obs setup", "search", "tutorial", "Set up OBS", 8.0, "LOW", "WORKABLE", 60,
+                                                {"description": "Package"})
+        self.store.link_published_video(run_id, "video-obs", "2026-08-20T10:00:00+00:00", format_val="tutorial",
+                                        ownership_state="verified", ownership_verified=True, verified_channel_id="channel-1")
+        # Completed here before this device could read traffic sources.
+        self.store.record_performance_snapshot("video-obs", 168, views=900, snapshot_window="7d")
+        service = CloudSyncService(self.settings())
+        self.assertEqual(service._stage_local_packages(), 1)
+        with sqlite3.connect(self.path) as connection:
+            sync_uuid, revision, payload_json = connection.execute(
+                "SELECT sync_uuid,revision,payload_json FROM cloud_sync_outbox").fetchone()
+            connection.execute("DELETE FROM cloud_sync_outbox")
+        remote = json.loads(payload_json)
+        window = next(item for item in remote["linked_video"]["snapshots"] if item["snapshot_window"] == "7d")
+        window["views"] = 950  # a completed window here is kept as it is
+        window["traffic_sources"] = {"sources": [{"source": "YT_SEARCH", "views": 700}, {"source": "SHORTS", "views": 250}]}
+        remote["studio_tests"] = [
+            {"variants": [{"label": "A"}, "B"], "status": "prepared", "created_at": "2026-09-01T00:00:00+00:00"},
+            {"variants": [{"label": "A", "title": "Only one"}], "status": "prepared", "created_at": "2026-09-02T00:00:00+00:00"},
+            {"variants": [{"label": "A", "title": "One"}, {"label": "B", "title": "Two"}], "status": "completed",
+             "winner_variant": "Z", "created_at": "2026-09-03T00:00:00+00:00"},
+        ]
+        self.assertEqual(service._pull(_Remote([(sync_uuid, "laptop-b", revision + 1, _hash(remote), json.dumps(remote))])), 1)
+
+        report = self.store.linked_package_report(run_id)
+        kept = next(item for item in report["snapshots"] if item["snapshot_window"] == "7d")
+        self.assertEqual(kept["views"], 900)
+        self.assertEqual(kept["traffic_sources"]["dominant_source"], "YT_SEARCH")
+        self.assertEqual(StudioTestStore(self.store).tests(run_id), [])
+
+    def _temporary_database(self) -> str:
+        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        handle.close()
+        for suffix in ("", "-wal", "-shm"):
+            self.addCleanup(lambda path=handle.name + suffix: os.path.exists(path) and os.unlink(path))
+        HistoryStore(handle.name)
+        return handle.name
 
     def test_deleting_a_synced_package_queues_a_durable_tombstone(self):
         run_id = self.store.record_analysis_run(

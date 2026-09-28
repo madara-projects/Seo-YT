@@ -13,7 +13,7 @@ def _kept(rows, creator_brief=None):
 
 class ScriptTests(unittest.TestCase):
     def test_tamil_query_keeps_tamil_and_latin_spellings_of_its_words(self):
-        # Every result of a Tamil query used to be dropped: 102 units for nothing.
+        # Every result of a Tamil query used to be dropped: a search call and two units for nothing.
         rows = [
             {"video_id": "tamil", "title": "செட்டிநாடு சிக்கன் பிரியாணி செய்வது எப்படி", "research_query": TAMIL_QUERY},
             {"video_id": "latin", "title": "Chettinad Chicken Biryani Recipe in Tamil", "research_query": TAMIL_QUERY},

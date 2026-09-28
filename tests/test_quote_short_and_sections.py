@@ -83,7 +83,10 @@ class ProcessNarrationTests(unittest.TestCase):
             QUOTE, brief,
         )
         self.assertFalse(narrates_process(package["description"]))
-        self.assertIn("rainy road", package["description"])
+        self.assertIn("Impossible love is often the most painful experience in this world.", package["description"])
+        # "This short features ... set against a rainy road" describes the
+        # footage a Short's viewers are watching: a production note.
+        self.assertNotIn("This short features", package["description"])
 
 
 class QuoteDetectionTests(unittest.TestCase):

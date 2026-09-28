@@ -11,9 +11,10 @@ from __future__ import annotations
 import re
 from difflib import SequenceMatcher
 from itertools import pairwise
+from os.path import commonprefix
 from typing import Any, Iterable
 
-from win_engine.analysis.source_cues import is_short_video, source_quote
+from win_engine.analysis.source_cues import feeling_words, is_short_video, source_quote, timestamp_line
 from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
 from win_engine.analysis.transliteration import phonetic_key, phonetic_keys, phonetic_match
 
@@ -103,6 +104,23 @@ _PROCESS_NARRATION_RE = re.compile(
 )
 
 
+def description_prose(value: Any) -> str:
+    """A description without its chapter list and its hashtag line.
+
+    The timestamp lines are the creator's own, pasted for YouTube's chapters;
+    judged as copy they read as a repeated keyword list and pushed a full
+    description past its word band. The hashtags are judged as hashtags:
+    read as words, "#LiveStream" called a tutorial a livestream, and a
+    hashtag diluted a quote-only Short's description score.
+    """
+
+    lines = [
+        line for line in normalize_unicode(value).splitlines()
+        if not timestamp_line(line) and not re.fullmatch(r"\s*(?:#[^\s#]+\s*)+", line)
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def narrates_process(text: Any) -> bool:
     """True when copy describes the writing rules instead of the video."""
 
@@ -137,6 +155,55 @@ def strip_process_narration(text: str) -> str:
         if kept:
             kept_paragraphs.append(" ".join(kept))
     return "\n\n".join(kept_paragraphs).strip()
+
+
+# How a Short was made, which its viewers are already watching: "This video
+# features a person walking alone ... in slow motion, accompanied by the exact
+# on-screen text: ..." was a live Short's whole description.
+_PRODUCTION_NOTE_RE = re.compile(
+    r"\b(?:this|the)\s+(?:video|short|clip|reel)\s+(?:features|shows|captures|follows|opens\s+(?:on|with))\b"
+    r"|\bthe\s+(?:video|clip|reel)\s+is\b"
+    r"|\bon[\s-]?screen\s+(?:text|quote|caption|words?)\b|\btext\s+overlay\b"
+    r"|\bthe\s+(?:video\s+)?background\s+(?:is|shows|features|has)\b"
+    r"|\bslow[\s-]?motion\b|\baccompanied\s+by\b",
+    re.IGNORECASE,
+)
+
+
+def _line_sentences(line: str) -> list[str]:
+    return [part for part in re.split(r"(?<=[.!?…])\s+", line.strip()) if part]
+
+
+def _is_production_note(sentence: str, subject: str) -> bool:
+    # A phrase the creator's own subject uses ("slow motion lightning") is the
+    # video's topic, not a note on how it was made.
+    return any(match.group(0).casefold() not in subject
+               for match in _PRODUCTION_NOTE_RE.finditer(normalize_unicode(sentence)))
+
+
+def production_note_sentences(text: Any, subject: Any = "") -> list[str]:
+    """Sentences of a description that describe the production, not what the video means."""
+
+    folded = normalize_unicode(subject).casefold()
+    return [sentence for line in str(text or "").splitlines() for sentence in _line_sentences(line)
+            if _is_production_note(sentence, folded)]
+
+
+def strip_production_notes(text: Any, subject: Any = "") -> str:
+    """A Short's description without its production-note sentences; "" when nothing else is left."""
+
+    folded = normalize_unicode(subject).casefold()
+    lines: list[str] = []
+    for line in str(text or "").splitlines():
+        sentences = _line_sentences(line)
+        kept = [sentence for sentence in sentences if not _is_production_note(sentence, folded)]
+        if len(kept) == len(sentences):
+            lines.append(line)
+        elif kept:
+            lines.append(" ".join(kept))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 _MOVED_ON_PERSON_RE = re.compile(
     r"\b(?:(?:the|that|other|another|a)\s+)?(?:person|someone|somebody|they)\s+(?:who\s+)?(?:has\s+|have\s+)?moved\s+on(?:\s+from\s+your\s+life)?\b",
     re.IGNORECASE,
@@ -194,6 +261,75 @@ def title_copies_quote(value: Any, exact_quote: Any) -> bool:
         return True
     title_set, quote_set = set(title_words), set(quote_words)
     return len(title_words) >= 5 and len(title_set & quote_set) / len(title_set) >= 0.9
+
+
+# "Alone quotes for when people misunderstand you": a search phrase with a
+# format word, where the title should carry the quote's feeling.
+_KEYWORD_QUOTES_TITLE_RE = re.compile(
+    r"^\W*(?:[^\W\d_]+[\s-]+){0,3}(?:quotes?|status|shayari|captions?|lines)\s+(?:for|about|on|when|that|to)\b",
+    re.IGNORECASE,
+)
+# The title voices the feeling or speaks to the viewer.
+_VOICE_RE = re.compile(r"\b(?:you|your|yourself|you['’](?:re|ve|ll)|i|i['’]m|me|my|myself|we|us|our)\b", re.IGNORECASE)
+# Labels in a creator's notes ("the quote is-", "the video is-"), not the scene.
+_NOTE_LABEL_WORDS = {"quote", "video", "background", "visual", "visuals", "text", "screen", "reel", "short", "format"}
+
+
+def _shares_root(word: str, roots: set[str]) -> bool:
+    """Same root, or the same long stem ("misunderstood" and "misunderstand")."""
+
+    root = _quality_root(word)
+    return root in roots or any(
+        len(commonprefix([root, other])) >= max(5, min(len(root), len(other)) - 3) for other in roots
+    )
+
+
+def _feeling_keys(text: Any) -> set[str]:
+    # "betrayal" and "betrayed", "love" and "loving" name one feeling.
+    return {_quality_root(word)[:4] for word in feeling_words(text)}
+
+
+def short_title_fit(title: Any, quote: Any, source: Any = "") -> int:
+    """How well a quote Short's title carries the quote, 0-100. Deterministic.
+
+    A Short is found in the feed more than in search, so its titles are ranked
+    by hook, clarity and emotional fit: faithful to the quote's meaning (two of
+    its words are enough; more is repetition), keeping the feeling it names,
+    voicing it or speaking to the viewer, 30-70 characters. Words only the
+    scene supplies ("A rainy night walk"), "<keyword> quotes for ..."
+    constructions, cut-off titles and echoes of the quote rank lower. Search
+    phrases only break ties, in the caller.
+    """
+
+    body = _TITLE_EMOJI_RE.sub(" ", _SHORTS_TITLE_RE.sub(" ", normalize_unicode(title)))
+    body = re.sub(r"\s+", " ", body.replace("‍", "").replace("️", "")).strip(" -|")
+    words = _meaningful_words(body)
+    quote_roots = {_quality_root(word) for word in _meaningful_words(quote)}
+    if not words or not quote_roots:
+        return 0
+    scene_roots = {
+        _quality_root(word) for word in _meaningful_words(source)
+        if word not in _NOTE_LABEL_WORDS and not _shares_root(word, quote_roots)
+    }
+    quote_hits = sum(1 for word in words if _shares_root(word, quote_roots))
+    scene_hits = sum(1 for word in words if not _shares_root(word, quote_roots) and _quality_root(word) in scene_roots)
+    quote_feelings = _feeling_keys(quote)
+    tokens = set(unicode_words(body, min_length=1))
+    echo = len(tokens & set(unicode_words(quote, min_length=1))) / max(len(tokens), 1)
+    score = 30 * min(quote_hits / 2, 1.0)
+    score += 20 if not quote_feelings or quote_feelings & _feeling_keys(body) else 0
+    score += 10 if _VOICE_RE.search(body) else 0
+    score += 20 if 30 <= len(body) <= 70 else 10 if 20 <= len(body) <= 80 else 0
+    score += 10 if "…" in body or body.endswith("...") else 20
+    score -= 15 * min(scene_hits, 2)
+    score -= 25 if _KEYWORD_QUOTES_TITLE_RE.search(body) else 0
+    # A title complements the quote on screen; repeating it adds nothing.
+    score -= 20 if title_copies_quote(body, quote) else 15 if echo >= 0.85 else 0
+    # Faithfulness is a gate, not one part of the sum: a well-made title about
+    # something else ("Why you should never text your ex again") is not this quote's.
+    if not quote_hits:
+        score = min(score, 30)
+    return int(round(max(0.0, min(100.0, score))))
 
 
 def candidate_mechanism(title: str) -> str:
@@ -477,7 +613,7 @@ def evaluate_package_quality(
                 "source": "generated_suggestion",
             })
 
-    description = normalize_unicode(package.get("description"))
+    description = description_prose(package.get("description"))
     if not description:
         issues.append(_issue("missing_description", "description", "Description is empty."))
     else:
@@ -493,6 +629,12 @@ def evaluate_package_quality(
             issues.append(_issue("unsupported_instructional_framing", "description", "A non-instructional source must not claim tips, advice, explanations, or instructional content absent from the source."))
         if _looks_like_tag_list(description):
             issues.append(_issue("tag_list_contamination", "description", "Description reads like a repeated SEO tag list."))
+        if is_short and production_note_sentences(description, f"{exact_quote} {normalize_unicode(brief.get('topic'))}"):
+            issues.append(_issue(
+                "production_notes", "description",
+                "A Short's description speaks to its viewers; remove production notes such as "
+                "\"This video features ...\", \"on-screen text\", \"accompanied by\" or \"slow motion\".",
+            ))
         issues.extend(_description_usefulness_issues(
             description, source, brief, non_instructional,
             source_overlap_supported=requested_language not in {"tamil", "tanglish", "hindi"},
@@ -704,7 +846,10 @@ def _title_usefulness_issues(
         issues.append(_issue("unnatural_title_phrase", "title", "Title uses an unnatural emotional phrase.", index=index))
     if re.search(r"\bheart and soul friendship\b", clean, re.IGNORECASE):
         issues.append(_issue("unnatural_title_phrase", "title", "Title combines an idiom and topic into an unnatural phrase.", index=index))
-    if source_overlap_supported and words and source_words and not ({_quality_root(word) for word in words} & {_quality_root(word) for word in source_words}):
+    # Another form of a source word anchors a title too ("explanation" for
+    # "explaining"), as short_title_fit reads it.
+    source_roots = {_quality_root(word) for word in source_words}
+    if source_overlap_supported and words and source_words and not any(_shares_root(word, source_roots) for word in words):
         issues.append(_issue("title_not_source_specific", "title", "Title has no meaningful anchor in the creator source.", index=index))
     for competitor in competitors:
         if title_similarity(clean, competitor) >= 0.94:
@@ -808,6 +953,18 @@ def _tag_provenance_issues(tags: list[str], evidence: dict[str, Any] | None) -> 
     return issues
 
 
+# Words a quote Short's reflective line and soft call to action may add.
+_SHORT_REFLECTION_WORDS = 10
+
+
+def _carries_quote(text: str, quote: str) -> bool:
+    """Whether the text contains the quote word for word (case, spacing and end punctuation aside)."""
+    def flat(value: str) -> str:
+        return " ".join(unicode_words(value, min_length=1)).casefold()
+
+    return bool(flat(quote)) and f" {flat(quote)} " in f" {flat(text)} "
+
+
 def _final_semantic_quality(
     *,
     package: dict[str, Any],
@@ -827,7 +984,7 @@ def _final_semantic_quality(
     """
 
     title = str((accepted[0] if accepted else {}).get("title") or package.get("title") or "")
-    description = normalize_unicode(package.get("description"))
+    description = description_prose(package.get("description"))
     source_words = _source_words(source, brief)
     title_words = set(_meaningful_words(title))
     description_words = set(_meaningful_words(description))
@@ -863,6 +1020,14 @@ def _final_semantic_quality(
         # Faithful is not the same as optimized: repeating the complete on-screen
         # quote gives the viewer no complementary packaging idea.
         title_score = min(title_score, 68.0)
+    if quote and is_short_content(source, brief) and _carries_quote(description, quote):
+        # A quote Short's description is the exact quote and a line of
+        # reflection for viewers, in new words by design: the verbatim quote
+        # grounds it (production notes and unsupported claims are checked
+        # apart). A longer passage in new words is still judged by overlap.
+        reflection = description_words - set(_meaningful_words(quote))
+        if len(reflection) <= _SHORT_REFLECTION_WORDS:
+            description_overlap = 1.0
     description_score = _bounded_score(
         35 + min(description_overlap * 55, 45) + (10 if 4 <= len(description_words) <= 120 else 0)
     )
@@ -891,10 +1056,16 @@ def _final_semantic_quality(
         # phrase was "nifty 50 index fund returns".
         if any(keyword_placement(title, phrase) == "front" for phrase in strong_search_phrases(tag_evidence)):
             placement = "front"
-    if placement == "missing":
-        title_score -= 12
-    elif placement == "late":
-        title_score -= 4
+    short = is_short_content(source, brief)
+    # A quote Short is found in the feed more than in search: its title carries
+    # the quote's feeling, and a search phrase is only a secondary factor.
+    # Tags play a minimal role in a Short's discovery
+    # (support.google.com/youtube/answer/146402). Both are still reported, as
+    # notes that do not decide a Short's verdict.
+    keyword_severity = "info" if short and quote else "warning"
+    tag_severity = "info" if short else "warning"
+    if keyword_severity == "warning":
+        title_score -= 12 if placement == "missing" else 4 if placement == "late" else 0
     title_score = _bounded_score(title_score)
     tag_keys = {normalize_unicode(tag).casefold() for tag in tags}
     selected_rows = [
@@ -929,7 +1100,7 @@ def _final_semantic_quality(
         warnings.append(_issue(
             "primary_keyword_missing_from_title", "title",
             f"The title does not contain the main search phrase “{primary_phrase}”.",
-            severity="warning",
+            severity=keyword_severity,
         ))
     if _source_is_topicless(source, brief):
         warnings.append(_issue(
@@ -938,7 +1109,7 @@ def _final_semantic_quality(
             "Add what the video is about (the product, dish, skill, or idea) and generate again.",
             severity="warning",
         ))
-    if description and not is_short_content(source, brief):
+    if description and not short:
         source_count = len(unicode_words(source))
         description_count = len(unicode_words(re.sub(r"#[^\s#]+", " ", description)))
         floor = min(120, max(50, int(source_count * 0.8)))
@@ -957,13 +1128,13 @@ def _final_semantic_quality(
         warnings.append(_issue(
             "weak_tag_usefulness", "tags",
             "No useful subject tag survived; yt/shorts tags are retained only as the creator's format strategy.",
-            severity="warning",
+            severity=tag_severity,
         ))
     elif topic_rows and tag_score is not None and tag_score < 72:
         warnings.append(_issue(
             "weak_tag_usefulness", "tags",
             "Average subject-tag quality is below the 72-point threshold required for a GREEN package.",
-            severity="warning",
+            severity=tag_severity,
         ))
     if direct_quote_title:
         warnings.append(_issue(
@@ -982,13 +1153,14 @@ def _final_semantic_quality(
         row for row in topic_rows
         if float(row.get("keyword_relevance_score") or 0) >= 90 and float(row.get("source_support_score") or 0) >= 70
     ]
-    if is_short_content(source, brief) and rich_quote_context and len(topic_rows) < 2 and not strong_topic_rows:
+    if short and rich_quote_context and len(topic_rows) < 2 and not strong_topic_rows:
         warnings.append(_issue(
             "sparse_tag_set", "tags",
             f"Only {len(topic_rows)} useful subject tag(s) survived without strong support; yt/shorts format tags do not count as subject tags.",
-            severity="warning",
+            severity=tag_severity,
         ))
-    verdict = "RED" if critical else ("YELLOW" if warnings else "GREEN")
+    # An "info" note is reported but does not decide the verdict.
+    verdict = "RED" if critical else ("YELLOW" if any(item["severity"] == "warning" for item in warnings) else "GREEN")
     return {
         "title_score": None if "title_score" in not_measured else round(title_score, 1),
         "description_score": None if "description_score" in not_measured else round(description_score, 1),
@@ -1117,8 +1289,18 @@ def _central_quote_terms(quote: str) -> set[str]:
 
 
 def _meaningful_words(value: Any) -> list[str]:
-    stop = {"a", "an", "and", "are", "as", "at", "after", "before", "be", "but", "by", "for", "from", "how", "i", "in", "into", "is", "it", "my", "of", "on", "or", "our", "that", "the", "this", "to", "was", "we", "what", "when", "where", "which", "who", "whom", "why", "with", "you", "your", "shorts"}
-    return [word for word in unicode_words(value) if len(word) > 2 and word not in stop]
+    return [word for word in unicode_words(value) if len(word) > 2 and word not in _NOT_MEANINGFUL]
+
+
+# Grammar words, including modal and auxiliary verbs: "Why you should stop
+# explaining yourself" names no topic with "should".
+_NOT_MEANINGFUL = frozenset({
+    "a", "an", "and", "are", "as", "at", "after", "before", "be", "but", "by", "for", "from", "how", "i", "in",
+    "into", "is", "it", "my", "of", "on", "or", "our", "that", "the", "this", "to", "was", "we", "what", "when",
+    "where", "which", "who", "whom", "why", "with", "you", "your", "shorts",
+    "can", "could", "should", "would", "will", "must", "might", "may", "have", "has", "had", "been", "were",
+    "does", "did",
+})
 
 
 def _bounded_score(value: float) -> float:
@@ -1276,6 +1458,8 @@ _DANGLING_TITLE_ENDINGS = {
     "after", "before", "into", "than", "the", "a", "an", "your", "my", "our",
     "their", "his", "her", "its", "is", "are", "was", "were", "any",
 }
+_COPULAS = {"is", "are", "was", "were"}
+_SUBJECT_PRONOUNS = {"i", "you", "we", "they", "he", "she", "it"}
 # Only the words whose close repetition signals garbling ("How to you how
 # make ..."). Articles repeat legitimately: "The Good, the Bad and the Ugly".
 _REPEATABLE_FUNCTION_WORDS = {"how", "to"}
@@ -1355,7 +1539,9 @@ def title_fluency_issues(title: str, *, index: int | None = None) -> list[dict[s
     if len(tokens) < 2:
         return []
     issues: list[dict[str, Any]] = []
-    if tokens[-1] in _DANGLING_TITLE_ENDINGS:
+    # "…decided who you are" ends a clause; "The reason people are" does not.
+    ends_clause = tokens[-1] in _COPULAS and tokens[-2] in _SUBJECT_PRONOUNS
+    if tokens[-1] in _DANGLING_TITLE_ENDINGS and not ends_clause:
         issues.append(_issue(
             "broken_title_grammar", "title",
             f"Title ends with the grammar word '{tokens[-1]}', so it reads as a cut-off phrase.",

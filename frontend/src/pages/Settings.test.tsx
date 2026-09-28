@@ -37,7 +37,44 @@ const SETTINGS = {
     next_run_at: null as string | null,
     last_counts: { links: 0, windows: 0, captured: 0, failed: 0 },
   },
+  youtube_quota: {
+    available: true,
+    quota_date: "2026-09-25",
+    resets_at: "2026-09-26T07:00:00+00:00",
+    limits: { search_calls_per_day: 100, units_per_day: 10000 },
+    sources: [
+      {
+        source: "key1",
+        label: "API key 1",
+        search: { used: 3, limit: 100, remaining: 97 },
+        default: { calls: 12, used: 12, limit: 10000, remaining: 9988 },
+        analytics: { calls: 0 },
+      },
+      {
+        source: "oauth",
+        label: "Connected channel",
+        search: { used: 0, limit: 100, remaining: 100 },
+        default: { calls: 4, used: 4, limit: 10000, remaining: 9996 },
+        analytics: { calls: 2 },
+      },
+    ],
+    warnings: [] as string[],
+  },
 };
+
+/** Settings status with its quota block replaced (or removed, as an older server sends it). */
+function withQuota(youtube_quota: unknown) {
+  return async (url: string) => {
+    const path = String(url);
+    if (path === "/api/settings/status") return json({ ...SETTINGS, youtube_quota });
+    if (path === "/youtube/channel/status") return json(channel);
+    return json({});
+  };
+}
+
+async function quotaBlock() {
+  return (await screen.findByText("YouTube quota today")).closest("[data-quota]") as HTMLElement;
+}
 
 const CLOUD = {
   state: "offline/pending",
@@ -150,6 +187,64 @@ describe("SettingsPage", () => {
     // POST, so the server applies its cross-site guard and costly-request budget.
     expect(calls("POST", "/diagnostics")).toBe(1);
     expect(calls("GET", "/diagnostics")).toBe(0);
+  });
+
+  it("shows today's YouTube quota per key and channel against the configured limits", async () => {
+    renderSettings();
+
+    const block = await quotaBlock();
+    expect(within(block).getByText("API key 1")).toBeInTheDocument();
+    expect(within(block).getByText("3 of 100 searches")).toBeInTheDocument();
+    expect(within(block).getByText("97 left")).toBeInTheDocument();
+    expect(within(block).getByText("12 of 10,000 units")).toBeInTheDocument();
+    expect(within(block).getByText("9,988 left")).toBeInTheDocument();
+    expect(within(block).getByRole("meter", { name: "API key 1 searches used" })).toHaveAttribute("aria-valuenow", "3");
+    // The channel never searches, but its Analytics requests are counted.
+    const channelCard = within(block).getByText("Connected channel").closest("li") as HTMLElement;
+    expect(within(channelCard).getByText("Analytics calls")).toBeInTheDocument();
+    expect(within(channelCard).getByText("2")).toBeInTheDocument();
+    expect(within(channelCard).queryByText(/searches/)).not.toBeInTheDocument();
+    expect(within(block).getByText(/Resets at midnight Pacific time/)).toBeInTheDocument();
+    expect(within(block).getByText(/should match your quotas in Google Cloud Console/)).toBeInTheDocument();
+    // Reading the counts costs nothing: no live check runs.
+    expect(calls("POST", "/diagnostics")).toBe(0);
+  });
+
+  it("warns when a bucket nears its limit", async () => {
+    const warning = "YouTube quota: API key 1 has used 92 of 100 searches today, 90% or more of its configured daily limit.";
+    fetchMock.mockImplementation(
+      withQuota({
+        ...SETTINGS.youtube_quota,
+        sources: [{ ...SETTINGS.youtube_quota.sources[0], search: { used: 92, limit: 100, remaining: 8 } }],
+        warnings: [warning],
+      }),
+    );
+    renderSettings();
+
+    const block = await quotaBlock();
+    expect(within(block).getByText(warning)).toBeInTheDocument();
+    expect(within(block).getByText("92 of 100 searches")).toBeInTheDocument();
+  });
+
+  it("says the quota is unavailable, never 0, when it couldn't be read", async () => {
+    fetchMock.mockImplementation(
+      withQuota({ ...SETTINGS.youtube_quota, available: false, sources: [], warnings: [] }),
+    );
+    const { unmount } = renderSettings();
+
+    let block = await quotaBlock();
+    expect(within(block).getByText(/Unavailable/)).toBeInTheDocument();
+    expect(within(block).queryByText(/of 100 searches/)).not.toBeInTheDocument();
+    expect(within(block).queryByText("0")).not.toBeInTheDocument();
+    unmount();
+
+    // An older server sends no quota block at all.
+    fetchMock.mockImplementation(withQuota(undefined));
+    renderSettings();
+
+    block = await quotaBlock();
+    expect(within(block).getByText(/Unavailable/)).toBeInTheDocument();
+    expect(within(block).queryByText(/Resets at midnight Pacific time ·/)).not.toBeInTheDocument();
   });
 
   it("shows the collector's counts only once a check has finished", async () => {

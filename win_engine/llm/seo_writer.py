@@ -24,6 +24,7 @@ from win_engine.analysis.generation_quality import (
     source_requires_noninstructional_framing,
     source_withholds_message_content,
     strip_process_narration,
+    strip_production_notes,
     # The quality gate judges repetition with this same measure.
     title_similarity as _title_similarity,
 )
@@ -303,14 +304,26 @@ def _build_search_demand_block(creator_brief: Optional[dict[str, Any]]) -> str:
     ][:8]
     if not phrases:
         return ""
+    brief = creator_brief or {}
+    quote_short = bool(brief.get("exact_quote") or brief.get("on_screen_text")) and is_short_content(
+        str(brief.get("content") or ""), brief)
+    usage = (
+        # "Alone quotes for when people misunderstand you" led a live quote
+        # Short whose quote is not about being alone.
+        "\nThis is a quote Short: its title carries the quote's feeling or speaks to the viewer, and a "
+        "phrase is secondary. Use one only where it reads naturally and is true of the quote; never build a "
+        "'<phrase> quotes for ...' title. Use the ones that describe this exact video as tags."
+        if quote_short else
+        "\nUse the most fitting phrase naturally in the title's first words and in the description's "
+        "first sentence, and use the ones that describe this exact video as tags."
+    )
     return (
         "\nSearch phrases real viewers type on YouTube (from YouTube's own search suggestions, most "
         "popular first; this is demand evidence, not search volume):\n"
         + "\n".join(f"- {phrase}" for phrase in phrases)
-        + "\nUse the most fitting phrase naturally in the title's first words and in the description's "
-        "first sentence, and use the ones that describe this exact video as tags. A phrase is only "
-        "usable if every word in it is true of this video. These are lowercase search queries: in the "
-        "title and description, capitalise names, brands and models as the source writes them "
+        + usage
+        + " A phrase is only usable if every word in it is true of this video. These are lowercase search "
+        "queries: in the title and description, capitalise names, brands and models as the source writes them "
         "(\"Samsung Galaxy S25 Ultra\", not \"samsung galaxy s25 ultra\"); tags stay lowercase.\n"
     )
 
@@ -432,6 +445,26 @@ def _build_user_prompt(
             + json.dumps(previous_copy, ensure_ascii=False)[:5000]
             + "\n"
         )
+    if is_short_content(script, creator_brief):
+        # Viewers of a Short are already watching it: its description speaks
+        # to them. A live Short's description was its production notes.
+        description_rule = (
+            "- write the description for viewers of this Short as 1-3 short lines: the exact quote (or, without "
+            "a quote, the video's core line), then one reflective line or question, and optionally a soft call to "
+            "action. No production notes: never describe the footage, scene, camera, slow motion, background, "
+            "on-screen text, or how the video was made (no \"This video features...\", \"accompanied by\", "
+            "\"the video is...\")"
+        )
+    else:
+        description_rule = (
+            "- write a video-specific description: 120-220 words whenever the source has that much substance "
+            "(never pad beyond what it supports). The first sentence must contain the main search phrase and the "
+            "concrete viewer payoff, because only about the first 150 characters show in search. Then cover what "
+            "the video actually contains — each step, point, ingredient, comparison, or verdict the source "
+            "mentions, in its order — so a viewer knows exactly what they will get\n"
+            "- make the description easy to scan with short natural paragraphs and 1-3 restrained, topic-relevant "
+            "emojis. Do not produce one dense wall of text"
+        )
     if (language or "").casefold() == "tamil":
         # A bilingual title needs room for both the Tamil and English phrase.
         title_length_rule = "45-85 characters"
@@ -439,6 +472,23 @@ def _build_user_prompt(
         title_length_rule = "35-65 characters"
     else:
         title_length_rule = "45-65 characters"
+    if quote and is_short_content(script, creator_brief):
+        # Asked for a SEARCH and a BROWSE slot, a live quote Short came back as
+        # the quote's opening words and echoes of it, and only two passed.
+        variants_rule = (
+            "- return exactly five distinct variants, each a different angle on the quote: 1) its core line in new "
+            "words, 2) speaking to the viewer, 3) naming the feeling it carries, 4) a question the viewer asks "
+            "themselves, 5) another truthful angle. Keep at least one of the quote's own key words in every title, "
+            "in the form the quote uses it, but never most of the quote: a title that repeats the quote or reads "
+            "almost like another variant is discarded"
+        )
+    else:
+        variants_rule = (
+            "- return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE "
+            "(truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel "
+            "evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are "
+            "additional truthful alternatives"
+        )
     # A script containing the closing delimiter could end the quoted block
     # early and pass the rest off as instructions.
     quoted_script = script.strip().replace('"""', r'\"\"\"')
@@ -463,10 +513,9 @@ Constraints:
 - these rules are for you, not the viewer. Never describe them in the copy: no "without adding stories or assumptions", "the exact emotional idea", "staying true to the source", "no invented details", and no mention of the brief, the creator's instructions, or production terms such as "talking head" or "b-roll"
 - when a quote contains a turn such as "but", "yet", or "now", make the title preserve the idea after that turn; do not title only the setup
 - preserve an obviously sarcastic, incredulous, playful, or rhetorical register without copying slang mechanically or turning it into a calm generic statement
-- write a video-specific description. Long-form: 120-220 words whenever the source has that much substance (never pad beyond what it supports); a single-quote Short: 45-100 words. The first sentence must contain the main search phrase and the concrete viewer payoff, because only about the first 150 characters show in search. Then cover what the video actually contains — each step, point, ingredient, comparison, or verdict the source mentions, in its order — so a viewer knows exactly what they will get
-- make the description easy to scan with short natural paragraphs and 1-3 restrained, topic-relevant emojis. Do not produce one dense wall of text
+{description_rule}
 - choose a description structure that fits this video. Do not reuse a universal hook, bullet list, chapter template, CTA, or "watch until the end" wording
-- include chapters only when real timestamps or a sufficiently detailed script supports them
+- do not write chapters or timestamps in the description: times are unknown before the cut, and the creator's own chapter list is added to the description separately
 - tags must be natural phrases that a person might type into search. Preserve contractions such as "didn't"; never make a tag by deleting grammar words from a quote, and never return a bag of unrelated quote words
 - research-backed SEO targets are candidates, not mandatory tags. Do not copy a title, exact quote, or competitor title into tags; use only targets that accurately describe the video
 - tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". For a Short, include the creator-preferred platform tags "yt" and "shorts" as two separate tags; do not include youtube shorts, viral shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
@@ -478,7 +527,7 @@ Constraints:
 - research may inform topic vocabulary, but it cannot invent what the video teaches, explains, demonstrates, or advises
 - do not infer a time of day, darkness, empty streets, weather, spoken narration, peace, comfort, or healing unless the creator source explicitly supplies it
 {silent_quote_rule}{non_instructional_rule}{undisclosed_message_rule}- title: {title_length_rule}, engaging, and matched to the actual content category. Unless this is a quote video, put the main search phrase a viewer would type within the first five words, and make every title a complete, grammatical phrase
-- return exactly five distinct variants. Variant 1 is SEARCH (natural topic phrase), variant 2 is BROWSE (truthful curiosity or emotion), and variant 3 is EXISTING AUDIENCE only when the source or channel evidence supports a personal proof/story; otherwise use a faithful resonance angle. Variants 4-5 are additional truthful alternatives
+{variants_rule}
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
 - use idiomatic language, but never infer "one-sided effort", exhaustion, abandonment, or another relationship dynamic unless the creator source states it
 - thumbnail text must add a short new idea; it must not merely repeat the title. Never use false guarantees, unrelated trends, or misleading claims.
@@ -602,6 +651,10 @@ def _sanitize_generated_package(
     quote = str((creator_brief or {}).get("exact_quote") or (creator_brief or {}).get("on_screen_text") or "").strip()
     quote = quote or source_quote(script, creator_brief)
     description = _naturalize_generated_text(str(cleaned.get("description") or ""))
+    if is_short_content(script, creator_brief):
+        # A Short's viewers are watching the scene already; "This video features
+        # ... accompanied by the exact on-screen text" is a production note.
+        description = strip_production_notes(description, f"{quote} {(creator_brief or {}).get('topic') or ''}")
     if quote:
         description = _remove_unsupported_description_sentences(description, script)
         if not description:
@@ -894,6 +947,11 @@ def write_multilang_packages_with_source(
             "initial_quality_status": gate["status"], "events": [str(first_trace.get("status") or "gemini_success")],
             **first_trace,
         }
+        if gate["passed"] and gate.get("rejected_candidates"):
+            # A passing package keeps only its accepted titles. Without this record
+            # a live quote Short lost three of five with no trace of why, and the
+            # refinement request cannot ask for alternatives that avoid them.
+            first["generation_trace"]["rejected_titles"] = _quality_rejection_summary(gate)["rejected_titles"]
         if gate["passed"] or not gate["repairable"]:
             if gate["passed"]:
                 first = _improve_passing_package(

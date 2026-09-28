@@ -40,10 +40,16 @@ class Settings(BaseSettings):
 
     youtube_api_key: str | None = None
     youtube_api_keys: str | None = None
-    # search.list costs 100 units for any page size up to 50; above 50 every
-    # search fails with HTTP 400.
+    # A search.list call counts once against the daily search allowance for any
+    # page size up to 50; above 50 every search fails with HTTP 400.
     youtube_max_results: int = Field(default=5, ge=1, le=50)
     youtube_max_research_queries: int = 5
+    # Daily quota of each key's Google Cloud project (and the OAuth client's),
+    # copied from Cloud Console: YouTube does not report what is left. search.list
+    # has its own bucket of calls; every other method draws units (1 per read)
+    # from the shared bucket. Used to show usage and warn at 90%, never to block.
+    youtube_search_calls_per_day: int = Field(default=100, ge=1)
+    youtube_units_per_day: int = Field(default=10_000, ge=1)
 
     cache_ttl_trending_seconds: int = 21600
     cache_ttl_evergreen_seconds: int = 604800

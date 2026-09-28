@@ -100,6 +100,46 @@ export interface DeletionCloudSync extends CloudSyncStatus {
   run_requested?: boolean;
 }
 
+/** One quota bucket of one source: requests counted today against its configured daily limit. */
+export interface QuotaBucket {
+  /** Searches for the search bucket; units for the shared bucket. */
+  used?: number;
+  limit?: number;
+  remaining?: number;
+  /** Requests sent; in the shared bucket each read costs one unit. */
+  calls?: number;
+}
+
+/** An API key slot ("key1"…) or the connected channel ("oauth"): never the key itself. */
+export interface QuotaSource {
+  source?: string;
+  label?: string;
+  /** search.list, with its own daily allowance of calls. */
+  search?: QuotaBucket;
+  /** Every other Data API method, drawing units from the shared bucket. */
+  default?: QuotaBucket;
+  /** YouTube Analytics has a quota of its own, so only its requests are counted. */
+  analytics?: { calls?: number };
+}
+
+/**
+ * Today's YouTube quota use, counted by the app itself: YouTube does not
+ * report what is left. `available` is false when the count could not be read,
+ * and then no source is listed.
+ */
+export interface YouTubeQuota {
+  available?: boolean;
+  /** The Pacific quota day, "2026-09-25". */
+  quota_date?: string;
+  /** The next Pacific midnight, in UTC. */
+  resets_at?: string;
+  /** From settings, which should match Google Cloud Console. */
+  limits?: { search_calls_per_day?: number; units_per_day?: number };
+  sources?: QuotaSource[];
+  /** A bucket at 90% or more of its limit. */
+  warnings?: string[];
+}
+
 export interface SettingsStatus {
   app?: { name?: string; version?: string; environment?: string };
   database?: {
@@ -126,6 +166,7 @@ export interface SettingsStatus {
     redis?: { configured?: boolean };
   };
   collector?: CollectorStatus;
+  youtube_quota?: YouTubeQuota;
   // `youtube_oauth` and `cloud_sync` are also sent, but Settings reads the
   // channel and cloud sync from their own status endpoints, so they aren't typed.
 }

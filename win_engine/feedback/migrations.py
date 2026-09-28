@@ -13,7 +13,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 _BACKUPS_KEPT = 10
 # The pre-migration state is what a backup must preserve, so a migration that
 # is retried in the same process does not copy the whole database again.
@@ -222,6 +222,7 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA journal_mode = WAL")
     _create_independent_tables(connection)
     _create_relational_tables(connection)
+    _create_v11_additions(connection)
     _create_indexes(connection)
     connection.execute(
         """CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -232,7 +233,7 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
-        (CURRENT_SCHEMA_VERSION, datetime.now(timezone.utc).isoformat(), _V10_DESCRIPTION),
+        (CURRENT_SCHEMA_VERSION, datetime.now(timezone.utc).isoformat(), _V11_DESCRIPTION),
     )
     connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
     connection.commit()
@@ -533,6 +534,71 @@ def _migrate_v9_to_v10(connection: sqlite3.Connection) -> None:
 
 
 _V10_DESCRIPTION = "Keep the losing local edit with each cloud sync conflict; uploads by channel; one spelling per format"
+
+
+def _migrate_v10_to_v11(connection: sqlite3.Connection) -> None:
+    """Count YouTube quota per bucket, record YouTube Studio title/thumbnail tests, and keep traffic sources."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_v11_additions(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (11, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), _V11_DESCRIPTION),
+        )
+        connection.execute("PRAGMA user_version = 11")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+_V11_DESCRIPTION = "YouTube quota per bucket; YouTube Studio title/thumbnail tests; snapshot traffic sources"
+
+
+def _create_v11_additions(connection: sqlite3.Connection) -> None:
+    """Version 11's tables and snapshot column, for the v10 step and a new database alike.
+
+    The column is appended with ALTER TABLE in both cases, so a migrated
+    database and a new one list the snapshot columns in the same order.
+    """
+    # Calls and units spent per Pacific quota day, per quota bucket
+    # ("search" for search.list, "default" for every other Data API
+    # method) and per source (an API key's slot, or the OAuth connection).
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS youtube_quota_usage (
+               quota_date TEXT NOT NULL,
+               source TEXT NOT NULL,
+               bucket TEXT NOT NULL,
+               calls INTEGER NOT NULL DEFAULT 0,
+               units INTEGER NOT NULL DEFAULT 0,
+               updated_at TEXT NOT NULL,
+               PRIMARY KEY (quota_date, source, bucket)
+           )"""
+    )
+    # Up to three title/thumbnail variants prepared for YouTube Studio's own
+    # A/B test on one long-form video, and the result the creator read there.
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS youtube_studio_tests (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               analysis_run_id INTEGER NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
+               published_video_link_id INTEGER REFERENCES published_video_links(id) ON DELETE SET NULL,
+               variants_json TEXT NOT NULL,
+               status TEXT NOT NULL DEFAULT 'prepared',
+               winner_variant TEXT,
+               result_json TEXT,
+               notes TEXT NOT NULL DEFAULT '',
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_studio_tests_run ON youtube_studio_tests(analysis_run_id)"
+    )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(video_performance_snapshots)")}
+    if "traffic_sources_json" not in columns:
+        connection.execute("ALTER TABLE video_performance_snapshots ADD COLUMN traffic_sources_json TEXT")
+
+
 # history_store's format spellings as version 10 shipped them. A migration must
 # keep doing what it did then, so it has its own copy.
 _V10_FORMATS = frozenset({
@@ -585,6 +651,7 @@ _MIGRATIONS = (
     _migrate_v7_to_v8,
     _migrate_v8_to_v9,
     _migrate_v9_to_v10,
+    _migrate_v10_to_v11,
 )
 assert len(_MIGRATIONS) == CURRENT_SCHEMA_VERSION
 

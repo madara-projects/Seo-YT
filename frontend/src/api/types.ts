@@ -281,7 +281,10 @@ export interface AnalyzeResponse {
   keyword_research?: KeywordResearch;
   pacing_analysis?: PacingAnalysis;
   ctr_prediction?: { title_quality_score?: number | null };
-  opportunity_gap_analysis?: { opportunity_score?: { score?: number | null; label?: string } };
+  opportunity_gap_analysis?: {
+    // The breakdown is read through parseOpportunityBreakdown (api/opportunityTypes.ts).
+    opportunity_score?: { score?: number | null; label?: string; breakdown?: unknown };
+  };
 
   [key: string]: unknown;
 }

@@ -43,7 +43,7 @@ _RECORD_ID = re.compile(r"/[\s+-]*\d[\d_.\s]*(?=/|$)")
 _COSTLY_PATHS = frozenset(
     {"/analyze", "/diagnostics", "/api/demand/research", "/api/watchlist/channels", "/api/watchlist/videos", "/api/cloud-sync/run"}
 )
-_COSTLY_SUFFIXES = ("/research", "/generate", "/demand-research", "/refresh", "/link-video")
+_COSTLY_SUFFIXES = ("/research", "/generate", "/demand-research", "/refresh", "/link-video", "/retention-probe")
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",

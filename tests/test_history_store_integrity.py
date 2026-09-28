@@ -258,7 +258,7 @@ class StartupTests(unittest.TestCase):
             # Logged, as at every later start-up, instead of failing this start only.
             with self.assertLogs(migrations.logger, level="WARNING") as logs:
                 result = migrations.prepare_database(str(path))
-            self.assertEqual((result.old_version, result.new_version), (9, 10))
+            self.assertEqual((result.old_version, result.new_version), (9, migrations.CURRENT_SCHEMA_VERSION))
             self.assertIn("foreign-key violation", logs.output[0])
 
     def test_a_negative_schema_version_is_refused_untouched(self):
@@ -306,7 +306,7 @@ class StartupTests(unittest.TestCase):
             connection.close()
 
             result = migrations.prepare_database(str(path))
-            self.assertEqual((result.old_version, result.new_version), (9, 10))
+            self.assertEqual((result.old_version, result.new_version), (9, migrations.CURRENT_SCHEMA_VERSION))
             connection = sqlite3.connect(path)
             try:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(cloud_sync_conflicts)")}
@@ -314,6 +314,39 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
             finally:
                 connection.close()
+
+    def test_a_new_database_has_the_same_version_11_schema_as_a_migrated_one(self):
+        def schema(path: Path) -> tuple[set, list, list]:
+            connection = sqlite3.connect(path)
+            try:
+                names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'index')")}
+                snapshot_columns = connection.execute("PRAGMA table_info(video_performance_snapshots)").fetchall()
+                versions = connection.execute("SELECT version, description FROM schema_migrations WHERE version = 11").fetchall()
+                return names, snapshot_columns, versions
+            finally:
+                connection.close()
+
+        with tempfile.TemporaryDirectory() as folder:
+            new_path = Path(folder) / "new.db"
+            migrations.prepare_database(str(new_path))
+            migrated_path = Path(folder) / "v10.db"
+            migrations.prepare_database(str(migrated_path))
+            connection = sqlite3.connect(migrated_path)
+            connection.execute("DROP TABLE youtube_quota_usage")
+            connection.execute("DROP TABLE youtube_studio_tests")
+            connection.execute("ALTER TABLE video_performance_snapshots DROP COLUMN traffic_sources_json")
+            connection.execute("DELETE FROM schema_migrations WHERE version = 11")
+            connection.execute("PRAGMA user_version = 10")
+            connection.commit()
+            connection.close()
+
+            result = migrations.prepare_database(str(migrated_path))
+            self.assertEqual((result.old_version, result.new_version), (10, 11))
+            new_names, new_columns, new_versions = schema(new_path)
+            self.assertTrue({"youtube_quota_usage", "youtube_studio_tests", "idx_studio_tests_run"} <= new_names)
+            self.assertIn("traffic_sources_json", [column[1] for column in new_columns])
+            self.assertEqual(new_versions, [(11, migrations._V11_DESCRIPTION)])
+            self.assertEqual(schema(migrated_path)[:2], (new_names, new_columns))
 
     def test_old_backups_are_pruned(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -35,7 +35,7 @@ class SnapshotCollector:
             "next_run_at": None,
             "last_error": None,
             "last_plan": [],
-            "last_counts": {"links": 0, "windows": 0, "captured": 0, "failed": 0},
+            "last_counts": {"links": 0, "windows": 0, "captured": 0, "traffic_sources": 0, "failed": 0},
         }
 
     def start(self) -> None:
@@ -85,7 +85,12 @@ class SnapshotCollector:
             )
             selected = due[: max(1, int(self.settings.snapshot_collector_max_links_per_run))]
             plan = [{"link_id": item["id"], "video_id": item["youtube_video_id"], "windows": item["due_windows"], "age_hours": item["age_hours"]} for item in selected]
-            counts = {"links": len(selected), "windows": sum(len(item["due_windows"]) for item in selected), "captured": 0, "failed": 0}
+            # Each captured window also asks for its traffic sources; `traffic_sources`
+            # counts the windows that got a breakdown (a refusal leaves it null).
+            counts = {
+                "links": len(selected), "windows": sum(len(item["due_windows"]) for item in selected),
+                "captured": 0, "traffic_sources": 0, "failed": 0,
+            }
             self._status["last_plan"] = plan
             self._status["last_counts"] = counts
             if self.settings.snapshot_collector_dry_run:
@@ -105,7 +110,9 @@ class SnapshotCollector:
                     result = service.refresh_linked_video_performance(
                         item, force=False, collect_current=False, windows=item["due_windows"]
                     )
-                    counts["captured"] += len(result.get("captured") or [])
+                    captured = result.get("captured") or []
+                    counts["captured"] += len(captured)
+                    counts["traffic_sources"] += sum(1 for snapshot in captured if snapshot.get("traffic_sources"))
                 except LinkUnavailable:
                     # The link is marked failed and leaves the plan; the others go on.
                     counts["failed"] += 1

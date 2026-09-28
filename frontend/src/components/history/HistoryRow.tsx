@@ -1,4 +1,5 @@
-import { Eye, Link2, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, Eye, Link2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
@@ -7,6 +8,7 @@ import { cn, UNAVAILABLE } from "@/lib/utils";
 import { initialOf } from "@/lib/format";
 import { roundOpportunity, roundTitleScore } from "@/lib/dashboardFormat";
 import { historyDate, runTitle } from "@/lib/historyFormat";
+import { RunOpportunityInputs } from "./HistoryOpportunityBreakdown";
 import type { HistoryRun } from "@/api/historyTypes";
 
 /** Rounded as the Dashboard rounds it; an unmeasured score says so instead of "0". */
@@ -57,6 +59,8 @@ export function HistoryRow({
   onDelete: () => void;
 }) {
   const title = runTitle(run);
+  const [showInputs, setShowInputs] = useState(false);
+  const inputsId = `opportunity-inputs-${run.id}`;
   const isLinked = Boolean(run.linked_youtube_video_id);
   const angle = run.content_angle || run.intent || "General";
 
@@ -117,7 +121,20 @@ export function HistoryRow({
         aria-label="Package scores"
         className="flex gap-5 pl-[4.35rem] lg:pl-0"
       >
-        <Score label="Opportunity" value={roundOpportunity(run.opportunity_score)} suffix="/100" max={100} />
+        <div className="space-y-1">
+          <Score label="Opportunity" value={roundOpportunity(run.opportunity_score)} suffix="/100" max={100} />
+          <button
+            type="button"
+            onClick={() => setShowInputs((open) => !open)}
+            aria-expanded={showInputs}
+            aria-controls={inputsId}
+            aria-label={`Score inputs for ${title}`}
+            className="inline-flex items-center gap-0.5 rounded-md text-[0.6875rem] font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Score inputs
+            <ChevronDown className={cn("size-3 transition-transform", showInputs && "rotate-180")} aria-hidden="true" />
+          </button>
+        </div>
         <Score label="Title quality" value={roundTitleScore(run.title_score)} suffix="/10" max={10} />
       </div>
 
@@ -135,6 +152,12 @@ export function HistoryRow({
           Delete
         </Button>
       </div>
+
+      {showInputs ? (
+        <div className="pl-[4.35rem] lg:col-span-3 lg:pl-0">
+          <RunOpportunityInputs runId={run.id} id={inputsId} />
+        </div>
+      ) : null}
     </article>
   );
 }

@@ -22,9 +22,14 @@ from win_engine.analysis.demand_explorer import analyze_demand, idea_fingerprint
 from win_engine.core.config import get_settings
 from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest, ExperimentMode, ExperimentStatus
 from win_engine.feedback.history_store import HistoryStore
+from win_engine.feedback.quota_ledger import quota_status
 from win_engine.ingestion.cache import probe_cache_backend
 from win_engine.feedback.intelligence_store import AlreadyWatched, IntelligenceStore
 from win_engine.feedback.audit_experiment_store import AuditExperimentStore
+from win_engine.feedback.retention_probe import curve_observations
+from win_engine.feedback.studio_tests import CreateStudioTestRequest, StudioTestError, StudioTestStore, UpdateStudioTestRequest, run_is_short
+from win_engine.core.iso_duration import duration_seconds
+from win_engine.feedback.score_calibration import opportunity_score_calibration
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.ingestion.research_service import ResearchService
 from win_engine.ingestion.youtube_client import YouTubeClient
@@ -225,6 +230,8 @@ def settings_status(request: Request):
                           "last_synced_at": (youtube.get("latest_sync") or {}).get("synced_at")},
         "collector": collector.status() if collector else {"state": "disabled", "enabled": False},
         "cloud_sync": cloud.status() if cloud else {"state": "disabled", "enabled": False},
+        # Today's YouTube quota use per key slot and the channel; never a key.
+        "youtube_quota": quota_status(settings, oauth_connected=youtube.get("connected")),
     }
 
 
@@ -909,6 +916,59 @@ def update_comparable_metadata(link_id: int, payload: ComparableMetadataRequest)
     return {"status": "updated", "link_id": link_id, "comparable_metadata": result}
 
 
+@router.post("/api/published-videos/{link_id}/retention-probe")
+def probe_published_video_retention(link_id: int):
+    """One YouTube Analytics request for the video's retention curve; nothing is stored."""
+    settings = get_settings()
+    store = HistoryStore(settings.database_path)
+    link = store.published_video_link(link_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Published video link not found.")
+    result = YouTubeChannelService(settings).probe_retention_curve(link)
+    run = store.history_run(int(link.get("analysis_run_id") or 0)) or {}
+    package = run.get("package") if isinstance(run.get("package"), dict) else {}
+    seconds = duration_seconds((link.get("youtube_metadata") or {}).get("duration"))
+    result["duration_seconds"] = seconds
+    result["observations"] = curve_observations(
+        result.get("points") or [], duration_seconds=seconds,
+        chapters=package.get("chapters") if isinstance(package.get("chapters"), list) else [],
+        short=run_is_short(run, link),
+    ) if result.get("status") == "available" else None
+    return result
+
+
+# --- YouTube Studio title/thumbnail tests (record-only; YouTube runs them) ---
+
+@router.get("/api/history/runs/{run_id}/studio-tests")
+def get_studio_tests(run_id: int):
+    overview = StudioTestStore(HistoryStore(get_settings().database_path)).overview(run_id)
+    if overview is None:
+        raise HTTPException(status_code=404, detail="Saved SEO package not found.")
+    return overview
+
+
+@router.post("/api/history/runs/{run_id}/studio-tests", status_code=201)
+def create_studio_test(run_id: int, payload: CreateStudioTestRequest):
+    try:
+        test = StudioTestStore(HistoryStore(get_settings().database_path)).create(run_id, payload.package_ids, payload.notes)
+    except StudioTestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if test is None:
+        raise HTTPException(status_code=404, detail="Saved SEO package not found.")
+    return test
+
+
+@router.patch("/api/studio-tests/{test_id}")
+def update_studio_test(test_id: int, payload: UpdateStudioTestRequest):
+    try:
+        test = StudioTestStore(HistoryStore(get_settings().database_path)).update(test_id, payload.model_dump(exclude_unset=True))
+    except StudioTestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if test is None:
+        raise HTTPException(status_code=404, detail="Studio test not found.")
+    return test
+
+
 # --- Stage C: Cohort Evidence Endpoints ---
 
 @router.get("/api/learning/cohorts")
@@ -918,6 +978,7 @@ def get_cohort_analytics(
     duration_bucket: str | None = None,
     topic_category: str | None = None,
     window: str = "24h",
+    traffic_source: str | None = None,
 ):
     store = HistoryStore(get_settings().database_path)
     try:
@@ -927,7 +988,18 @@ def get_cohort_analytics(
             duration_bucket_filter=duration_bucket,
             topic_category_filter=topic_category,
             snapshot_window=window,
+            traffic_source_filter=traffic_source,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/api/opportunity-score/calibration")
+def get_opportunity_score_calibration(window: str | None = None):
+    """Whether past Opportunity Scores went with more views in comparable videos: an association only."""
+    store = HistoryStore(get_settings().database_path)
+    try:
+        return opportunity_score_calibration(store, snapshot_window=window)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

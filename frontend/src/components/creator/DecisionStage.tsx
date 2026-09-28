@@ -4,6 +4,7 @@ import { CopyButton } from "@/components/common/CopyButton";
 import { EvidenceChip, SourceLegend } from "@/components/common/EvidenceChip";
 import { Panel } from "@/components/common/Panel";
 import { EmptyState } from "@/components/common/States";
+import { StudioTestPanel } from "@/components/learning/StudioTestPanel";
 import { asArray, asObject, formatNumber } from "@/lib/utils";
 import { opportunityText, titleScoreText } from "@/lib/dashboardFormat";
 import { copyValue } from "@/lib/packages";
@@ -21,17 +22,26 @@ export function DecisionStage({
   selectionStatus: SelectionStatus;
   onExport: () => void;
 }) {
+  // YouTube Studio's own title/thumbnail test is prepared from the saved run,
+  // whichever package ends up chosen.
+  const studioTest = data ? (
+    <StudioTestPanel runId={typeof data.history_run_id === "number" ? data.history_run_id : null} />
+  ) : null;
+
   if (!data || !selected) {
     return (
-      <EmptyState
-        icon={Stamp}
-        title="No decision to review yet"
-        description={
-          data
-            ? "Choose a package on the Package or Compare options tab first. Nothing counts as your decision until you choose one."
-            : "Generate a package and choose one before reviewing the final decision."
-        }
-      />
+      <div className="space-y-5">
+        <EmptyState
+          icon={Stamp}
+          title="No decision to review yet"
+          description={
+            data
+              ? "Choose a package on the Package or Compare options tab first. Nothing counts as your decision until you choose one."
+              : "Generate a package and choose one before reviewing the final decision."
+          }
+        />
+        {studioTest}
+      </div>
     );
   }
 
@@ -152,6 +162,8 @@ export function DecisionStage({
           </div>
         </Panel>
       </div>
+
+      {studioTest}
 
       <SourceLegend />
     </div>
