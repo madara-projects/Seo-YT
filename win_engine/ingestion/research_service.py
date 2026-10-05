@@ -12,6 +12,7 @@ from win_engine.analysis.keyword_extractor import extract_keyword_signals
 from win_engine.analysis.research_insights import build_research_decision
 from win_engine.analysis.semantic_research import analyze_script_semantics, refine_research_semantics
 from win_engine.analysis.keyword_research import build_keyword_research, demand_seed_phrases
+from win_engine.analysis.numbers import optional_number
 from win_engine.analysis.search_opportunities import discover_search_opportunities
 from win_engine.analysis.source_cues import is_short_duration
 from win_engine.analysis.research_planner import brief_research_text, plan_research_queries
@@ -44,11 +45,41 @@ _MAX_REFINEMENT_QUERIES = 2
 # A Short gets the primary search and the two best others, refinement
 # included: search.list has its own bucket of 100 calls a day per project.
 _SHORT_MAX_SEARCHES = 3
+# YouTube's videoDuration bands meet at 4 and 20 minutes. A length this close
+# to an edge has rivals in both bands, and one search can ask for only one.
+_BAND_EDGES_SECONDS = (4 * 60, 20 * 60)
+_BAND_EDGE_MARGIN_SECONDS = 3 * 60
 _UNKNOWN_TIME = datetime.min.replace(tzinfo=timezone.utc)
 _NO_TOPIC_WARNING = (
     "No usable research topic survived semantic validation. Review the supplied topic before relying on "
     "this package's SEO research."
 )
+_WRITER_RESERVE_WARNING = (
+    "Semantic research stopped before a usable Gemini answer: this request's remaining calls were left to the "
+    "writer, so the searches came from the brief's own words."
+)
+
+
+def _search_duration(short_form: bool, creator_brief: dict[str, Any] | None) -> str | None:
+    """YouTube's videoDuration band for this video's searches, or None for every length.
+
+    The bands are "short" (under 4 minutes), "medium" (4 to 20) and "long"
+    (over 20), one a search. A Short searches short videos. A long-form video
+    searches every length, since a band would drop its rivals on the other
+    side of an edge (a tutorial of unknown length against 25-60 minute ones),
+    unless its creator stated a length more than three minutes inside the
+    medium or long band. A length read out of the script is not stated.
+    """
+
+    if short_form:
+        return "short"
+    brief = creator_brief or {}
+    source = ((brief.get("field_provenance") or {}).get("duration_seconds") or {}).get("source")
+    # A number read out of the script ("for 90 seconds") is not the video's length.
+    seconds = optional_number(brief.get("duration_seconds")) if source in (None, "creator_supplied") else None
+    if seconds is None or any(abs(seconds - edge) <= _BAND_EDGE_MARGIN_SECONDS for edge in _BAND_EDGES_SECONDS):
+        return None
+    return "long" if seconds > 20 * 60 else "medium" if seconds > 4 * 60 else None
 
 
 def _words(value: object) -> list[str]:
@@ -143,9 +174,12 @@ class ResearchService:
         query = research_queries[0]["query"] if research_queries else script[:120]
         # Reported only: each query is cached for its own policy.
         cache_policy, _ = self._select_cache_policy(query)
-        locale = {"region": region, "primary_language": primary_language}
+        # A Short's searches ask YouTube for short videos: its page of long
+        # videos used to be fetched and mostly dropped. See _search_duration.
+        search = {"region": region, "primary_language": primary_language,
+                  "video_duration": _search_duration(short_form, creator_brief)}
 
-        youtube_results, query_diagnostics = self._search_research_queries(research_queries, **locale)
+        youtube_results, query_diagnostics = self._search_research_queries(research_queries, **search)
         attempts = list(query_diagnostics["query_attempts"])
         youtube_results = self._filter_relevant_results(youtube_results, creator_brief)
         query_diagnostics["youtube_results_relevant"] = len(youtube_results)
@@ -208,7 +242,7 @@ class ResearchService:
                 if len(extra_queries) == max_extra:
                     break
             if extra_queries:
-                extra_results, extra_diagnostics = self._search_research_queries(extra_queries, **locale)
+                extra_results, extra_diagnostics = self._search_research_queries(extra_queries, **search)
                 attempts.extend(extra_diagnostics["query_attempts"])
                 # A video found again keeps the queries of both passes; the
                 # refinement row used to replace the first-pass row outright.
@@ -217,6 +251,9 @@ class ResearchService:
                     key = str(row.get("video_id"))
                     merged[key] = self._merge_rows(merged[key], row) if key in merged else row
                 scored_results = score_outliers(self._filter_relevant_results(list(merged.values()), creator_brief))
+                # Counted over the results the gap analysis compares them with.
+                keyword_signals = extract_keyword_signals(research_text, scored_results)
+                entity_signals = extract_entity_signals(research_text, scored_results)
                 research_queries.extend(extra_queries)
                 for field in ("secondary_topics", "search_intents", "concept_evidence", "keyword_clusters"):
                     semantic_analysis[field] = [*(semantic_analysis.get(field) or []), *(refinement.get(field) or [])]
@@ -262,6 +299,8 @@ class ResearchService:
         thumbnail_intelligence = analyze_thumbnails(scored_results)
         runtime_state = self._youtube.runtime_state()
         research_warnings = _research_warnings(attempts, research_queries, self._settings)
+        if semantic_analysis.get("fallback_reason") == "gemini_writer_reserve":
+            research_warnings.append(_WRITER_RESERVE_WARNING)
 
         logger.info(
             "Research gathered: youtube=%s",
@@ -292,8 +331,15 @@ class ResearchService:
         *,
         region: str = "global",
         primary_language: str = "english",
+        video_duration: str | None = None,
     ) -> tuple[list[dict[str, object]], dict[str, object]]:
-        """Search each planned angle and de-duplicate videos across the result set."""
+        """Search each planned angle and de-duplicate videos across the result set.
+
+        Each search is one search.list call for a page of YOUTUBE_MAX_RESULTS
+        results, the same call whatever the page size, plus one videos.list and
+        one channels.list call (1 unit each) for the page's statistics.
+        ``video_duration`` is YouTube's length band (see _search_duration).
+        """
 
         max_results = self._settings.youtube_max_results
         locale = {
@@ -312,7 +358,11 @@ class ResearchService:
                 # filter would drop everything a search, one of the day's few, returned.
                 attempt.update({"cache": "skipped", "result_count": 0, "status": "skipped"})
                 continue
-            cache_input = "|".join([query.casefold(), str(max_results), *(value or "" for value in locale.values())])
+            # The page size and the length filter are part of the key: a page of
+            # 5 videos of any length is not the answer to a page of 25 short ones.
+            cache_input = "|".join([
+                query.casefold(), str(max_results), video_duration or "", *(value or "" for value in locale.values()),
+            ])
             digest = sha256(cache_input.encode("utf-8")).hexdigest()[:20]
             # The key is the search alone, so every later run finds it, and the
             # query's own policy sets how long it is kept.
@@ -327,7 +377,7 @@ class ResearchService:
                 # two 1-unit lookups again, not another search.
                 results = (
                     self._youtube.attach_statistics(page["rows"]) if page
-                    else self._youtube.search_videos(query, max_results, **locale) or []
+                    else self._youtube.search_videos(query, max_results, video_duration=video_duration, **locale) or []
                 )
                 attempt["warning"] = self._youtube.runtime_state().get("warning")
                 complete = [row for row in results if row.get("captured_at")]
@@ -370,11 +420,16 @@ class ResearchService:
             "queries_skipped": sum(1 for item in attempts if item["status"] == "skipped"),
             "youtube_results_collected": sum(int(item["result_count"]) for item in attempts),
             "youtube_results_unique": len(merged),
+            "page_size": max_results,
+            "video_duration": video_duration,
             "query_attempts": attempts,
             "quota_policy": (
                 "Queries are de-duplicated and bounded by YOUTUBE_MAX_RESEARCH_QUERIES, plus at most "
                 f"{_MAX_REFINEMENT_QUERIES} refinement queries; a Short gets at most {_SHORT_MAX_SEARCHES} searches "
-                "in all, refinement included. Each returns at most YOUTUBE_MAX_RESULTS results. "
+                "in all, refinement included. Each search is one search.list call for a page of at most "
+                "YOUTUBE_MAX_RESULTS results (one call whatever the page size), of short videos for a Short and "
+                "of any length for long form unless its stated length sits well inside YouTube's medium or long band, "
+                "plus one videos.list and one channels.list call of 1 unit each for the page's statistics. "
                 "Queries without a searchable word are skipped. Results with complete statistics are cached "
                 "in Redis when configured, otherwise in this process's memory. A search whose statistics lookup "
                 "failed is kept, so a later run repeats only the 1-unit statistics lookups."

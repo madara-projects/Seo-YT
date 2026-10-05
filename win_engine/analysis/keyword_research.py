@@ -7,6 +7,7 @@ copied directly into the final tag list.
 from __future__ import annotations
 
 import re
+import unicodedata
 from functools import lru_cache
 from typing import Any, Iterable
 
@@ -17,6 +18,7 @@ from win_engine.analysis.generation_quality import (
 )
 from win_engine.analysis.search_opportunities import UNSUPPORTED_ADJACENT_CONTEXT
 from win_engine.analysis.text_tokens import (
+    JOINERS,
     is_word_character,
     normalize_unicode,
     strip_stray_joiners,
@@ -28,7 +30,8 @@ from win_engine.ingestion.search_suggest import demand_rank, suggestion_index
 
 
 _FORMAT_GENERIC = {"short", "shorts", "yt", "video", "videos", "youtube", "content", "viral", "trending", "fyp"}
-_PREFERRED_SHORT_TAGS = ("yt", "shorts")
+# "shorts" is the creator's one format tag; "yt" is a tag nobody searches.
+_PREFERRED_SHORT_TAGS = ("shorts",)
 _BROAD_EMOTIONAL_TERMS = {
     "emotion", "emotional", "feelings", "healing", "hurt", "loneliness", "lonely",
     "motivation", "pain", "sad", "sadness", "selfcare", "self-care",
@@ -46,7 +49,38 @@ _CREATOR_META_PHRASES = (
     "according to the prompt", "without context", "no specific life problem", "silent reflective quote",
     "minimal reflection",
 )
-_FRAGMENT_ENDINGS = {"near", "one", "then", "every", "same", "even", "empty", "while", "neither", "after", "before", "with", "without", "of", "for", "to"}
+# Not "a": a letter after a noun names a thing ("vitamin a", "plan a").
+_FRAGMENT_ENDINGS = {
+    "near", "one", "then", "every", "same", "even", "empty", "while", "neither", "after", "before", "with",
+    "without", "of", "for", "to",
+    "than", "that", "their", "your", "my", "its", "an", "the", "by", "and", "or", "but", "if", "so",
+}
+# A phrase lifted from a brief and cut short ends on a verb that needs its
+# clause ("older get", "how rare have"); after its subject, "to" or a modal it
+# ends one ("who you are", "the older you get", "nice to have", "must have").
+# Not "can" or "do": "trash can", "things to do".
+_CLAUSE_VERB_ENDINGS = {
+    "is", "are", "was", "were", "be", "been", "am", "does", "did", "will", "would", "could",
+    "should", "have", "has", "had", "get", "gets", "got",
+}
+_SUBJECT_WORDS = {"i", "you", "we", "they", "he", "she", "it", "who", "what", "people", "someone", "everyone"}
+_CLAUSE_VERB_LEADS = _SUBJECT_WORDS | {"to", "must", "will", "would", "can", "could", "should", "might", "may"}
+# A question word ends a label cut short ("screen why"), not a longer phrase ("no matter what").
+_WH_ENDINGS = {"why", "how", "what", "when", "where", "which", "who", "whom"}
+# A tag may not open with grammar that needs a clause before it. Not "the"
+# or "at": "the office", "at home workout" are what people type; nor a
+# question's opening ("is iphone 16 worth it", "which iphone to buy").
+_FRAGMENT_STARTS = {"and", "but", "or", "of", "with", "from", "that", "then", "also", "than", "as", "by"}
+# The creator's notes about the production, which a brief's prose carries
+# ("the quote on the screen", "typewriter reveal"), are not what viewers
+# search unless the video is about them: "text overlay capcut" is a real
+# search on a CapCut tutorial (see _production_note). Whole words and
+# phrases: "screen recording" stays a real search.
+_NOTE_LABEL_WORDS = {"onscreen", "overlay", "typewriter", "narration", "voiceover", "backdrop", "broll"}
+_NOTE_LABEL_PHRASES = (
+    "on screen", "on the screen", "quote on", "screen text", "text overlay", "typewriter reveal",
+    "voice over", "no narration", "b roll", "the video is", "video is of", "background is",
+)
 _ABSTRACT_CONCEPTS = {"heartbreak", "loneliness", "rejection", "healing", "loss", "abandonment", "forgotten", "unseen", "erased", "distance", "absence", "grief", "betrayal"}
 _PHRASE_CONCEPTS = (
     "coping with feeling forgotten", "being forgotten by someone", "feeling forgotten",
@@ -155,8 +189,11 @@ def build_keyword_research(
 
     scored: list[dict[str, Any]] = []
     rejected_before_selection = 0
+    subject_text = _subject_text(script, brief)
     for candidate in candidates.values():
-        entry = _score(candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms)
+        entry = None if _production_note(candidate["keyword"], subject_text) else _score(
+            candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms,
+        )
         if entry and not (non_instructional and has_unsupported_instructional_framing(entry.get("keyword"))):
             _annotate_demand(entry, demand_index, subjects)
             scored.append(entry)
@@ -258,11 +295,19 @@ def select_final_tags(
 
     eligible: list[dict[str, Any]] = []
     rejected_count = 0
+    subject_text = _subject_text(script, brief)
+    unresearched = not research.get("candidates") and not research.get("search_demand")
     for item in indexed.values():
         entry = dict(item)
-        if non_instructional and has_unsupported_instructional_framing(entry.get("keyword")):
+        # The quote's own words ("stop explaining yourself") reproduce the
+        # source; only instructional wording it does not contain is a claim.
+        if non_instructional and has_unsupported_instructional_framing(entry.get("keyword"), f"{script}\n{quote}"):
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "unsupported_instructional_framing", "source": entry.get("source")})
+            continue
+        if _production_note(entry.get("keyword"), subject_text):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "production_note", "source": entry.get("source")})
             continue
         reject_reason = _reject_reason(entry, title, quote, content_terms)
         if reject_reason:
@@ -272,6 +317,19 @@ def select_final_tags(
         if int(entry.get("source_support_score") or 0) < 50:
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "weak_source_support", "source": entry.get("source")})
+            continue
+        # The brief's own prose ("deep emotional resonance relatable truth and
+        # life", "a relatable quiet reflection about surviving life") is what
+        # the creator wrote to the tool, not what viewers search; a Short's
+        # tag is a short phrase.
+        brief_reason = (
+            "too_long_for_a_short_tag" if short_requested and tag_length(entry.get("keyword")) > MAX_SHORT_TAG_CHARS
+            else "brief_fragment" if not entry.get("demand_validated") and _brief_fragment(entry.get("keyword"), brief, script)
+            else None
+        )
+        if brief_reason:
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": brief_reason, "source": entry.get("source")})
             continue
         # One-letter model names carry the whole difference: "xbox series s"
         # passed as grounded on a video about the Series X.
@@ -290,7 +348,10 @@ def select_final_tags(
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "entity_not_in_source", "source": entry.get("source")})
             continue
-        if int(entry.get("keyword_relevance_score") or 0) < 50:
+        # Without research (the AI Shorts path makes none) a writer's tag has no
+        # evidence to score; one the source's own words support is kept.
+        quote_grounded = unresearched and entry.get("source") == "model" and int(entry.get("source_support_score") or 0) >= 50
+        if int(entry.get("keyword_relevance_score") or 0) < 50 and not quote_grounded:
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "below_minimum_tag_quality", "source": entry.get("source")})
             continue
@@ -378,7 +439,7 @@ def select_final_tags(
             "candidates_rejected_at_selection": rejected_count,
             "candidates_selected": len(chosen),
         },
-        "selection_policy": "Tags are atomic source-grounded search concepts. Multi-word result evidence requires strict phrase-term coverage; planned-query alignment is scored separately and is never represented as search volume. A second tag from the same topic family is retained only when it independently clears 72 or has matching-result evidence and keeps the selected subject-tag average at or above 72. Weak generic, visual-only, title-copy, quote-copy, malformed, duplicate, competitor-derived, and unsupported candidates are excluded; visual context is capped at one tag. The creator-preferred yt and shorts platform tags are appended only for Shorts.",
+        "selection_policy": "Tags are atomic source-grounded search concepts. Multi-word result evidence requires strict phrase-term coverage; planned-query alignment is scored separately and is never represented as search volume. A second tag from the same topic family is retained only when it independently clears 72 or has matching-result evidence and keeps the selected subject-tag average at or above 72. Weak generic, visual-only, title-copy, quote-copy, malformed, duplicate, competitor-derived, and unsupported candidates are excluded; visual context is capped at one tag. The creator-preferred shorts platform tag is appended only for Shorts.",
     }
     return tags, evidence
 
@@ -953,6 +1014,7 @@ def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
     matched = {
         word for word in words
         if word in source_terms or _term_root(word) in source_roots or _sounds_grounded(word, cross_script)
+        or (len(word) >= 7 and any(_same_long_stem(word, source) for source in source_terms if len(source) >= 7))
     }
     # A related search result cannot add an unrelated domain, use case, or
     # decision frame merely because it is popular in YouTube search.
@@ -976,6 +1038,10 @@ def _result_relevant(row: dict[str, Any], content_terms: set[str]) -> bool:
 def _content_score(text: str, content_terms: set[str]) -> int:
     tokens = set(_tokens(text))
     matched = tokens & content_terms
+    matched |= {
+        token for token in tokens if len(token) >= 7
+        and any(_same_long_stem(token, term) for term in content_terms if len(term) >= 7)
+    }
     keys = _cross_script_keys(content_terms)
     if keys:
         matched |= {token for token in tokens if _sounds_grounded(token, keys)}
@@ -1067,6 +1133,17 @@ def _fragmented(text: str) -> bool:
     words = _tokens(folded)
     if not words:
         return False
+    # The words as typed, grammar words included: "is- older get more realise
+    # how rare have" and "screen why" were lifted from a creator's notes.
+    typed = folded.split()
+    if any(word.startswith("-") or word.endswith("-") for word in typed):
+        return True
+    if typed[0] in _FRAGMENT_STARTS or typed[-1] in _FRAGMENT_ENDINGS:
+        return True
+    if typed[-1] in _CLAUSE_VERB_ENDINGS and (len(typed) < 2 or typed[-2] not in _CLAUSE_VERB_LEADS):
+        return True
+    if typed[-1] in _WH_ENDINGS and len(typed) <= 2:
+        return True
     # A phrase cannot end on a connective ("fast near"). A list of fragments
     # from particular test scripts ("between tcp", "udp user") caught nothing else.
     if words[-1] in _FRAGMENT_ENDINGS and len(words) <= 6:
@@ -1075,13 +1152,96 @@ def _fragmented(text: str) -> bool:
     return len(words) <= 7 and len(set(words) & temporal_word_soup) >= 4
 
 
+def natural_tag_phrase(text: Any) -> bool:
+    """Whether a tag reads as a phrase someone might type: no label fragments, no cut-off grammar."""
+
+    value = _normalize(text)
+    return bool(value) and not _malformed(value) and not _fragmented(value) and not _creator_instruction_leak(value)
+
+
+def _subject_text(script: str, brief: dict[str, Any]) -> str:
+    """The creator's own words about what the video shows: a quote Short's quote, else its script.
+
+    A quote Short's script is the creator's notes on how it is made ("the
+    quote on the screen is ...", "typewriter reveal, no voiceover"); a
+    tutorial's script names what it teaches ("add a text overlay in CapCut").
+    """
+
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "")
+    if quote and is_short_content(script, brief):
+        return quote
+    return f"{script} {brief.get('content') or ''}"
+
+
+def _production_note(text: Any, subject: str) -> bool:
+    """A note on how the video is made ("text overlay", "on the screen") that its subject never names."""
+
+    spaced = " " + re.sub(r"[\s-]+", " ", _normalize(text)) + " "
+    named = re.sub(r"[\s-]+", "", _normalize(subject))
+    labels = [
+        *(word for word in spaced.split() if word in _NOTE_LABEL_WORDS),
+        *(phrase for phrase in _NOTE_LABEL_PHRASES if f" {phrase} " in spaced),
+    ]
+    return any(label.replace(" ", "") not in named for label in labels)
+
+
+# A Short's tag is a short search phrase; tags play a minimal role there. A
+# long-form tag may name a whole search ("samsung galaxy s25 ultra review").
+MAX_SHORT_TAG_CHARS = 30
+MAX_LONG_TAG_CHARS = 60
+
+
+def tag_length(tag: Any) -> int:
+    """The letters of a tag as a viewer reads them.
+
+    Tamil and Devanagari write a vowel as a sign on its consonant: counted as
+    code points, "செட்டிநாடு சிக்கன் பிரியாணி செய்முறை" has 36 characters and
+    no ordinary Tamil search fitted a 30-character cap.
+    """
+
+    return sum(
+        1 for char in normalize_unicode(tag)
+        if not unicodedata.category(char).startswith("M") and char not in JOINERS
+    )
+# The brief's prose fields: what the creator told the tool, not the video's words.
+_BRIEF_PROSE_FIELDS = (
+    "viewer_promise", "unique_angle", "target_audience", "proof", "creator_intent", "content_constraints",
+    "thumbnail_idea",
+)
+
+
+def _brief_fragment(text: Any, brief: dict[str, Any], script: str) -> bool:
+    """A run of four or more words from the brief's prose that the script and quote never use."""
+
+    key = _normalize(text)
+    if len(key.split()) < 4:
+        return False
+    source = f" {_normalize(' '.join([script, str(brief.get('content') or ''), str(brief.get('exact_quote') or '')]))} "
+    if f" {key} " in source:
+        return False
+    return any(f" {key} " in f" {_normalize(brief.get(field))} " for field in _BRIEF_PROSE_FIELDS)
+
+
 def _semantic_support(text: str, content_terms: set[str]) -> bool:
     roots = {_term_root(term) for term in content_terms}
     tokens = _tokens(text)
     if set(tokens) & content_terms or any(_term_root(term) in roots for term in tokens):
         return True
+    # Another form of a long source word: "misunderstood" for "misunderstand",
+    # which no suffix rule joins. Both words share all but their last few letters.
+    if any(_same_long_stem(term, word) for term in tokens if len(term) >= 7 for word in content_terms if len(word) >= 7):
+        return True
     keys = _cross_script_keys(content_terms)
     return any(_sounds_grounded(term, keys) for term in tokens)
+
+
+def _same_long_stem(left: str, right: str) -> bool:
+    shared = 0
+    for a, b in zip(left, right):
+        if a != b:
+            break
+        shared += 1
+    return shared >= max(6, min(len(left), len(right)) - 3)
 
 
 def _term_root(value: str) -> str:

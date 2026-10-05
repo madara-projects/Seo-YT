@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from win_engine.analysis.semantic_research import usable_research_topic
+from win_engine.analysis.semantic_research import quote_is_the_content, usable_research_topic
 from win_engine.analysis.generation_quality import (
     has_unsupported_instructional_framing,
     is_short_content,
@@ -19,6 +19,9 @@ _QUERY_STOPWORDS = {
     "with", "who", "your", "video", "viewers", "experiencing", "engage", "gradually",
     "calming", "exact", "shown", "screen", "background", "footage", "animation",
 }
+# Words a footage note and a quote both use for people; they tie a query to
+# neither.
+_GENERIC_SUBJECTS = {"person", "people", "someone", "man", "woman"}
 
 
 def plan_research_queries(
@@ -43,9 +46,11 @@ def plan_research_queries(
     # words (the brief's topic, taken from the quote or main phrase). A table of
     # stock "quote concepts" searched "knowing when to let go" for "I can't get
     # enough of you": the opposite meaning, each query one of the day's searches.
+    # A topic made of the footage ("solitary walker") is no topic at all.
     topic = next((value for value in [proven_semantic_topic,
         _search_phrase(semantic_primary, 6), structured_topic,
-        *(semantic.get("secondary_topics") or [])] if usable_research_topic(value)), "")
+        *(semantic.get("secondary_topics") or [])]
+        if usable_research_topic(value) and not _visual_only_query(str(value), script, brief)), "")
     audience_problem = _keyword_phrase(
         " ".join(str(value or "") for value in (brief.get("target_audience"), brief.get("viewer_promise"))),
         6,
@@ -75,7 +80,10 @@ def plan_research_queries(
     # more likely to search a phrase such as "quotes about grief".  Keep this
     # deterministic and source-grounded instead of asking the model to invent
     # a broader emotional angle.
-    quote_search = _quote_search_variant(topic) if brief.get("exact_quote") or brief.get("on_screen_text") else ""
+    # Only a video whose content is the quote is searched as a quote video;
+    # a talking head that cites one is searched for its subject.
+    quote_video = quote_is_the_content(script, brief)
+    quote_search = _quote_search_variant(topic) if quote_video else ""
     if quote_search and quote_search.casefold() != topic.casefold():
         candidates.append(("quote_search", quote_search))
     candidates.extend((f"intent:{semantic.get('viewer_intent') or 'viewer'}", concept) for concept in intents if concept)
@@ -105,10 +113,10 @@ def plan_research_queries(
             continue
         if source_requires_noninstructional_framing(script, brief) and has_unsupported_instructional_framing(cleaned):
             continue
-        if brief.get("exact_quote") and re.match(r"(?i)^(?:coping with|how to|healing from|tips? for)\b", cleaned):
+        if quote_video and re.match(r"(?i)^(?:coping with|how to|healing from|tips? for)\b", cleaned):
             continue
         meaningful = _keyword_phrase(cleaned, 8).split()
-        if len(meaningful) == 1 and brief.get("exact_quote"):
+        if len(meaningful) == 1 and quote_video:
             base_topic = _keyword_phrase(topic, 3)
             cleaned = (
                 f"{cleaned} quotes" if query_type == "primary"
@@ -131,18 +139,43 @@ def plan_research_queries(
 
 
 def _visual_only_query(value: str, script: str, brief: dict[str, Any]) -> bool:
-    """Reject scenery/camera subjects unless the actual content also discusses them."""
+    """Reject scenery/camera subjects unless the actual content also discusses them.
+
+    A quote Short's content is the quote: a query using any word that only the
+    footage supplies ("solitary walker", "alone") is the footage's, whatever the
+    rest of the script says, since the Creator page's script carries the
+    footage note beside the quote and the two used to count as one content.
+    A long-form script that opens with a quote is about all of itself, so it
+    keeps the overlap rule below.
+    """
 
     visual_words = set(_keyword_phrase(str(brief.get("visual_requirements") or ""), 20).split())
     query_words = set(_keyword_phrase(value, 20).split())
     if not visual_words or not query_words:
         return False
-    content = " ".join(str(brief.get(field) or "") for field in ("exact_quote", "on_screen_text", "content", "topic"))
-    content = content or script
+    if quote_is_the_content(script, brief):
+        # Compared by stem: "walk away" in the quote is "walking away" in the footage.
+        quote = " ".join(str(brief.get(field) or "") for field in ("exact_quote", "on_screen_text", "topic"))
+        footage_only = _stems(query_words) & _stems(visual_words)
+        return bool(footage_only - _stems(_keyword_phrase(quote, 60).split()) - _stems(_GENERIC_SUBJECTS))
+    content = " ".join(str(brief.get(field) or "") for field in ("content", "topic")) or script
     content_words = set(_keyword_phrase(content, 40).split())
     visual_overlap = len(query_words & visual_words) / len(query_words)
     content_overlap = len(query_words & content_words) / len(query_words)
     return visual_overlap >= 0.5 and content_overlap < 0.5
+
+
+def _stems(words: Any) -> set[str]:
+    """Words without an -ing, -ed, -es or -s ending or a final e, so "leaving" meets "leave"."""
+
+    stems: set[str] = set()
+    for word in words:
+        for suffix in ("ing", "ed", "es", "s"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+                word = word[: -len(suffix)]
+                break
+        stems.add(word.rstrip("e"))
+    return stems
 
 
 def _low_value_query(value: str) -> bool:

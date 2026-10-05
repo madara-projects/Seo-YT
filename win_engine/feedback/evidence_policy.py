@@ -14,6 +14,13 @@ EARLY_SIGNAL_MIN_SAMPLES = 5
 MODERATE_EVIDENCE_MIN_SAMPLES = 10
 STRONG_EVIDENCE_MIN_SAMPLES = 20
 MATURE_SNAPSHOT_WINDOWS = ("24h", "7d", "28d")
+# A leading group of videos is a pattern worth imitating only in a cohort this
+# large, and only when its median beats the rest's by this share. Five videos
+# used to put the top three, and their tags, into the writer's prompt however
+# little separated them from the others.
+LEADING_GROUP_SIZE = 3
+PATTERN_MIN_SAMPLES = 10
+PATTERN_MIN_MARGIN = 0.25
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,59 @@ def sample_is_eligible(
         and comparable_metadata(link)
         and mature_snapshot(snapshot, expected_window)
     )
+
+
+def _median(values: list[float]) -> float | None:
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    middle = len(ordered) // 2
+    return float(ordered[middle]) if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def pattern_signal(outcomes: list[float], *, comparable: bool, measure: str = "views per day") -> dict[str, Any]:
+    """Whether the leading videos stand apart from the rest by more than noise.
+
+    ``outcomes`` are a cohort's outcomes, best first. The leading three are a
+    pattern only when the cohort is comparable (one format and one language),
+    has PATTERN_MIN_SAMPLES videos, and their median beats the rest's by
+    PATTERN_MIN_MARGIN. A channel whose Shorts all sit within 12% of each
+    other has no leading group, however its top three happen to be ordered.
+    """
+    leading, rest = outcomes[:LEADING_GROUP_SIZE], outcomes[LEADING_GROUP_SIZE:]
+    leading_median, rest_median = _median(leading), _median(rest)
+    margin = round(leading_median / rest_median - 1.0, 3) if leading_median is not None and rest_median else None
+    # A rest with a median of 0 has no ratio to beat; any lead over it is one.
+    leads_an_empty_rest = rest_median == 0 and bool(leading_median)
+    signal: dict[str, Any] = {
+        "sample_size": len(outcomes), "measure": measure, "leading_median": leading_median,
+        "rest_median": rest_median, "margin": margin,
+        "minimum_samples": PATTERN_MIN_SAMPLES, "minimum_margin": PATTERN_MIN_MARGIN,
+    }
+    if not comparable:
+        status, reason = "mixed_cohort", (
+            "a mixed cohort: the linked videos span more than one format or language, so their outcomes are not compared."
+        )
+    elif len(outcomes) < PATTERN_MIN_SAMPLES:
+        status, reason = "insufficient_sample", (
+            f"a leading group needs {PATTERN_MIN_SAMPLES} comparable videos to stand apart from noise; "
+            f"there are {len(outcomes)}."
+        )
+    elif leads_an_empty_rest:
+        status, reason = "pattern", (
+            f"the leading three videos' median {measure} ({leading_median:,.0f}) beats the rest's (0)."
+        )
+    elif margin is None or margin < PATTERN_MIN_MARGIN:
+        status, reason = "no_pattern", (
+            f"the leading three videos' median {measure} ({leading_median:,.0f}) is within "
+            f"{PATTERN_MIN_MARGIN:.0%} of the rest's ({rest_median:,.0f}), a spread noise explains."
+        )
+    else:
+        status, reason = "pattern", (
+            f"the leading three videos' median {measure} ({leading_median:,.0f}) beats the rest's "
+            f"({rest_median:,.0f}) by {margin:.0%}."
+        )
+    return {**signal, "status": status, "reason": reason}
 
 
 def confidence_payload(sample_size: int) -> dict[str, Any]:

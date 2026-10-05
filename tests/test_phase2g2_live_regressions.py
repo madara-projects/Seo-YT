@@ -4,7 +4,7 @@ Validates:
 1. Negation-aware voice-over parsing (no false contradiction warnings).
 2. Metadata header prefix stripping (no false quote delay warnings).
 3. Atmospheric/cinematic quote Short retention analysis.
-4. Preservation of 'yt' and 'shorts' as intentional format tags.
+4. Preservation of 'shorts' as the intentional format tag ('yt' is no longer added).
 5. Tag score integrity (platform tags do not inflate semantic tag score).
 6. Shorts prefer 5-6 strong semantic tags over weak padding.
 7. Quality refinement rank includes tag score.
@@ -102,8 +102,8 @@ class Phase2G2LiveRegressionTests(unittest.TestCase):
         self.assertIn(dropoff_risk, {"LOW", "MEDIUM"})
         self.assertNotEqual(dropoff_risk, "HIGH")
 
-    def test_04_yt_and_shorts_preserved_in_final_tags(self):
-        """yt and shorts are intentionally required for Shorts packages and must be preserved."""
+    def test_04_shorts_preserved_and_yt_dropped_in_final_tags(self):
+        """shorts is the creator's format tag for Shorts; the hard-coded yt tag nobody searches is dropped."""
         script = "Hope can be cruel when it keeps you waiting for a person who will never return."
         brief = build_creator_brief(script=script, video_format="youtube_shorts")
         research = build_keyword_research(
@@ -122,11 +122,10 @@ class Phase2G2LiveRegressionTests(unittest.TestCase):
             script=script,
             creator_brief=brief,
         )
-        self.assertIn("yt", tags)
+        self.assertNotIn("yt", tags)
         self.assertIn("shorts", tags)
         # Verify classification is platform_format
         prov_map = {item["tag"]: item for item in evidence["tag_provenance"]}
-        self.assertEqual(prov_map["yt"]["provenance"], "creator_strategy")
         self.assertEqual(prov_map["shorts"]["provenance"], "creator_strategy")
 
     def test_05_tag_score_integrity_platform_tags_not_inflated(self):
@@ -188,9 +187,9 @@ class Phase2G2LiveRegressionTests(unittest.TestCase):
         # Should not contain the weak tags 68 and 72
         self.assertNotIn("wrong person", tags)
         self.assertNotIn("quiet comfort", tags)
-        # Should contain the strong tags and platform tags
+        # Should contain the strong tags and the shorts platform tag (no yt)
         self.assertIn("false hope", tags)
-        self.assertIn("yt", tags)
+        self.assertNotIn("yt", tags)
         self.assertIn("shorts", tags)
         # Total semantic tags should be <= 6
         semantic_tags = [t for t in tags if t not in {"yt", "shorts"}]
@@ -300,7 +299,7 @@ class Phase2G2LiveRegressionTests(unittest.TestCase):
                 self.assertEqual(result["verdict"], expected_verdict)
 
     def test_10_live_quote_contract_end_to_end(self):
-        """Live quote script must produce GREEN package with title>=90, desc>=90, tag>=90 and yt/shorts preserved."""
+        """Live quote script must produce GREEN package with title>=90, desc>=90, tag>=90 and shorts preserved."""
         script = (
             "Format: YouTube Shorts\n"
             "Visual: Rain drops on window pane at dusk, melancholic lofi mood\n"
@@ -377,9 +376,9 @@ class Phase2G2LiveRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(quality["tag_score"], 90.0, f"Tag score {quality['tag_score']} < 90")
         self.assertEqual(response["generation_quality"]["verdict"], "GREEN")
 
-        # Verify yt and shorts presence
+        # The shorts tag is kept; the writer's "yt" is platform filler and dropped.
         pkg_tags = response["tags"]
-        self.assertIn("yt", pkg_tags)
+        self.assertNotIn("yt", pkg_tags)
         self.assertIn("shorts", pkg_tags)
 
         # Verify no false warnings

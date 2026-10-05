@@ -83,6 +83,18 @@ class RouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 422)
 
+    def test_a_published_time_beyond_the_calendar_in_utc_is_refused(self):
+        # Valid where it is written, but year 10000 or year 0 once moved to UTC:
+        # the conversion raised OverflowError, which was a 500.
+        run = self.run_id()
+        for value in ("9999-12-31T23:59:59-10:00", "0001-01-01T00:00:00+10:00"):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    f"/api/history/runs/{run}/link-video", json={"youtube_video_id": "abcdefghijk", "published_at": value},
+                )
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(response.json()["error"]["code"], "validation_error")
+
     def test_health_reports_a_broken_database_as_degraded(self):
         with patch.object(routes.HistoryStore, "system_status", side_effect=RuntimeError("cannot open")):
             response = self.client.get("/health")
@@ -116,6 +128,32 @@ class RouteTests(unittest.TestCase):
             body["youtube_oauth"],
             {"configured": None, "connected": None, "channel_title": None, "last_synced_at": None},
         )
+
+    def test_settings_status_survives_a_backup_pruned_while_it_looks(self):
+        backups = Path(self.dir.name) / "backups"
+        backups.mkdir()
+        older = backups / "routes.backup-20260101T000000000000Z.sqlite3"
+        newest = backups / "routes.backup-20260102T000000000000Z.sqlite3"
+        older.write_bytes(b"")
+        newest.write_bytes(b"")
+        real_stat = Path.stat
+
+        def stat(path, *args, **kwargs):
+            # The startup migration prunes a stale backup between the listing and this look.
+            if path.name == older.name:
+                raise FileNotFoundError(path)
+            return real_stat(path, *args, **kwargs)
+
+        with patch.object(Path, "stat", stat):
+            response = self.client.get("/api/settings/status")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json()["database"]["last_backup_at"],
+            datetime.fromtimestamp(newest.stat().st_mtime, timezone.utc).isoformat(),
+        )
+        newest.unlink()
+        older.unlink()
+        self.assertIsNone(self.client.get("/api/settings/status").json()["database"]["last_backup_at"])
 
     def test_a_blank_experiment_date_clears_it(self):
         created = self.client.post("/api/experiment-center/experiments", json={
@@ -153,6 +191,68 @@ class RouteTests(unittest.TestCase):
             self.run_id()
         body = self.client.get("/api/history/runs?limit=2").json()
         self.assertEqual((len(body["runs"]), body["total"]), (2, 3))
+
+    def test_numbers_beyond_sqlite_are_refused_not_server_errors(self):
+        # SQLite numbers rows with 64-bit integers; a larger id or offset used to
+        # reach the driver and raise OverflowError, a 500 with a traceback.
+        huge = 99999999999999999999
+        for path in (
+            f"/api/history/runs/{huge}", f"/api/ideas/{huge}", f"/api/ai-shorts/plans/{huge}",
+            f"/api/published-videos/{huge}/snapshots", f"/api/experiment-center/experiments/{huge}",
+            f"/api/watchlist/videos/{huge}", f"/api/audits/{huge}", f"/api/demand/research/{huge}",
+            f"/api/history/runs?offset={huge}", f"/api/ideas?limit={huge}", f"/api/demand/research?offset={huge}",
+            f"/api/demand/research?idea_id={huge}", f"/api/audits/1?audit_id={huge}",
+            "/api/history/runs/0", "/api/ideas/-1",
+        ):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(response.json()["error"]["code"], "validation_error")
+        for path in (f"/api/history/runs/{huge}", f"/api/ai-shorts/plans/{huge}"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.delete(path).status_code, 422)
+        deleted = self.client.request("DELETE", "/api/history/runs", json={"run_ids": [huge]})
+        self.assertEqual(deleted.status_code, 422, deleted.text)
+        assigned = self.client.post(
+            "/api/experiment-center/experiments/1/assignments", json={"published_video_link_id": huge, "role": "control"},
+        )
+        self.assertEqual(assigned.status_code, 422, assigned.text)
+        # The largest id SQLite can hold is simply not found, and paging still clamps nothing silently.
+        self.assertEqual(self.client.get(f"/api/history/runs/{2**63 - 1}").status_code, 404)
+        self.assertEqual(self.client.get("/api/history/runs?limit=100&offset=0").status_code, 200)
+
+    def test_a_boolean_is_not_a_record_id(self):
+        # JSON true read as the number 1 deleted saved package #1.
+        run = self.run_id()
+        self.assertEqual(run, 1)
+        deleted = self.client.request("DELETE", "/api/history/runs", json={"run_ids": [True]})
+        self.assertEqual(deleted.status_code, 422, deleted.text)
+        self.assertIsNotNone(self.store.history_run(run))
+        assigned = self.client.post(
+            "/api/experiment-center/experiments/1/assignments", json={"published_video_link_id": True, "role": "control"},
+        )
+        self.assertEqual(assigned.status_code, 422, assigned.text)
+        self.assertEqual(self.client.request("DELETE", "/api/history/runs", json={"run_ids": [run]}).status_code, 200)
+
+    def test_an_experiment_baseline_must_be_plain_json(self):
+        # Saved as given and read back on every listing: one NaN, Infinity or
+        # lone surrogate made GET /api/experiments/{video} a 500 for good.
+        run = self.run_id()
+        self.store.link_published_video(run, "firstvideo1", "2026-08-01T00:00:00+00:00")
+        self.store.record_performance_snapshot("firstvideo1", 24, views=10, snapshot_window="24h")
+        for value in (b"NaN", b"-Infinity", b"1e999", b'{"nested": [1, NaN]}', b'"half a character \\ud800"'):
+            with self.subTest(value=value):
+                body = b'{"youtube_video_id": "firstvideo1", "performance_before": {"views": ' + value + b"}}"
+                response = self.client.post("/api/experiments", content=body, headers={"Content-Type": "application/json"})
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(response.json()["error"]["code"], "validation_error")
+        listed = self.client.get("/api/experiments/firstvideo1")
+        self.assertEqual((listed.status_code, listed.json()["count"]), (200, 0))
+
+        baseline = {"views": 10, "ctr": 4.5, "source": "studio", "windows": {"24h": [1, None, True]}}
+        recorded = self.client.post("/api/experiments", json={"youtube_video_id": "firstvideo1", "performance_before": baseline})
+        self.assertEqual(recorded.status_code, 200, recorded.text)
+        self.assertEqual(self.client.get("/api/experiments/firstvideo1").json()["experiments"][0]["performance_before"], baseline)
 
     def test_reset_is_refused_while_cloud_sync_would_restore_packages(self):
         self.run_id()

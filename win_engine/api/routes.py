@@ -8,19 +8,22 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import get_args
+from typing import Annotated, get_args
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fastapi import APIRouter
 from fastapi import HTTPException
+from fastapi import Path as PathParam
+from fastapi import Query
 from fastapi import Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.analysis.idea_workspace import build_idea_evidence, evidence_to_research, idea_script
 from win_engine.analysis.demand_explorer import analyze_demand, idea_fingerprint
 from win_engine.core.config import get_settings
-from win_engine.core.schemas import AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest, ExperimentMode, ExperimentStatus
+from win_engine.core.schemas import MAX_RECORD_ID, AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest, ExperimentMode, ExperimentStatus, AiShortsGenerateRequest
+from win_engine.feedback.ai_shorts_store import AiShortsStore
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.quota_ledger import quota_status
 from win_engine.ingestion.cache import probe_cache_backend
@@ -30,6 +33,7 @@ from win_engine.feedback.retention_probe import curve_observations
 from win_engine.feedback.studio_tests import CreateStudioTestRequest, StudioTestError, StudioTestStore, UpdateStudioTestRequest, run_is_short
 from win_engine.core.iso_duration import duration_seconds
 from win_engine.feedback.score_calibration import opportunity_score_calibration
+from win_engine.generation.ai_shorts import QuoteRefused, generate_ai_short
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.ingestion.research_service import ResearchService
 from win_engine.ingestion.youtube_client import YouTubeClient
@@ -43,12 +47,16 @@ _APP_START = time.time()
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 # The interface's pages. The browser resolves each one; the server returns the
 # same document for every one, so a reload or a bookmark opens that page.
-_APP_PAGES = ("dashboard", "creator", "history", "channel", "ideas", "demand", "watchlist", "audits", "experiments", "settings")
+_APP_PAGES = ("dashboard", "creator", "ai-shorts", "history", "channel", "ideas", "demand", "watchlist", "audits", "experiments", "settings")
 # Pages the YouTube OAuth callback may return the browser to. Anything else
 # falls back to the root, so the value can never become an open redirect.
 _OAUTH_RETURN_PATHS = frozenset({"/", "/settings", "/channel"})
 _OAUTH_RETURN_COOKIE = "win_engine_oauth_return"
 _OAUTH_REASON = re.compile(r"[a-z_]{1,40}")
+# A record id in a path: a positive 64-bit integer, as SQLite numbers rows. A
+# larger number used to reach the driver and raise OverflowError, a 500; zero
+# and negatives name no record either. Query ids and offsets are bounded alike.
+RecordId = Annotated[int, PathParam(ge=1, le=MAX_RECORD_ID)]
 
 
 def _gemini_budget(route):
@@ -105,6 +113,27 @@ def moved_interface(request: Request, path: str = ""):
     if request.url.query:
         target += f"?{request.url.query}"
     return RedirectResponse(target, status_code=308)
+
+
+def _latest_backup_time(database_path: Path) -> str | None:
+    """When the newest backup of the database was written, or None.
+
+    The backups folder is read as it is now: a backup the startup migration
+    prunes between the listing and its stat is skipped, not a server error
+    on the Settings page polling at that moment.
+    """
+    backup_dir = database_path.resolve().parent / "backups"
+    if not backup_dir.is_dir():
+        return None
+    newest: float | None = None
+    for item in backup_dir.glob(f"{database_path.stem}.backup-*.sqlite3"):
+        try:
+            modified = item.stat().st_mtime
+        except OSError:
+            continue
+        if newest is None or modified > newest:
+            newest = modified
+    return datetime.fromtimestamp(newest, timezone.utc).isoformat() if newest is not None else None
 
 
 def _database_status(database_path: str) -> dict[str, object]:
@@ -209,8 +238,6 @@ def settings_status(request: Request):
         database_bytes = database_path.stat().st_size
     except OSError:
         database_bytes = None
-    backup_dir = database_path.resolve().parent / "backups"
-    backups = sorted(backup_dir.glob(f"{database_path.stem}.backup-*.sqlite3"), key=lambda item: item.stat().st_mtime, reverse=True) if backup_dir.exists() else []
     # The channel connection is stored in the database: while that cannot be
     # read, the YouTube state is unknown (null) and the database block says why.
     youtube = YouTubeChannelService(settings).status() if database["database_ok"] else {}
@@ -221,7 +248,7 @@ def settings_status(request: Request):
         "database": {"healthy": bool(database["database_ok"]), "error": database.get("error"),
                      "name": database_path.name, "schema_version": stats.get("schema_version"),
                      "size_bytes": database_bytes, "counts": stats.get("counts"),
-                     "last_backup_at": datetime.fromtimestamp(backups[0].stat().st_mtime, timezone.utc).isoformat() if backups else None},
+                     "last_backup_at": _latest_backup_time(database_path)},
         "providers": {"gemini": gemini_client.diagnostics(),
                       "youtube_data_api": {"configured": bool(settings.youtube_api_key_pool), "key_count": len(settings.youtube_api_key_pool)},
                       "local_fallback": {"available": True}, "redis": {"configured": bool(settings.redis_url)}},
@@ -390,18 +417,20 @@ def get_history_summary():
 
 
 @router.get("/api/history/runs")
-def get_history_runs(limit: int = 50, offset: int = 0):
+def get_history_runs(
+    limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0, le=MAX_RECORD_ID),
+):
     store = HistoryStore(get_settings().database_path)
     return {
         "runs": store.history_runs(limit=limit, offset=offset),
         "total": store.history_run_count(),
-        "limit": min(max(limit, 1), 100),
-        "offset": max(offset, 0),
+        "limit": limit,
+        "offset": offset,
     }
 
 
 @router.get("/api/history/runs/{run_id}")
-def get_history_run(run_id: int):
+def get_history_run(run_id: RecordId):
     store = HistoryStore(get_settings().database_path)
     run = store.history_run(run_id)
     if not run:
@@ -411,7 +440,7 @@ def get_history_run(run_id: int):
 
 
 @router.put("/api/history/runs/{run_id}/selection")
-def select_history_package(run_id: int, payload: SelectPackageRequest):
+def select_history_package(run_id: RecordId, payload: SelectPackageRequest):
     """Persist only a package that exists in the saved generated response."""
 
     store = HistoryStore(get_settings().database_path)
@@ -437,7 +466,11 @@ def create_idea(payload: CreateIdeaRequest):
 
 
 @router.get("/api/ideas")
-def list_ideas(status: str | None = None, limit: int = 50, offset: int = 0):
+def list_ideas(
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=MAX_RECORD_ID),
+):
     store = HistoryStore(get_settings().database_path)
     try:
         return store.content_ideas(status=status, limit=limit, offset=offset)
@@ -446,7 +479,7 @@ def list_ideas(status: str | None = None, limit: int = 50, offset: int = 0):
 
 
 @router.get("/api/ideas/{idea_id}")
-def get_idea(idea_id: int):
+def get_idea(idea_id: RecordId):
     idea = HistoryStore(get_settings().database_path).content_idea(idea_id)
     if not idea:
         raise HTTPException(status_code=404, detail="Idea not found.")
@@ -454,7 +487,7 @@ def get_idea(idea_id: int):
 
 
 @router.patch("/api/ideas/{idea_id}")
-def update_idea(idea_id: int, payload: UpdateIdeaRequest):
+def update_idea(idea_id: RecordId, payload: UpdateIdeaRequest):
     store = HistoryStore(get_settings().database_path)
     try:
         idea = store.update_content_idea(idea_id, payload.model_dump(exclude_unset=True))
@@ -467,7 +500,7 @@ def update_idea(idea_id: int, payload: UpdateIdeaRequest):
 
 @router.post("/api/ideas/{idea_id}/research")
 @_gemini_budget
-def research_idea(idea_id: int):
+def research_idea(idea_id: RecordId):
     settings = get_settings()
     store = HistoryStore(settings.database_path)
     idea = store.content_idea(idea_id)
@@ -481,7 +514,7 @@ def research_idea(idea_id: int):
 
 @router.post("/api/ideas/{idea_id}/generate")
 @_gemini_budget
-def generate_idea_package(idea_id: int, payload: GenerateIdeaRequest):
+def generate_idea_package(idea_id: RecordId, payload: GenerateIdeaRequest):
     settings = get_settings()
     store = HistoryStore(settings.database_path)
     idea = store.content_idea(idea_id)
@@ -583,20 +616,20 @@ def list_watch_channels(state:str|None=None):
     return {"channels":items,"total":len(items)}
 
 @router.get("/api/watchlist/channels/{item_id}")
-def get_watch_channel(item_id:int):
+def get_watch_channel(item_id:RecordId):
     item=IntelligenceStore(HistoryStore(get_settings().database_path)).channel(item_id)
     if not item: raise HTTPException(status_code=404,detail="Watched channel not found.")
     return {"channel":item}
 
 @router.patch("/api/watchlist/channels/{item_id}")
-def update_watch_channel(item_id:int,payload:UpdateWatchRequest):
+def update_watch_channel(item_id:RecordId,payload:UpdateWatchRequest):
     try:item=IntelligenceStore(HistoryStore(get_settings().database_path)).update_channel(item_id,payload.model_dump(exclude_unset=True))
     except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
     if not item:raise HTTPException(status_code=404,detail="Watched channel not found.")
     return {"status":"updated","channel":item}
 
 @router.post("/api/watchlist/channels/{item_id}/research")
-def research_watch_channel(item_id:int):
+def research_watch_channel(item_id:RecordId):
     settings=get_settings(); store=IntelligenceStore(HistoryStore(settings.database_path)); item=store.channel(item_id)
     if not item:raise HTTPException(status_code=404,detail="Watched channel not found.")
     client=_public_client(settings); metadata=client.get_channel(item['channel_id'])
@@ -623,20 +656,20 @@ def list_watch_videos(state:str|None=None,q:str=""):
     return {"videos":items,"total":len(items)}
 
 @router.get("/api/watchlist/videos/{item_id}")
-def get_watch_video(item_id:int):
+def get_watch_video(item_id:RecordId):
     item=IntelligenceStore(HistoryStore(get_settings().database_path)).video(item_id)
     if not item:raise HTTPException(status_code=404,detail="Watched video not found.")
     return {"video":item}
 
 @router.patch("/api/watchlist/videos/{item_id}")
-def update_watch_video(item_id:int,payload:UpdateWatchRequest):
+def update_watch_video(item_id:RecordId,payload:UpdateWatchRequest):
     try:item=IntelligenceStore(HistoryStore(get_settings().database_path)).update_video(item_id,payload.model_dump(exclude_unset=True))
     except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
     if not item:raise HTTPException(status_code=404,detail="Watched video not found.")
     return {"status":"updated","video":item}
 
 @router.post("/api/watchlist/videos/{item_id}/research")
-def research_watch_video(item_id:int):
+def research_watch_video(item_id:RecordId):
     settings=get_settings(); store=IntelligenceStore(HistoryStore(settings.database_path)); item=store.video(item_id)
     if not item:raise HTTPException(status_code=404,detail="Watched video not found.")
     metadata=_public_client(settings).get_video(item['video_id'])
@@ -644,7 +677,7 @@ def research_watch_video(item_id:int):
     return {"status":"researched","video":store.upsert_video(metadata,watchlist_channel_id=item.get('watchlist_channel_id'),snapshot=True)}
 
 @router.post("/api/watchlist/videos/{item_id}/analyze-outlier")
-def analyze_watch_video_outlier(item_id:int):
+def analyze_watch_video_outlier(item_id:RecordId):
     store=IntelligenceStore(HistoryStore(get_settings().database_path))
     try:analysis=store.analyze_outlier(item_id)
     except KeyError as exc:raise HTTPException(status_code=404,detail="Watched video not found.") from exc
@@ -672,17 +705,21 @@ def create_demand_research(payload:DemandResearchRequest):
     return {"status":"researched","research":_run_demand(payload.model_dump())}
 
 @router.get("/api/demand/research")
-def list_demand_research(limit:int=50,offset:int=0,idea_id:int|None=None):
+def list_demand_research(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=MAX_RECORD_ID),
+    idea_id: int | None = Query(default=None, ge=1, le=MAX_RECORD_ID),
+):
     return IntelligenceStore(HistoryStore(get_settings().database_path)).demands(limit,offset,idea_id)
 
 @router.get("/api/demand/research/{research_id}")
-def get_demand_research(research_id:int):
+def get_demand_research(research_id:RecordId):
     item=IntelligenceStore(HistoryStore(get_settings().database_path)).demand(research_id)
     if not item:raise HTTPException(status_code=404,detail="Demand research snapshot not found.")
     return {"research":item}
 
 @router.post("/api/ideas/{idea_id}/demand-research",status_code=201)
-def create_idea_demand_research(idea_id:int):
+def create_idea_demand_research(idea_id:RecordId):
     idea=HistoryStore(get_settings().database_path).content_idea(idea_id)
     if not idea:raise HTTPException(status_code=404,detail="Idea not found.")
     if idea.get('status')=="archived":raise HTTPException(status_code=409,detail="Restore this archived idea before researching it.")
@@ -691,7 +728,7 @@ def create_idea_demand_research(idea_id:int):
 
 @router.post("/api/demand/research/{research_id}/generate")
 @_gemini_budget
-def generate_from_demand(research_id:int):
+def generate_from_demand(research_id:RecordId):
     settings=get_settings(); history=HistoryStore(settings.database_path); intelligence=IntelligenceStore(history); item=intelligence.demand(research_id)
     if not item:raise HTTPException(status_code=404,detail="Demand research snapshot not found.")
     if item.get('idea_id'):
@@ -725,7 +762,7 @@ def reset_database(request: Request):
 # --- Stage A: Published Video Linking Endpoints ---
 
 @router.post("/api/history/runs/{run_id}/link-video")
-def link_published_video(run_id: int, payload: LinkVideoRequest):
+def link_published_video(run_id: RecordId, payload: LinkVideoRequest):
     settings = get_settings()
     store = HistoryStore(settings.database_path)
     run = store.history_run(run_id)
@@ -830,7 +867,7 @@ def _delete_sync_result(request: Request) -> dict:
 
 
 @router.delete("/api/history/runs/{run_id}")
-def delete_history_run(run_id: int, request: Request):
+def delete_history_run(run_id: RecordId, request: Request):
     store = HistoryStore(get_settings().database_path)
     if not store.delete_analysis_run(run_id):
         raise HTTPException(status_code=404, detail="Analysis run not found.")
@@ -847,6 +884,59 @@ def delete_history_runs(payload: DeleteHistoryRunsRequest, request: Request):
             "cloud_sync": _delete_sync_result(request)}
 
 
+# --- AI Shorts: Google Flow prompts and a lean package from a quote ---
+
+@router.post("/api/ai-shorts/generate")
+def generate_ai_short_plan(payload: AiShortsGenerateRequest):
+    """From a quote alone: Flow prompts per eight-second part and a lean Shorts package, saved to History.
+
+    No YouTube Data API call is made. Gemini is held to four calls, two for the
+    planner and two for the package, by the service's own per-stage budgets;
+    the shared `_gemini_budget` wrapper is deliberately not applied here, since
+    a nested budget would replace those caps with the general allowance. The
+    path ends in "/generate", so the stricter rate limit for quota-spending
+    requests applies.
+    """
+    settings = get_settings()
+    store = HistoryStore(settings.database_path)
+    try:
+        return generate_ai_short(
+            store,
+            quote=payload.quote,
+            language=payload.language,
+            parts=payload.parts,
+            mood_hint=payload.mood_hint,
+            region=payload.region,
+            deadline_seconds=settings.gemini_request_deadline_seconds,
+        )
+    except QuoteRefused as exc:
+        # Only the planner's verdict on the quote; any other error is the server's.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/api/ai-shorts/plans")
+def list_ai_short_plans(limit: int = Query(default=20, ge=1, le=100)):
+    return {"plans": AiShortsStore(HistoryStore(get_settings().database_path)).plans(limit)}
+
+
+@router.get("/api/ai-shorts/plans/{plan_id}")
+def get_ai_short_plan(plan_id: RecordId):
+    plan = AiShortsStore(HistoryStore(get_settings().database_path)).plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="AI Shorts plan not found.")
+    return plan
+
+
+@router.delete("/api/ai-shorts/plans/{plan_id}", status_code=204, response_class=Response)
+def delete_ai_short_plan(plan_id: RecordId, request: Request):
+    """Delete the plan and its History run; the run's cloud tombstone is queued as for any deletion."""
+    store = HistoryStore(get_settings().database_path)
+    if not AiShortsStore(store).delete_plan(plan_id):
+        raise HTTPException(status_code=404, detail="AI Shorts plan not found.")
+    _delete_sync_result(request)
+    return Response(status_code=204)
+
+
 @router.get("/api/published-videos")
 def get_published_video_links():
     store = HistoryStore(get_settings().database_path)
@@ -855,7 +945,7 @@ def get_published_video_links():
 
 
 @router.get("/api/published-videos/{link_id}/snapshots")
-def get_published_video_snapshots(link_id: int):
+def get_published_video_snapshots(link_id: RecordId):
     store = HistoryStore(get_settings().database_path)
     link = store.published_video_link(link_id)
     if not link:
@@ -864,7 +954,7 @@ def get_published_video_snapshots(link_id: int):
 
 
 @router.post("/api/published-videos/{link_id}/refresh")
-def refresh_published_video(link_id: int):
+def refresh_published_video(link_id: RecordId):
     settings = get_settings()
     store = HistoryStore(settings.database_path)
     link = store.published_video_link(link_id)
@@ -890,7 +980,7 @@ def refresh_published_video(link_id: int):
 
 
 @router.patch("/api/published-videos/{link_id}")
-def update_published_video_link(link_id: int, payload: UpdatePublishedVideoRequest):
+def update_published_video_link(link_id: RecordId, payload: UpdatePublishedVideoRequest):
     store = HistoryStore(get_settings().database_path)
     success = store.update_published_video_link(
         link_id=link_id,
@@ -905,7 +995,7 @@ def update_published_video_link(link_id: int, payload: UpdatePublishedVideoReque
 
 
 @router.patch("/api/published-videos/{link_id}/comparable-metadata")
-def update_comparable_metadata(link_id: int, payload: ComparableMetadataRequest):
+def update_comparable_metadata(link_id: RecordId, payload: ComparableMetadataRequest):
     store = HistoryStore(get_settings().database_path)
     try:
         result = store.update_comparable_metadata(link_id, payload.model_dump(exclude_unset=True))
@@ -917,7 +1007,7 @@ def update_comparable_metadata(link_id: int, payload: ComparableMetadataRequest)
 
 
 @router.post("/api/published-videos/{link_id}/retention-probe")
-def probe_published_video_retention(link_id: int):
+def probe_published_video_retention(link_id: RecordId):
     """One YouTube Analytics request for the video's retention curve; nothing is stored."""
     settings = get_settings()
     store = HistoryStore(settings.database_path)
@@ -940,7 +1030,7 @@ def probe_published_video_retention(link_id: int):
 # --- YouTube Studio title/thumbnail tests (record-only; YouTube runs them) ---
 
 @router.get("/api/history/runs/{run_id}/studio-tests")
-def get_studio_tests(run_id: int):
+def get_studio_tests(run_id: RecordId):
     overview = StudioTestStore(HistoryStore(get_settings().database_path)).overview(run_id)
     if overview is None:
         raise HTTPException(status_code=404, detail="Saved SEO package not found.")
@@ -948,7 +1038,7 @@ def get_studio_tests(run_id: int):
 
 
 @router.post("/api/history/runs/{run_id}/studio-tests", status_code=201)
-def create_studio_test(run_id: int, payload: CreateStudioTestRequest):
+def create_studio_test(run_id: RecordId, payload: CreateStudioTestRequest):
     try:
         test = StudioTestStore(HistoryStore(get_settings().database_path)).create(run_id, payload.package_ids, payload.notes)
     except StudioTestError as exc:
@@ -959,7 +1049,7 @@ def create_studio_test(run_id: int, payload: CreateStudioTestRequest):
 
 
 @router.patch("/api/studio-tests/{test_id}")
-def update_studio_test(test_id: int, payload: UpdateStudioTestRequest):
+def update_studio_test(test_id: RecordId, payload: UpdateStudioTestRequest):
     try:
         test = StudioTestStore(HistoryStore(get_settings().database_path)).update(test_id, payload.model_dump(exclude_unset=True))
     except StudioTestError as exc:
@@ -1046,7 +1136,7 @@ def list_published_audits(evidence_state: str | None = None, audit_state: str | 
 
 
 @router.get("/api/audits/{link_id}")
-def get_published_audit(link_id: int, audit_id: int | None = None):
+def get_published_audit(link_id: RecordId, audit_id: int | None = Query(default=None, ge=1, le=MAX_RECORD_ID)):
     store = AuditExperimentStore(HistoryStore(get_settings().database_path))
     if not store.history.published_video_link(link_id):
         raise HTTPException(status_code=404, detail="Published video link not found.")
@@ -1055,7 +1145,7 @@ def get_published_audit(link_id: int, audit_id: int | None = None):
 
 
 @router.post("/api/audits/{link_id}/refresh", status_code=201)
-def refresh_published_audit(link_id: int):
+def refresh_published_audit(link_id: RecordId):
     settings = get_settings()
     history = HistoryStore(settings.database_path)
     link = history.published_video_link(link_id)
@@ -1076,7 +1166,7 @@ def refresh_published_audit(link_id: int):
 
 
 @router.get("/api/audits/{link_id}/findings")
-def get_published_audit_findings(link_id: int):
+def get_published_audit_findings(link_id: RecordId):
     audit = AuditExperimentStore(HistoryStore(get_settings().database_path)).audit(link_id)
     if not audit:
         raise HTTPException(status_code=404, detail="Run the published-video audit first.")
@@ -1084,7 +1174,7 @@ def get_published_audit_findings(link_id: int):
 
 
 @router.get("/api/audits/{link_id}/evidence")
-def get_published_audit_evidence(link_id: int):
+def get_published_audit_evidence(link_id: RecordId):
     audit = AuditExperimentStore(HistoryStore(get_settings().database_path)).audit(link_id)
     if not audit:
         raise HTTPException(status_code=404, detail="Run the published-video audit first.")
@@ -1110,7 +1200,7 @@ def list_structured_experiments(status: str | None = None, mode: str | None = No
 
 
 @router.get("/api/experiment-center/experiments/{experiment_id}")
-def get_structured_experiment(experiment_id: int):
+def get_structured_experiment(experiment_id: RecordId):
     store = AuditExperimentStore(HistoryStore(get_settings().database_path))
     item = store.experiment(experiment_id)
     if not item:
@@ -1119,7 +1209,7 @@ def get_structured_experiment(experiment_id: int):
 
 
 @router.patch("/api/experiment-center/experiments/{experiment_id}")
-def update_structured_experiment(experiment_id: int, payload: UpdateStructuredExperimentRequest):
+def update_structured_experiment(experiment_id: RecordId, payload: UpdateStructuredExperimentRequest):
     store = AuditExperimentStore(HistoryStore(get_settings().database_path))
     try:
         item = store.update_experiment(experiment_id, payload.model_dump(exclude_unset=True))
@@ -1131,7 +1221,7 @@ def update_structured_experiment(experiment_id: int, payload: UpdateStructuredEx
 
 
 @router.post("/api/experiment-center/experiments/{experiment_id}/assignments", status_code=201)
-def assign_structured_experiment_video(experiment_id: int, payload: AssignExperimentVideoRequest):
+def assign_structured_experiment_video(experiment_id: RecordId, payload: AssignExperimentVideoRequest):
     settings = get_settings()
     channel = YouTubeChannelService(settings).connected_channel_id()
     if not channel:
@@ -1153,7 +1243,7 @@ def assign_structured_experiment_video(experiment_id: int, payload: AssignExperi
 
 
 @router.delete("/api/experiment-center/experiments/{experiment_id}/assignments/{assignment_id}")
-def remove_structured_experiment_assignment(experiment_id: int, assignment_id: int):
+def remove_structured_experiment_assignment(experiment_id: RecordId, assignment_id: RecordId):
     store = AuditExperimentStore(HistoryStore(get_settings().database_path))
     try:
         removed = store.remove_assignment(experiment_id, assignment_id)
@@ -1165,7 +1255,7 @@ def remove_structured_experiment_assignment(experiment_id: int, assignment_id: i
 
 
 @router.post("/api/experiment-center/experiments/{experiment_id}/compare", status_code=201)
-def compare_structured_experiment(experiment_id: int):
+def compare_structured_experiment(experiment_id: RecordId):
     settings = get_settings()
     channel = YouTubeChannelService(settings).connected_channel_id()
     if not channel:

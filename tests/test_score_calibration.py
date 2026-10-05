@@ -157,8 +157,10 @@ class HistoryCalibrationTests(unittest.TestCase):
         self.store = HistoryStore(self.path)
 
     def video(self, video_id, score, views, *, window="7d", label="WORKABLE", verified=True, language="english",
-              fmt="Short"):
-        run_id = self.store.record_analysis_run(video_id, "browse", "emotion", video_id, 7.0, "LOW", label, score, {})
+              fmt="Short", payload=None):
+        run_id = self.store.record_analysis_run(
+            video_id, "browse", "emotion", video_id, 7.0, "LOW", label, score, payload or {},
+        )
         self.store.link_published_video(
             run_id, video_id, _iso(40), format_val=fmt, language=language,
             ownership_state="verified" if verified else "unverified", ownership_verified=verified,
@@ -198,6 +200,18 @@ class HistoryCalibrationTests(unittest.TestCase):
         self.assertEqual((weekly["snapshot_window"], weekly["sample_size"]), ("7d", 1))
         with self.assertRaises(ValueError):
             opportunity_score_calibration(self.store, snapshot_window="current")
+
+    def test_runs_stored_with_either_breakdown_version_are_compared(self):
+        # Runs saved before the per-run (v2) breakdown keep their v1 breakdown.
+        def stored(version):
+            return {"opportunity_gap_analysis": {"opportunity_score": {"breakdown": {"version": version}}}}
+
+        self.video("versionone1", 70, 900, payload=stored("opportunity-heuristic-v1"))
+        self.video("versiontwo1", 40, 200, payload=stored("opportunity-heuristic-v2"))
+        self.video("nobreakdown", 55, 400)
+
+        result = opportunity_score_calibration(self.store)
+        self.assertEqual((result["sample_size"], result["breakdown_stored_count"]), (3, 2))
 
     def test_the_endpoint_reports_the_calibration(self):
         self.video("eligible001", 70, 900)

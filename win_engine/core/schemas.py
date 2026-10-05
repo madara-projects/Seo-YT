@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.core.regions import REGION_ALIASES
+
+# Record ids are SQLite row ids: a positive 64-bit integer. A larger number
+# names no record, and handed to the driver it raised an OverflowError (a 500)
+# instead of being refused as invalid input.
+MAX_RECORD_ID = 2**63 - 1
 
 
 def normalize_region(value: str) -> str:
@@ -112,7 +118,8 @@ class AnalyzeResponse(BaseModel):
 
 
 class DeleteHistoryRunsRequest(_Request):
-    run_ids: List[int] = Field(..., min_length=1, max_length=100)
+    # Strict: JSON true would otherwise be read as 1 and delete package #1.
+    run_ids: List[StrictInt] = Field(..., min_length=1, max_length=100)
 
     @field_validator("run_ids")
     @classmethod
@@ -120,6 +127,8 @@ class DeleteHistoryRunsRequest(_Request):
         unique = list(dict.fromkeys(values))
         if any(value <= 0 for value in unique):
             raise ValueError("Every history run ID must be a positive integer.")
+        if any(value > MAX_RECORD_ID for value in unique):
+            raise ValueError("A history run ID is larger than any saved package's.")
         return unique
 
 
@@ -133,7 +142,11 @@ def _utc_timestamp(value: str | None) -> str | None:
         raise ValueError("Use an ISO-8601 date and time, for example 2026-09-01T18:30:00+05:30.") from exc
     if parsed.tzinfo is None:
         raise ValueError("Include a time zone, for example 2026-09-01T18:30:00+05:30 or ...Z for UTC.")
-    return parsed.astimezone(timezone.utc).isoformat()
+    try:
+        return parsed.astimezone(timezone.utc).isoformat()
+    except OverflowError as exc:
+        # 9999-12-31T23:59-10:00 is year 10000 in UTC: not a time a video was published.
+        raise ValueError("Use a publication time between the years 1 and 9999 in UTC.") from exc
 
 
 class LinkVideoRequest(_Request):
@@ -260,6 +273,38 @@ class GenerateIdeaRequest(_Request):
     script: str = Field(default="", max_length=12000)
 
 
+class AiShortsGenerateRequest(_Request):
+    """A quote and nothing else: the AI Shorts planner and its lean package work from it.
+
+    Unknown fields are refused rather than ignored, so a misspelled field in the
+    page is reported instead of silently falling back to a default.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    quote: str = Field(..., min_length=6, max_length=400, description="The quote the Short shows; the only required input")
+    language: str = Field(default="english", max_length=40, description="Language of the on-screen text and the SEO package")
+    # Strict: JSON true would otherwise be read as 1 part, and "2" as 2.
+    parts: StrictInt = Field(default=2, ge=1, le=3, description="Eight-second Google Flow parts (1 to 3)")
+    mood_hint: str = Field(default="", max_length=200, description="Optional feeling or scene direction for the planner")
+    region: str = Field(default="global", max_length=40, description="Target region (global, india, us, etc.)")
+
+    @field_validator("region")
+    @classmethod
+    def normalize_ai_shorts_region(cls, value: str) -> str:
+        return normalize_region(value) or "global"
+
+    @field_validator("language")
+    @classmethod
+    def normalize_ai_shorts_language(cls, value: str) -> str:
+        return value.strip().lower() or "english"
+
+    @field_validator("quote")
+    @classmethod
+    def quote_has_words(cls, value: str) -> str:
+        return _require_words(value)
+
+
 class CreateWatchChannelRequest(_Request):
     channel_id: str = Field(..., min_length=3, max_length=100)
     notes: str = Field(default="", max_length=2000)
@@ -309,6 +354,17 @@ class RecordExperimentRequest(_Request):
     new_thumbnail: str | None = Field(default=None, max_length=1000)
     reason: str | None = Field(default=None, max_length=1000)
     performance_before: Dict[str, Any] = Field(default_factory=dict, max_length=40)
+
+    @field_validator("performance_before")
+    @classmethod
+    def plain_json_baseline(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        # Saved as given and returned by every read of the video's experiments:
+        # a NaN, an Infinity or a lone surrogate in it made each read a 500.
+        try:
+            json.dumps(value, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        except ValueError as exc:  # UnicodeEncodeError is a ValueError too
+            raise ValueError("Use finite numbers and plain text only.") from exc
+        return value
 
 
 ExperimentStatus = Literal["draft", "planned", "active", "paused", "completed", "cancelled", "inconclusive"]
@@ -393,6 +449,6 @@ class UpdateStructuredExperimentRequest(_Request):
 
 
 class AssignExperimentVideoRequest(_Request):
-    published_video_link_id: int = Field(..., ge=1)
+    published_video_link_id: StrictInt = Field(..., ge=1, le=MAX_RECORD_ID)
     role: ExperimentRole
     notes: str = Field(default="", max_length=1000)

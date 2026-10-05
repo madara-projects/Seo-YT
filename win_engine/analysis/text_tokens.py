@@ -79,3 +79,15 @@ def unicode_words(value: Any, *, min_length: int = 2) -> list[str]:
         for token in _WORD_RE.findall(normalize_unicode(value))
         if len(token.replace("_", "")) >= min_length
     ]
+
+
+def word_spans(text: str) -> list[tuple[str, int, int]]:
+    """(casefolded word, start, end) of each word in ``text``, read as unicode_words reads it.
+
+    The positions index ``text`` itself, so pass it already normalized.
+    """
+
+    return [
+        (match.group(0).casefold(), match.start(), match.end())
+        for match in _WORD_RE.finditer(text) if match.group(0).replace("_", "")
+    ]

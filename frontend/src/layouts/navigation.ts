@@ -1,4 +1,5 @@
 import {
+  Clapperboard,
   ClipboardCheck,
   Eye,
   FlaskConical,
@@ -31,6 +32,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, hint: "Overview and signals" },
       { to: "/creator", label: "Creator", icon: Sparkles, hint: "Generate and compare packages" },
+      { to: "/ai-shorts", label: "AI Shorts", icon: Clapperboard, hint: "Quote in, Flow prompts and package out" },
       { to: "/history", label: "History", icon: Library, hint: "Saved packages and links" },
     ],
   },

@@ -25,6 +25,7 @@ const LAZY = { timeout: 20_000 };
 beforeAll(async () => {
   await Promise.all([
     import("@/pages/Dashboard"),
+    import("@/pages/AiShorts"),
     import("@/pages/History"),
     import("@/pages/Channel"),
     import("@/pages/Settings"),
@@ -118,6 +119,7 @@ describe("App shell", () => {
   });
 
   it.each([
+    ["/ai-shorts", "AI Shorts", "Your quote"],
     ["/ideas", "Ideas", "Backlog"],
     ["/watchlist", "Watchlist", "Watch something new"],
     ["/audits", "Audits", "Published videos"],

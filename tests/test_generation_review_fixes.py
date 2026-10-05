@@ -255,7 +255,8 @@ class ContentFreeInputTests(unittest.TestCase):
                 title = force_topic_in_title("", "cold brew coffee", "cooking", variant_index=index)
                 self.assertEqual(title, "Cold Brew Coffee")
                 short = force_topic_in_title("", "love quotes", "shorts", variant_index=index, short_form=True)
-                self.assertEqual(short.casefold().count("#shorts"), 1)
+                # #shorts in a title is optional and never injected.
+                self.assertEqual(short, "Love Quotes")
                 self.assertFalse(any(char.isdigit() for char in title + short))
         # With nothing to name, no placeholder ("General Guide") is invented.
         self.assertEqual(force_topic_in_title("", "", "general"), "")

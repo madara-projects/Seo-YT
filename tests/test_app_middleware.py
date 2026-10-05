@@ -110,6 +110,22 @@ class MiddlewareTests(unittest.TestCase):
         error = self.assert_envelope(self.client.post("/api/demand/research", json={"topic": ""}), 422, "validation_error")
         self.assertTrue(error["message"].startswith("topic: "))
 
+    def test_a_refusal_never_fails_on_values_json_cannot_carry(self):
+        # Python's JSON parser accepts NaN, Infinity and lone surrogates. A
+        # refusal echoes the input in its details, and a reply that could not
+        # encode them was a 500 instead of the 422.
+        for body in (
+            b'{"topic": "Rain at night", "target_duration_seconds": NaN}',
+            b'{"topic": "Rain at night", "target_duration_seconds": 1e999}',
+            b'{"topic": "\\ud800"}',
+            b'{"\\ud800": "an unknown field named by half a character"}',
+        ):
+            with self.subTest(body=body):
+                response = self.client.post("/api/ideas", content=body, headers={"Content-Type": "application/json"})
+                self.assert_envelope(response, 422, "validation_error")
+                self.assertNotIn("NaN", response.text)
+                self.assertNotIn("Infinity", response.text)
+
     def test_unknown_routes_and_methods_use_the_same_envelope(self):
         self.assert_envelope(self.client.get("/no-such-route"), 404, "http_error")
         response = self.client.delete("/health")

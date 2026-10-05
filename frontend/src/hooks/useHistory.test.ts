@@ -1,5 +1,28 @@
-import { describe, expect, it } from "vitest";
-import { cloudDeletionNote } from "./useHistory";
+import { createElement, type ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { aiShortsKeys } from "./queryKeys";
+import { cloudDeletionNote, useDeleteRuns } from "./useHistory";
+
+describe("useDeleteRuns", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("refreshes the AI Shorts list and plans, which the server deletes with the run", async () => {
+    const answer = { status: "deleted", run_id: 4201, deleted_run_ids: [4201] };
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify(answer) })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    client.setQueryData(aiShortsKeys.plans(), { plans: [] });
+    client.setQueryData(aiShortsKeys.plan(31), { id: 31 });
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children);
+    const { result } = renderHook(() => useDeleteRuns(), { wrapper });
+
+    await result.current.mutateAsync([4201]);
+
+    expect(client.getQueryState(aiShortsKeys.plans())?.isInvalidated).toBe(true);
+    expect(client.getQueryState(aiShortsKeys.plan(31))?.isInvalidated).toBe(true);
+  });
+});
 
 // States are the ones `CloudSyncService` reports: disabled, waiting, running,
 // unconfigured, healthy/idle and offline/pending. The delete route answers

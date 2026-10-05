@@ -2,6 +2,7 @@ import {
   ArrowUpRight,
   BadgeCheck,
   BarChart3,
+  Clapperboard,
   FileText,
   Gauge,
   Hash,
@@ -15,6 +16,7 @@ import {
   X,
   Youtube,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -23,6 +25,7 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Badge } from "@/components/common/Badge";
 import { CopyButton } from "@/components/common/CopyButton";
 import { EvidenceChip, type EvidenceTone } from "@/components/common/EvidenceChip";
 import { IconBadge } from "@/components/common/IconBadge";
@@ -30,12 +33,13 @@ import { Stat } from "@/components/common/Panel";
 import { CardSkeleton, ErrorState, UnavailableNote } from "@/components/common/States";
 import { apiErrorMessage, apiRequestId } from "@/api/client";
 import { asArray, asObject, displayValue } from "@/lib/utils";
-import { formatCompact } from "@/lib/format";
+import { formatCompact, toFiniteNumber } from "@/lib/format";
 import { opportunityText, titleScoreText } from "@/lib/dashboardFormat";
 import { historyDate } from "@/lib/historyFormat";
+import { partsLabel } from "@/lib/aiShortsFormat";
 import { windowLabel } from "@/lib/auditFormat";
 import { youtubeWatchUrl } from "@/lib/channelFormat";
-import { uploadBundleText } from "@/lib/packages";
+import { cleanHashtags, cleanTags, hashtagsText, tagsText, uploadBundleText } from "@/lib/packages";
 import type { HistoryRunDetail, LinkedVideoReport } from "@/api/historyTypes";
 import { HistoryOpportunityBreakdown } from "./HistoryOpportunityBreakdown";
 import { LinkedVideoLearning } from "@/components/learning/LinkedVideoLearning";
@@ -52,7 +56,7 @@ function TagList({ items }: { items: string[] }) {
       {items.map((item, index) => (
         <li
           key={`${item}-${index}`}
-          className="rounded-lg border border-border bg-elevated px-2.5 py-1 text-xs text-foreground"
+          className="max-w-full break-words rounded-lg border border-border bg-elevated px-2.5 py-1 text-xs text-foreground"
         >
           {item}
         </li>
@@ -275,8 +279,9 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
   const pkg = asObject(run.package);
   const hasPackage = Object.keys(pkg).length > 0;
 
-  const tags = asArray<string>(pkg.tags);
-  const hashtags = asArray<string>(pkg.hashtags);
+  // Cleaned once, so the tags on screen are exactly the tags that get pasted.
+  const tags = cleanTags(pkg.tags);
+  const hashtags = cleanHashtags(pkg.hashtags);
   const variants = asArray<unknown>(pkg.title_variants)
     .map((item) => (typeof item === "string" ? item : String(asObject(item).title ?? "")))
     .filter(Boolean);
@@ -391,7 +396,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
         action={description ? <CopyButton value={description} label="Copy" size="xs" /> : null}
       >
         {description ? (
-          <p className="whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[0.8125rem] leading-relaxed text-muted-foreground">
+          <p className="whitespace-pre-wrap break-words rounded-xl border border-border bg-elevated p-4 text-[0.8125rem] leading-relaxed text-muted-foreground">
             {description}
           </p>
         ) : (
@@ -403,7 +408,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
         <Section
           icon={Tag}
           title="Tags"
-          action={tags.length ? <CopyButton value={tags.join(", ")} label="Copy" size="xs" /> : null}
+          action={tags.length ? <CopyButton value={tagsText(tags)} label="Copy" size="xs" /> : null}
         >
           <TagList items={tags} />
         </Section>
@@ -411,7 +416,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
           icon={Hash}
           title="Hashtags"
           action={
-            hashtags.length ? <CopyButton value={hashtags.join(" ")} label="Copy" size="xs" /> : null
+            hashtags.length ? <CopyButton value={hashtagsText(hashtags)} label="Copy" size="xs" /> : null
           }
         >
           <TagList items={hashtags} />
@@ -461,7 +466,7 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
         action={fullScript ? <CopyButton value={fullScript} label="Copy" size="xs" /> : null}
       >
         {fullScript ? (
-          <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-elevated p-4 text-[0.8125rem] leading-relaxed text-muted-foreground scrollbar-thin">
+          <p className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-border bg-elevated p-4 text-[0.8125rem] leading-relaxed text-muted-foreground scrollbar-thin">
             {fullScript}
           </p>
         ) : (
@@ -470,6 +475,27 @@ function DetailBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => void
       </Section>
     </div>
   );
+}
+
+/**
+ * The AI Shorts plan a package was written from. Its saved payload carries
+ * `source_page: "ai_shorts"` and an `ai_shorts` block naming the plan; a row
+ * carries the same once the server copies them out of the payload.
+ */
+function aiShortsMarker(run: HistoryRunDetail | null): { planId: number | null; label: string } | null {
+  if (!run) return null;
+  const pkg = asObject(run.package);
+  const marker = asObject(run.ai_shorts ?? pkg.ai_shorts);
+  const written =
+    run.source_page === "ai_shorts" || pkg.source_page === "ai_shorts" || Object.keys(marker).length > 0;
+  if (!written) return null;
+  const planId = toFiniteNumber(marker.plan_id);
+  const parts = toFiniteNumber(marker.parts);
+  const total = toFiniteNumber(marker.total_seconds);
+  return {
+    planId: planId !== null && planId > 0 ? planId : null,
+    label: parts !== null && parts > 0 ? `AI Shorts · ${partsLabel(parts, total ?? undefined)}` : "AI Shorts",
+  };
 }
 
 /**
@@ -499,6 +525,7 @@ export function HistoryDetail({
   const title = run ? displayValue(run.title, "Untitled package") : fallbackTitle || "Saved package";
   // The creator's recorded choice is what they meant to publish, so it is what gets copied.
   const chosen = run?.selected_package?.package ?? null;
+  const aiShorts = aiShortsMarker(run);
 
   return (
     <Sheet open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
@@ -530,7 +557,7 @@ export function HistoryDetail({
             </SheetClose>
           </div>
           {run ? (
-            <div className="relative mt-4">
+            <div className="relative mt-4 flex flex-wrap items-center gap-2">
               {/* The page promises the saved package can be reused; without this the
                   only route was selecting text inside a scroll box. */}
               <CopyButton
@@ -545,6 +572,21 @@ export function HistoryDetail({
                 size="sm"
                 disabled={!hasPackage}
               />
+              {aiShorts ? (
+                <>
+                  <Badge variant="brand" title="Written on the AI Shorts page">
+                    {aiShorts.label}
+                  </Badge>
+                  {aiShorts.planId !== null ? (
+                    <Button asChild variant="outline" size="sm">
+                      <Link to={`/ai-shorts?plan=${aiShorts.planId}`}>
+                        <Clapperboard aria-hidden="true" />
+                        Open AI Short
+                      </Link>
+                    </Button>
+                  ) : null}
+                </>
+              ) : null}
             </div>
           ) : null}
         </div>

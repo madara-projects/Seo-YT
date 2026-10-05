@@ -13,7 +13,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 _BACKUPS_KEPT = 10
 # The pre-migration state is what a backup must preserve, so a migration that
 # is retried in the same process does not copy the whole database again.
@@ -221,8 +221,10 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
 
     connection.execute("PRAGMA journal_mode = WAL")
     _create_independent_tables(connection)
+    _add_owned_snapshot_channel(connection)
     _create_relational_tables(connection)
     _create_v11_additions(connection)
+    _create_v12_additions(connection)
     _create_indexes(connection)
     connection.execute(
         """CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -233,7 +235,7 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
-        (CURRENT_SCHEMA_VERSION, datetime.now(timezone.utc).isoformat(), _V11_DESCRIPTION),
+        (CURRENT_SCHEMA_VERSION, datetime.now(timezone.utc).isoformat(), _V12_DESCRIPTION),
     )
     connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
     connection.commit()
@@ -505,9 +507,7 @@ def _migrate_v9_to_v10(connection: sqlite3.Connection) -> None:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(cloud_sync_conflicts)")}
         if "local_payload_json" not in columns:
             connection.execute("ALTER TABLE cloud_sync_conflicts ADD COLUMN local_payload_json TEXT")
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(owned_video_snapshots)")}
-        if "channel_id" not in columns:
-            connection.execute("ALTER TABLE owned_video_snapshots ADD COLUMN channel_id TEXT")
+        _add_owned_snapshot_channel(connection)
         _attribute_owned_snapshots(connection)
         # Cohorts compare exact values, and older links stored the brief's own
         # spelling ("Short") or free text; the link row keeps that text.
@@ -534,6 +534,18 @@ def _migrate_v9_to_v10(connection: sqlite3.Connection) -> None:
 
 
 _V10_DESCRIPTION = "Keep the losing local edit with each cloud sync conflict; uploads by channel; one spelling per format"
+
+
+def _add_owned_snapshot_channel(connection: sqlite3.Connection) -> None:
+    """Version 10's channel column on owned uploads, for the v9 step and a new database alike.
+
+    Appended with ALTER TABLE in both cases, so a migrated database and a new
+    one list the columns in the same order (as _create_v11_additions does for
+    the snapshot column).
+    """
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(owned_video_snapshots)")}
+    if "channel_id" not in columns:
+        connection.execute("ALTER TABLE owned_video_snapshots ADD COLUMN channel_id TEXT")
 
 
 def _migrate_v10_to_v11(connection: sqlite3.Connection) -> None:
@@ -599,6 +611,52 @@ def _create_v11_additions(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE video_performance_snapshots ADD COLUMN traffic_sources_json TEXT")
 
 
+def _migrate_v11_to_v12(connection: sqlite3.Connection) -> None:
+    """Keep each AI Shorts plan (its Google Flow prompts) beside the History run that holds its package."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_v12_additions(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (12, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), _V12_DESCRIPTION),
+        )
+        connection.execute("PRAGMA user_version = 12")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+_V12_DESCRIPTION = "AI Shorts plans: Google Flow prompts per part, kept with the History run of their package"
+
+
+def _create_v12_additions(connection: sqlite3.Connection) -> None:
+    """Version 12's table and index, for the v11 step and a new database alike.
+
+    One row per AI Shorts plan: the quote the creator typed and the planner's
+    whole result (shots, Flow steps, text overlay plan) as JSON. The package it
+    was made with is the History run it points at, so deleting that run (from
+    History, or by a cloud tombstone) removes the plan with it. Plans are not
+    carried by cloud sync.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS ai_short_plans (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               analysis_run_id INTEGER NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
+               quote TEXT NOT NULL,
+               language TEXT NOT NULL,
+               parts INTEGER NOT NULL,
+               plan_json TEXT NOT NULL,
+               generation_source TEXT NOT NULL,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_short_plans_run ON ai_short_plans(analysis_run_id)"
+    )
+
+
 # history_store's format spellings as version 10 shipped them. A migration must
 # keep doing what it did then, so it has its own copy.
 _V10_FORMATS = frozenset({
@@ -652,6 +710,7 @@ _MIGRATIONS = (
     _migrate_v8_to_v9,
     _migrate_v9_to_v10,
     _migrate_v10_to_v11,
+    _migrate_v11_to_v12,
 )
 assert len(_MIGRATIONS) == CURRENT_SCHEMA_VERSION
 
@@ -715,7 +774,6 @@ def _create_independent_tables(connection: sqlite3.Connection) -> None:
         """CREATE TABLE IF NOT EXISTS owned_video_snapshots (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
                video_id TEXT NOT NULL,
-               channel_id TEXT,
                captured_at TEXT NOT NULL,
                published_at TEXT,
                title TEXT,

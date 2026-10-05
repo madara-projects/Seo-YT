@@ -36,7 +36,10 @@ describe("PackagingStage opportunity score", () => {
 
     expect(card.getByText("48 / 100")).toBeInTheDocument();
     expect(card.getByText("Medium input confidence")).toBeInTheDocument();
-    expect(card.getByText("Local heuristic, not a prediction of views.")).toBeInTheDocument();
+    // The score has no title input: it is one figure for the run, not one per option.
+    expect(
+      card.getByText("Local heuristic for this run's research, the same for every option. Not a prediction of views."),
+    ).toBeInTheDocument();
     await userEvent.click(card.getByRole("button", { name: /why this score/i }));
     expect(card.getAllByTestId("opportunity-input")).toHaveLength(5);
     expect(card.getByRole("list", { name: "Missing data" })).toBeInTheDocument();

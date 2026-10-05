@@ -16,6 +16,9 @@ from win_engine.analysis.generation_quality import (
     focused_short_hashtags,
     has_unsupported_instructional_framing,
     is_short_content,
+    narrates_process,
+    production_note_sentences,
+    safe_quote_title,
     source_requires_noninstructional_framing,
 )
 from win_engine.analysis.package_builder import build_title_thumbnail_packages, title_gate_status
@@ -24,17 +27,26 @@ from win_engine.analysis.language_engine import build_language_strategy
 from win_engine.analysis.keyword_research import select_final_tags
 from win_engine.analysis.topic_lock import hashtag_from_phrase, source_lead_phrase, strip_lead_in
 from win_engine.analysis.pacing_engine import analyze_script_pacing
-from win_engine.analysis.source_cues import source_quote, timestamp_line
+from win_engine.analysis.source_cues import affirmed_feeling_words, feeling_words, source_quote, timestamp_line
 from win_engine.analysis.strategy_layer import build_channel_intelligence
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.thumbnail_classifier import build_thumbnail_strategy
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.channel_learning import learning_summary as channel_performance_learning
 from win_engine.generation.expansion_engine import build_chapters
-from win_engine.llm.seo_writer import last_generation_diagnostics, write_multilang_packages_with_source
+from win_engine.llm.seo_writer import (
+    MAX_TAG_CHARS,
+    clean_tags,
+    last_generation_diagnostics,
+    write_multilang_packages_with_source,
+)
 
 
 _TOPIC_STOPWORDS = {"video", "youtube", "will", "what", "days", "today", "going"}
+_GRAMMAR_WORDS = {
+    "that", "this", "with", "your", "they", "them", "their", "there", "have", "from", "what", "when",
+    "will", "been", "were", "does", "just", "then", "than", "into", "about", "would", "could", "should",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -168,7 +180,9 @@ def build_seo_package(
         p["tags"] = tags
         p["keyword_research"] = tag_evidence
         if is_short_content(script, creator_brief):
-            p["hashtags"] = focused_short_hashtags(tags)
+            p["hashtags"] = _short_hashtags(
+                tags, script, creator_brief, proposed=p.get("hashtags") or [], fallback=not generated,
+            )
         return p
 
     multilang = {lang: _resolve(lang) for lang in _LANGS}
@@ -204,7 +218,7 @@ def build_seo_package(
         )
         safe["tags"] = safe_tags
         if is_short_content(script, creator_brief):
-            safe["hashtags"] = focused_short_hashtags(safe_tags)
+            safe["hashtags"] = _short_hashtags(safe_tags, script, creator_brief, fallback=True)
         safe["keyword_research"] = safe_evidence
         safe_trace = dict(generation_trace)
         safe_events = list(safe_trace.get("events") or [])
@@ -248,7 +262,7 @@ def build_seo_package(
             )
             minimal["tags"] = minimal_tags
             if is_short_content(script, creator_brief):
-                minimal["hashtags"] = focused_short_hashtags(minimal_tags)
+                minimal["hashtags"] = _short_hashtags(minimal_tags, script, creator_brief, fallback=True)
             minimal_gate = evaluate_package_quality(
                 minimal, script=script, creator_brief=creator_brief, language=selected_language,
                 recent_titles=channel_learning.get("recent_titles") or [],
@@ -688,73 +702,42 @@ def _deterministic_score(
     return round(min(max(score, 0.0), 10.0), 1)
 
 
-def _fit_title(body: str, suffix: str = "", max_chars: int = 70) -> str:
-    clean = re.sub(r"\s+", " ", body).strip(" .:-")
-    available = max_chars - len(suffix)
-    if len(clean) > available:
-        shortened = clean[: max(1, available - 1)].rsplit(" ", 1)[0].rstrip(" .,:;-")
-        clean = (shortened or clean[: max(1, available - 1)]).rstrip() + "…"
-    return clean + suffix
+# One emoji per feeling a quote names, by the start of the feeling word. The
+# old chooser matched substrings of the footage ("car" in "carefully", "rain"
+# in "train") and picked by checksum, so a title got 🚦 or 🛵 for its road.
+# A heart is not a broken one: "A grateful heart is a happy heart" got 💔.
+_FEELING_EMOJIS = (
+    ("heartbr", "💔"), ("heartach", "💔"), ("broken", "💔"), ("lov", "🤍"), ("miss", "🥀"), ("alone", "🌙"),
+    ("lonel", "🌙"), ("silen", "🌙"), ("cry", "😢"), ("tear", "😢"), ("sad", "😔"), ("pain", "😔"),
+    ("hurt", "😔"), ("forgiv", "🌱"), ("heal", "🌱"), ("goodbye", "🍂"), ("forg", "🍂"), ("memor", "🍂"),
+    ("betray", "🖤"), ("trust", "🖤"), ("soul", "✨"), ("deserv", "🤍"), ("regret", "🍂"), ("happi", "☀️"),
+)
 
 
-# Words that turn a quote; the idea after the last one is what a title keeps.
-_QUOTE_TURN_RE = re.compile(r"\b(?:but|yet|however|instead|now)\b", re.IGNORECASE)
+def _feeling_emoji(quote: str) -> str:
+    """The emoji for the first feeling the quote names and does not deny ("Don't cry"), or ""."""
+
+    for word in affirmed_feeling_words(quote):
+        for prefix, emoji in _FEELING_EMOJIS:
+            if word.startswith(prefix):
+                return emoji
+    return ""
 
 
-def _fit_quote_title(body: str, suffix: str, max_chars: int = 70) -> str:
-    """A quote as a title, cut at a word boundary to fit.
+def _short_hashtags(
+    tags: list[str], script: str, creator_brief: dict[str, Any] | None, *,
+    proposed: list[str] | tuple[str, ...] = (), fallback: bool = False,
+) -> list[str]:
+    """A Short's hashtags: #shorts, then #quotes and the quote's feeling, then the writer's and the tags'.
 
-    Cutting the end can drop the idea after the quote's turn ("... and yet it
-    taught me to stay"), which the title must keep; the setup is cut
-    instead, so the title stays a span of the creator's words.
+    A fallback quote Short keeps the first three only (#shorts #quotes
+    #heartbreak): a hashtag coined from a tag is one nobody follows.
     """
 
-    title = _fit_title(body, suffix, max_chars)
-    clean = re.sub(r"\s+", " ", body).strip(" .:-")
-    turns = list(_QUOTE_TURN_RE.finditer(clean))
-    kept = title[: len(title) - len(suffix)].rstrip("…")
-    if not turns or turns[-1].end() <= len(kept):
-        return title
-    words: list[str] = []
-    for word in reversed(clean.split()):
-        if len(" ".join([word, *words])) + len(suffix) > max_chars:
-            break
-        words.insert(0, word)
-    tail = " ".join(words).lstrip(" ,;:-")
-    return _fit_title(tail[:1].upper() + tail[1:], suffix, max_chars) if tail else title
-
-
-def _quote_title_focus(quote: str) -> str:
-    """Remove a purely introductory quote lead-in when a stronger clause follows."""
-
-    clean = re.sub(r"\s+", " ", quote or "").strip(" .")
-    focused = re.sub(
-        r"^(?:in the end|sometimes|honestly|maybe|the truth is)\s*,?\s+",
-        "",
-        clean,
-        flags=re.IGNORECASE,
-    )
-    return focused or clean
-
-
-def _semantic_emoji(text: str) -> str:
-    """Choose a relevant fallback emoji from the actual content, never a fixed template."""
-
-    lowered = (text or "").casefold()
-    groups = (
-        (("rain", "rainy", "storm", "monsoon"), ("🌧️", "☔", "🌦️")),
-        (("heartbreak", "heart", "missing", "miss", "love"), ("💔", "🫶", "❤️‍🩹")),
-        (("road", "traffic", "vehicle", "car", "bus"), ("🚦", "🚗", "🛣️")),
-        (("moon", "night", "stars", "sky"), ("🌙", "✨", "🌌")),
-        (("silence", "solitude", "alone", "lonely", "quiet streets"), ("🌙", "🕯️", "🌃")),
-        (("sunset", "beach", "ocean", "sea"), ("🌅", "🌊", "☀️")),
-        (("mountain", "hill", "nature", "green"), ("⛰️", "🌿", "🌄")),
-        (("funny", "comedy", "laugh"), ("😂", "😄", "🤣")),
-    )
-    for terms, emojis in groups:
-        if any(term in lowered for term in terms):
-            return emojis[sum(ord(char) for char in lowered) % len(emojis)]
-    return ""
+    quote = source_quote(script, creator_brief)
+    if fallback and quote:
+        return focused_short_hashtags([], quote=quote)
+    return focused_short_hashtags(tags, quote=quote, proposed=proposed)
 
 
 def _is_source_span(phrase: str, text: str) -> bool:
@@ -763,11 +746,6 @@ def _is_source_span(phrase: str, text: str) -> bool:
     words = [re.escape(word) for word in str(phrase or "").split()]
     pattern = r"(?<!\w)" + r"[\s-]+".join(words) + r"(?!\w)"
     return bool(words) and re.search(pattern, str(text or ""), re.IGNORECASE) is not None
-
-
-def _topic_hashtag(value: str) -> str:
-    words = re.findall(r"[A-Za-z0-9]+", value or "")[:3]
-    return "#" + "".join(word.capitalize() for word in words) if words else ""
 
 
 def _visual_hashtag(value: str) -> str:
@@ -779,33 +757,50 @@ def _visual_hashtag(value: str) -> str:
     return hashtag_from_phrase(value)
 
 
-def _fallback_quote_variants(quote: str, topic: str, suffix: str, *, semantic_validated: bool = False) -> list[str]:
-    """Produce conservative, readable quote titles from the creator's own words.
+def _fallback_quote_title(quote: str, emoji: str = "") -> str:
+    """The quote as a title: whole when it fits, else its best complete span.
 
-    Titles written for particular test quotes ("Needed, But Never Chosen",
-    "The Thoughts I Only Share With Silence") were given to any quote that
-    shared a word with them, whatever it meant.
+    Never a phrase from the brief ("Deep emotional resonance relatable truth
+    and life" shipped as a title), never cut mid-phrase, never "…", never
+    "#shorts"; chosen with the quality gate's own title checks. The
+    feeling's emoji follows when the title still fits.
     """
 
-    # ``topic`` comes from the validated semantic layer. Prefer that natural
-    # interpretation over copying/truncating the on-screen quote, when it names
-    # enough to be a title: the gate rejects a two-word one as too vague.
-    semantic_topic = re.sub(r"\s+", " ", topic or "").strip(" .:-")
-    quote_focus = _quote_title_focus(quote)
-    if (
-        semantic_validated and len(semantic_topic.split()) >= 3
-        and semantic_topic.casefold() not in {"video topic", quote_focus.casefold()}
-    ):
-        return [_fit_title(semantic_topic[:1].upper() + semantic_topic[1:], suffix)]
-    if not quote_focus:
-        return [_fit_title("A Quiet Reflection", suffix)]
-    # The creator's whole quote reads better than a cut one with an emoji, so
-    # the emoji goes first when it is all that stops the quote fitting.
-    plain = " #shorts" if suffix.endswith(" #shorts") else suffix
-    whole = re.sub(r"\s+", " ", quote_focus).strip(" .:-")
-    if len(whole) + len(suffix) > 70 >= len(whole) + len(plain):
-        suffix = plain
-    return [_fit_quote_title(quote_focus, suffix)]
+    title = safe_quote_title(quote) or "A Quiet Reflection"
+    if emoji and len(title) + len(emoji) + 1 <= 72:
+        return f"{title} {emoji}"
+    return title
+
+
+def _supported_reflection_line(brief: dict[str, Any], quote: str) -> str:
+    """The creator's own viewer promise as the description's second line, when it is one.
+
+    Only a creator-supplied sentence about this quote qualifies: "A relatable
+    reminder that missing someone does not mean they belong in your life"
+    shares the quote's words; "Deep emotional resonance, relatable truth,
+    and life perspective" names nothing in it and is left out.
+    """
+
+    promise = re.sub(r"\s+", " ", str(brief.get("viewer_promise") or "")).strip()
+    source = ((brief.get("field_provenance") or {}).get("viewer_promise") or {}).get("source")
+    if not promise or source not in (None, "creator_supplied"):
+        return ""
+    words = unicode_words(promise, min_length=1)
+    if not 5 <= len(words) <= 25 or set(words) & {
+        "quote", "quotes", "video", "short", "shorts", "title", "package", "tag", "tags", "hashtag", "hashtags",
+        "viewer", "viewers", "audience", "seo", "youtube", "screen",
+    }:
+        return ""
+    if narrates_process(promise) or production_note_sentences(promise, quote):
+        return ""
+    # Two of the quote's own words ("missing", "someone"), not one shared
+    # "life": a line that names nothing in the quote is the brief's prose.
+    def stems(text: str) -> set[str]:
+        return {word[:4] for word in unicode_words(text) if len(word) > 3 and word not in _GRAMMAR_WORDS}
+
+    if len(stems(promise) & stems(quote)) < 2:
+        return ""
+    return promise.rstrip(".") + "."
 
 
 def _fallback_topic_variants(topic: str, suffix: str, instructional: bool) -> list[str]:
@@ -821,7 +816,17 @@ def _fallback_topic_variants(topic: str, suffix: str, instructional: bool) -> li
         body = f"How to {clean}"
     else:
         body = clean
-    return [_fit_title(body[:1].upper() + body[1:], suffix)]
+    return [_uncut_title(body[:1].upper() + body[1:]) + suffix]
+
+
+def _uncut_title(body: str, max_chars: int = 70) -> str:
+    """A title from a source phrase: whole when it fits, else cut at a phrase boundary, never with "…".
+
+    Either way it never ends on a dangling word: a topic cut at a word limit
+    ("... every evening even after she") loses its last words, not its grammar.
+    """
+
+    return _trim_title_span(re.sub(r"\s+", " ", body).strip(" .:-"), max_chars)
 
 
 def _fallback_title_topic(topic: str, content: str, video_format: str, instructional: bool = True) -> str:
@@ -879,6 +884,7 @@ _TITLE_DANGLING = {
     "a", "an", "the", "and", "or", "but", "with", "without", "from", "about", "to", "for",
     "of", "after", "before", "into", "than", "at", "in", "on", "by", "any", "your", "my",
     "our", "their", "is", "are", "was", "were", "that", "which", "என்று",
+    "she", "he", "they", "we", "i", "who", "when", "while", "if", "so", "as", "because", "even", "still",
 }
 _INSTRUCTIONAL_VERBS = {
     "make", "cook", "bake", "brew", "build", "create", "fix", "clean", "install", "learn",
@@ -1019,14 +1025,11 @@ def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | No
     content = str(brief.get("content") or primary_topic or "").strip()
     quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip() or source_quote(content, brief)
     is_shorts = is_short_content(content or primary_topic, brief)
-    emoji = _semantic_emoji(" ".join([content, str(brief.get("visual_requirements") or "")]))
-    suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
     if quote:
-        safe_topic = "" if has_unsupported_instructional_framing(primary_topic) else primary_topic
-        variants = _fallback_quote_variants(quote, safe_topic, suffix, semantic_validated=bool(safe_topic))
-        # The title may have dropped its emoji to keep the whole quote.
-        suffix = next((tail for tail in (suffix, " #shorts") if suffix and variants[0].endswith(tail)), suffix)
-        body = variants[0][:-len(suffix)] if suffix and variants[0].endswith(suffix) else variants[0]
+        # The quote, whole or its complete punchline, is the title: never a
+        # brief phrase, never cut with "…", never "#shorts" (YouTube finds a
+        # Short by its format; the description carries the hashtag).
+        title = _fallback_quote_title(quote, _feeling_emoji(quote) if is_shorts else "")
         # The viewer gets the quote, never a note on how the description was
         # assembled ("built only from the words supplied..."). A Short's viewers
         # are watching the scene, so only a long video's description names it.
@@ -1038,13 +1041,13 @@ def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | No
         prose = " ".join(line for line in content.splitlines() if not timestamp_line(line))
         excerpt = re.sub(r"\s+", " ", prose).strip(" .")
         description = (excerpt or body).rstrip(".") + "."
-    title = _fit_title(body, suffix)
+        title = _uncut_title(body)
     return {
         "title": title,
         "variants": [title],
         "description": description,
         "tags": [],
-        "hashtags": ["#shorts"] if is_shorts else [],
+        "hashtags": focused_short_hashtags([], quote=quote) if is_shorts else [],
     }
 
 
@@ -1071,26 +1074,18 @@ def _content_specific_fallback(
     promise = str(brief.get("viewer_promise") or "").strip()
     video_format = str(brief.get("video_format") or "").strip().casefold()
 
-    emoji = _semantic_emoji(" ".join([topic, content, quote, str(brief.get("visual_requirements") or "")]))
-    suffix = f" {emoji} #shorts" if is_shorts and emoji else " #shorts" if is_shorts else ""
     if quote:
-        fallback_title_topic = seo_targets[0] if seo_targets else topic
-        variants = _fallback_quote_variants(quote, fallback_title_topic, suffix, semantic_validated=bool(seo_targets))
+        # The quote, whole or its complete punchline, is the title; a brief or
+        # research phrase is not ("Deep emotional resonance relatable truth
+        # and life"). No "#shorts" in the title: YouTube finds a Short by its
+        # format, and the description carries the hashtag.
+        variants = [_fallback_quote_title(quote, _feeling_emoji(quote) if is_shorts else "")]
         # A Short's description speaks to viewers who are watching the scene;
         # describing it there is a production note.
         visual_line = "" if is_shorts else _fallback_visual_sentence(str(brief.get("visual_requirements") or ""))
-        # Only themes research validated against the source are named; lines
-        # written for particular test quotes ("knowing your worth", "the silence
-        # described by the words on screen") read meaning into any quote.
-        supported_themes = [item for item in seo_targets if item.casefold() != topic.casefold()][:3]
-        if supported_themes:
-            reflective_line = "A reflective moment about " + ", ".join(supported_themes) + "."
-        elif seo_targets and topic and topic.casefold() != "video topic":
-            reflective_line = f"A reflective moment about {topic}."
-        else:
-            # No supported theme to name. "A reflective Short built around the
-            # exact words shown on screen" told viewers how the copy was made.
-            reflective_line = ""
+        # A second line only when the creator wrote one about this quote:
+        # "A reflective moment about {keywords}" read like a template.
+        reflective_line = _supported_reflection_line(brief, quote)
         description = "\n\n".join(part for part in (f"“{quote}”", visual_line, reflective_line) if part)
     else:
         instructional = not source_requires_noninstructional_framing(content or topic, brief)
@@ -1099,9 +1094,9 @@ def _content_specific_fallback(
             " while " in f" {content.casefold()} " and len(re.findall(r"\b[A-Z][A-Z0-9]{1,}\b", content)) >= 2
         )
         if comparison_mode:
-            variants = [_fit_title(f"{title_topic}: What's the Difference?", suffix)]
+            variants = [_uncut_title(f"{title_topic}: What's the Difference?")]
         else:
-            variants = _fallback_topic_variants(title_topic, suffix, instructional)
+            variants = _fallback_topic_variants(title_topic, "", instructional)
             # Additional readable alternatives, each a contiguous source span.
             # A story's opening clause is not a title, so narratives keep one.
             entity = _named_entity(strip_lead_in(content)) if instructional else ""
@@ -1113,36 +1108,50 @@ def _content_specific_fallback(
             for body in extra_bodies:
                 if not body or len(variants) >= 3:
                     continue
-                candidate = _fit_title(body[:1].upper() + body[1:], suffix)
+                candidate = _uncut_title(body[:1].upper() + body[1:])
                 if all(candidate.casefold() != existing.casefold() for existing in variants):
                     variants.append(candidate)
         description = _fallback_description(content or topic, promise)
 
-    tags: list[str] = []
-    seen: set[str] = set()
     signals = [str(item.get("keyword") or "") for item in keyword_signals or []]
-    candidates = [topic, *(seo_targets if quote else []), *signals]
-    for field in ("viewer_promise", "unique_angle"):
-        value = " ".join(str(brief.get(field) or "").strip().lower().split()[:6])
-        if value:
-            candidates.append(value)
-    for candidate in candidates:
-        cleaned = candidate.strip().lower()
-        if quote and has_unsupported_instructional_framing(cleaned):
-            continue
-        if cleaned and cleaned not in seen:
-            seen.add(cleaned)
-            tags.append(cleaned)
+    if quote:
+        # A quote video's tags come from its quote or the feeling it names
+        # ("unspoken love"), not from the footage the script describes
+        # ("vehicles pass", "daytime flight window").
+        def stems(text: str) -> set[str]:
+            return {word[:4] for word in unicode_words(text) if len(word) > 3 and word not in _GRAMMAR_WORDS}
 
-    # A quote's hashtags come from its validated tags later; "#DeepThoughts
-    # #Solitude" for any quote with "silence" in it named a theme no one chose.
-    hashtags = [] if quote else [_topic_hashtag(topic)]
-    if is_shorts:
-        hashtags.insert(0, "#shorts")
-    if not quote:
-        visual_hashtag = _visual_hashtag(str(brief.get("visual_requirements") or ""))
-        if visual_hashtag:
-            hashtags.append(visual_hashtag)
+        signals = [signal for signal in signals if stems(signal) & stems(quote) or feeling_words(signal)]
+    # The first words of the brief's prose ("deep emotional resonance,
+    # relatable truth, and") were offered as tags; they are not searches.
+    # Tags are cleaned as the writer's are: natural phrases of 30 characters
+    # at most, no fragment lifted from the creator's notes ("screen why").
+    # A long how-to topic offers its opening phrase ("how to set up obs
+    # studio"), and any source the name it carries ("obs studio"); the first
+    # words of a statement ("manual coffee grinder needs") are no search.
+    candidates = [
+        topic, _trim_title_span(topic, MAX_TAG_CHARS) if topic.casefold().startswith("how to ") else "",
+        "" if quote else _named_entity(strip_lead_in(content)),
+        *(seo_targets if quote else []), *signals,
+    ]
+    tags = [
+        tag for tag in clean_tags(candidates, short=is_shorts)
+        if not (quote and has_unsupported_instructional_framing(tag))
+    ]
+
+    if quote and is_shorts:
+        # #shorts, #quotes and the hashtag of the feeling the quote names;
+        # "#DeepThoughts #Solitude" for any quote with "silence" in it named
+        # a theme no one chose.
+        hashtags = focused_short_hashtags([], quote=quote)
+    else:
+        # A readable label of three words at most, never the topic's first
+        # three words ("#TcpEstablishesA", "#SheKeptChecking").
+        hashtags = [hashtag_from_phrase(topic)]
+        if is_shorts:
+            hashtags.insert(0, "#shorts")
+        if not quote:
+            hashtags.append(_visual_hashtag(str(brief.get("visual_requirements") or "")))
     hashtags = list(dict.fromkeys(item for item in hashtags if item))[:3]
     # A keyword signal is offered only as the creator wrote it: word pairs
     # joined across a sentence break or a dropped word ("rain. On-screen" gave

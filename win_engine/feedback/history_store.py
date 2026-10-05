@@ -5,6 +5,8 @@ import logging
 import re
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
@@ -104,6 +106,8 @@ class HistoryStore:
     """SQLite-backed snapshot store for repeated video metric collection."""
 
     def __init__(self, database_path: str) -> None:
+        # The open recording_runs() blocks, each listing the runs recorded in it.
+        self._run_records: list[list[int]] = []
         self._database_path_raw = database_path
         self._database_path = Path(database_path) if database_path != ":memory:" else None
         self._memory_connection: sqlite3.Connection | None = None
@@ -211,7 +215,26 @@ class HistoryStore:
                     json.dumps(payload) if payload is not None else None,
                 ),
             )
-        return int(cursor.lastrowid)
+        run_id = int(cursor.lastrowid)
+        for recorded in self._run_records:
+            recorded.append(run_id)
+        return run_id
+
+    @contextmanager
+    def recording_runs(self) -> Iterator[list[int]]:
+        """The ids of the packages this store records inside the block, for a caller that may have to remove them.
+
+        A stage that records its run and then fails would leave that run behind.
+        Only runs recorded through this store are listed, never another
+        request's, which has its own store.
+        """
+        recorded: list[int] = []
+        self._run_records.append(recorded)
+        try:
+            yield recorded
+        finally:
+            # By identity: an equal list may belong to another block.
+            self._run_records = [item for item in self._run_records if item is not recorded]
 
     def update_analysis_payload(
         self, run_id: int, title: str, payload: dict[str, Any], title_score: float | None = None
@@ -417,7 +440,10 @@ class HistoryStore:
                 """
                 SELECT a.id, a.created_at, a.title, a.opportunity_score, a.title_score,
                        a.query, a.payload_json IS NOT NULL, p.id, p.youtube_video_id,
-                       ps.generated_package_id, ps.selected_at, a.content_angle, a.intent
+                       ps.generated_package_id, ps.selected_at, a.content_angle, a.intent,
+                       CASE WHEN json_valid(a.payload_json)
+                            THEN json_extract(a.payload_json, '$.source_page', '$.ai_shorts') END,
+                       """ + _LOCAL_PLAN_MARK_SQL.format(run_id="a.id") + """
                 FROM analysis_runs a
                 LEFT JOIN analysis_package_selections ps ON ps.analysis_run_id = a.id
                 LEFT JOIN published_video_links p ON p.analysis_run_id = a.id
@@ -425,8 +451,12 @@ class HistoryStore:
                 """
                 , (max(1, min(limit, 100)), max(0, offset))
             ).fetchall()
-        return [
-            {
+        result = []
+        for row in rows:
+            # An AI Shorts package is marked inside its payload; the list shows
+            # the mark without loading the payload.
+            source_page, ai_shorts = _package_marker(row[13], row[14])
+            result.append({
                 "id": row[0], "created_at": row[1], "title": row[2],
                 "opportunity_score": _rounded(row[3]),
                 "title_score": _rounded(row[4]), "query": row[5],
@@ -438,9 +468,10 @@ class HistoryStore:
                 # Shown on each row and searched, as the legacy list always expected.
                 "content_angle": row[11],
                 "intent": row[12],
-            }
-            for row in rows
-        ]
+                "source_page": source_page,
+                "ai_shorts": ai_shorts,
+            })
+        return result
 
     def recent_generated_titles(self, limit: int = 10) -> list[str]:
         with self._connect() as connection:
@@ -653,7 +684,8 @@ class HistoryStore:
             row = connection.execute(
                 """
                 SELECT id, created_at, query, intent, content_angle, title, title_score,
-                       retention_risk, opportunity_label, opportunity_score, payload_json
+                       retention_risk, opportunity_label, opportunity_score, payload_json,
+                       """ + _LOCAL_PLAN_MARK_SQL.format(run_id="analysis_runs.id") + """
                 FROM analysis_runs WHERE id = ?
                 """,
                 (run_id,),
@@ -664,6 +696,8 @@ class HistoryStore:
             package = json.loads(row[10]) if row[10] else None
         except json.JSONDecodeError:
             package = None
+        # Shown beside the payload, whose own mark may name another device's plan.
+        source_page, ai_shorts = _page_mark(package, row[11])
         stored_query = str(row[2] or "")
         creator_content = ""
         if isinstance(package, dict):
@@ -679,6 +713,7 @@ class HistoryStore:
             "content_angle": row[4], "title": row[5], "title_score": _rounded(row[6]),
             "retention_risk": row[7], "opportunity_label": row[8],
             "opportunity_score": _rounded(row[9]), "package": package,
+            "source_page": source_page, "ai_shorts": ai_shorts,
         }
         result["selected_package"] = self.package_selection(run_id)
         return result
@@ -2355,6 +2390,51 @@ def _json_value(value: str | None) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except (TypeError, ValueError):
         return {}
+
+
+# What ai_shorts_store.save_plan writes into a run's `ai_shorts` block, and the page it names.
+_AI_SHORTS_MARK_KEYS = ("plan_id", "parts", "total_seconds", "language", "generation_source")
+_AI_SHORTS_PAGE = "ai_shorts"
+# The newest plan kept on this device for the run named by `{run_id}`, as the
+# mark save_plan writes (JSON text), or NULL when it has none.
+_LOCAL_PLAN_MARK_SQL = """(SELECT json_object(
+        'plan_id', sp.id, 'parts', sp.parts, 'language', sp.language, 'generation_source', sp.generation_source,
+        'total_seconds', CASE WHEN json_valid(sp.plan_json) THEN json_extract(sp.plan_json, '$.total_seconds') END)
+    FROM ai_short_plans sp WHERE sp.analysis_run_id = {run_id} ORDER BY sp.id DESC LIMIT 1)"""
+
+
+def _package_marker(value: Any, local_plan: Any = None) -> tuple[str | None, dict[str, Any] | None]:
+    """A list row's page mark from json_extract's pair [source_page, ai_shorts], each None when absent."""
+    try:
+        pair = json.loads(value) if value else None
+    except (TypeError, ValueError):
+        pair = None
+    package = {"source_page": pair[0], "ai_shorts": pair[1]} if isinstance(pair, list) and len(pair) == 2 else None
+    return _page_mark(package, local_plan)
+
+
+def _page_mark(package: Any, local_plan: Any) -> tuple[str | None, dict[str, Any] | None]:
+    """The page a saved package was written on and its AI Shorts mark, each None when absent.
+
+    ``local_plan`` is the mark of the plan kept on this device for the run
+    (_LOCAL_PLAN_MARK_SQL), or None. The mark's plan_id is that plan's, or
+    None: plans are not synced, so a package pulled from another device names
+    that device's plan id, which here is another run's plan or no plan at all.
+    A payload with no mark (a cloud pull can overwrite it with a copy that has
+    none) takes its mark from the plan kept here.
+    """
+    local = _json_value(local_plan)
+    package = package if isinstance(package, dict) else {}
+    source_page = package.get("source_page")
+    source_page = source_page if isinstance(source_page, str) and source_page else None
+    marker = package.get("ai_shorts")
+    if isinstance(marker, dict) and marker:
+        mark = {key: marker.get(key) for key in _AI_SHORTS_MARK_KEYS}
+        mark["plan_id"] = local.get("plan_id")
+        return source_page, mark
+    if local:
+        return _AI_SHORTS_PAGE, {key: local.get(key) for key in _AI_SHORTS_MARK_KEYS}
+    return source_page, None
 
 
 def _json_list(value: str | None) -> list[str]:

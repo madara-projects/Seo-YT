@@ -138,8 +138,9 @@ export function DecisionStage({
               {titleScoreText(selected.titleQualityScore)}.
             </p>
             <p>
-              These scores help compare packaging. They do not predict actual CTR, views, reach, or
-              growth.
+              The Opportunity Score is for this run's topic and research, so it is the same for every
+              package option; only the title quality is scored per title. Neither predicts actual CTR,
+              views, reach or growth.
             </p>
           </div>
         </Panel>

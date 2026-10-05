@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-from win_engine.analysis.semantic_research import fallback_viewer_intent
+from win_engine.analysis.semantic_research import fallback_viewer_intent, writer_reserve_reached
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.transliteration import has_tamil, phonetic_keys, phonetic_match
 from win_engine.llm import gemini_client
@@ -61,6 +61,10 @@ def discover_search_opportunities(
         return base
     if not gemini_client.is_available():
         base["status"] = "gemini_unavailable"
+        return base
+    if writer_reserve_reached():
+        # The request's remaining calls are the package writer's.
+        base["status"] = "gemini_writer_reserve"
         return base
 
     source = _source_text(script, semantic or {}, creator_brief or {})

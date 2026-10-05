@@ -9,10 +9,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PORT=8000
 
-# curl is used by the container health check.
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
 
 # Fail fast instead of triggering a C/C++ source build when a wheel is missing.
@@ -31,7 +27,10 @@ USER winengine
 
 EXPOSE 8000
 
+# Python's own HTTP client, so the image needs no curl and no apt layer: one
+# tool fewer for anyone who gets a shell in the container. A non-2xx answer
+# or no answer raises, which exits non-zero.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS "http://localhost:${PORT}/health" || exit 1
+    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ.get('PORT', '8000') + '/health', timeout=4)"]
 
 CMD ["python", "app.py"]

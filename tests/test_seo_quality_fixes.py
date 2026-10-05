@@ -13,6 +13,7 @@ import httpx
 
 from win_engine.analysis.creator_brief import build_creator_brief, creator_topic
 from win_engine.analysis.generation_quality import (
+    apply_quality_gate,
     evaluate_package_quality,
     keyword_placement,
     title_fluency_issues,
@@ -194,9 +195,14 @@ class GateStillRejectsBadCopyTests(unittest.TestCase):
         self.assertIn("tag_list_contamination", [issue["code"] for issue in gate["issues"]])
 
     def test_unrelated_english_tags_on_a_tamil_script_are_rejected(self):
-        gate = _gate({"title": "செட்டிநாடு சிக்கன் பிரியாணி", "description": "செட்டிநாடு சிக்கன் பிரியாணி செய்வது எப்படி.",
-                      "tags": ["easy mutton curry"]}, BIRYANI, "tamil")
-        self.assertIn("unrelated_tag", [issue["code"] for issue in gate["issues"]])
+        package = {"title": "செட்டிநாடு சிக்கன் பிரியாணி", "description": "செட்டிநாடு சிக்கன் பிரியாணி செய்வது எப்படி.",
+                   "tags": ["easy mutton curry"]}
+        gate = _gate(package, BIRYANI, "tamil")
+        # Tags are advisory: an unrelated tag is noted and dropped, never a
+        # reason to fail or repair the whole package.
+        self.assertIn("unrelated_tag", [issue["code"] for issue in gate["warnings"]])
+        self.assertNotIn("unrelated_tag", [issue["code"] for issue in gate["issues"]])
+        self.assertEqual(apply_quality_gate({"hashtags": [], **package}, gate)["tags"], [])
 
     def test_reflective_quotes_still_cannot_invent_context(self):
         gate = _gate(
@@ -442,7 +448,9 @@ class ReviewRoundTests(unittest.TestCase):
         from win_engine.analysis.generation_quality import focused_short_hashtags
 
         hashtags = focused_short_hashtags(["2 ingredient ice cream", "2 ingredient ice cream recipe", "instant mango ice cream"])
-        self.assertEqual(hashtags, ["#shorts", "#2IngredientIceCream", "#MangoIceCream"])
+        # "#2IngredientIceCreamRecipe" repeats the first; and a Short now
+        # carries at most one compound hashtag, so "#MangoIceCream" waits.
+        self.assertEqual(hashtags, ["#shorts", "#2IngredientIceCream"])
         self.assertEqual(force_hashtags(["#ColdBrew", "#ColdBrewCoffee", "#Coffee"], "", "cooking"), ["#ColdBrew", "#Coffee"])
 
     def test_searched_emotional_phrases_survive(self):
@@ -586,9 +594,11 @@ class LiveAuditRoundTwoTests(unittest.TestCase):
     def test_short_hashtags_drop_search_intent_but_keep_meaning(self):
         from win_engine.analysis.generation_quality import focused_short_hashtags
 
+        # New contract: no coined hashtag longer than three words
+        # ("#MangoIceCreamRecipe") and at most one compound.
         self.assertEqual(
             focused_short_hashtags(["easy mango ice cream recipe", "how to make mango ice cream", "ice cream", "yt", "shorts"]),
-            ["#shorts", "#MangoIceCreamRecipe", "#IceCream"],
+            ["#shorts", "#MangoIceCream"],
         )
         self.assertEqual(focused_short_hashtags(["chettinad biryani recipe in tamil"]),
                          ["#shorts", "#ChettinadBiryaniRecipe"])

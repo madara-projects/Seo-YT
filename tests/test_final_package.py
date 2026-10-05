@@ -267,6 +267,13 @@ class FallbackWarningTests(unittest.TestCase):
             "No Gemini package passed the local validation checks, so this run used the content-specific local fallback."
         ])
 
+    def test_an_exhausted_call_allowance_is_named(self):
+        # Research runs first on the same allowance; the owner saw the generic warning.
+        # The writer's own retries can spend the rest too, so it says no more than that.
+        (warning,) = self._warnings({"status": "gemini_budget_exhausted", "events": ["gemini_budget_exhausted"]})
+        self.assertTrue(warning.startswith("This request's Gemini call allowance ran out before the writer produced a package"))
+        self.assertNotIn("validation", warning)
+
 
 class KeywordSignalFallbackTests(unittest.TestCase):
     def test_empty_research_is_reported_not_filled_with_presets(self):

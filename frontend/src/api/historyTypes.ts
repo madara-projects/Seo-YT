@@ -7,6 +7,7 @@
  * what it cannot evidence, and the UI must render that as "Unavailable"
  * rather than as a zero.
  */
+import type { AiShortsRunMarker } from "./types";
 
 export interface RecentRun {
   id: number;
@@ -128,6 +129,14 @@ export interface HistoryRun {
    */
   content_angle?: string | null;
   intent?: string | null;
+
+  /**
+   * Where the package was written. The saved payload carries
+   * `source_page: "ai_shorts"` and an `ai_shorts` block naming the plan; a
+   * list row shows the chip once the server copies them out of the payload.
+   */
+  source_page?: string | null;
+  ai_shorts?: AiShortsRunMarker | null;
 }
 
 export interface HistoryRunsResponse {
@@ -209,9 +218,12 @@ export interface HistoryRunDetail {
   opportunity_label?: string | null;
   /** Null when unmeasured ("UNMEASURED"), never 0. */
   opportunity_score?: number | null;
+  /** The saved payload; for an AI Shorts run it carries `source_page` and `ai_shorts`. */
   package?: Record<string, unknown> | null;
   selected_package?: PackageSelection | null;
   linked_video_report?: LinkedVideoReport | null;
+  source_page?: string | null;
+  ai_shorts?: AiShortsRunMarker | null;
 }
 
 /** `POST /api/history/runs/{id}/link-video`. */

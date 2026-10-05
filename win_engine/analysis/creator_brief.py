@@ -12,6 +12,7 @@ from win_engine.analysis.source_cues import (
     labelled_visual,
     looks_like_standalone_quote,
     source_quote,
+    strip_keyword_tail,
 )
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.topic_lock import source_lead_phrase
@@ -95,7 +96,9 @@ def build_creator_brief(
     quote_short = is_short_video(script_text, {**cue_brief, "video_format": auto_format})
     extracted_quote = exact_quote.strip() or extract_quote(script_text, short=quote_short)
     if not extracted_quote and standalone_quote:
-        extracted_quote = re.sub(r"\s+", " ", script_text).strip(" \t\r\n\"'“”‘’")
+        # Keywords pasted after the line ("..., deep realization quotes,
+        # shorts, yt, viral shorts") are not part of the quote.
+        extracted_quote = strip_keyword_tail(re.sub(r"\s+", " ", script_text)).strip(" \t\r\n\"'“”‘’")
     extracted_on_screen = on_screen_text.strip() or extracted_quote
     inferred_duration = duration_seconds if duration_seconds is not None else _extract_duration(script_text)
     inferred_visual = visual_requirements.strip() or labelled_visual(script_text)

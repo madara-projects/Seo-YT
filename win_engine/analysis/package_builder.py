@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from win_engine.ai_enhancement import find_content_similarity
-from win_engine.analysis.generation_quality import candidate_mechanism
+from win_engine.analysis.generation_quality import candidate_mechanism, is_short_content
+from win_engine.analysis.source_cues import has_short_cue
 from win_engine.analysis.text_tokens import unicode_words
 
 
@@ -22,6 +24,50 @@ _MISLEADING_CODES = {
     "invented_story_detail", "unsupported_action", "invented_timescale", "dropped_number",
     "unsupported_instructional_framing",
 }
+SHORTS_INTENT = "Shorts feed"
+# Phrases viewers type into search, and the question, tease or first-person
+# openings that the Home and suggested feeds reward.
+_SEARCH_CUES = re.compile(
+    r"\bhow to\b|\btutorial\b|\bguide\b|\breview\b|\brecipe\b|\bexplained\b|\bstep[- ]by[- ]step\b|\btips?\b|"
+    r"\bsetup\b|\bchecklist\b|\bvs\.?\b|\bversus\b|\bwhat is\b|\bbest\b.*\bfor\b|\btop \d+\b",
+    re.IGNORECASE,
+)
+_BROWSE_CUES = re.compile(
+    r"\?|^(?:i|we|my)\b|\b(?:why|what nobody|truth|secret|hidden|hiding|nobody|no one|mistakes?|wrong|myth|"
+    r"finally|never|always|silently|real reason|inside)\b",
+    re.IGNORECASE,
+)
+
+
+def package_intent_for_title(title: str, creator_brief: dict[str, Any] | None = None) -> str:
+    """Where a title's mechanism earns its views: "Search", "Browse", "Search and browse" or "Shorts feed".
+
+    The writer stage labels its variants by position (first Search, second
+    Browse, third Existing audience), so a how-to in second place read
+    "Browse". A phrase viewers would type is Search, and so is a title that
+    opens with the video's subject in its topic's words; a question, tease or
+    first-person story is Browse. A Short is found in the feed, where search
+    is minor, so it carries no search-or-browse label.
+    """
+
+    brief = creator_brief or {}
+    if is_short_content("", brief) or has_short_cue(title):
+        return SHORTS_INTENT
+    if _SEARCH_CUES.search(title):
+        return "Search"
+    if _BROWSE_CUES.search(title):
+        return "Browse"
+    if _opens_with_subject(title, brief):
+        return "Search"
+    return "Search and browse"
+
+
+def _opens_with_subject(title: str, brief: dict[str, Any]) -> bool:
+    """Whether the title's first meaningful words are the brief's topic words ("Chennai street food...")."""
+
+    topic = set(unicode_words(brief.get("topic")))
+    opening = _meaningful_words(title)[:3]
+    return len(opening) >= 2 and set(opening) <= topic
 
 
 def title_gate_status(title: str, gate: dict[str, Any] | None, *, source: str) -> dict[str, Any]:
@@ -60,6 +106,9 @@ def build_title_thumbnail_packages(
     brief = creator_brief or {}
     packages: list[dict[str, Any]] = []
     seen: set[str] = set()
+    # Each option gets its own thumbnail text: three options all reading
+    # "SAD LOVE QUOTES" gave the creator nothing to choose between.
+    used_texts: set[str] = set()
     for variant in title_variants:
         title = str(variant.get("title") or "").strip()
         key = title.casefold()
@@ -74,24 +123,27 @@ def build_title_thumbnail_packages(
             else {"status": "pass", "source": "package_builder_checks"}
         )
         style = _title_style(title)
-        package_intent = str(variant.get("package_intent") or "Alternative")
+        # Labelled by what the title does; the variant's own label is positional.
+        package_intent = package_intent_for_title(title, brief)
+        thumbnail_text = _thumbnail_text(title, focus_phrases, used=used_texts)
+        used_texts.add(thumbnail_text)
         packages.append(
             {
                 "package_id": f"package-{chr(97 + len(packages))}",
                 "package": chr(65 + len(packages)),
                 "title": title,
-                "thumbnail_text": _thumbnail_text(title, focus_phrases),
+                "thumbnail_text": thumbnail_text,
                 "thumbnail_visual": str(brief.get("thumbnail_idea") or _default_visual(brief)).strip(),
                 "viewer_promise": str(brief.get("viewer_promise") or _default_promise(brief)).strip(),
                 "why_click": _why_click(style, brief, package_intent),
                 "approach": style,
                 "package_intent": package_intent,
-                "best_for": _best_for(style, brief, package_intent),
+                "best_for": _best_for(package_intent),
                 "misleading_risk": _misleading_risk(gate),
                 "quality_status": _quality_status(gate),
                 "mechanism": str(variant.get("mechanism") or candidate_mechanism(title)),
                 "reason": str(variant.get("reason") or "A distinct, source-supported packaging option."),
-                "discovery_surface": str(variant.get("discovery_surface") or package_intent),
+                "discovery_surface": package_intent,
                 "evidence_used": variant.get("evidence_used") or {"status": "insufficient_evidence"},
                 "tradeoffs": variant.get("tradeoffs") or ["Generated suggestion; publishing outcome is not guaranteed."],
                 "quality_gate": gate,
@@ -143,6 +195,19 @@ _EDGE_WORDS = {
     "of", "in", "on", "at", "for", "with", "and", "or", "but", "to", "from", "by", "than", "that", "is", "are",
     "was", "were", "be", "been", "being", "it", "its", "when", "what", "which", "who", "about", "can", "cannot",
     "can't", "never", "not", "so", "very", "more", "most", "there", "this", "these", "those", "them", "they",
+    # Adverbs and pronouns that leave a phrase hanging ("YOURSELF WHEN THEY ALREADY").
+    "already", "still", "just", "even", "only", "ever", "anyone", "someone", "everyone", "where", "while", "if",
+    "how", "my", "your", "you", "me", "we", "us", "i", "he", "she", "him", "her", "our", "their",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must",
+}
+
+
+# Words that join two phrases ("talking TO people WHO refuse"): inside a
+# thumbnail line they make it a sentence fragment; a pronoun ("made up THEIR
+# minds") does not.
+_GLUE_WORDS = {
+    "of", "in", "on", "at", "for", "with", "and", "or", "but", "to", "from", "by", "than", "that", "when",
+    "what", "which", "who", "about", "so", "where", "while", "if", "because",
 }
 
 
@@ -155,22 +220,45 @@ def _stem(word: str) -> str:
     return folded.rstrip("e")
 
 
-def _thumbnail_text(title: str, focus_phrases: list[str] | None = None) -> str:
-    # The creator's thumbnail direction describes the image and is shown as
-    # the visual. Its first words are not text for the image: "Show me holding
-    # the phone..." became the thumbnail text "show me holding the". Lines
-    # written for two test quotes ("SILENCE KNOWS", "KNOW YOUR WORTH") went on
-    # any quote that shared their words; the text now comes from the title.
-    # A validated search phrase that the title contains is a ready-made,
-    # grammatical thumbnail line ("SAD LOVE QUOTES", "PAINFUL LOVE").
+def _thumbnail_text(title: str, focus_phrases: list[str] | None = None, *, used: set[str] | None = None) -> str:
+    """Two to four words of the title for the thumbnail, best first, skipping text another option uses.
+
+    The creator's thumbnail direction describes the image and is shown as the
+    visual. Its first words are not text for the image: "Show me holding the
+    phone..." became the thumbnail text "show me holding the". Lines written
+    for two test quotes ("SILENCE KNOWS", "KNOW YOUR WORTH") went on any quote
+    that shared their words; the text now comes from the title.
+    """
+
+    candidates = _thumbnail_candidates(title, focus_phrases)
+    taken = used or set()
+    for candidate in candidates:
+        if candidate not in taken:
+            return candidate
+    return candidates[0] if candidates else "WATCH THIS"
+
+
+def _thumbnail_candidates(title: str, focus_phrases: list[str] | None) -> list[str]:
     phrases = [" ".join(str(item).split()) for item in (focus_phrases or []) if str(item).strip()]
     title_folded = f" {' '.join(unicode_words(title))} ".casefold()
+    candidates: list[str] = []
+
+    def add(text: str) -> None:
+        text = text.upper()
+        if text and text not in candidates:
+            candidates.append(text)
+
+    # A validated search phrase that the title contains is a ready-made,
+    # grammatical thumbnail line ("SAD LOVE QUOTES", "PAINFUL LOVE").
     contained = [phrase for phrase in phrases if 2 <= len(phrase.split()) <= 4 and f" {phrase.casefold()} " in title_folded]
-    if contained:
-        return max(contained, key=lambda phrase: len(phrase.split())).upper()
-    ignored = {"the", "a", "an", "how", "to", "my", "your", "with", "for", "what", "is", "really", "shorts"}
+    for phrase in sorted(contained, key=lambda phrase: -len(phrase.split())):
+        add(phrase)
+    # Only articles and filler leave the window; dropping "to" from "talking to
+    # people" glued "TALKING PEOPLE", a phrase nobody wrote. Small words stay
+    # and cannot start or end a window (_EDGE_WORDS).
+    ignored = {"the", "a", "an", "really", "shorts"}
     words = [word for word in unicode_words(title) if word.lower() not in ignored]
-    # Next best: the strongest tag sharing a word with this title (stems, so
+    # Next: the strongest tag sharing a word with this title (stems, so
     # "loving" finds "love quotes"). A real search phrase reads cleanly; a
     # window cut from a sentence gave "HIDDEN DETAIL IN NEW".
     title_stems = {_stem(word) for word in words if word.lower() not in _EDGE_WORDS}
@@ -179,14 +267,15 @@ def _thumbnail_text(title: str, focus_phrases: list[str] | None = None) -> str:
         return len({_stem(word) for word in phrase.split()} & title_stems)
 
     shared = [phrase for phrase in phrases if 2 <= len(phrase.split()) <= 4 and shared_count(phrase)]
-    if shared:
-        # The tag that overlaps this title most; the earlier (stronger) tag on ties.
-        return max(shared, key=lambda phrase: (shared_count(phrase), -phrases.index(phrase))).upper()
+    for phrase in sorted(shared, key=lambda phrase: (-shared_count(phrase), phrases.index(phrase))):
+        add(phrase)
+    # Then windows of the title: the one naming the most of the subject, with
+    # no connective at either end and as few as possible inside ("YOURSELF
+    # WHEN THEY ALREADY" lost to "STOP EXPLAINING YOURSELF"), longer first.
     # The first four words cut "The heavy weight of impossible love" down to
-    # "HEAVY WEIGHT OF IMPOSSIBLE". Choose the window that names the most of the
-    # subject and does not start or end on a connective.
+    # "HEAVY WEIGHT OF IMPOSSIBLE".
     focus = {word.casefold() for phrase in phrases for word in phrase.split()}
-    best: tuple[int, int, list[str]] | None = None
+    windows: list[tuple[tuple[int, int, int, int], list[str]]] = []
     for size in (4, 3, 2):
         for start in range(max(len(words) - size, 0) + 1):
             window = words[start:start + size]
@@ -196,18 +285,19 @@ def _thumbnail_text(title: str, focus_phrases: list[str] | None = None) -> str:
                 window = window[:-1]
             if len(window) < 2 and len(words) >= 2:
                 continue
-            rank = (sum(word.casefold() in focus for word in window), len(window))
-            if best is None or rank > best[:2]:
-                best = (*rank, window)
-    if best is None:
+            inner = sum(word.lower() in _GLUE_WORDS for word in window)
+            rank = (sum(word.casefold() in focus for word in window), -inner, len(window), -start)
+            windows.append((rank, window))
+    for _, window in sorted(windows, key=lambda item: item[0], reverse=True):
+        add(" ".join(window))
+    if not candidates:
         chosen = words[:4]
         while len(chosen) > 1 and chosen[0].lower() in _EDGE_WORDS:
             chosen = chosen[1:]
         while len(chosen) > 1 and chosen[-1].lower() in _EDGE_WORDS:
             chosen = chosen[:-1]
-    else:
-        chosen = best[2]
-    return " ".join(word.upper() for word in chosen) or "WATCH THIS"
+        add(" ".join(chosen))
+    return candidates
 
 
 def _default_visual(brief: dict[str, Any]) -> str:
@@ -245,26 +335,28 @@ def _why_click(style: str, brief: dict[str, Any], package_intent: str = "") -> s
     support = (f" The proof ({proof[:1].lower() + proof[1:]}) backs it up." if proof
                else f" The background ({visual[:1].lower() + visual[1:]}) sets the mood." if visual and len(visual.split()) <= 12
                else "")
-    if package_intent == "Existing audience":
-        return "It speaks directly to viewers who already follow this subject." + support
+    if package_intent == SHORTS_INTENT:
+        # Found in the feed, not by a typed phrase: the first second has to land.
+        opening = (
+            "It raises a question the Short answers," if style == "curiosity-led"
+            else "It leads with the feeling of the quote," if brief.get("exact_quote") or brief.get("on_screen_text")
+            else "It names the moment plainly,"
+        )
+        return f"{opening} which is what the Shorts feed rewards; typed phrases play a minor part." + support
     if package_intent == "Browse":
-        return "It leads with the feeling rather than a keyword, which suits the Home and Shorts feeds." + support
-    if style == "searchable" or package_intent == "Search":
+        return "It leads with the feeling or the question rather than a keyword, which suits the Home and suggested feeds." + support
+    if package_intent == "Search":
         return "It leads with the words viewers type into search, so the video can be found for that phrase."
     if style == "curiosity-led":
         return "It raises a question the video answers." + support
     return "It names the subject clearly and hints at the payoff." + support
 
 
-def _best_for(style: str, brief: dict[str, Any], package_intent: str = "") -> str:
+def _best_for(package_intent: str) -> str:
+    if package_intent == SHORTS_INTENT:
+        return "Shorts feed / relatable viewers"
     if package_intent == "Search":
         return "Search / new viewers"
     if package_intent == "Browse":
         return "Browse / home and suggested viewers"
-    if package_intent == "Existing audience":
-        return "Returning viewers / existing audience"
-    if style == "searchable":
-        return "Search / new viewers"
-    if style == "curiosity-led":
-        return "Browse / relatable viewers"
     return "Search and browse"

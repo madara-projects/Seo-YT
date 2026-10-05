@@ -67,7 +67,21 @@ _UPSTREAM_ERRORS = (ApiClientError, TransportError, OSError, HttpLib2Error)
 # flight (two tabs, a retry); each keeps its own entry until used or expired.
 _PENDING_STATES: dict[str, tuple[float, str]] = {}
 _PENDING_LOCK = threading.Lock()
+# One refresh of a video at a time. The snapshot collector and a manual
+# refresh that met on the same video each found every due window uncollected
+# and each queried YouTube Analytics for it, spending the quota twice; the one
+# that waits now finds the windows complete and asks for nothing.
+_REFRESH_LOCKS: dict[str, threading.Lock] = {}
+_REFRESH_LOCKS_GUARD = threading.Lock()
 logger = logging.getLogger(__name__)
+
+
+def _refresh_lock(video_id: str) -> threading.Lock:
+    with _REFRESH_LOCKS_GUARD:
+        lock = _REFRESH_LOCKS.get(video_id)
+        if lock is None:
+            lock = _REFRESH_LOCKS[video_id] = threading.Lock()
+        return lock
 
 
 class YouTubeUnavailable(RuntimeError):
@@ -384,11 +398,24 @@ class YouTubeChannelService:
         Runs on request and from the snapshot collector: a laptop cannot collect
         data while it is off, so each run catches up on whatever is due. The
         collector passes the `windows` it planned, so a window still cooling
-        down after a failure is not retried early.
+        down after a failure is not retried early. Refreshes of one video run
+        one at a time (_refresh_lock), so the two never query a window twice.
         """
         video_id = str(link.get("youtube_video_id") or "")
         if not video_id:
             raise ValueError("Published-video link is missing its YouTube video ID.")
+        with _refresh_lock(video_id):
+            return self._refresh_linked_video(link, video_id, force=force, collect_current=collect_current, windows=windows)
+
+    def _refresh_linked_video(
+        self,
+        link: dict[str, Any],
+        video_id: str,
+        *,
+        force: bool,
+        collect_current: bool,
+        windows: Collection[str] | None,
+    ) -> dict[str, Any]:
         published_at = _parse_timestamp(str(link.get("published_at") or ""))
         if not published_at:
             raise ValueError("Published-video link has an invalid publication time.")
@@ -655,7 +682,9 @@ class YouTubeChannelService:
             if "invalid_scope" not in str(exc).lower():
                 raise
             return unavailable("missing_scope", "The YouTube connection lacks the Analytics permission. Connect again and allow it.")
-        except YouTubeUnavailable as exc:
+        except (YouTubeUnavailable, ValueError) as exc:
+            # ValueError: the saved token cannot be read (the encryption key
+            # changed). Reported like every other reason, not raised as a 500.
             return unavailable("api_error", str(exc))
         granted = getattr(credentials, "granted_scopes", None)
         if isinstance(granted, (list, tuple, set, frozenset, str)) and granted:

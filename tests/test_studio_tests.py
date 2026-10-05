@@ -255,6 +255,24 @@ class RouteTests(StudioTestCase):
         with self.assertRaises(ValidationError):
             UpdateStudioTestRequest(outcome="preferred")
 
+    def test_an_empty_update_is_refused_rather_than_rewriting_the_test(self):
+        # An empty PATCH changed nothing but updated_at, which cloud sync reads as a newer edit.
+        with self.assertRaisesRegex(ValidationError, "at least one change"):
+            UpdateStudioTestRequest()
+        test = self.store.create(self.run_id(), ["package-a", "package-d"])
+        with patch.object(routes, "get_settings", return_value=self.settings):
+            unchanged = routes.update_studio_test(test["id"], UpdateStudioTestRequest(notes=test["notes"]))
+        self.assertEqual(unchanged["id"], test["id"])
+
+    def test_an_update_that_changes_nothing_leaves_the_test_untouched(self):
+        # Fields sent with the values they already have change nothing; rewriting
+        # updated_at for them would still read as a newer edit to cloud sync.
+        test = self.store.create(self.run_id(), ["package-a", "package-d"], notes="first idea")
+        for changes in ({"notes": "first idea"}, {"notes": None}, {"link_video": False}, {"outcome": None}):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.store.update(test["id"], changes), test)
+        self.assertEqual(self.store.update(test["id"], {"notes": "second idea"})["notes"], "second idea")
+
 
 if __name__ == "__main__":
     unittest.main()

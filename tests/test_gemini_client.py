@@ -355,6 +355,19 @@ class JsonReplyTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertIsNone(gemini_client.parse_json_object(raw))
 
+    def test_a_reply_nested_too_deep_to_parse_is_no_object_not_a_crash(self):
+        # json.loads raised RecursionError at about a thousand levels, and the
+        # AI Shorts route answered a 500 instead of falling back.
+        raw = '{"shots": ' + "[" * 5000 + "]" * 5000 + "}"
+        self.assertIsNone(gemini_client.parse_json_object(raw))
+
+    def test_a_reply_with_an_integer_too_long_to_read_is_no_object_not_a_crash(self):
+        # json.loads raises a plain ValueError (not a JSONDecodeError) past 4300
+        # digits, and the AI Shorts route showed it as the reason a quote was refused.
+        raw = '{"parts": ' + "1" * 5000 + "}"
+        self.assertIsNone(gemini_client.parse_json_object(raw))
+        self.assertIsNone(gemini_client.parse_json_object("```json\n" + raw + "\n```"))
+
 
 if __name__ == "__main__":
     unittest.main()

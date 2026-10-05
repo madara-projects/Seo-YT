@@ -204,18 +204,24 @@ class ShortDescriptionTests(unittest.TestCase):
         clean = evaluate_package_quality(_package(STOP), script=SCRIPT, creator_brief=brief, tag_evidence=_evidence())
         self.assertNotIn("production_notes", [item["code"] for item in clean["issues"]])
 
-    def test_the_local_fallback_drops_the_emoji_before_cutting_the_quote(self):
+    def test_the_local_fallback_keeps_the_whole_quote_and_only_a_feeling_emoji(self):
+        # New contract: the fallback title is the whole quote, never cut and
+        # never given #shorts; an emoji follows only for a feeling the quote
+        # names ("miss"), never for the footage (green hills, rain).
         quote = "You can miss someone and still know you're better without them"
         script = f"YouTube Short, a man walking alone through green hills. On-screen quote: '{quote}.'"
         brief = build_creator_brief(script=script, video_format="youtube_shorts")
         self.assertEqual(brief["exact_quote"], quote)
         for title in (_content_specific_fallback("", [], brief)["title"], _safe_minimal_package("", brief)["title"]):
             with self.subTest(title=title):
-                self.assertEqual(title, f"{quote} #shorts")
-        # A quote that fits with its emoji keeps it.
+                self.assertEqual(title, f"{quote} 🥀")
         short = build_creator_brief(script="YouTube Short, rain at night. On-screen quote: 'Some storms bring you home.'",
                                     video_format="youtube_shorts")
-        self.assertRegex(_safe_minimal_package("", short)["title"], r"^Some storms bring you home \S+ #shorts$")
+        self.assertEqual(_safe_minimal_package("", short)["title"], "Some storms bring you home")
+        # The emoji goes first when it is all that stops the whole quote fitting.
+        longer = "You can miss someone deeply and still know you're better off without them"
+        brief = build_creator_brief(script=f"YouTube Short. On-screen quote: '{longer}.'", video_format="youtube_shorts")
+        self.assertEqual(_content_specific_fallback("", [], brief)["title"], longer)
 
     def test_the_local_fallback_writes_no_production_notes(self):
         brief = build_creator_brief(script=SCRIPT, video_format="youtube_shorts",
@@ -302,8 +308,9 @@ class ShortTitleAlternativeTests(unittest.TestCase):
     KEPT = ["Why you should stop explaining yourself #shorts", "Stop explaining yourself #shorts"]
     NEW = ["Tired of explaining yourself to closed minds? 🌃 #shorts",
            "Some people already decided to misunderstand you 🌧️ #shorts"]
-    ECHO = f"{QUOTE} #shorts"
-    DISCARDED = [{"title": ECHO, "codes": ["title_duplicates_on_screen_quote"]}]
+    # The whole quote is an allowed title now; a copy cut with "…" is not.
+    ECHO = "Stop explaining yourself to people who already... #shorts"
+    DISCARDED = [{"title": ECHO, "codes": ["quote_title_cut"]}]
 
     def refine(self, repaired):
         with patch("win_engine.generation.quality_refinement.gemini_client.is_available", return_value=True), \
@@ -316,8 +323,9 @@ class ShortTitleAlternativeTests(unittest.TestCase):
 
     def test_the_writer_asks_a_quote_short_for_five_distinct_angles(self):
         prompt = seo_writer._build_user_prompt(SCRIPT, "", "english", "global", "general", creator_brief=_brief())
-        for angle in ("its core line in new words", "speaking to the viewer", "naming the feeling",
-                      "a question the viewer asks themselves", "never most of the quote"):
+        for angle in ("the quote's punchline clause, or the whole quote", "its core line in new words",
+                      "speaking to the viewer", "naming the feeling", "a question the viewer asks themselves",
+                      "cuts the quote mid-phrase, ends in '...', stops before the quote's turn, reverses its meaning"):
             self.assertIn(angle, prompt)
         self.assertIn("return exactly five distinct variants", prompt)
         self.assertNotIn("Variant 1 is SEARCH", prompt)
@@ -342,7 +350,7 @@ class ShortTitleAlternativeTests(unittest.TestCase):
         self.assertEqual([title.casefold() for title in package["variants"]], [title.casefold() for title in self.KEPT])
         rejected = package["generation_trace"]["rejected_titles"]
         self.assertEqual([item["title"] for item in rejected], [self.ECHO])
-        self.assertIn("title_duplicates_on_screen_quote", rejected[0]["codes"])
+        self.assertIn("quote_title_cut", rejected[0]["codes"])
 
     def test_the_one_repair_asks_for_the_missing_alternatives_and_keeps_them(self):
         # The repair's own package fails (its description drops the quote), so

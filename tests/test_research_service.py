@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
+from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.core.config import Settings
 from win_engine.ingestion import cache as cache_module
 from win_engine.ingestion import research_service, youtube_client
@@ -134,7 +135,7 @@ class CacheTests(_ServiceTestCase):
         self.search(self.service(answers), "grief quotes", region="india", primary_language="tamil")
         other_region = self.service(answers)
         self.search(other_region, "grief quotes", region="us", primary_language="tamil")
-        other_size = self.service(answers, youtube_max_results=25)
+        other_size = self.service(answers, youtube_max_results=10)
         self.search(other_size, "grief quotes", region="india", primary_language="tamil")
 
         self.assertEqual(other_region._youtube.calls[0]["region_code"], "US")
@@ -158,6 +159,83 @@ class CacheTests(_ServiceTestCase):
 
         self.assertEqual(service._youtube.calls, [])
         self.assertEqual(diagnostics["query_attempts"][0]["status"], "skipped")
+
+
+class PageSizeAndDurationTests(_ServiceTestCase):
+    """One search call brings a page of 25 (the same cost as 5), filtered to the video's length class."""
+
+    ANSWERS = {"grief quotes": ([_row("v1", "Grief quotes")], None)}
+
+    def test_a_search_asks_for_one_page_of_the_configured_size(self):
+        service = self.service(self.ANSWERS)
+        self.search(service, "grief quotes")
+        self.assertEqual(service._youtube.calls[0]["max_results"], 25)
+        self.assertEqual(Settings().youtube_max_results, 25)
+
+    def test_each_format_asks_youtube_for_its_own_length_band(self):
+        # YouTube's bands: short under 4 minutes, medium 4-20, long over 20.
+        planned = [{"type": "primary", "query": "grief quotes"}]
+        briefs = [
+            ("short", {"video_format": "youtube_shorts"}),
+            ("medium", {"video_format": "tutorial", "duration_seconds": 600}),
+            ("long", {"video_format": "long_form", "duration_seconds": 1800}),
+            # "Any format" on the Demand page: the format was only inferred.
+            (None, build_creator_brief(script="python csv parsing")),
+        ]
+        for expected, brief in briefs:
+            with self.subTest(expected=expected):
+                service = self.service(self.ANSWERS)
+                with patch.object(research_service, "plan_research_queries", return_value=planned):
+                    service.gather("topic", creator_brief=brief, results_only=True)
+                self.assertEqual([call["video_duration"] for call in service._youtube.calls], [expected])
+
+    def test_a_long_form_video_searches_every_length_unless_its_length_sits_well_inside_a_band(self):
+        # One band a search: "medium" for a tutorial of unknown length dropped
+        # every 25-60 minute rival, and "long" for a 21-minute review every
+        # 15-20 minute one. A length near a band's edge competes on both sides.
+        cases = [
+            ({"video_format": "tutorial"}, None),  # no stated length
+            ({"video_format": "tutorial", "duration_seconds": 70}, None),  # under 4 minutes: no long-form band
+            ({"video_format": "vlog", "duration_seconds": 210}, None),
+            ({"video_format": "tutorial", "duration_seconds": 360}, None),  # 6 minutes: within 3 of the 4-minute edge
+            ({"video_format": "tutorial", "duration_seconds": 600}, "medium"),
+            ({"video_format": "review", "duration_seconds": 1080}, None),  # 18 minutes
+            ({"video_format": "review", "duration_seconds": 1260}, None),  # 21 minutes
+            ({"video_format": "long_form", "duration_seconds": 1800}, "long"),
+            # A number read out of the script is not the video's length.
+            (build_creator_brief(script="a 30 minute workout explained", video_format="tutorial"), None),
+        ]
+        for brief, expected in cases:
+            with self.subTest(brief={key: brief.get(key) for key in ("video_format", "duration_seconds")}):
+                self.assertEqual(research_service._search_duration(False, brief), expected)
+        self.assertEqual(research_service._search_duration(True, {"duration_seconds": 1800}), "short")
+
+    def test_the_duration_filter_is_part_of_the_cache_key(self):
+        planned = [{"type": "primary", "query": "grief quotes"}]
+        first, second, third = (self.service(self.ANSWERS) for _ in range(3))
+        first._search_research_queries(planned, video_duration="short")
+        second._search_research_queries(planned)
+        _, diagnostics = third._search_research_queries(planned, video_duration="short")
+
+        self.assertEqual(len(second._youtube.calls), 1)
+        self.assertEqual((third._youtube.calls, diagnostics["query_attempts"][0]["cache"]), ([], "hit"))
+
+    def test_research_says_when_it_left_its_gemini_calls_to_the_writer(self):
+        service = self.service(self.ANSWERS)
+        service._suggest = MagicMock(fetch=MagicMock(return_value={"status": "disabled"}))
+        reserved = {"primary_topic": "", "secondary_topics": [], "search_intents": [], "keyword_clusters": [],
+                    "concept_evidence": [], "source": "local_fallback", "fallback_reason": "gemini_writer_reserve"}
+        local = {name: MagicMock(return_value=value) for name, value in {
+            "analyze_script_semantics": reserved, "refine_research_semantics": {},
+            "discover_search_opportunities": {}, "build_keyword_research": {"candidates": []},
+            "demand_seed_phrases": [], "extract_keyword_signals": [], "extract_entity_signals": [],
+            "build_upload_timing": {}, "analyze_thumbnails": {}, "build_research_decision": {},
+            "plan_research_queries": [{"type": "primary", "query": "grief quotes"}],
+        }.items()}
+        with patch.multiple(research_service, **local):
+            research = service.gather("topic")
+
+        self.assertTrue(any("left to the writer" in item for item in research["research_warnings"]), research["research_warnings"])
 
 
 def _http(status, payload):
@@ -331,6 +409,7 @@ class GatherTests(_ServiceTestCase):
         with patch.multiple(research_service, plan_research_queries=planner, **local):
             research = service.gather("topic", creator_brief=creator_brief)
         research["planner_limits"] = [call.kwargs.get("max_queries") for call in planner.call_args_list]
+        research["mocks"] = local
         return research
 
     FIRST_PASS = ["grief quotes", "silence grief", "grief poetry", "missing someone", "empty chair"]
@@ -382,6 +461,22 @@ class GatherTests(_ServiceTestCase):
                                {"type": "secondary_topic", "query": "silence grief"}]])
 
         self.assertEqual([call["query"] for call in service._youtube.calls], ["grief quotes", "silence grief"])
+
+    def test_keyword_and_entity_signals_count_the_refinement_results_too(self):
+        # The gap analysis compares the signals with the final results; signals
+        # counted over the first pass alone made a phrase the refinement's
+        # videos use look like the script's own.
+        service = self.service({"grief quotes": ([_row("v1", "Grief quotes")], None),
+                                "silence grief": ([_row("v2", "Silence in grief")], None)})
+
+        research = self.refine(service, [[{"type": "primary", "query": "grief quotes"}],
+                                         [{"type": "secondary_topic", "query": "silence grief"}]])
+
+        self.assertEqual(sorted(row["video_id"] for row in research["youtube_results"]), ["v1", "v2"])
+        for name in ("extract_keyword_signals", "extract_entity_signals"):
+            with self.subTest(name=name):
+                counted = research["mocks"][name].call_args.args[1]
+                self.assertEqual(sorted(row["video_id"] for row in counted), ["v1", "v2"])
 
 
 if __name__ == "__main__":

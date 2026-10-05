@@ -105,6 +105,7 @@ The creator always decides what to publish or change. SEO YT does not automatica
 |---|---|
 | Dashboard | Channel summary, recent activity, and shortcuts. |
 | Creator Studio | Move from idea and brief through research, angle, packaging, local comparison/selection, final decision, and a manual pre-publish checklist. |
+| AI Shorts | Type only a quote. Gemini reads its feeling and writes one Google Flow (Veo 3.1) prompt per 8-second part (Part 1 as Text to Video, Part 2 for Flow's Extend), with the Flow steps, an on-screen text plan and a lean SEO package; the package is saved to History so the published Short can be linked later. No YouTube quota is spent. |
 | Ideas | Save original ideas, refresh dated research, inspect evidence, open Demand research, and generate through the existing Creator engine. |
 | Demand | Research a topic from dated public and eligible personal signals, inspect limitations/provenance, and generate through the existing engine. |
 | Watchlist | Save verified public channels/videos, refresh immutable snapshots, and inspect transparent same-channel possible-outlier analysis. |
@@ -233,7 +234,7 @@ Important variables:
 | `WIN_ENGINE_GEMINI_MODEL` | Gemini model name. | Defaults from `.env.example` |
 | `WIN_ENGINE_YOUTUBE_API_KEY` | Primary YouTube Data API research key. | For live research |
 | `WIN_ENGINE_YOUTUBE_API_KEYS` | Optional comma-separated key pool; duplicates are removed. | Optional |
-| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Public research results used per query. | Optional; default `5` |
+| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Public research results per search (1-50). One search call whatever the size; the page's statistics are one 1-unit `videos.list` and one `channels.list` call. A Short's searches ask for short videos (under 4 minutes); a long-form video's ask for every length, unless its stated length sits more than 3 minutes inside YouTube's medium (4-20 minutes) or long (over 20) band. | Optional; default `25` |
 | `WIN_ENGINE_YOUTUBE_SEARCH_CALLS_PER_DAY` | Daily `search.list` calls allowed per key's Google Cloud project; copy it from Cloud Console. | Default `100` |
 | `WIN_ENGINE_YOUTUBE_UNITS_PER_DAY` | Daily units of the shared bucket (every other Data API method) per project; copy it from Cloud Console. | Default `10000` |
 | `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_ID` | Google OAuth web-client ID. | For channel connection |
@@ -363,6 +364,8 @@ When Redis is unavailable, the research cache falls back to its supported local 
 | `GET` | `/meta` | Application name, version, and environment. |
 | `POST` | `/diagnostics` | Live YouTube (one 1-unit call) and Gemini configuration check. |
 | `POST` | `/analyze` | Research content and generate/save an SEO package. |
+| `POST` | `/api/ai-shorts/generate` | From a quote: Google Flow prompts per 8-second part, Flow steps, an on-screen text plan and a lean Shorts package, saved to History. Gemini only; no YouTube calls. |
+| `GET` | `/api/ai-shorts/plans` | Saved AI Shorts plans, newest first; `/api/ai-shorts/plans/{id}` returns one, `DELETE` removes it with its History run. |
 | `GET` | `/youtube/channel/status` | Connected-channel and latest-sync status. |
 | `GET` | `/youtube/channel/connect` | Start Google OAuth connection. |
 | `POST` | `/youtube/channel/refresh` | Refresh connected-channel data. |
@@ -447,7 +450,7 @@ docker run --rm -v "$PWD:/app" -w /app python:3.11.16-slim sh -c "pip install -q
 
 Frontend checks run from `frontend/`: `npm ci`, then `npx tsc -b --noEmit`, `npx vitest run`, and `npm run build`. The Playwright suite (`npx playwright test`) drives a running app at `127.0.0.1:8000` and intercepts every request that could change data.
 
-The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full run has 964 backend tests. The interface has its own Vitest and Playwright suites in `frontend/`, and no browser tooling is installed in production Docker.
+The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full run has 1,196 backend tests. The interface has its own Vitest and Playwright suites in `frontend/`, and no browser tooling is installed in production Docker.
 
 ## Repository structure
 

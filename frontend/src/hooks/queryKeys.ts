@@ -51,6 +51,12 @@ export const experimentKeys = {
   detail: (id: number) => [...experimentKeys.all, "detail", id] as const,
 };
 
+export const aiShortsKeys = {
+  all: ["ai-shorts"] as const,
+  plans: () => [...aiShortsKeys.all, "plans"] as const,
+  plan: (id: number) => [...aiShortsKeys.all, "plan", id] as const,
+};
+
 export const watchKeys = {
   all: ["watchlist"] as const,
   lists: () => [...watchKeys.all, "list"] as const,
@@ -68,6 +74,8 @@ export const mutationKeys = {
   channelRefresh: ["channel-refresh"] as const,
   /** Demand research spends quota: the form finds a run still in flight after the page is left and reopened. */
   demandResearch: ["demand-research"] as const,
+  /** `/api/ai-shorts/generate`: the AI Shorts page finds a run started before it was (re)mounted. */
+  aiShorts: ["ai-shorts-generate"] as const,
   /**
    * Everything done to one record (`kind` is "idea", "audit", "watch-video"…).
    * The state outlives the panel that started it, so switching records and
@@ -79,9 +87,10 @@ export const mutationKeys = {
 
 /**
  * A package was saved, deleted or linked. Deleting cascades to its published
- * link, audits and experiment assignments and returns its idea to "scripted";
- * linking publishes the idea and creates an audit candidate; Settings counts
- * all of them. Every view of that data is refreshed, not just History.
+ * link, audits, experiment assignments and AI Shorts plan and returns its idea
+ * to "scripted"; linking publishes the idea and creates an audit candidate;
+ * Settings counts all of them. Every view of that data is refreshed, not just
+ * History.
  */
 export function invalidatePackageViews(queryClient: QueryClient, { keepRunList = false } = {}) {
   void queryClient.invalidateQueries({
@@ -90,7 +99,7 @@ export function invalidatePackageViews(queryClient: QueryClient, { keepRunList =
     // patched it in the cache spares those requests.
     predicate: keepRunList ? (query) => query.queryKey[1] !== "runs" : undefined,
   });
-  for (const queryKey of [ideaKeys.all, auditKeys.all, experimentKeys.all, systemKeys.settings]) {
+  for (const queryKey of [ideaKeys.all, auditKeys.all, experimentKeys.all, aiShortsKeys.all, systemKeys.settings]) {
     void queryClient.invalidateQueries({ queryKey });
   }
 }

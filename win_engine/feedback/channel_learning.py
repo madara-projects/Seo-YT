@@ -7,7 +7,7 @@ from typing import Any
 
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.feedback.migrations import connect_managed
-from win_engine.feedback.evidence_policy import evidence_level, sample_is_eligible
+from win_engine.feedback.evidence_policy import evidence_level, pattern_signal, sample_is_eligible
 from win_engine.feedback.history_store import HistoryStore, comparable_format, format_filter_values, known_filter
 
 
@@ -62,6 +62,8 @@ def learning_summary(
         age_hours = float(snapshot.get("age_hours") or 0)
         linked.append({
             "video_id": link.get("youtube_video_id"),
+            "format": effective_format,
+            "language": effective_language,
             "published_at": link.get("published_at"),
             "title": str(metadata.get("title") or link.get("selected_title") or link.get("package_topic") or ""),
             "generated_title": str(link.get("package_topic") or ""),
@@ -84,18 +86,32 @@ def learning_summary(
     eligible.sort(key=lambda item: (item["views_per_day"], item.get("average_view_percentage") or 0), reverse=True)
     sample = len(eligible)
     level = evidence_level(sample)
+    # The leading videos reach the writer's prompt only when their lead is more
+    # than noise in a cohort of one format and language; at five videos with
+    # views 12% apart the top three were sent as a "pattern". Long-form formats
+    # are one cohort, as the format filter groups them.
+    long_form = format_filter_values("long_form") or frozenset()
+    comparable = len({
+        ("long_form" if item["format"] in long_form else item["format"], item["language"]) for item in eligible
+    }) <= 1
+    signal = pattern_signal([float(item["views_per_day"]) for item in eligible], comparable=comparable)
+    pattern_found = level.learning_allowed and signal["status"] == "pattern"
     if not level.learning_allowed:
         recommendation = (
             f"Collect verified completed {snapshot_window} snapshots until at least {level.minimum_samples} comparable linked videos are mature "
             f"(currently {sample}); do not change generation strategy from the early sample."
         )
         confidence = "collecting"
-    else:
+    elif pattern_found:
         best = eligible[0]
         recommendation = (
             f"{level.label}: '{best.get('title') or 'the leading comparable video'}' currently leads this "
-            f"{snapshot_window} cohort by age-normalized views. Treat this as historical evidence, not a guarantee."
+            f"{snapshot_window} cohort by age-normalized views, and {signal['reason']} "
+            "Treat this as historical evidence, not a guarantee."
         )
+        confidence = level.key
+    else:
+        recommendation = f"No linked-video pattern was applied: {signal['reason']}"
         confidence = level.key
     return {
         "sample_size": sample,
@@ -106,9 +122,10 @@ def learning_summary(
         "confidence_label": level.label,
         "learning_allowed": level.learning_allowed,
         "snapshot_window": snapshot_window,
-        # Ranking a sample below the evidence threshold would present noise as a pattern.
-        "best_videos": eligible[:3] if level.learning_allowed else [],
-        "weakest_videos": list(reversed(eligible[-3:])) if level.learning_allowed else [],
+        "pattern_signal": signal,
+        # Ranking a sample without a pattern would present noise as one.
+        "best_videos": eligible[:3] if pattern_found else [],
+        "weakest_videos": list(reversed(eligible[-3:])) if pattern_found else [],
         "linked_evidence": linked,
         "recommendation": recommendation,
     }

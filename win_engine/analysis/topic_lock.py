@@ -363,6 +363,9 @@ _TRAILING_FUNCTION_WORDS = {
     "a", "an", "the", "and", "or", "but", "with", "without", "from", "about", "to",
     "for", "of", "after", "before", "into", "than", "at", "in", "on", "by", "any",
     "your", "my", "our", "their", "is", "are", "was", "were", "that", "which",
+    # A word limit that stops at a clause's subject or opener leaves it
+    # dangling: "... every evening even after she".
+    "she", "he", "they", "we", "i", "who", "when", "while", "if", "so", "as", "because", "even", "still",
     "என்று", "பற்றி", "மற்றும்",
 }
 _SPAN_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’-]*|[஀-௿]+")
@@ -449,10 +452,11 @@ def _title_is_broken(title: str) -> bool:
     return len(cleaned) < 6
 
 
-# A Short's title carries #Shorts exactly once. A fixed 💔, "The Hardest
-# Truth", "Watch Until The End..." and "What They Never Told You" (which also
-# dropped #Shorts) told viewers things about the video no one had said.
-QUOTE_TITLE_PATTERNS: List[str] = ["{topic} #Shorts"]
+# A Short's title is its topic alone. YouTube finds a Short by its format, so
+# #shorts in a title is optional and never injected. A fixed 💔, "The Hardest
+# Truth", "Watch Until The End..." and "What They Never Told You" told viewers
+# things about the video no one had said.
+QUOTE_TITLE_PATTERNS: List[str] = ["{topic}"]
 
 
 def force_topic_in_title(title: str, topic: str, category: str = "general",

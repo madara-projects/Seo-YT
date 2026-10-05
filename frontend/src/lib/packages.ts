@@ -113,8 +113,9 @@ export function buildPackageOptions(
       primary: Boolean(candidate.primary) || key === normalizeTitle(base.title),
       title,
       description: base.description,
-      tags: [...base.tags],
-      hashtags: [...base.hashtags],
+      // Shown and copied in the same cleaned form, so the count on screen is the count pasted.
+      tags: cleanTags(base.tags),
+      hashtags: cleanHashtags(base.hashtags),
       language: base.language,
       thumbnailText: String(candidate.thumbnail_text ?? "").trim(),
       thumbnailVisual: String(candidate.thumbnail_visual ?? brief.thumbnail_idea ?? "").trim(),
@@ -140,6 +141,80 @@ export function buildPackageOptions(
   }
 
   return options;
+}
+
+/**
+ * Tags as YouTube Studio's tag box expects them: separate entries with no
+ * separator inside any of them. YouTube splits a paste on commas only, so a
+ * generated tag that kept its own comma ("deep quotes,") or a list sent as
+ * one string pasted as tags with commas and line breaks inside. Every entry
+ * is split on commas, semicolons, bars and line breaks, trimmed of whitespace,
+ * wrapping quotes and a hashtag's leading "#" (the tag box keeps it as part of
+ * the tag), and repeated once at most (case-insensitively, first spelling kept).
+ */
+export function cleanTags(items: unknown): string[] {
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const raw of asArray<unknown>(items)) {
+    for (const piece of String(raw ?? "").split(/[\r\n,;|]+/)) {
+      const tag = piece
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/^["“”]+|["“”]+$/g, "")
+        .replace(/^[#＃]+/, "")
+        .trim();
+      const key = tag.toLocaleLowerCase();
+      if (!tag || seen.has(key)) continue;
+      seen.add(key);
+      tags.push(tag);
+    }
+  }
+  return tags;
+}
+
+/**
+ * One hashtag from an entry's words: "#cold brew" → "ColdBrew", as the backend
+ * joins it (a hashtag ends at the first space, so it would publish as #cold).
+ * A single word keeps its spelling; so does a word with capitals inside ("iPhone").
+ */
+function hashtagWord(piece: string): string {
+  const words = piece
+    .split(/\s+/)
+    .map((word) => word.replace(/^[#＃]+/, "").replace(/[,.;:!?"“”]+$/g, ""))
+    .filter(Boolean);
+  if (words.length < 2) return words[0] ?? "";
+  return words
+    .map((word) => (/\p{Lu}/u.test(word.slice(1)) ? word : word.charAt(0).toLocaleUpperCase() + word.slice(1)))
+    .join("");
+}
+
+/**
+ * Hashtags as single `#word` tokens: split on commas, line breaks and before
+ * each "#", a multi-word entry joined into one, one `#` each, no repeats.
+ */
+export function cleanHashtags(items: unknown): string[] {
+  const seen = new Set<string>();
+  const hashtags: string[] = [];
+  for (const raw of asArray<unknown>(items)) {
+    for (const piece of String(raw ?? "").split(/[\r\n,]+|\s+(?=[#＃])/)) {
+      const word = hashtagWord(piece.trim());
+      const key = word.toLocaleLowerCase();
+      if (!word || seen.has(key)) continue;
+      seen.add(key);
+      hashtags.push(`#${word}`);
+    }
+  }
+  return hashtags;
+}
+
+/** One line, comma-separated, no trailing comma: what the tag box splits correctly. */
+export function tagsText(items: unknown): string {
+  return cleanTags(items).join(", ");
+}
+
+/** One line, space-separated: pasted into the description or title as they are. */
+export function hashtagsText(items: unknown): string {
+  return cleanHashtags(items).join(" ");
 }
 
 /** Plain-text bundle for pasting into YouTube Studio. */
@@ -170,10 +245,10 @@ export function uploadBundleText(fields: {
     fields.description ?? "",
     "",
     "TAGS",
-    (fields.tags ?? []).join(", "),
+    tagsText(fields.tags),
     "",
     "HASHTAGS",
-    (fields.hashtags ?? []).join(" "),
+    hashtagsText(fields.hashtags),
   ].join("\n");
 }
 
@@ -181,8 +256,8 @@ export type CopyField = "title" | "description" | "tags" | "hashtags" | "upload-
 
 export function copyValue(option: PackageOption | null, field: CopyField): string {
   if (!option) return "";
-  if (field === "tags") return option.tags.join(", ");
-  if (field === "hashtags") return option.hashtags.join(" ");
+  if (field === "tags") return tagsText(option.tags);
+  if (field === "hashtags") return hashtagsText(option.hashtags);
   if (field === "upload-package") return uploadPackageText(option);
   return String(option[field] ?? "");
 }

@@ -1,11 +1,13 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ChevronDown, Eye, Link2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/common/Badge";
 import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { Meter } from "@/components/common/Meter";
 import { cn, UNAVAILABLE } from "@/lib/utils";
-import { initialOf } from "@/lib/format";
+import { initialOf, toFiniteNumber } from "@/lib/format";
 import { roundOpportunity, roundTitleScore } from "@/lib/dashboardFormat";
 import { historyDate, runTitle } from "@/lib/historyFormat";
 import { RunOpportunityInputs } from "./HistoryOpportunityBreakdown";
@@ -63,6 +65,9 @@ export function HistoryRow({
   const inputsId = `opportunity-inputs-${run.id}`;
   const isLinked = Boolean(run.linked_youtube_video_id);
   const angle = run.content_angle || run.intent || "General";
+  // Written on the AI Shorts page: the row says so and leads back to its Flow prompts.
+  const aiShorts = run.source_page === "ai_shorts" || Boolean(run.ai_shorts);
+  const planId = toFiniteNumber(run.ai_shorts?.plan_id);
 
   return (
     <article
@@ -112,6 +117,22 @@ export function HistoryRow({
               <EvidenceChip tone="neutral">Selection unknown</EvidenceChip>
             )}
             {isLinked ? <EvidenceChip tone="ok">YouTube linked</EvidenceChip> : null}
+            {aiShorts ? (
+              planId !== null && planId > 0 ? (
+                <Link
+                  to={`/ai-shorts?plan=${planId}`}
+                  aria-label={`Open AI Short for ${title}`}
+                  title="Open its Flow prompts on the AI Shorts page"
+                  className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Badge variant="brand">AI Shorts</Badge>
+                </Link>
+              ) : (
+                <Badge variant="brand" title="Written on the AI Shorts page">
+                  AI Shorts
+                </Badge>
+              )
+            ) : null}
           </div>
         </div>
       </div>

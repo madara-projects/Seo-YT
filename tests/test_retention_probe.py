@@ -157,6 +157,19 @@ class ProbeTests(ProbeBase):
             with self.assertRaises(RefreshError):
                 self.service.probe_retention_curve(link)
 
+    def test_an_unreadable_saved_token_is_reported_not_raised(self):
+        # The encryption key changed since the channel was connected: every
+        # other route says so with a 400; the probe used to raise it as a 500.
+        link = self.link("tokenvideo1")
+        with (
+            patch.object(youtube_channel.Fernet, "decrypt", side_effect=youtube_channel.InvalidToken()),
+            patch(BUILD) as build_client,
+        ):
+            result = self.service.probe_retention_curve(link)
+        self.assertEqual((result["status"], result["reason"], result["requests"]), ("unavailable", "api_error", 0))
+        self.assertIn("Disconnect and connect again", result["message"])
+        build_client.assert_not_called()
+
 
 class ObservationTests(unittest.TestCase):
     def test_a_drop_inside_the_hook_is_placed_there(self):

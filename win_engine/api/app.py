@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import time
 import uuid
@@ -66,6 +67,23 @@ _SECURITY_HEADERS = {
 }
 
 
+def _json_safe(value: Any) -> Any:
+    """`value` with what a JSON reply cannot hold replaced: NaN and infinities by null, a lone surrogate by "?".
+
+    Python's JSON parser accepts all three in a request body, and a refusal
+    echoes the input back; rendering it raised, so the refusal became a 500.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, dict):
+        return {_json_safe(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def error_response(
     request: Request,
     status_code: int,
@@ -78,11 +96,11 @@ def error_response(
     """The one error envelope every failure uses, carrying the request id."""
     error: dict[str, Any] = {
         "code": code,
-        "message": message,
+        "message": _json_safe(message),
         "request_id": getattr(request.state, "request_id", "unavailable"),
     }
     if details is not None:
-        error["details"] = details
+        error["details"] = _json_safe(details)
     return JSONResponse(status_code=status_code, content={"error": error}, headers=headers)
 
 

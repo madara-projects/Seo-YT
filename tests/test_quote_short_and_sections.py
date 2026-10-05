@@ -276,7 +276,10 @@ class PackagingSectionTests(unittest.TestCase):
         self.assertGreaterEqual(len(refined["tags"]), 5)
         self.assertIn("top station sunrise hike", refined["tags"])
 
-    def test_title_with_the_search_phrase_beats_a_quote_echo(self):
+    def test_a_quote_punchline_title_is_not_outranked_by_a_search_phrase(self):
+        # New contract: a quote Short's punchline in the quote's words may lead
+        # (option 1); a search phrase only breaks ties between titles that
+        # carry the quote equally. The old rule ranked any keyword title first.
         from win_engine.generation.quality_refinement import refine_package
 
         betrayal = "The biggest betrayal is knowing that if you didn't find out, they would have never told you."
@@ -295,7 +298,8 @@ class PackagingSectionTests(unittest.TestCase):
         with patch.object(gemini_client, "is_available", return_value=False):
             refined, _ = refine_package(package, script=betrayal, brief=brief, language="english", region="global",
                                         evidence=evidence, competitors=[])
-        self.assertEqual(refined["title"], "Hidden betrayal hurts the deepest #shorts")
+        self.assertEqual(refined["title"], "If you didn't find out, they wouldn't have told you #shorts")
+        self.assertIn("Hidden betrayal hurts the deepest #shorts", refined["variants"])
 
     def test_a_validated_search_tag_meets_the_tag_bar(self):
         evidence = {"subject_terms": ["love"], "selected_keywords": [

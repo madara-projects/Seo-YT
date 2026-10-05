@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from win_engine.core.config import Settings
+from win_engine.feedback.ai_shorts_store import AiShortsStore
 from win_engine.feedback.audit_experiment_store import AuditExperimentStore
 from win_engine.feedback.cloud_sync import CloudSyncService, _hash
 from win_engine.feedback.history_store import HistoryStore
@@ -241,6 +242,39 @@ class CloudPullTests(unittest.TestCase):
 
         self.assertLessEqual(self.service._pull_watermark, datetime.now(timezone.utc).isoformat())
         self.assertIsNotNone(self.service._pull_since())
+
+    @staticmethod
+    def _ai_short(store, query):
+        run_id = store.record_analysis_run(query, "browse", "quote", query.title(), 7.0, "LOW", "UNMEASURED", None,
+                                           {"title": query.title()})
+        AiShortsStore(store).save_plan(analysis_run_id=run_id, quote=query, language="english", parts=2,
+                                       plan={"total_seconds": 16, "generation_source": "fallback"},
+                                       package={"title": query.title()})
+        return run_id
+
+    def test_an_ai_short_arrives_with_its_mark_but_no_plan_of_this_device(self):
+        source_run = self._ai_short(self.source_store, "a quote short")
+        self.source._stage_local_packages()
+
+        self.assertEqual(self.service._pull(_PullRemote([self._remote_row(source_run)])), 1)
+
+        row = self.store.history_runs()[0]
+        # History still says AI Shorts; the Flow prompts stayed on the device that wrote them.
+        self.assertEqual((row["source_page"], row["ai_shorts"]["parts"], row["ai_shorts"]["plan_id"]), ("ai_shorts", 2, None))
+        self.assertEqual(self._query("SELECT COUNT(*) FROM ai_short_plans"), [(0,)])
+
+    def test_a_cloud_deletion_of_an_ai_short_removes_its_plan_here(self):
+        local_run = self._ai_short(self.store, "a local quote short")
+        self.service._stage_local_packages()
+        sync_uuid = self._query("SELECT sync_uuid FROM cloud_sync_packages WHERE analysis_run_id = ?", (local_run,))[0][0]
+        tombstone = (sync_uuid, "device-a", 2, "tombstone-hash", "{}", UPDATED_AT, UPDATED_AT)
+
+        # The pull defers foreign-key checks to its commit; the cascade still runs.
+        self.assertEqual(self.service._pull(_PullRemote([tombstone])), 1)
+
+        self.assertEqual(self._query("SELECT COUNT(*) FROM analysis_runs"), [(0,)])
+        self.assertEqual(self._query("SELECT COUNT(*) FROM ai_short_plans"), [(0,)])
+        self.assertEqual(self._query("PRAGMA foreign_key_check"), [])
 
 
 if __name__ == "__main__":

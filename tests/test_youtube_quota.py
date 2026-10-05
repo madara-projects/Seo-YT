@@ -186,6 +186,25 @@ class RecordingTests(_DatabaseTestCase):
 
         self.assertEqual([row[1:] for row in self.rows()], [("key1", "search", 200, 0)])
 
+    def test_two_writers_on_one_database_add_up_rather_than_overwrite(self):
+        # Two app processes each have their own writer thread; the sum happens
+        # in SQL, so neither can write back a total read before the other's batch.
+        refused: list = []
+
+        def write_batches():
+            for _ in range(20):
+                count = (self.path, "2026-09-25", "key1", "default", 1, MIDNIGHT.isoformat())
+                refused.extend(quota_ledger._write([count] * 10))
+
+        threads = [threading.Thread(target=write_batches) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(refused, [])
+        self.assertEqual(self.rows(), [("2026-09-25", "key1", "default", 400, 400)])
+
 
 class YouTubeClientRecordingTests(_DatabaseTestCase):
     SEARCH_OK = {"items": [{"id": {"videoId": "vid1"}, "snippet": {"channelId": "UC1", "title": "A"}}]}
@@ -213,6 +232,23 @@ class YouTubeClientRecordingTests(_DatabaseTestCase):
         self.client().search_videos("q")
 
         self.assertEqual(self.rows(), [(self.today, "key1", "default", 2, 2), (self.today, "key1", "search", 1, 0)])
+
+    def test_a_page_of_twenty_five_results_costs_one_search_and_two_units(self):
+        # search.list counts one call whatever the page size; the statistics of
+        # up to 50 ids come from one videos.list and one channels.list call.
+        search = {"items": [{"id": {"videoId": f"vid{index}"}, "snippet": {"channelId": f"UC{index}", "title": "A"}}
+                            for index in range(25)]}
+        videos = {"items": [{"id": f"vid{index}", "statistics": {"viewCount": "1"}, "contentDetails": {"duration": "PT1M"}}
+                            for index in range(25)]}
+        channels = {"items": [{"id": f"UC{index}", "statistics": {"subscriberCount": "5"}} for index in range(25)]}
+        get = self._get(_response(200, search), _response(200, videos), _response(200, channels))
+
+        rows = self.client().search_videos("q", 25, video_duration="short")
+
+        self.assertEqual(len(rows), 25)
+        self.assertEqual(self.rows(), [(self.today, "key1", "default", 2, 2), (self.today, "key1", "search", 1, 0)])
+        self.assertEqual(get.call_args_list[0].kwargs["params"]["videoDuration"], "short")
+        self.assertEqual(len(get.call_args_list[1].kwargs["params"]["id"].split(",")), 25)
 
     def test_statistics_looked_up_again_spend_no_search(self):
         self._get(_response(200, self.VIDEOS_OK), _response(200, self.CHANNELS_OK))

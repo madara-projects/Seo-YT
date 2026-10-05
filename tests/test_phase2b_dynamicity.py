@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from win_engine.analysis.creator_brief import build_creator_brief, creator_topic
-from win_engine.analysis.generation_quality import evaluate_package_quality
+from win_engine.analysis.generation_quality import apply_quality_gate, evaluate_package_quality
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.strategy_engine import _content_specific_fallback, build_seo_package
 
@@ -89,25 +89,29 @@ class Phase2BDynamicityTests(unittest.TestCase):
         self.assertIn("lemon", two["description"].casefold())
 
     def test_generic_and_unrelated_tags_are_removed_or_rejected(self):
-        gate = evaluate_package_quality(
-            {
-                "title": "How to Parse CSV Files Safely in Python",
-                "variants": ["How to Parse CSV Files Safely in Python"],
-                "description": "A practical Python CSV parsing tutorial.",
-                "tags": ["python csv parsing", "youtube", "viral", "trending"],
-                "hashtags": [],
-            },
-            script="A practical Python tutorial showing how to parse CSV files safely.",
-        )
-        self.assertIn("generic_tag_filler", {item["code"] for item in gate["issues"]})
+        package = {
+            "title": "How to Parse CSV Files Safely in Python",
+            "variants": ["How to Parse CSV Files Safely in Python"],
+            "description": "A practical Python CSV parsing tutorial.",
+            "tags": ["python csv parsing", "youtube", "viral", "trending"],
+            "hashtags": [],
+        }
+        gate = evaluate_package_quality(package, script="A practical Python tutorial showing how to parse CSV files safely.")
+        # Tags are advisory: the filler is reported and removed, not a reason
+        # to fail or repair the package.
+        self.assertIn("generic_tag_filler", {item["code"] for item in gate["warnings"]})
+        self.assertTrue(gate["passed"])
+        self.assertEqual(apply_quality_gate(package, gate)["tags"], ["python csv parsing"])
 
-    def test_short_fallback_keeps_semantic_emoji_and_uses_shorts_as_a_hashtag(self):
+    def test_short_fallback_keeps_a_feeling_emoji_and_uses_shorts_as_a_hashtag(self):
         rain = build_creator_brief(script='Rainy road Short with the quote "I miss the quiet after goodbye."')
         moon = build_creator_brief(script='Night sky Short with the quote "Some memories glow after midnight."')
         rain_package = _content_specific_fallback(creator_topic(rain), [], rain)
         moon_package = _content_specific_fallback(creator_topic(moon), [], moon)
-        self.assertEqual(rain_package["title"].casefold().count("#shorts"), 1)
-        self.assertEqual(moon_package["title"].casefold().count("#shorts"), 1)
+        # New contract: #shorts belongs in the hashtags, never the title; the
+        # emoji is the feeling the quote names, not the rain or the night sky.
+        self.assertEqual(rain_package["title"], "I miss the quiet after goodbye 🥀")
+        self.assertEqual(moon_package["title"], "Some memories glow after midnight 🍂")
         self.assertNotEqual(rain_package["title"], moon_package["title"])
         self.assertNotIn("shorts", rain_package["tags"])
         self.assertNotIn("shorts", moon_package["tags"])

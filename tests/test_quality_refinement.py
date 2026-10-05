@@ -15,8 +15,9 @@ class QualityTargetTests(unittest.TestCase):
             "selected_keywords": [{"keyword": "loneliness", "classification": "secondary_topic", "source_classification": "combined", "source_support_score": 100, "evidence_count": 2}],
             "selected_result_evidence": {"tags_with_matching_results": ["loneliness"]},
         }
+        # "shorts" is the one creator-strategy platform tag; "yt" is no longer one.
         synced = synchronize_tag_evidence(evidence, ["being forgotten", "yt", "shorts"])
-        self.assertEqual(synced["selected_tags"], ["being forgotten", "yt", "shorts"])
+        self.assertEqual(synced["selected_tags"], ["being forgotten", "shorts"])
         self.assertEqual(synced["selected_result_evidence"]["tags_with_matching_results"], ["being forgotten"])
         self.assertNotIn("loneliness", synced["selected_result_evidence"]["tags_with_matching_results"])
 

@@ -13,9 +13,66 @@ from win_engine.analysis.semantic_research import (
     fallback_viewer_intent,
     refine_research_semantics,
 )
+from win_engine.llm import gemini_client
 
 TAMIL_RECIPE = "செட்டிநாடு சிக்கன் பிரியாணி செய்வது எப்படி"
 RESULTS = [{"title": "Biryani recipe", "description": "Restaurant style biryani at home"}]
+
+
+@patch("win_engine.analysis.semantic_research.gemini_client.is_available", return_value=True)
+@patch("win_engine.analysis.semantic_research.gemini_client.generate")
+class WriterReserveTests(unittest.TestCase):
+    """Research shares one request allowance with the writer and runs first, so it leaves the writer its calls."""
+
+    SCRIPT = "Samsung Galaxy S25 Ultra review: camera, battery and display tested for a month."
+
+    def test_research_leaves_the_writer_its_reserved_calls(self, generate, _available):
+        generate.return_value = json.dumps({"primary_topic": "Samsung Galaxy S25 Ultra review"})
+        with gemini_client.request_budget(max_calls=3):  # exactly the writer's reserve
+            semantic = analyze_script_semantics(self.SCRIPT)
+            refinement = refine_research_semantics(self.SCRIPT, {}, [{"query": "galaxy s25 ultra review"}])
+        generate.assert_not_called()
+        self.assertEqual(semantic["source"], "local_fallback")
+        self.assertEqual(semantic["fallback_reason"], "gemini_writer_reserve")
+        self.assertEqual(refinement, {})
+
+    def test_the_search_opportunity_call_leaves_the_writer_its_reserve_too(self, generate, _available):
+        # The third research call: it spent the writer's reserve when the
+        # allowance was configured low.
+        generate.return_value = _opportunities("chettinad chicken biryani")
+        with gemini_client.request_budget(max_calls=3):
+            result = discover_search_opportunities(script=TAMIL_RECIPE, semantic={}, youtube_results=RESULTS)
+        generate.assert_not_called()
+        self.assertEqual((result["status"], result["opportunities"]), ("gemini_writer_reserve", []))
+
+    def test_research_calls_run_while_the_allowance_has_room_above_the_reserve(self, generate, _available):
+        generate.return_value = json.dumps({"primary_topic": "Samsung Galaxy S25 Ultra review"})
+        with gemini_client.request_budget(max_calls=4):
+            semantic = analyze_script_semantics(self.SCRIPT)
+        self.assertEqual(semantic["source"], "gemini")
+        self.assertNotIn("fallback_reason", semantic)
+        generate.assert_called_once()
+
+    def test_a_repair_withheld_for_the_writer_names_the_reserve_as_the_cause(self, generate, _available):
+        def unusable(**_kwargs):
+            gemini_client._REQUEST_BUDGET.get().claim_call()  # as the real client counts each call
+            return json.dumps({"primary_topic": ""})
+
+        generate.side_effect = unusable
+        with gemini_client.request_budget(max_calls=4):
+            withheld = analyze_script_semantics(self.SCRIPT)
+        self.assertEqual(generate.call_count, 1)
+        self.assertEqual((withheld["source"], withheld["fallback_reason"]), ("local_fallback", "gemini_writer_reserve"))
+        # A repair that was made and failed is not the reserve's doing.
+        generate.reset_mock()
+        with gemini_client.request_budget(max_calls=12):
+            failed = analyze_script_semantics(self.SCRIPT)
+        self.assertEqual(generate.call_count, 2)
+        self.assertNotIn("fallback_reason", failed)
+
+    def test_without_a_request_allowance_research_is_not_held_back(self, generate, _available):
+        generate.return_value = json.dumps({"primary_topic": "Samsung Galaxy S25 Ultra review"})
+        self.assertEqual(analyze_script_semantics(self.SCRIPT)["source"], "gemini")
 
 
 def _opportunities(*concepts: str) -> str:

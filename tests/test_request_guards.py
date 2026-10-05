@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
@@ -93,6 +95,23 @@ class CrossSiteMiddlewareTests(unittest.TestCase):
         response = self.client.delete("/api/history/runs/1", headers={"Sec-Fetch-Site": "cross-site"})
 
         self.assertEqual(response.status_code, 403)
+
+    def test_every_route_that_changes_data_is_covered(self):
+        # The guard is the middleware, not a check each route remembers, so a
+        # new route (the AI Shorts ones, say) is covered the day it is added.
+        writes = [
+            (method, route.path) for route in routes.router.routes if isinstance(route, APIRoute)
+            for method in sorted(route.methods - {"GET", "HEAD", "OPTIONS"})
+        ]
+        self.assertIn(("POST", "/api/ai-shorts/generate"), writes)
+        self.assertIn(("DELETE", "/api/ai-shorts/plans/{plan_id}"), writes)
+        for method, path in writes:
+            url = re.sub(r"\{[^}]+\}", "1", path)
+            for headers in ({"Sec-Fetch-Site": "cross-site"}, {"Origin": "https://evil.example"}):
+                with self.subTest(method=method, path=path, headers=headers):
+                    response = self.client.request(method, url, headers=headers, json={})
+                    self.assertEqual(response.status_code, 403, response.text)
+                    self.assertEqual(response.json()["error"]["code"], "cross_site_request")
 
     def test_cross_site_reads_are_untouched(self):
         response = self.client.get("/meta", headers={"Sec-Fetch-Site": "cross-site"})

@@ -6,7 +6,7 @@ from typing import Any
 
 from win_engine.analysis.generation_quality import evaluate_package_quality, is_short_content, short_title_fit
 from win_engine.analysis.source_cues import source_quote
-from win_engine.analysis.text_tokens import unicode_words
+from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
 from win_engine.llm import gemini_client
 from win_engine.llm.seo_writer import generate_one
 
@@ -38,18 +38,29 @@ def title_demand_words(title: str, evidence: dict[str, Any] | None) -> int:
     return best
 
 
-def target_fields(short_form: bool = False) -> tuple[str, ...]:
-    """The scores the 90-point target counts. A Short's tag score is reported, not targeted:
-    tags play a minimal role in its discovery (support.google.com/youtube/answer/146402)."""
+def target_fields(short_form: bool = False, quote_short: bool = False) -> tuple[str, ...]:
+    """The scores the 90-point target counts.
 
-    return tuple(field for field in SCORE_FIELDS if not (short_form and field == "tag_score"))
+    A Short's tag score is reported, not targeted: tags play a minimal role
+    in its discovery (support.google.com/youtube/answer/146402). A quote
+    Short's title is judged by the gate's pass/fail checks (the quote kept
+    whole or to its punchline, no cut, no reversed meaning), not by a word
+    overlap score, which only drove repairs toward the quote's own words.
+    """
+
+    skipped = {"tag_score"} if short_form else set()
+    if quote_short:
+        skipped.add("title_score")
+    return tuple(field for field in SCORE_FIELDS if field not in skipped)
 
 
-def enforce_quality_target(gate: dict[str, Any], *, short_form: bool = False) -> dict[str, Any]:
+def enforce_quality_target(gate: dict[str, Any], *, short_form: bool = False, quote_short: bool | None = None) -> dict[str, Any]:
     """Annotate shortfalls without replacing scores or treating missing data as zero evidence."""
     result = deepcopy(gate)
     quality = result.setdefault("final_seo_quality", {})
-    fields = target_fields(short_form)
+    if quote_short is None:
+        quote_short = bool(short_form and gate.get("exact_quote_checked"))
+    fields = target_fields(short_form, quote_short)
     # An unmeasured score cannot show the target was met; it is named as not
     # measured rather than read as a low score.
     unmeasured = [field for field in fields if quality.get(field) is None]
@@ -62,6 +73,11 @@ def enforce_quality_target(gate: dict[str, Any], *, short_form: bool = False) ->
         result["quality_target"]["not_counted"] = {
             "tag_score": "Tags play a minimal role in a Short's discovery; the score is reported, not targeted.",
         }
+    if quote_short:
+        result["quality_target"]["not_counted"]["title_score"] = (
+            "A quote Short's title passes or fails its checks (the quote kept whole or to its punchline, "
+            "no cut, no reversed meaning); the score is reported, not targeted."
+        )
     if shortfalls:
         named = [f"{field} (not measured)" if field in unmeasured else field for field in shortfalls]
         issue = {"code": "quality_target_not_met", "field": "package", "severity": "warning",
@@ -90,9 +106,12 @@ def _lead_with(title: str, variants: list[str]) -> list[str]:
 def _alternatives_request(kept: list[str], rejected: list[dict[str, Any]], *, quote_short: bool) -> str:
     """The repair instruction when fewer than three distinct titles passed the gate."""
 
-    angles = (": the quote's core line in new words, speaking to the viewer, the feeling it names, "
-              "a question the viewer asks themselves" if quote_short else "")
-    faults = [*(["repeat most of the quote"] if quote_short else []), "read almost like another title",
+    angles = (": the quote's punchline clause or the whole quote when it fits 70 characters, its core line in "
+              "new words, speaking to the viewer, the feeling it names, a question the viewer asks themselves"
+              if quote_short else "")
+    faults = [*(["cut the quote mid-phrase, end in '...', stop before the quote's turn, or reverse its meaning"]
+                if quote_short else []),
+              "read almost like another title",
               "promise advice or a how-to the source does not give",
               "add a feeling, setting or claim the source does not state"]
     discarded = "; ".join(
@@ -146,21 +165,24 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
         title = float(scores.get("title_score") or 0)
         description = float(scores.get("description_score") or 0)
         tag = float(scores.get("tag_score") or 0)
-        # A reasonably grounded title that carries the phrase viewers search
-        # beats one that only echoes the quote: source overlap alone scored
-        # "If you didn't find out, they wouldn't have told you" (88) above
-        # "Hidden betrayal hurts the deepest" (85).
+        # Between titles that score alike, one that carries the phrase viewers
+        # search leads. It used to outrank every score, which made the title
+        # that led with the main keyword win over a more specific, truthful
+        # one ("Download and install OBS Studio..." over "My exact OBS settings...").
         carries_keyword = title >= _KEYWORD_TITLE_FLOOR and not any(
             isinstance(item, dict) and item.get("code") == "primary_keyword_missing_from_title"
             for item in scores.get("warnings") or []
         )
-        ranked = (bool(gate.get("passed")), carries_keyword, min(title, description, tag), title + description + tag,
-                  title_demand_words(str(pkg.get("title") or ""), evidence))
+        ranked = (bool(gate.get("passed")), min(title, description, tag), title + description + tag,
+                  carries_keyword, title_demand_words(str(pkg.get("title") or ""), evidence))
         if not short_quote:
             return ranked
-        # The title the gate lets through first is the one the creator gets.
+        # The title the gate lets through first is the one the creator gets;
+        # a package led by a title the gate rejects ("Alone quotes for ...")
+        # ranks below the same titles led by one it accepts.
         accepted = [item.get("title") for item in gate.get("accepted_candidates") or [] if isinstance(item, dict)]
-        return (ranked[0], title_fit(accepted[0] if accepted else pkg.get("title")), *ranked[1:])
+        leads = normalize_unicode(pkg.get("title")) in accepted
+        return (ranked[0], leads, title_fit(accepted[0] if accepted else pkg.get("title")), *ranked[1:])
 
     def refine_tags_locally(pkg: dict[str, Any]) -> dict[str, Any]:
         pkg_tags = list(pkg.get("tags") or [])
@@ -259,9 +281,10 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
     scores = gate.get("final_seo_quality", {})
     # Only a measured shortfall is worth a repair request: a score the local
     # check cannot measure (a Tamil title) would not show any improvement,
-    # and a Short's tag score is not targeted at all.
-    below_target = any(scores.get(field) is not None and float(scores[field]) < TARGET
-                       for field in target_fields(short_form))
+    # a Short's tag score is not targeted at all, and a quote Short's title
+    # is judged by its pass/fail checks rather than a word-overlap score.
+    targeted = target_fields(short_form, bool(short_quote))
+    below_target = any(scores.get(field) is not None and float(scores[field]) < TARGET for field in targeted)
     # The writer asks for five titles; when fewer than three passed, the one
     # repair asks for the missing alternatives rather than accepting two.
     few_titles = any(isinstance(item, dict) and item.get("code") == "fewer_legitimate_alternatives"
@@ -284,7 +307,7 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
                 "Measured scores: " + ", ".join(
                     f"{label}={'not measured' if scores.get(field) is None else scores.get(field)}"
                     for label, field in (("title", "title_score"), ("description", "description_score"), ("tags", "tag_score"))
-                    if field in target_fields(short_form)
+                    if field in targeted
                 ) + "; target 90 each."})
         if few_titles:
             feedback.append({"message": _alternatives_request(accepted_titles(gate), rejected_titles or [],

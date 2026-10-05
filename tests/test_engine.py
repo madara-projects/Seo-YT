@@ -255,7 +255,7 @@ class TestEngineStages(unittest.TestCase):
         tags = package["tags"]
         self.assertIn("chennai street food", tags)
         self.assertIn("shorts", tags)
-        self.assertIn("yt", tags)
+        self.assertNotIn("yt", tags)  # a tag nobody searches is no longer added
         self.assertIn("#shorts", package["hashtags"])
         self.assertTrue({"youtube shorts", "viral shorts"}.isdisjoint(tags))
 
@@ -306,7 +306,12 @@ class TestEngineStages(unittest.TestCase):
             [item["package_intent"] for item in package["title_variants"][:3]],
             ["Search", "Browse", "Existing audience"],
         )
-        self.assertEqual(package["title_thumbnail_packages"][2]["best_for"], "Returning viewers / existing audience")
+        # The packages label each title by what it does, not by its position:
+        # a how-to is Search; a hidden-bug tease and a first-person story are Browse.
+        self.assertEqual(
+            [item["best_for"] for item in package["title_thumbnail_packages"][:3]],
+            ["Search / new viewers", "Browse / home and suggested viewers", "Browse / home and suggested viewers"],
+        )
 
     @patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source")
     def test_generated_history_preserves_the_full_creator_script(self, mocked_writer):
@@ -414,15 +419,19 @@ class TestEngineStages(unittest.TestCase):
         topic = creator_topic(brief)
         package = _content_specific_fallback(topic, [], brief)
         self.assertEqual(topic, "some sunsets look beautiful because they're endings")
-        self.assertTrue(package["title"].startswith("Some sunsets look beautiful because they're endings "))
-        self.assertTrue(package["title"].endswith("#shorts"))
+        # The whole quote is the title: no "#shorts", and no emoji for a
+        # quote that names no feeling (a beach is footage, not a feeling).
+        self.assertEqual(package["title"], "Some sunsets look beautiful because they're endings")
         # "Background visual is beach scene" is prose, not a "Background:" label,
         # so no visual requirement is inferred and none is described.
         self.assertEqual(brief["visual_requirements"], "")
         self.assertNotIn("beach scene", package["description"])
         self.assertNotIn("Gemini was unavailable", package["description"])
         self.assertNotIn("feeling of being forgotten", package["description"].casefold())
-        self.assertIn("some sunsets look beautiful because they're endings", package["tags"])
+        self.assertIn("“Some sunsets look beautiful because they're endings”", package["description"])
+        # Tags are natural phrases of 30 characters at most, so the whole
+        # quote is not offered as one.
+        self.assertTrue(all(len(tag) <= 30 for tag in package["tags"]))
         self.assertNotIn("background visual", package["tags"])
 
     def test_quote_topic_keeps_a_natural_search_phrase(self):
@@ -444,7 +453,9 @@ class TestEngineStages(unittest.TestCase):
         )
         self.assertEqual(creator_topic(brief), "in the end i wasn't abandonded i was erased")
 
-    def test_quote_fallback_title_drops_only_an_introductory_lead_in(self):
+    def test_quote_fallback_title_keeps_a_quote_that_fits_whole(self):
+        # New contract: a quote that fits is the title whole, its opener
+        # ("In the end") included; the opener goes only from a quote too long to keep.
         quote = "In the end, I wasn't abandoned. I was erased."
         brief = build_creator_brief(
             script="Quote Short over evening road traffic.",
@@ -453,12 +464,18 @@ class TestEngineStages(unittest.TestCase):
             video_format="youtube_shorts",
         )
         package = _content_specific_fallback(creator_topic(brief), [], brief)
-        self.assertTrue(package["title"].startswith("I wasn't abandoned. I was erased"))
+        self.assertEqual(package["title"], "In the end, I wasn't abandoned. I was erased")
         self.assertIn("“In the end, I wasn't abandoned. I was erased.”", package["description"])
         # The description is for viewers; how it was assembled is not their business.
         self.assertNotIn("exact words shown on screen", package["description"])
+        long_quote = ("Perhaps the saddest thing about being human is knowing when something ends, "
+                      "while still wishing it wouldn't")
+        brief = build_creator_brief(script=long_quote, exact_quote=long_quote, video_format="youtube_shorts")
+        title = _content_specific_fallback(creator_topic(brief), [], brief)["title"]
+        self.assertTrue(title.startswith("The saddest thing about being human"), title)
+        self.assertNotIn("…", title)
 
-    def test_grief_quote_fallback_complements_quote_and_drops_coping_target(self):
+    def test_grief_quote_fallback_uses_the_quote_and_drops_coping_target(self):
         quote = "Grief teaches you the weight of silence and the shape of absence."
         brief = build_creator_brief(
             script=quote, exact_quote=quote, on_screen_text=quote,
@@ -467,12 +484,14 @@ class TestEngineStages(unittest.TestCase):
         )
         brief["seo_research_targets"] = ["coping with grief", "silence in grief", "absence in grief"]
         package = _content_specific_fallback("coping with grief", [], brief)
-        # The title and the reflective line name validated research targets,
-        # not lines written for this test quote ("When Grief Makes Silence Feel Heavy").
-        self.assertTrue(package["title"].startswith("Silence in grief "))
-        self.assertTrue(package["title"].endswith("#shorts"))
+        # New contract: the title is the quote itself, never a research or
+        # brief phrase, and never a line written for this test quote ("When
+        # Grief Makes Silence Feel Heavy"); its emoji is the feeling it names.
+        self.assertEqual(package["title"], "Grief teaches you the weight of silence and the shape of absence 🌙")
         self.assertNotIn("coping", " ".join(package["tags"]).casefold())
-        self.assertIn("silence in grief", package["description"].casefold())
+        # The description is the exact quote; "A reflective moment about
+        # silence in grief, absence in grief" read like a template.
+        self.assertEqual(package["description"], f"“{quote}”")
         self.assertNotIn("grief can make silence feel heavy", package["description"].casefold())
 
     def test_quote_research_queries_use_the_message_not_production_directions(self):

@@ -19,7 +19,7 @@ The code has strong evidence and safety rules (read-only YouTube OAuth, no autom
 ### Runtime and deployment
 
 - `app.py` creates a FastAPI application and serves the static frontend from the same origin.
-- `compose.yaml` runs `win-engine` and Redis. The application is published only as `127.0.0.1:8000:8000`; Redis has no host port. The image is Python 3.11-slim with `curl` and the production requirements only; Node, Playwright, Chromium, and Ollama are not in the image.
+- `compose.yaml` runs `win-engine` and Redis. The application is published only as `127.0.0.1:8000:8000`; Redis has no host port. The image is Python 3.11-slim with the production requirements only (its health check uses Python's own HTTP client); Node, Playwright, Chromium, and Ollama are not in the image.
 - Both services were present but exited when inspected (`docker compose ps -a`), so the source/configuration supports a healthy deployment but this inspection did not establish a currently running container.
 - The application lifespan starts the opt-in snapshot collector and cloud-sync worker when enabled and stops both on shutdown. A stopped laptop cannot collect snapshots or run synchronization.
 

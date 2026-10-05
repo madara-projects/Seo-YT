@@ -149,6 +149,27 @@ class SearchTests(_ClientTestCase):
         params = get.call_args.kwargs["params"]
         self.assertEqual((params["regionCode"], params["relevanceLanguage"], params["maxResults"]), ("IN", "ta", 25))
 
+    def test_search_sends_the_duration_filter_only_when_given(self):
+        get = self._get(_response(200, {"items": []}), _response(200, {"items": []}))
+        client = YouTubeClient(["key"], timeout_seconds=5)
+
+        client.search_videos("q", 25, video_duration="short")
+        client.search_videos("q", 25)
+
+        first, second = (call.kwargs["params"] for call in get.call_args_list)
+        self.assertEqual(first["videoDuration"], "short")
+        self.assertNotIn("videoDuration", second)
+
+    def test_a_page_size_search_rejects_is_never_sent(self):
+        # Above 50 every search fails with HTTP 400 and still counts against the day's searches.
+        get = self._get(_response(200, {"items": []}), _response(200, {"items": []}))
+        client = YouTubeClient(["key"], timeout_seconds=5)
+
+        client.search_videos("q", 80)
+        client.search_videos("q", 0)
+
+        self.assertEqual([call.kwargs["params"]["maxResults"] for call in get.call_args_list], [50, 1])
+
     def test_creator_regions_and_languages_map_to_youtube_codes(self):
         self.assertEqual(youtube_region_code("Tamil Nadu"), "IN")
         self.assertEqual(youtube_region_code("sri lanka"), "LK")
@@ -226,6 +247,8 @@ class CheapCallTests(_ClientTestCase):
 
 class MaxResultsSettingTests(unittest.TestCase):
     def test_page_size_is_bounded_to_what_search_accepts(self):
+        # A page of 25 costs the same one search call as a page of 5.
+        self.assertEqual(Settings().youtube_max_results, 25)
         self.assertEqual(Settings(youtube_max_results=50).youtube_max_results, 50)
         for invalid in (0, 51):
             with self.assertRaises(ValidationError):

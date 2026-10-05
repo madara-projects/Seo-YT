@@ -12,8 +12,10 @@ import logging
 import re
 from typing import Any
 
+from win_engine.analysis.source_cues import is_short_video
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.transliteration import has_tamil, phonetic_keys, phonetic_match
+from win_engine.core.config import get_settings
 from win_engine.llm import gemini_client
 
 
@@ -46,6 +48,10 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
 
     source = _source_text(script, creator_brief)
     if gemini_client.is_available():
+        if writer_reserve_reached():
+            logger.info("Semantic research made no Gemini call: the request's remaining calls are the writer's.")
+            return {**_fallback(source, creator_brief), "fallback_reason": "gemini_writer_reserve"}
+        prompt_source = _prompt_source(script, creator_brief)
         raw = gemini_client.generate(
             prompt=(
                 "Analyze this video source for YouTube research. Return JSON only with "
@@ -68,7 +74,7 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
                 "For a quote, prefer the concrete meaning as the primary topic (for example letting go of the wrong person) "
                 "over broad advice categories. Use at most 3 secondary topics and 4 search phrases. "
                 "Keep reflective quotes emotional_relatable; do not label them tutorials or tips.\n"
-                f"Creator source:\n{source[:8000]}"
+                f"Creator source:\n{prompt_source[:8000]}"
             ),
             system="You are a careful semantic research analyst. Return compact valid JSON only.",
             max_tokens=2200,
@@ -78,7 +84,10 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
         parsed = _parse(raw)
         if parsed:
             parsed = _ground_semantics(parsed, source, script=script, brief=creator_brief)
-        if not parsed or not usable_research_topic(parsed.get("primary_topic")):
+        needs_repair = not parsed or not usable_research_topic(parsed.get("primary_topic"))
+        # A repair the writer's reserve withholds is the fallback's cause, not the answer.
+        repair_withheld = needs_repair and writer_reserve_reached()
+        if needs_repair and not repair_withheld:
             repaired = _parse(gemini_client.generate(
                 prompt=(
                     "Repair the semantic analysis of this creator source. Return compact JSON with primary_topic, "
@@ -89,7 +98,7 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
                     "remove grammar from the opening sentence or copy a sentence fragment as the topic. "
                     "A reflective quote has emotional_relatable intent. Preserve negation and contrasts. "
                     "Do not invent diagnoses, life events, outcomes, or visual subjects. Do not claim search volume.\n"
-                    f"Creator source:\n{source[:8000]}"
+                    f"Creator source:\n{prompt_source[:8000]}"
                 ),
                 system="Return valid JSON only. Every proposed concept needs a source anchor.",
                 max_tokens=2200, temperature=0.1, purpose="research",
@@ -100,6 +109,9 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
             parsed["source"] = "gemini"
             parsed["confidence"] = "semantic_inference"
             return parsed
+        if repair_withheld:
+            logger.info("Semantic research made no repair call: the request's remaining calls are the writer's.")
+            return {**_fallback(source, creator_brief), "fallback_reason": "gemini_writer_reserve"}
         logger.warning("Semantic Gemini response was unavailable or invalid; using local semantic fallback.")
 
     return _fallback(source, creator_brief)
@@ -186,7 +198,7 @@ def usable_research_topic(value: Any) -> bool:
 
 def refine_research_semantics(script: str, brief: dict[str, Any], previous_queries: list[dict[str, str]]) -> dict[str, Any]:
     """One bounded proposal of shorter concepts when initial searches have weak support."""
-    if not gemini_client.is_available():
+    if not gemini_client.is_available() or writer_reserve_reached():
         return {}
     source = _source_text(script, brief)
     raw = gemini_client.generate(
@@ -199,10 +211,26 @@ def refine_research_semantics(script: str, brief: dict[str, Any], previous_queri
             "(array of {cluster,candidates}), concept_evidence (array of {concept,source_phrase,relationship}). "
             "Every concept needs a verbatim source_phrase and direct/paraphrase/metaphor relationship. "
             "These are proposals, not claims of search volume.\n"
-            f"Previous searches: {json.dumps(previous_queries)}\nCreator source:\n{source[:8000]}"),
+            f"Previous searches: {json.dumps(previous_queries)}\nCreator source:\n{_prompt_source(script, brief)[:8000]}"),
         system="Return valid semantic JSON only.", max_tokens=1600, temperature=0.1, purpose="research")
     parsed = _parse(raw)
     return _ground_semantics(parsed, source, script=script, brief=brief) if parsed else {}
+
+
+def writer_reserve_reached() -> bool:
+    """Whether the request's Gemini allowance is down to the calls kept for the writer.
+
+    Research shares one allowance with the package writer and runs first, so
+    every research call (semantic analysis, its repair and refinement, search
+    opportunities) stops at the reserve instead of starving the writer into the
+    local fallback. Without a request allowance (scripts, tests) nothing is held back.
+    The allowance is the client's request-scoped budget; it has no public reader.
+    """
+    budget_var = getattr(gemini_client, "_REQUEST_BUDGET", None)
+    budget = budget_var.get() if budget_var is not None else None
+    if budget is None:
+        return False
+    return int(budget.max_calls) - int(budget.calls) <= get_settings().gemini_writer_reserved_calls
 
 
 def fallback_viewer_intent(source: str) -> str:
@@ -228,13 +256,21 @@ def _ground_semantics(
     unsupported diagnosis, history, relationship event, or audience problem.
     """
 
-    anchors = _ground_tokens(source)
+    content_source = _content_source_text(script, brief)
+    quote_content = quote_is_the_content(script, brief)
+    # The footage behind a quote grounds nothing: "solitary walker" became a
+    # quote Short's topic, then its searches and tags. Other content may well
+    # be about what is on screen, so its visuals stay anchors.
+    anchors = _ground_tokens(content_source if quote_content else source)
     validated_evidence = _validated_concept_evidence(
         value.get("concept_evidence"), source,
-        content_source=_content_source_text(script, brief),
+        content_source=content_source,
         visual_source=_clean((brief or {}).get("visual_requirements")),
     )
-    evidence_by_concept = {item["concept"].casefold(): item for item in validated_evidence}
+    evidence_by_concept = {
+        item["concept"].casefold(): item for item in validated_evidence
+        if not (quote_content and item["source_scope"] == "visual")
+    }
 
     def supported(item: Any) -> bool:
         clean = _clean(item)
@@ -267,14 +303,19 @@ def _ground_semantics(
         result["primary_topic"] = next((item for item in alternatives
             if usable_research_topic(item) and supported(item)
             and not re.match(r"(?i)^(?:how to|people|individuals|viewers)\b", item)), "")
-    if (brief or {}).get("exact_quote") or (brief or {}).get("on_screen_text"):
+    if quote_content:
         result["viewer_intent"] = "emotional_relatable"
     retained = {
         _clean(result.get("primary_topic")).casefold(),
         *(_clean(item).casefold() for field in ("secondary_topics", "entities", "audience", "search_intents") for item in result.get(field) or []),
         *(_clean(item).casefold() for cluster in clusters for item in cluster.get("candidates") or []),
     }
-    result["concept_evidence"] = [item for item in validated_evidence if item["concept"].casefold() in retained]
+    # Footage-only evidence stays on record as context, so the planner and the
+    # tag selector can recognise the concept it names for what it is.
+    result["concept_evidence"] = [
+        item for item in validated_evidence
+        if item["concept"].casefold() in retained or item["source_scope"] == "visual"
+    ]
     result["concept_evidence_validated"] = True
     return result
 
@@ -352,13 +393,49 @@ def _source_text(script: str, brief: dict[str, Any] | None) -> str:
     return "\n".join(_clean(part) for part in parts if _clean(part))
 
 
+def _prompt_source(script: str, brief: dict[str, Any] | None) -> str:
+    """What the model reads: the content, then the footage labelled as context.
+
+    The footage used to sit unlabelled among the creator's lines, and the
+    model made "solitary walker" a quote Short's primary topic.
+    """
+
+    source = _content_source_text(script, brief)
+    visual = _clean((brief or {}).get("visual_requirements"))
+    if visual and visual.casefold() not in source.casefold():
+        source += f"\nVisual context (presentation only; never the topic unless the creator says the video is about it): {visual}"
+    return source
+
+
+def quote_is_the_content(script: str, brief: dict[str, Any] | None) -> bool:
+    """Whether the video's content is its quote, so that the footage beside it grounds nothing.
+
+    A Short's quote is its content, and so is a quote the creator supplied
+    for a video without a chosen long-form format. A long-form script that
+    opens with a quote is about all of itself: read as the quote alone, a
+    talking head's three habits were lost from its research.
+    """
+
+    data = brief or {}
+    if not (_clean(data.get("exact_quote")) or _clean(data.get("on_screen_text"))):
+        return False
+    if is_short_video(script, data):
+        return True
+    provenance = data.get("field_provenance") or {}
+
+    def stated(field: str) -> bool:
+        return bool(_clean(data.get(field))) and (provenance.get(field) or {}).get("source") in (None, "creator_supplied")
+
+    return stated("exact_quote") and not stated("video_format")
+
+
 def _content_source_text(script: str, brief: dict[str, Any] | None) -> str:
     """Return subject/meaning evidence without treating supplied visuals as the topic."""
 
     data = brief or {}
     exact = _clean(data.get("exact_quote") or data.get("on_screen_text"))
     parts = [
-        exact or script,
+        exact if quote_is_the_content(script, data) else script,
         data.get("target_audience"), data.get("viewer_promise"), data.get("unique_angle"),
         data.get("creator_intent"), data.get("factual_claims"), data.get("content_constraints"),
     ]

@@ -41,8 +41,11 @@ class Settings(BaseSettings):
     youtube_api_key: str | None = None
     youtube_api_keys: str | None = None
     # A search.list call counts once against the daily search allowance for any
-    # page size up to 50; above 50 every search fails with HTTP 400.
-    youtube_max_results: int = Field(default=5, ge=1, le=50)
+    # page size up to 50 (above 50 every search fails with HTTP 400), and the
+    # page's statistics cost one videos.list and one channels.list call however
+    # long it is. A page of 25 costs what a page of 5 did and leaves the length
+    # and relevance filters something to keep.
+    youtube_max_results: int = Field(default=25, ge=1, le=50)
     youtube_max_research_queries: int = 5
     # Daily quota of each key's Google Cloud project (and the OAuth client's),
     # copied from Cloud Console: YouTube does not report what is left. search.list
@@ -88,6 +91,12 @@ class Settings(BaseSettings):
     # normally makes at most seven logical calls.
     gemini_request_max_calls: int = Field(default=12, ge=1, le=50)
     gemini_request_deadline_seconds: float = Field(default=300.0, ge=30.0, le=1800.0)
+    # Calls of that allowance kept for the package writer. Research (semantic
+    # analysis, its repair, search opportunities and refinement) runs first on
+    # the same allowance and makes no Gemini call once only this many are left,
+    # so it cannot starve the writer into the local fallback. An allowance no
+    # larger than this leaves research none.
+    gemini_writer_reserved_calls: int = Field(default=3, ge=0, le=10)
 
     # YouTube search suggestions: the demand signal (what viewers actually
     # type). Unofficial endpoint; bounded, cached, and fail-soft.

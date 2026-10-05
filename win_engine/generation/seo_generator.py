@@ -18,7 +18,7 @@ from win_engine.analysis.strategy_layer import build_content_graph_strategy
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.keyword_research import select_final_tags, synchronize_tag_evidence
 from win_engine.analysis.research_planner import brief_research_text
-from win_engine.analysis.source_cues import timestamp_line
+from win_engine.analysis.source_cues import source_quote, timestamp_line
 from win_engine.analysis.topic_lock import (
     is_junk_tag,
     extract_main_topic,
@@ -61,6 +61,10 @@ _PROVIDER_FALLBACK_CAUSES = {
     "gemini_invalid_response": "Gemini returned an unusable response",
     "gemini_truncated": "Gemini's response was cut off",
     "gemini_application_error": "The Gemini request failed",
+    # Research runs first on the same per-request allowance (it leaves the
+    # writer a reserve), and the writer's own repairs share it; the generic
+    # warning hid that the writer was refused a call.
+    "gemini_budget_exhausted": "This request's Gemini call allowance ran out before the writer produced a package",
 }
 
 
@@ -122,6 +126,9 @@ def generate_seo_suggestions(
     # "lessons" or "thoughts" made a startup talk "quotes", and then a Short
     # with #shorts and yt/shorts tags.
     short_form = is_short_content(script_text, creator_brief if isinstance(creator_brief, dict) else None)
+    # A quote Short's hashtags are #quotes and the quote's feeling, which
+    # viewers follow, rather than compounds coined from its tags.
+    short_quote = source_quote(script_text, creator_brief if isinstance(creator_brief, dict) else None) if short_form else ""
 
     intent = classify_intent(script_text)
     history_store = research.get("history_store")
@@ -186,7 +193,9 @@ def generate_seo_suggestions(
         creator_brief if isinstance(creator_brief, dict) else None,
     )
     if short_form:
-        locked_hashtags = focused_short_hashtags(locked_tags, casing)
+        # The writer's hashtags are proposals only once the source supports
+        # them: "#Heartbreak" on "Didn't I deserve the bare minimum?" is not.
+        locked_hashtags = focused_short_hashtags(locked_tags, casing, quote=short_quote, proposed=locked_hashtags)
     # Every description the creator can copy carries the chapters; a Short has none.
     chapters = [] if short_form else list(seo_package.get("chapters") or [])
     locked_description = format_upload_ready_description(
@@ -220,7 +229,9 @@ def generate_seo_suggestions(
         tag for tag in (refined.get("tags") or locked_tags) if not unsupported_risk_terms(tag, risk_source)
     ]
     keyword_research = synchronize_tag_evidence(keyword_research, locked_tags)
-    locked_hashtags = (focused_short_hashtags(locked_tags, casing)
+    locked_hashtags = (focused_short_hashtags(locked_tags, casing, quote=short_quote, proposed=filter_source_hashtags(
+                           refined.get("hashtags") or locked_hashtags, script_text,
+                           creator_brief if isinstance(creator_brief, dict) else None))
         if short_form
         else (refined.get("hashtags") or locked_hashtags))
     locked_hashtags = [tag for tag in locked_hashtags if not unsupported_risk_terms(tag, risk_source)]
@@ -255,6 +266,15 @@ def generate_seo_suggestions(
     )
     locked_title = gated["title"]
     locked_variants = gated["variants"]
+    # A tag or hashtag the final gate noted is dropped, never shipped; the
+    # evidence and the description's hashtag line follow the final lists.
+    if gated["tags"] != locked_tags:
+        locked_tags = list(gated["tags"])
+        keyword_research = synchronize_tag_evidence(keyword_research, locked_tags)
+    if gated["hashtags"] != locked_hashtags:
+        locked_hashtags = list(gated["hashtags"])
+        locked_description = format_upload_ready_description(
+            locked_description, locked_hashtags, category=category, topic=main_topic, chapters=chapters)
     final_gate = enforce_quality_target(final_gate, short_form=short_form)
     # The writer stage records its own verdict under this key; the package the
     # creator receives is the one judged here, after tag selection and refinement.
@@ -333,7 +353,7 @@ def generate_seo_suggestions(
             creator_brief if isinstance(creator_brief, dict) else None,
         )
         if short_form:
-            hashtags = focused_short_hashtags(tags, casing)
+            hashtags = focused_short_hashtags(tags, casing, quote=short_quote, proposed=hashtags)
         hashtags = [tag for tag in hashtags if not unsupported_risk_terms(tag, risk_source)]
         description = normalize_risk_terms(p.get("description", "") or "", source=risk_source)
         # Only English gets the topic-presence fallback; Tamil / Tanglish

@@ -10,6 +10,7 @@ import { PageSkeleton } from "@/components/common/States";
 import CreatorPage from "@/pages/Creator";
 
 const DashboardPage = lazy(() => import("@/pages/Dashboard"));
+const AiShortsPage = lazy(() => import("@/pages/AiShorts"));
 const HistoryPage = lazy(() => import("@/pages/History"));
 const ChannelPage = lazy(() => import("@/pages/Channel"));
 const IdeasPage = lazy(() => import("@/pages/Ideas"));
@@ -90,6 +91,7 @@ export function App() {
                 <Suspense fallback={<PageSkeleton />}>
                   <Routes>
                     <Route path="/dashboard" element={<DashboardPage />} />
+                    <Route path="/ai-shorts" element={<AiShortsPage />} />
                     <Route path="/history" element={<HistoryPage />} />
                     <Route path="/channel" element={<ChannelPage />} />
                     <Route path="/ideas" element={<IdeasPage />} />

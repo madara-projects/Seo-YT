@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
 from typing import Any
 
 from win_engine.ai_enhancement import find_content_similarity
 from win_engine.analysis.dynamic_thresholds import get_dynamic_kill_switch
+# The extractor's own word filter, so a phrase is found in a title the way the
+# extractor counted it there.
+from win_engine.analysis.keyword_extractor import _tokenize as extractor_words
 from win_engine.analysis.numbers import optional_number
 from win_engine.analysis.source_cues import is_short_duration
+from win_engine.analysis.text_tokens import unicode_words
 from win_engine.core.iso_duration import duration_seconds
 
 
@@ -82,28 +87,78 @@ def _keyword_gaps(
     keyword_signals: list[dict[str, Any]],
     youtube_results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    result_text = " ".join(
-        f"{item.get('title', '')} {item.get('description', '')}" for item in youtube_results
-    ).lower()
+    """Phrases of the creator's script that the sampled competitors leave unused.
+
+    A signal's mentions count the script and the competitor metadata together,
+    so a quote six competitor titles shared used to read as a six-mention "gap".
+    Only a phrase the script itself uses can be one: a gap is high when no
+    sampled result uses the phrase and medium when one result in a sample of
+    five or more does. Without a sample there is nothing to leave a phrase unused.
+    """
+
+    sample = len(youtube_results)
+    if not sample:
+        return []
 
     gaps: list[dict[str, Any]] = []
     for signal in keyword_signals:
         keyword = str(signal.get("keyword", "")).strip()
         mentions = int(signal.get("mentions", 0))
-        if not keyword or keyword in {"youtube", "video", "will", "what"}:
+        if not keyword or keyword in {"youtube", "video", "will", "what"} or mentions < 2:
             continue
-
-        result_mentions = result_text.count(keyword.lower())
-        if mentions >= 2 and result_mentions <= max(1, mentions):
-            gaps.append(
-                {
-                    "keyword": keyword,
-                    "gap_strength": "high" if result_mentions == 0 else "medium",
-                    "reason": "Present in your concept but underused in competitor metadata.",
-                }
-            )
+        per_result = [
+            _phrase_count(keyword, item.get("title")) + _phrase_count(keyword, item.get("description"))
+            for item in youtube_results
+        ]
+        if mentions - sum(per_result) < 1:
+            continue  # every mention came from the competitors, not from the script
+        using = sum(1 for count in per_result if count)
+        if using == 0:
+            strength = "high"
+            reason = f"Present in your script; none of the {sample} sampled competitor titles or descriptions use it."
+        elif using == 1 and sample >= 5:
+            strength = "medium"
+            reason = f"Present in your script; 1 of the {sample} sampled competitor titles or descriptions uses it."
+        else:
+            continue
+        gaps.append({"keyword": keyword, "gap_strength": strength, "reason": reason})
 
     return gaps[:6]
+
+
+def _phrase_count(phrase: str, text: object) -> int:
+    """How often a keyword signal's phrase occurs in one competitor title or description.
+
+    The extractor joins words after dropping stop words, so "people come life"
+    stands for "people come into your life" and is in no title as written; it
+    is counted in both spellings, as the extractor counted it. Whole words are
+    compared: a regex word boundary falls inside Indic words, before a vowel
+    sign, and found "प्यार" in "प्यारा".
+    """
+
+    target = unicode_words(phrase, min_length=1)
+
+    def occurrences(words: list[str]) -> int:
+        size = len(target)
+        return sum(1 for start in range(len(words) - size + 1) if words[start:start + size] == target) if size else 0
+
+    written = str(text or "")
+    return max(occurrences(unicode_words(written, min_length=1)), occurrences(extractor_words(written)))
+
+
+def _title_opening(title: object) -> str:
+    """The first three words of a title: the framing a copycat title repeats. "" when shorter."""
+
+    words = unicode_words(title)[:3]
+    return " ".join(words) if len(words) == 3 else ""
+
+
+def _repeated_openings(youtube_results: list[dict[str, Any]]) -> dict[str, int]:
+    """Each opening shared by sampled titles, with how many titles repeat it after the first."""
+
+    openings = Counter(_title_opening(item.get("title")) for item in youtube_results)
+    openings.pop("", None)
+    return {opening: count - 1 for opening, count in openings.items() if count >= 2}
 
 
 def _competition_meter(youtube_results: list[dict[str, Any]], language_context: dict[str, Any]) -> dict[str, Any]:
@@ -114,9 +169,10 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
             "reason": "No competitor data available.",
         }
 
-    repeated_title_patterns = sum(
-        1 for item in youtube_results if "30 days" in str(item.get("title", "")).lower()
-    )
+    sample = len(youtube_results)
+    # Titles that repeat another sampled title's opening. A count of '30 days'
+    # titles, left over from another niche, stood here before.
+    repeated_title_patterns = sum(_repeated_openings(youtube_results).values())
     # A hidden or unfetched subscriber count is unknown, not a small channel.
     subscriber_counts = [optional_number(item.get("subscriber_count")) for item in youtube_results]
     big_channel_count = sum(1 for count in subscriber_counts if count is not None and count >= 250000)
@@ -125,7 +181,9 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
         score for item in youtube_results[:5] if (score := optional_number(item.get("outlier_score"))) is not None
     ]
 
-    score = (repeated_title_patterns * 20) + (big_channel_count * 15)
+    # Shares of the sample, so a page of 25 results reads like a page of 5 did:
+    # every repeated opening or large channel in five results adds what it added.
+    score = round(60 * repeated_title_patterns / sample) + round(75 * big_channel_count / sample)
     if outlier_scores:
         average_outlier = sum(outlier_scores) / len(outlier_scores)
         if average_outlier > 100000:
@@ -145,7 +203,7 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
 
     if score >= 70:
         label = "SATURATED"
-        reason = "Large channels and repeated title patterns suggest heavy competition."
+        reason = "Large channels and repeated title openings suggest heavy competition."
     elif score >= 40:
         label = "COMPETITIVE"
         reason = "The topic has traction, but several established videos are already fighting for the click."
@@ -162,8 +220,9 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
         "confidence": "low",
         "evidence_state": "heuristic",
         "basis": (
-            f"Counts of '30 days' titles and 250K+ subscriber channels in {len(youtube_results)} sampled "
-            "results, plus the average outlier score of the first five; not a measurement of market size or demand."
+            f"Shares of the {sample} sampled results whose title repeats another's opening (the same opening "
+            "three words) or whose channel has 250K+ subscribers, plus the average outlier score of the first "
+            "five; not a measurement of market size or demand."
         ),
         "repeated_title_patterns": repeated_title_patterns,
         "big_channel_count": big_channel_count,
@@ -180,12 +239,14 @@ def _differentiation_plan(
     competition: dict[str, Any],
     youtube_results: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    repeated_30_days = sum(1 for item in youtube_results if "30 days" in str(item.get("title", "")).lower())
+    repeated_openings = _repeated_openings(youtube_results)
     repeated_shocking = sum(1 for item in youtube_results if "shocking" in str(item.get("title", "")).lower())
 
-    avoid_patterns: list[str] = []
-    if repeated_30_days >= 2:
-        avoid_patterns.append("Too many competitor titles lean on the same '30 days' structure.")
+    # The two most repeated openings; a title that starts the same way blends in.
+    avoid_patterns: list[str] = [
+        f"{repeats + 1} competitor titles open with \"{opening}\"; a title that starts the same way blends in."
+        for opening, repeats in sorted(repeated_openings.items(), key=lambda item: -item[1])[:2]
+    ]
     if repeated_shocking >= 2:
         avoid_patterns.append("Curiosity words like 'shocking' are already heavily used in this pocket.")
 
@@ -263,6 +324,10 @@ def _opportunity_score(
         "label": label,
         "confidence": breakdown["confidence"].upper(),
         "reason": "Weighted from current view velocity, competition room, keyword gaps, small-channel breakouts, and research relevance.",
+        # Every input describes the competitor sample, none the title: one score
+        # per run, the same for every package option of that run.
+        "scope": OPPORTUNITY_SCORE_SCOPE,
+        "varies_by_title": False,
         "components": {key: round(value, 2) for key, value in values.items()},
         "breakdown": breakdown,
     }
@@ -276,8 +341,10 @@ OPPORTUNITY_INPUTS = (
     ("small_channel_breakout", "Small-channel breakouts", 0.10),
     ("research_relevance", "Research relevance", 0.10),
 )
+OPPORTUNITY_SCORE_SCOPE = "per_run"
 OPPORTUNITY_SCORE_STATEMENT = (
-    "A local heuristic that weighs five signals from this idea's YouTube research. "
+    "A local heuristic that weighs five signals from this idea's YouTube research, computed once per run: "
+    "the title is not an input, so every package option in a run shares it. "
     "It is not a prediction of views, reach or click-through rate."
 )
 # Sources of an input: counts YouTube reported, a local rule applied to the
@@ -350,12 +417,13 @@ def _opportunity_breakdown(
             if velocity_count else "No top research video had a view velocity, so this counted as 0."
         ),
         "competition_room": (
-            f"100 minus the competition heuristic ({round(100.0 - values['competition_room'], 2):g}/100 from '30 days' titles, "
-            f"250K+ subscriber channels and outlier scores in {sampled})."
+            f"100 minus the competition heuristic ({round(100.0 - values['competition_room'], 2):g}/100 from repeated "
+            f"title openings, 250K+ subscriber channels and outlier scores in {sampled})."
             if competition_measured else "Competition was not measured, so this counted as 100."
         ),
         "keyword_gap": (
-            f"{len(keyword_gaps)} keyword(s) from your script that competitor titles and descriptions underuse, out of 6 counted."
+            f"{len(keyword_gaps)} phrase(s) of your script that none, or one, of the sampled competitor titles and "
+            "descriptions use, out of 6 counted."
             if sources["keyword_gap"] == HEURISTIC else "No keywords were extracted from your script, so this counted as 0."
         ),
         "small_channel_breakout": (
@@ -378,9 +446,12 @@ def _opportunity_breakdown(
     ]
 
     with_data = sum(1 for item in inputs if item["source"] != DEFAULT)
+    # Fewer than five sampled results read as medium confidence from two; a
+    # sample that small is low whatever the inputs.
+    small_sample = research_result_count is not None and research_result_count < 5
     if with_data == len(inputs) and top >= 3 and not warnings and (research_result_count or 0) >= 10:
         confidence = "high"
-    elif with_data >= 4 and top >= 2:
+    elif with_data >= 4 and top >= 2 and not small_sample:
         confidence = "medium"
     else:
         confidence = "low"
@@ -388,8 +459,9 @@ def _opportunity_breakdown(
         f" from {research_result_count} sampled result(s)" if research_result_count is not None else ""
     )
     return {
-        "version": "opportunity-heuristic-v1",
+        "version": "opportunity-heuristic-v2",
         "kind": "local_heuristic",
+        "scope": OPPORTUNITY_SCORE_SCOPE,
         "statement": OPPORTUNITY_SCORE_STATEMENT,
         "score": score,
         "inputs": inputs,
@@ -415,26 +487,29 @@ def _competitor_shadow(youtube_results: list[dict[str, Any]]) -> dict[str, Any]:
         }
 
     titles = [str(item.get("title", "")) for item in youtube_results]
+    # "for 7/30 days" titles, left over from another niche, no longer make an experiment.
     title_pattern_counts = {
-        "experiment": sum(1 for title in titles if any(token in title.lower() for token in ["i tried", "i tested", "for 7 days", "for 30 days"])),
+        "experiment": sum(1 for title in titles if any(token in title.lower() for token in ["i tried", "i tested"])),
         "search": sum(1 for title in titles if any(token in title.lower() for token in ["how to", "guide", "tutorial"])),
         "curiosity": sum(1 for title in titles if any(token in title.lower() for token in ["shocking", "secret", "truth", "mistake"])),
     }
-    dominant_title_pattern = max(title_pattern_counts, key=title_pattern_counts.get)
+    dominant_title_pattern = _dominant(title_pattern_counts)
 
     hook_pattern_counts = {
         "first_person": sum(1 for title in titles if title.lower().startswith("i ")),
         "how_to": sum(1 for title in titles if title.lower().startswith("how to")),
         "question": sum(1 for title in titles if "?" in title),
     }
-    dominant_hook_pattern = max(hook_pattern_counts, key=hook_pattern_counts.get)
+    dominant_hook_pattern = _dominant(hook_pattern_counts)
 
     if dominant_title_pattern == "experiment":
         differentiation = "Keep the experiment angle, but narrow the promise or conflict so it does not blend into the same repeated challenge pattern."
     elif dominant_title_pattern == "search":
         differentiation = "Avoid generic tutorial phrasing and lead with a more specific or surprising outcome."
-    else:
+    elif dominant_title_pattern == "curiosity":
         differentiation = "Reduce generic curiosity phrasing and make the payoff more concrete."
+    else:
+        differentiation = "No one title pattern dominates; lead with the most specific payoff your video delivers."
 
     return {
         "similar_video_count": len(youtube_results),
@@ -442,6 +517,13 @@ def _competitor_shadow(youtube_results: list[dict[str, Any]]) -> dict[str, Any]:
         "dominant_hook_pattern": dominant_hook_pattern,
         "recommended_differentiation": differentiation,
     }
+
+
+def _dominant(counts: dict[str, int]) -> str:
+    """The most frequent pattern, or "other" when no title has any: max() of zeros named the first."""
+
+    best = max(counts, key=counts.get)
+    return best if counts[best] else "other"
 
 
 def _format_lock_in(

@@ -23,10 +23,28 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    # Ceilings, so a runaway request or leak slows this app instead of the machine.
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 256
     # The snapshot collector waits up to 15 s for a YouTube call in progress.
     stop_grace_period: 30s
     restart: unless-stopped
   redis:
     image: redis:7.4.11-alpine
     container_name: youtube-win-engine-redis
+    # Only a research cache: least-recently-used entries make room, so a full
+    # cache evicts instead of failing writes or reaching the memory ceiling.
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    # Not published to the host; only win-engine reaches it on this network.
+    # As the image's own redis user it needs no capabilities, and it writes
+    # only to its /data volume.
+    user: redis
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 64
     restart: unless-stopped

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from win_engine.analysis.generation_quality import (
+    apply_quality_gate,
     evaluate_package_quality,
     filter_source_hashtags,
     is_silent_quote_only_short,
@@ -22,19 +23,22 @@ def _silent_quote_brief(quote: str) -> dict[str, str]:
 class SourceFidelityTests(unittest.TestCase):
     def test_silent_misunderstood_quote_rejects_fabricated_advice_in_every_field(self):
         quote = "Being misunderstood is the price we pay for being genuine."
-        gate = evaluate_package_quality(
-            {
-                "title": "Coping with being misunderstood #shorts",
-                "variants": ["Being misunderstood without losing yourself #shorts"],
-                "description": f"{quote}\n\nWe break down practical tips and common questions about how to cope.",
-                "tags": ["coping with being misunderstood", "being genuine"],
-                "hashtags": ["#shorts", "#authenticity"],
-            }, script=quote, creator_brief=_silent_quote_brief(quote),
-        )
+        package = {
+            "title": "Coping with being misunderstood #shorts",
+            "variants": ["Being misunderstood without losing yourself #shorts"],
+            "description": f"{quote}\n\nWe break down practical tips and common questions about how to cope.",
+            "tags": ["coping with being misunderstood", "being genuine"],
+            "hashtags": ["#shorts", "#authenticity"],
+        }
+        gate = evaluate_package_quality(package, script=quote, creator_brief=_silent_quote_brief(quote))
         flagged = {(item["field"], item["code"]) for item in [*gate["issues"], *(issue for rejected in gate["rejected_candidates"] for issue in rejected["issues"])]}
         self.assertIn(("title", "unsupported_instructional_framing"), flagged)
         self.assertIn(("description", "unsupported_instructional_framing"), flagged)
-        self.assertIn(("tags", "unsupported_instructional_framing"), flagged)
+        # Tags are advisory: the advice tag is still caught, as a note that
+        # removes it from the package rather than failing the package.
+        tag_notes = {(item["field"], item["code"]) for item in gate["warnings"]}
+        self.assertIn(("tags", "unsupported_instructional_framing"), tag_notes)
+        self.assertNotIn("coping with being misunderstood", apply_quality_gate(package, gate)["tags"])
         self.assertTrue(gate["silent_quote_only_checked"])
 
     def test_other_silent_quote_rejects_counseling_and_explanation_framing(self):

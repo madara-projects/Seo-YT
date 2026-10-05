@@ -19,9 +19,9 @@
 **/.DS_Store
 **/Thumbs.db
 
-# Secrets and credentials: never baked into an image layer.
-.env
-.env.*
+# Secrets and credentials: never baked into an image layer, wherever they sit.
+**/.env
+**/.env.*
 **/credentials.json
 **/client_secret*.json
 **/token*.json

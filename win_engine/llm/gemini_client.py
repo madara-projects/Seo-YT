@@ -131,7 +131,10 @@ def parse_json_object(raw: str) -> dict[str, Any] | None:
         for attempt in (candidate, re.sub(r",\s*([}\]])", r"\1", candidate)):
             try:
                 value = json.loads(attempt)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
+                # Malformed (JSONDecodeError is a ValueError), an integer past
+                # Python's 4300-digit limit (a bare ValueError) or nested past
+                # the parser's depth limit: no usable object either way.
                 continue
             if isinstance(value, dict):
                 return value

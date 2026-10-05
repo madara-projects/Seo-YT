@@ -1,6 +1,7 @@
 """Links, snapshots and cohorts keep evidence and report only what was measured."""
 from __future__ import annotations
 
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -315,38 +316,83 @@ class StartupTests(unittest.TestCase):
             finally:
                 connection.close()
 
-    def test_a_new_database_has_the_same_version_11_schema_as_a_migrated_one(self):
-        def schema(path: Path) -> tuple[set, list, list]:
-            connection = sqlite3.connect(path)
-            try:
-                names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'index')")}
-                snapshot_columns = connection.execute("PRAGMA table_info(video_performance_snapshots)").fetchall()
-                versions = connection.execute("SELECT version, description FROM schema_migrations WHERE version = 11").fetchall()
-                return names, snapshot_columns, versions
-            finally:
-                connection.close()
+    @staticmethod
+    def _schema(path: Path) -> dict:
+        """Every table's columns in order, foreign keys, indexes and CHECKs, with the version and the last migration."""
+        connection = sqlite3.connect(path)
+        try:
+            tables = dict(
+                connection.execute(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).fetchall()
+            )
+            described = {}
+            for table, table_sql in tables.items():
+                indexes = {}
+                for _, name, unique, origin, partial in connection.execute(f"PRAGMA index_list('{table}')"):
+                    columns = [row[2] for row in connection.execute(f"PRAGMA index_info('{name}')")]
+                    sql = connection.execute("SELECT sql FROM sqlite_master WHERE name = ?", (name,)).fetchone()
+                    indexes[name] = (unique, origin, partial, columns, " ".join((sql[0] or "").split()) if sql else None)
+                described[table] = {
+                    # (name, type, notnull, default, pk), in column order.
+                    "columns": [tuple(row[1:]) for row in connection.execute(f"PRAGMA table_info('{table}')")],
+                    # (table, from, to, on_update, on_delete, match)
+                    "foreign_keys": sorted(tuple(row[2:8]) for row in connection.execute(f"PRAGMA foreign_key_list('{table}')")),
+                    "indexes": indexes,
+                    # The whole definition, so CHECK constraints are compared too.
+                    "sql": " ".join(re.sub(r"\s*([(),])\s*", r"\1", table_sql or "").split()),
+                }
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            latest = connection.execute(
+                "SELECT version, description FROM schema_migrations ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            return {"tables": described, "user_version": version, "latest_migration": tuple(latest)}
+        finally:
+            connection.close()
+
+    def test_a_new_database_has_the_same_version_12_schema_as_a_migrated_one(self):
+        """Every table, column (in order), index and foreign key: from version 11 and from the Phase 1 layout."""
+        from test_phase1_migrations import Phase1MigrationTests
 
         with tempfile.TemporaryDirectory() as folder:
             new_path = Path(folder) / "new.db"
             migrations.prepare_database(str(new_path))
-            migrated_path = Path(folder) / "v10.db"
-            migrations.prepare_database(str(migrated_path))
-            connection = sqlite3.connect(migrated_path)
-            connection.execute("DROP TABLE youtube_quota_usage")
-            connection.execute("DROP TABLE youtube_studio_tests")
-            connection.execute("ALTER TABLE video_performance_snapshots DROP COLUMN traffic_sources_json")
-            connection.execute("DELETE FROM schema_migrations WHERE version = 11")
-            connection.execute("PRAGMA user_version = 10")
+            fresh = self._schema(new_path)
+            self.assertEqual((fresh["user_version"], fresh["latest_migration"]), (12, (12, migrations._V12_DESCRIPTION)))
+            self.assertTrue({"youtube_quota_usage", "youtube_studio_tests", "ai_short_plans"} <= set(fresh["tables"]))
+            self.assertIn("idx_studio_tests_run", fresh["tables"]["youtube_studio_tests"]["indexes"])
+            self.assertIn("idx_ai_short_plans_run", fresh["tables"]["ai_short_plans"]["indexes"])
+            self.assertIn("traffic_sources_json", [column[0] for column in fresh["tables"]["video_performance_snapshots"]["columns"]])
+            self.assertEqual([column[0] for column in fresh["tables"]["ai_short_plans"]["columns"]], [
+                "id", "analysis_run_id", "quote", "language", "parts", "plan_json",
+                "generation_source", "created_at", "updated_at",
+            ])
+            self.assertEqual(
+                fresh["tables"]["ai_short_plans"]["foreign_keys"],
+                [("analysis_runs", "analysis_run_id", "id", "NO ACTION", "CASCADE", "NONE")],
+            )
+
+            # From version 11: the step this release adds.
+            v11_path = Path(folder) / "v11.db"
+            migrations.prepare_database(str(v11_path))
+            connection = sqlite3.connect(v11_path)
+            connection.execute("DROP TABLE ai_short_plans")
+            connection.execute("DELETE FROM schema_migrations WHERE version = 12")
+            connection.execute("PRAGMA user_version = 11")
             connection.commit()
             connection.close()
+            result = migrations.prepare_database(str(v11_path))
+            self.assertEqual((result.old_version, result.new_version), (11, 12))
+            self.assertEqual(self._schema(v11_path), fresh)
 
-            result = migrations.prepare_database(str(migrated_path))
-            self.assertEqual((result.old_version, result.new_version), (10, 11))
-            new_names, new_columns, new_versions = schema(new_path)
-            self.assertTrue({"youtube_quota_usage", "youtube_studio_tests", "idx_studio_tests_run"} <= new_names)
-            self.assertIn("traffic_sources_json", [column[1] for column in new_columns])
-            self.assertEqual(new_versions, [(11, migrations._V11_DESCRIPTION)])
-            self.assertEqual(schema(migrated_path)[:2], (new_names, new_columns))
+            # From version 0, the Phase 1 layout, through every step. A column
+            # a step appends (owned_video_snapshots.channel_id) must sit where a
+            # new database puts it too.
+            legacy_path = Path(folder) / "legacy.db"
+            Phase1MigrationTests._create_v0_database(legacy_path)
+            result = migrations.prepare_database(str(legacy_path), backup_before_migration=False)
+            self.assertEqual((result.old_version, result.new_version), (0, 12))
+            self.assertEqual(self._schema(legacy_path), fresh)
 
     def test_old_backups_are_pruned(self):
         with tempfile.TemporaryDirectory() as folder:

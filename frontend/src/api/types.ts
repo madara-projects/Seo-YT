@@ -250,6 +250,20 @@ export interface PacingAnalysis {
   recommendation?: string | null;
 }
 
+/**
+ * Added to a run's saved payload by the AI Shorts page (`AiShortsStore.save_plan`),
+ * beside `source_page: "ai_shorts"`, so History can tell the package apart and
+ * find its Flow prompts again.
+ */
+export interface AiShortsRunMarker {
+  /** The plan kept on this device; null for a package synced from another device, whose plan stayed there. */
+  plan_id?: number | null;
+  parts?: number;
+  total_seconds?: number | null;
+  language?: string;
+  generation_source?: string;
+}
+
 /** The full `/analyze` response as the Creator workflow consumes it. */
 export interface AnalyzeResponse {
   title: string;
@@ -263,6 +277,9 @@ export interface AnalyzeResponse {
   generation_source?: "gemini" | "fallback" | string;
   research_warnings?: string[];
   history_run_id?: number;
+  /** "ai_shorts" on a payload saved from the AI Shorts page; absent on a Creator run. */
+  source_page?: string;
+  ai_shorts?: AiShortsRunMarker | null;
 
   creator_brief?: CreatorBrief;
   research_queries?: ResearchQuery[];

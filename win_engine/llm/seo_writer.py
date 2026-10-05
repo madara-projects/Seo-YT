@@ -21,12 +21,19 @@ from win_engine.analysis.generation_quality import (
     is_short_content,
     is_silent_quote_only_short,
     narrates_process,
+    safe_quote_title,
     source_requires_noninstructional_framing,
     source_withholds_message_content,
     strip_process_narration,
     strip_production_notes,
     # The quality gate judges repetition with this same measure.
     title_similarity as _title_similarity,
+)
+from win_engine.analysis.keyword_research import (
+    MAX_LONG_TAG_CHARS,
+    MAX_SHORT_TAG_CHARS,
+    natural_tag_phrase,
+    tag_length,
 )
 from win_engine.analysis.source_cues import source_quote
 from win_engine.analysis.topic_lock import normalize_hashtag, restore_source_casing, source_casing_map
@@ -393,10 +400,10 @@ def _build_user_prompt(
     previous_package: Optional[dict[str, Any]] = None,
 ) -> str:
     short_title_rule = (
-        "If this package is for a YouTube Short, the final upload-ready title MUST contain #shorts exactly once. "
-        "This package is a YouTube Short, so every title variant must follow the same rule. "
-        "Use one or at most two natural, semantically relevant emojis when the "
-        "mood or visual supports them; do not recycle a fixed emoji template."
+        "This package is a YouTube Short. YouTube detects a Short by its format, so #shorts in the title is "
+        "optional: never required, and at most once at the end. The description's hashtags carry #shorts first. "
+        "An emoji is optional too: use at most one that matches the feeling the quote or video carries, never "
+        "one that describes the footage, and do not recycle a fixed emoji template."
         if is_short_content(script, creator_brief)
         else
         "This is not identified as a YouTube Short. Do not add #shorts to the title or variants. "
@@ -411,11 +418,12 @@ def _build_user_prompt(
             "- This is a silent quote-only Short. Research may expand semantic vocabulary, but it must never claim "
             "the video teaches, explains, demonstrates, answers questions, gives advice, practical tips, coping steps, "
             "or a guide unless that content is explicitly in the creator source. Keep the description reflective and faithful.\n"
-            "- Every quote-Short title must complement the on-screen quote instead of copying, truncating, or lightly "
-            "rephrasing it. Keep at least one unmistakable source concept in each title, but add a distinct curiosity or "
-            "resonance angle. For example, a quote connecting grief, silence, and absence needs a title about that same "
-            "relationship; it must not become coping advice or a story about someone leaving. Do not package a reflective "
-            "quote as an explainer with openings such as 'Understanding...' or 'Exploring the...'.\n"
+            "- A quote-Short title keeps the quote's meaning whole: the quote itself (when it fits 70 characters), its "
+            "punchline clause, or new words that carry the same idea. Keep at least one unmistakable source concept in "
+            "each title. Never cut the quote mid-phrase, never end a title with '...', never stop before the quote's "
+            "turn, and never reverse what it says. A quote connecting grief, silence, and absence needs a title about "
+            "that same relationship; it must not become coping advice or a story about someone leaving. Do not package "
+            "a reflective quote as an explainer with openings such as 'Understanding...' or 'Exploring the...'.\n"
             "- In the description, reproduce the exact quote once, then describe only its supported reflection. Never call "
             "the quote a lesson and never say the Short teaches, explains, helps viewers cope, or provides healing.\n"
         )
@@ -469,18 +477,21 @@ def _build_user_prompt(
         # A bilingual title needs room for both the Tamil and English phrase.
         title_length_rule = "45-85 characters"
     elif is_short_content(script, creator_brief):
-        title_length_rule = "35-65 characters"
+        title_length_rule = "30-70 characters"
     else:
         title_length_rule = "45-65 characters"
     if quote and is_short_content(script, creator_brief):
         # Asked for a SEARCH and a BROWSE slot, a live quote Short came back as
         # the quote's opening words and echoes of it, and only two passed.
+        # Asked to "never" repeat most of the quote while keeping its words,
+        # ten titles in a row were rejected and a cut fallback shipped.
         variants_rule = (
-            "- return exactly five distinct variants, each a different angle on the quote: 1) its core line in new "
-            "words, 2) speaking to the viewer, 3) naming the feeling it carries, 4) a question the viewer asks "
-            "themselves, 5) another truthful angle. Keep at least one of the quote's own key words in every title, "
-            "in the form the quote uses it, but never most of the quote: a title that repeats the quote or reads "
-            "almost like another variant is discarded"
+            "- return exactly five distinct variants, each a different angle on the quote: 1) the quote's punchline "
+            "clause, or the whole quote when it fits 70 characters, word for word; 2) its core line in new words; "
+            "3) speaking to the viewer; 4) naming the feeling it carries; 5) a question the viewer asks themselves. "
+            "Keep at least one of the quote's own key words in every title, in the form the quote uses it. A title "
+            "that cuts the quote mid-phrase, ends in '...', stops before the quote's turn, reverses its meaning, or "
+            "reads almost like another variant is discarded"
         )
     else:
         variants_rule = (
@@ -518,15 +529,15 @@ Constraints:
 - do not write chapters or timestamps in the description: times are unknown before the cut, and the creator's own chapter list is added to the description separately
 - tags must be natural phrases that a person might type into search. Preserve contractions such as "didn't"; never make a tag by deleting grammar words from a quote, and never return a bag of unrelated quote words
 - research-backed SEO targets are candidates, not mandatory tags. Do not copy a title, exact quote, or competitor title into tags; use only targets that accurately describe the video
-- tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". For a Short, include the creator-preferred platform tags "yt" and "shorts" as two separate tags; do not include youtube shorts, viral shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
-- hashtags must be topic-specific. Include #shorts for a Short, then use up to two hashtags derived from the strongest validated subject tags; avoid generic #quotes, #sad, #viral, #trending, and #fyp
+- tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag, each 30 characters or fewer, never a fragment of the brief's notes. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". For a Short, include the creator-preferred platform tag "shorts"; do not include yt, youtube shorts, viral shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
+- hashtags: #shorts first for a Short, then up to two hashtags viewers actually follow: for a quote Short #quotes and one established feeling or niche hashtag (#heartbreak, #love, #healing, #SelfWorth, #SadLoveQuotes); for other videos the strongest validated subject tags. A hashtag is a real word or a phrase of at most three words; never coin a longer PascalCase phrase. Avoid #viral, #trending, and #fyp
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Return only tags justified by this specific video; do not pad the list to a fixed count and do not add generic viral/trending filler
 - for long-form, aim for 8-12 tags when the video supports them: the exact main search phrase first, then its closest real-search variants (prefer the search phrases listed above), then named products or entities written exactly as the source writes them, including model numbers (for example "galaxy s25 ultra review")
 - a researched YouTube title or result phrase is evidence only, never text to copy into a title, description, or tag. Research may improve wording for the same source-supported subject, but may not introduce a new situation, entity, relationship, product, lesson, or claim
 - a package that is merely valid is not enough: prefer a short, natural, source-faithful result over a generic, keyword-stuffed, or invented one
 - research may inform topic vocabulary, but it cannot invent what the video teaches, explains, demonstrates, or advises
 - do not infer a time of day, darkness, empty streets, weather, spoken narration, peace, comfort, or healing unless the creator source explicitly supplies it
-{silent_quote_rule}{non_instructional_rule}{undisclosed_message_rule}- title: {title_length_rule}, engaging, and matched to the actual content category. Unless this is a quote video, put the main search phrase a viewer would type within the first five words, and make every title a complete, grammatical phrase
+{silent_quote_rule}{non_instructional_rule}{undisclosed_message_rule}- title: {title_length_rule}, engaging, and matched to the actual content category. Prefer the most specific truthful title: the one that names what this exact video delivers. Unless this is a quote video, include the main search phrase a viewer would type where it reads naturally (early is better), but never force it into the first words at the cost of a more specific, truthful title, and never lead with a minor section of the video. Make every title a complete, grammatical phrase
 {variants_rule}
 - each variant must use a materially different opening, sentence structure, and psychological angle. Avoid stock openings such as "A quiet reminder", "The painful reality", and repeated "When you realize" templates. Do not repeat recent-title patterns supplied above
 - use idiomatic language, but never infer "one-sided effort", exhaustion, abandonment, or another relationship dynamic unless the creator source states it
@@ -538,8 +549,11 @@ Constraints:
 _extract_json = gemini_client.parse_json_object
 
 
-def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Shape-check + light coercion. Returns None on missing required fields."""
+def _validate(pkg: dict[str, Any], *, short: bool = False) -> Optional[dict[str, Any]]:
+    """Shape-check + light coercion. Returns None on missing required fields.
+
+    ``short`` gives tags a Short's length (see clean_tags).
+    """
     # The model can echo HTML entities from competitor titles ("&amp;").
     # str(None) made the title "None", so only real text counts.
     def text(value: Any) -> str:
@@ -559,8 +573,8 @@ def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
         title = text(pkg["title"])
         variants = _unique_text(texts(pkg["variants"]))
         description = text(pkg["description"])
-        tags = _unique_text([tag.lower().lstrip("#") for tag in texts(pkg["tags"], r",")])
-        hashtags = _unique_text(texts(pkg["hashtags"], r",|\s+(?=#)"))
+        tags = clean_tags(texts(pkg["tags"], r"[,\n]"), short=short)
+        hashtags = _unique_text(texts(pkg["hashtags"], r"[,\n]|\s+(?=#)"))
     except (KeyError, TypeError, AttributeError):
         return None
     # A sparse source may honestly have no defensible search tag. The final
@@ -576,6 +590,45 @@ def _validate(pkg: dict[str, Any]) -> Optional[dict[str, Any]]:
         "tags": tags[:12],
         "hashtags": hashtags[:3],
     }
+
+
+# YouTube's own limit per tag is longer, but a Short's tag over 30 letters is
+# a sentence, not a search; a long-form tag may name a whole search ("samsung
+# galaxy s25 ultra review"), up to 60. YouTube allows 500 characters of tags
+# in all, counting the quotes it puts around a tag with a space and the commas.
+MAX_TAG_CHARS = MAX_SHORT_TAG_CHARS
+MAX_TAGS_TOTAL_CHARS = 500
+
+
+def clean_tags(values: list[str], *, short: bool = False) -> list[str]:
+    """Upload-ready tags from what the model wrote.
+
+    Two published videos carried a trailing comma inside every tag ("deep
+    quotes,") because items were only whitespace-stripped. Each item is split
+    on commas and newlines, stripped of wrapping quotes, hashes and trailing
+    punctuation, lowercased, and kept once when it is a natural phrase within
+    the format's length (30 letters for a Short, 60 otherwise) and the tags
+    still fit YouTube's 500-character total.
+    """
+
+    limit = MAX_SHORT_TAG_CHARS if short else MAX_LONG_TAG_CHARS
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    total = -1  # n tags carry n - 1 commas
+    for value in values:
+        for piece in re.split(r"[,\n;|]", str(value or "")):
+            tag = piece.strip().strip("\"'“”‘’").strip().lstrip("#").strip()
+            tag = re.sub(r"[\s.,;:!?\-–—]+$", "", tag).strip().strip("\"'“”‘’")
+            tag = re.sub(r"\s+", " ", tag).lower()
+            if not tag or tag in seen or tag_length(tag) > limit or not natural_tag_phrase(tag):
+                continue
+            size = len(tag) + (2 if " " in tag else 0) + 1
+            if total + size > MAX_TAGS_TOTAL_CHARS:
+                continue
+            total += size
+            seen.add(tag)
+            cleaned.append(tag)
+    return cleaned
 
 
 _PHRASE_REPLACEMENTS = {
@@ -626,21 +679,15 @@ def _remove_unsupported_description_sentences(description: str, source: str) -> 
     return "\n\n".join(paragraphs).strip()
 
 
-def _safe_quote_title(quote: str, *, short: bool = True) -> str:
-    is_question = "?" in quote
-    clauses = [part.strip(" .,:;!?—–-") for part in re.split(r"\.{2,}|[;—–]", quote) if part.strip()]
-    focus = clauses[-1] if clauses else quote
-    focus = focus[:1].upper() + focus[1:]
-    # A quote in a long-form story is not a Short.
-    suffix = " #Shorts" if short else ""
-    if len(focus) + len(suffix) <= 70:
-        return focus.rstrip(".!?") + ("?" if is_question else "") + suffix
-    words: list[str] = []
-    for word in focus.split():
-        if len(" ".join([*words, word])) > 58:
-            break
-        words.append(word)
-    return " ".join(words).rstrip(".,;:!?") + "…" + suffix
+def _safe_quote_title(quote: str) -> str:
+    """The quote, whole or its best complete span, when every written title was unsafe.
+
+    It used to cut the quote at 58 characters with "…" and add "#Shorts";
+    #shorts is optional in a title and never injected. The span is chosen
+    with the quality gate's own title checks.
+    """
+
+    return safe_quote_title(quote) or quote.strip()
 
 
 def _sanitize_generated_package(
@@ -693,7 +740,7 @@ def _sanitize_generated_package(
             continue
         safe_titles.append(title)
     if not safe_titles and quote:
-        safe_titles = [_safe_quote_title(quote, short=is_short_content(script, creator_brief))]
+        safe_titles = [_safe_quote_title(quote)]
     if safe_titles:
         cleaned["title"] = safe_titles[0]
         cleaned["variants"] = safe_titles[:5]
@@ -767,7 +814,7 @@ def generate_one(
         gemini_client.set_last_generation_diagnostic(provider_trace)
         _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
         return None
-    validated = _validate(parsed)
+    validated = _validate(parsed, short=is_short_content(script, creator_brief))
     if not validated:
         logger.warning("Gemini response was rejected because required package fields were missing or invalid.")
         provider_trace["status"] = "gemini_invalid_response"

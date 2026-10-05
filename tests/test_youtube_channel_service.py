@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 from datetime import datetime, timezone
@@ -382,6 +384,80 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
         # The collector plans only the videos of the channel connected here.
         self.assertEqual(self.store.due_snapshot_links(channel_id="UC-owner"), [])
         self.assertEqual(len(self.store.due_snapshot_links(channel_id="UC-other")), 1)
+
+    def test_a_collector_run_and_a_manual_refresh_of_one_video_query_each_window_once(self):
+        # On 25 September the 24h and 7d windows of a 1 September video are due;
+        # two refreshes meeting on it used to query both windows each.
+        link = self.link("windowvid08", "2026-09-01T00:00:00+00:00")
+        ready = threading.Barrier(2)
+        queries: list[tuple] = []
+        failures: list[BaseException] = []
+
+        def query(_analytics, start, end, _metrics, **_kwargs):
+            queries.append((start.isoformat(), end.isoformat()))
+            time.sleep(0.05)  # the first caller is still waiting on YouTube when the second arrives
+            return {"views": 12}
+
+        def refresh() -> None:
+            try:
+                ready.wait(timeout=5)
+                self.service.refresh_linked_video_performance(link, collect_current=False)
+            except BaseException as exc:  # noqa: BLE001 - reported by the test thread
+                failures.append(exc)
+
+        with (
+            patch.object(youtube_channel, "datetime", _FrozenDatetime),
+            patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
+            patch(BUILD, side_effect=lambda name, *args, **kwargs: self.youtube("UC-owner") if name == "youtube" else MagicMock()),
+            patch.object(self.service, "_query", side_effect=query),
+            patch.object(self.service, "_traffic_sources", return_value=None),
+        ):
+            threads = [threading.Thread(target=refresh) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        self.assertEqual(failures, [])
+        # Published 1 September 00:00 UTC, which is 31 August in Pacific time: each window once.
+        self.assertEqual(sorted(queries), [("2026-08-31", "2026-09-01"), ("2026-08-31", "2026-09-07")])
+        self.assertEqual(self.store.snapshot_window_state("windowvid08", "24h")["status"], "complete")
+        self.assertEqual(self.store.snapshot_window_state("windowvid08", "7d")["status"], "complete")
+
+    def test_a_collector_refresh_that_waited_reads_the_windows_again_rather_than_its_plan(self):
+        # Deterministic: the collector planned both windows, then waits on the lock
+        # while the refresh holding it completes them. Its plan is stale by then.
+        link = self.link("windowvid09", "2026-09-01T00:00:00+00:00")
+        results: list[dict] = []
+        failures: list[BaseException] = []
+
+        def collect() -> None:
+            try:
+                results.append(self.service.refresh_linked_video_performance(
+                    link, force=False, collect_current=False, windows=["24h", "7d"],
+                ))
+            except BaseException as exc:  # noqa: BLE001 - reported by the test thread
+                failures.append(exc)
+
+        lock = youtube_channel._refresh_lock("windowvid09")
+        with (
+            patch.object(youtube_channel, "datetime", _FrozenDatetime),
+            patch(BUILD) as build_client,
+            patch.object(self.service, "_query") as query,
+        ):
+            with lock:
+                collector = threading.Thread(target=collect)
+                collector.start()
+                for window in ("24h", "7d"):
+                    self.store.record_performance_snapshot("windowvid09", 24, views=12, snapshot_window=window)
+            collector.join(timeout=10)
+
+        self.assertFalse(collector.is_alive())
+        self.assertEqual(failures, [])
+        build_client.assert_not_called()
+        query.assert_not_called()
+        self.assertEqual(results[0]["captured"], [])
+        self.assertIn("no YouTube API call", results[0]["message"])
 
 
 class UpstreamErrorTests(unittest.TestCase):

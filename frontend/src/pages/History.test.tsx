@@ -413,4 +413,76 @@ describe("HistoryPage", () => {
     expect(await screen.findByText("Database unavailable.")).toBeInTheDocument();
     expect(screen.getByText("Request ID: req-42")).toBeInTheDocument();
   });
+
+  /** A package the AI Shorts page wrote: its saved payload names the plan it came from. */
+  const AI_SHORTS_PACKAGE = {
+    title: "Three Morning Habits",
+    description: "A quote Short.",
+    tags: ["deep quotes,", "life quotes,"],
+    hashtags: ["#shorts,", "#quotes"],
+    source_page: "ai_shorts",
+    ai_shorts: { plan_id: 31, parts: 2, total_seconds: 16, language: "english", generation_source: "gemini" },
+  };
+
+  function mockAiShortsRun() {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("/api/history/runs?")) {
+        return jsonResponse({
+          runs: [{ ...RUNS[0], source_page: "ai_shorts", ai_shorts: { plan_id: 31, parts: 2, total_seconds: 16 } }, RUNS[1]],
+        });
+      }
+      if (String(url).endsWith("/api/history/runs/1")) {
+        return jsonResponse({ id: 1, title: "Three Morning Habits", created_at: "2026-09-22T17:53:19Z", package: AI_SHORTS_PACKAGE });
+      }
+      return jsonResponse({});
+    });
+  }
+
+  it("marks a package written on the AI Shorts page and links back to its plan", async () => {
+    mockAiShortsRun();
+    const user = userEvent.setup();
+    renderPage();
+
+    // Checked before the detail opens: the open sheet hides the list from assistive tech.
+    const rows = await screen.findAllByTestId("history-row");
+    expect(within(rows[0]!).getByRole("link", { name: "Open AI Short for Three Morning Habits" })).toHaveAttribute(
+      "href",
+      "/ai-shorts?plan=31",
+    );
+    expect(within(rows[1]!).queryByText("AI Shorts")).not.toBeInTheDocument();
+
+    await user.click(within(rows[0]!).getByRole("button", { name: "View package" }));
+    const detail = await screen.findByTestId("history-detail");
+    expect(await within(detail).findByText("AI Shorts · 2 parts · 16 s")).toBeInTheDocument();
+    expect(within(detail).getByRole("link", { name: "Open AI Short" })).toHaveAttribute("href", "/ai-shorts?plan=31");
+  });
+
+  it("copies a saved package's tags as one comma-separated line with no comma inside a tag", async () => {
+    mockAiShortsRun();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    // user-event installs its own clipboard stub, so the mock goes in after it.
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      renderPage("/history?run=1");
+      const detail = await screen.findByTestId("history-detail");
+      await within(detail).findByText("A quote Short.");
+      const tagsSection = within(detail).getByRole("heading", { name: "Tags" }).closest("section")!;
+
+      // The tags on screen are the tags pasted: the stray comma is gone from both.
+      expect(within(tagsSection).getByText("deep quotes")).toBeInTheDocument();
+      expect(within(tagsSection).queryByText("deep quotes,")).not.toBeInTheDocument();
+
+      await user.click(within(tagsSection).getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("deep quotes, life quotes"));
+
+      await user.click(within(detail).getByRole("button", { name: "Copy upload package" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+      const [bundle] = writeText.mock.calls[1] as [string];
+      expect(bundle).toContain("\nTAGS\ndeep quotes, life quotes\n");
+      expect(bundle).toContain("\nHASHTAGS\n#shorts #quotes");
+    } finally {
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
 });

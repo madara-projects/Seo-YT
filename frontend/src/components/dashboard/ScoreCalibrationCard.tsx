@@ -24,8 +24,8 @@ function Group({ group }: { group: CalibrationGroup }) {
           {ideaFormatLabel(group.format)} · {ideaLanguageLabel(group.language)} · {formatNumber(group.sample_size)} video(s)
         </p>
         <p>
-          Higher-scoring: median {median(higher.median_views)} views ({formatNumber(higher.sample_size ?? 0)}) ·
-          Lower-scoring: median {median(lower.median_views)} views ({formatNumber(lower.sample_size ?? 0)})
+          Higher-scoring: median {median(higher.median_views)} views ({formatNumber(higher.sample_size)}) ·
+          Lower-scoring: median {median(lower.median_views)} views ({formatNumber(lower.sample_size)})
         </p>
         <p>
           {typeof group.spearman_rho === "number"

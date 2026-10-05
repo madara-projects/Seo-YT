@@ -107,13 +107,20 @@ class YouTubeClient:
     def search_videos(
         self,
         query: str,
-        max_results: int = 5,
+        max_results: int = 25,
         raise_on_error: bool = False,
         *,
         region_code: str | None = None,
         relevance_language: str | None = None,
+        video_duration: str | None = None,
     ) -> List[dict[str, Any]]:
         """Search results with their video and channel statistics.
+
+        One search.list call whatever the page size (up to 50), then one
+        videos.list and one channels.list call of 1 unit each for the whole
+        page. ``video_duration`` is YouTube's videoDuration filter ("short" is
+        under four minutes, "medium" 4-20, "long" over 20; one value a call):
+        a page of long videos used to be fetched for a Short and mostly dropped.
 
         ``captured_at`` on a row says when both lookups returned its statistics.
         A row without it has gaps from a failed lookup, which are not zeros.
@@ -130,13 +137,16 @@ class YouTubeClient:
             "part": "snippet",
             "q": query,
             "type": "video",
-            "maxResults": max_results,
+            # Above 50 search.list fails with HTTP 400, and the failure still counts as a search.
+            "maxResults": max(1, min(int(max_results), 50)),
             "order": "relevance",
         }
         if region_code:
             params["regionCode"] = region_code
         if relevance_language:
             params["relevanceLanguage"] = relevance_language
+        if video_duration:
+            params["videoDuration"] = video_duration
         payload = self._request_json(self._SEARCH_URL, params, raise_on_error=raise_on_error)
         if not payload:
             return []

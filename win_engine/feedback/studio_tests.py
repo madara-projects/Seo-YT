@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from win_engine.analysis.generation_quality import title_similarity
 from win_engine.analysis.source_cues import is_short_video
@@ -61,6 +61,14 @@ class UpdateStudioTestRequest(BaseModel):
     # Percent of watch time per variant label, as Studio shows it.
     watch_time_share: dict[str, float] | None = None
     notes: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def require_a_change(self):
+        # An empty update still rewrote updated_at, which cloud sync reads as
+        # a newer edit and pushes the whole package again.
+        if not self.model_fields_set:
+            raise ValueError("Provide at least one change: link_video, outcome, winner_variant, watch_time_share or notes.")
+        return self
 
 
 def run_is_short(run: dict[str, Any], link: dict[str, Any] | None = None) -> bool:
@@ -188,6 +196,12 @@ class StudioTestStore:
             winner, result = _result(test, changes)
             status = "completed"
         notes = test["notes"] if changes.get("notes") is None else str(changes["notes"])
+        if (link_id, status, winner, result, notes) == (
+            test["linked_video"]["link_id"] if test["linked_video"] else None,
+            test["status"], test["winner_variant"], test["result"], test["notes"],
+        ):
+            # Nothing changed: a new updated_at would read as a newer edit to cloud sync.
+            return test
         with self.history._connect() as connection:
             connection.execute(
                 """UPDATE youtube_studio_tests

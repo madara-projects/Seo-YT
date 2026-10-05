@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildPackageOptions, copyValue, researchHasEvidence, titleScore } from "./packages";
+import {
+  buildPackageOptions,
+  cleanHashtags,
+  cleanTags,
+  copyValue,
+  hashtagsText,
+  researchHasEvidence,
+  tagsText,
+  titleScore,
+  uploadBundleText,
+} from "./packages";
 import type { AnalyzeResponse } from "@/api/types";
 
 function baseResponse(overrides: Partial<AnalyzeResponse> = {}): AnalyzeResponse {
@@ -165,8 +175,78 @@ describe("copyValue", () => {
     expect(text).toContain("HASHTAGS\n#one #two");
   });
 
+  it("copies tags as one line with no comma inside any tag, whatever the generator sent", () => {
+    // Two published videos ended up with "deep quotes," as a tag: the comma
+    // travelled inside the tag text, and YouTube splits a paste on commas only.
+    const dirty = buildPackageOptions(
+      baseResponse({
+        tags: ["deep quotes,", " life quotes, ", "Deep Quotes", "quotes\nabout life,", "", "“wisdom”"],
+        hashtags: ["#one,", "two", "#one", "#three #four", "#five\n"],
+      }),
+    )[0]!;
+
+    expect(copyValue(dirty, "tags")).toBe("deep quotes, life quotes, quotes, about life, wisdom");
+    expect(copyValue(dirty, "tags")).not.toMatch(/,\s*$|\n|,,/);
+    expect(copyValue(dirty, "hashtags")).toBe("#one #two #three #four #five");
+    // What is shown is what is copied, so the count on screen is the count pasted.
+    expect(dirty.tags).toEqual(["deep quotes", "life quotes", "quotes", "about life", "wisdom"]);
+    expect(dirty.hashtags).toEqual(["#one", "#two", "#three", "#four", "#five"]);
+  });
+
   it("returns an empty string for a missing option", () => {
     expect(copyValue(null, "title")).toBe("");
+  });
+});
+
+describe("tag text for YouTube Studio", () => {
+  it("joins clean tags with a comma and a space, and never ends with a comma", () => {
+    expect(tagsText(["alpha", "beta"])).toBe("alpha, beta");
+    expect(tagsText(["alpha,", "beta,"])).toBe("alpha, beta");
+    expect(tagsText(["alpha"])).toBe("alpha");
+  });
+
+  it("splits a list the generator sent as one string, on commas or line breaks", () => {
+    expect(cleanTags(["deep quotes, life quotes,quotes"])).toEqual(["deep quotes", "life quotes", "quotes"]);
+    expect(cleanTags(["deep quotes\nlife quotes\r\n"])).toEqual(["deep quotes", "life quotes"]);
+  });
+
+  it("keeps each tag's own spelling and drops only exact repeats", () => {
+    expect(cleanTags(["Deep Quotes", "deep quotes", "deep  quotes"])).toEqual(["Deep Quotes"]);
+  });
+
+  it("is empty, not a crash, for anything that is not a list", () => {
+    expect(tagsText(undefined)).toBe("");
+    expect(tagsText("alpha, beta")).toBe("");
+    expect(cleanTags([null, 7, ""])).toEqual(["7"]);
+  });
+
+  it("drops a hashtag's # from a tag and splits on semicolons and bars too", () => {
+    // YouTube's tag box takes the "#" as part of the tag.
+    expect(cleanTags(["#deep quotes", "##life", "＃trust"])).toEqual(["deep quotes", "life", "trust"]);
+    expect(cleanTags(["deep quotes; life quotes|quotes", "“#love”"])).toEqual(["deep quotes", "life quotes", "quotes", "love"]);
+    expect(cleanTags(["#", " ; | "])).toEqual([]);
+  });
+
+  it("writes one hashtag per word with a single leading hash", () => {
+    expect(hashtagsText(["#shorts", "quotes", "##life", "#shorts"])).toBe("#shorts #quotes #life");
+    expect(cleanHashtags(["#a, #b", "#c\n#d."])).toEqual(["#a", "#b", "#c", "#d"]);
+    expect(hashtagsText([])).toBe("");
+  });
+
+  it("joins a multi-word hashtag into one, as the backend does, rather than splitting it", () => {
+    // A hashtag ends at the first space: "#cold brew" would publish as #cold and a stray "brew".
+    expect(cleanHashtags(["#cold brew", "life lessons."])).toEqual(["#ColdBrew", "#LifeLessons"]);
+    // Inner capitals and a single word keep their spelling; a repeat in another spelling is dropped.
+    expect(cleanHashtags(["#iPhone tips", "#shorts", "#ColdBrew", "cold brew"])).toEqual(["#iPhoneTips", "#shorts", "#ColdBrew"]);
+    // Hashtags sent as one string still come apart at each "#".
+    expect(cleanHashtags(["#shorts #quotes #life"])).toEqual(["#shorts", "#quotes", "#life"]);
+  });
+
+  it("puts the same clean lines in the upload bundle", () => {
+    const lines = uploadBundleText({ title: "T", tags: ["a,", "b\nc"], hashtags: ["#x,", "y"] }).split("\n");
+    expect(lines[lines.indexOf("TAGS") + 1]).toBe("a, b, c");
+    expect(lines[lines.indexOf("HASHTAGS") + 1]).toBe("#x #y");
+    expect(lines.filter((line) => /,\s*$/.test(line))).toEqual([]);
   });
 });
 

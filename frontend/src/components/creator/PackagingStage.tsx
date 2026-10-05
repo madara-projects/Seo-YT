@@ -341,7 +341,7 @@ export function PackagingStage({
               }
               caption={
                 opportunityMeasured
-                  ? "Local heuristic, not a prediction of views."
+                  ? "Local heuristic for this run's research, the same for every option. Not a prediction of views."
                   : "Not measured: no competitor results were returned to score against."
               }
               tone={opportunityMeasured ? "warn" : "neutral"}

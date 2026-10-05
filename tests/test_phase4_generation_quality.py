@@ -77,7 +77,8 @@ class Phase4QualityTests(unittest.TestCase):
         package["description"] = quote + " A reflection on setting boundaries in friendship."
         gate = evaluate_package_quality(package, script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"})
         rejected = {item["code"] for row in gate["rejected_candidates"] for item in row["issues"]}
-        self.assertIn("missing_central_quote_concept", rejected)
+        # The payoff check replaced the "central terms" overlap rule.
+        self.assertIn("missing_quote_payoff", rejected)
 
     def test_friendship_quote_rejects_awkward_idiom_and_invented_causality(self):
         quote = "The one who poured heart and soul into friendship is now setting boundaries."
@@ -126,12 +127,26 @@ class Phase4QualityTests(unittest.TestCase):
         gate = evaluate_package_quality(package, script="Being forgotten by someone you remember.", creator_brief={"video_format": "youtube_shorts"})
         self.assertIn("invented_loss_event", {item["code"] for item in gate["issues"]})
 
-    def test_short_hashtags_are_derived_from_validated_topic_tags(self):
-        self.assertEqual(focused_short_hashtags(["letting go of the wrong person", "yt", "shorts"]),
-                         ["#shorts", "#LettingGoOfTheWrongPerson"])
+    def test_short_hashtags_are_followed_labels_not_coined_phrases(self):
+        # New contract: at most one compound hashtag, never longer than three
+        # words; a quote Short leads with #quotes and its feeling's hashtag.
+        self.assertEqual(focused_short_hashtags(["letting go of the wrong person", "yt", "shorts"]), ["#shorts"])
         self.assertEqual(
             focused_short_hashtags(["painful contradiction", "seeking comfort", "yt", "shorts"]),
-            ["#shorts", "#PainfulContradiction", "#SeekingComfort"],
+            ["#shorts", "#PainfulContradiction"],
+        )
+        # A heart is not a broken one: the feeling here is missing someone.
+        self.assertEqual(
+            focused_short_hashtags(["painful contradiction"], quote="My heart still misses you."),
+            ["#shorts", "#quotes", "#missingyou"],
+        )
+        self.assertEqual(
+            focused_short_hashtags(["painful contradiction"], quote="My heart is broken, but I still smile."),
+            ["#shorts", "#quotes", "#heartbreak"],
+        )
+        self.assertEqual(
+            focused_short_hashtags(["being forgotten"], quote="Some people only value you when they need you."),
+            ["#shorts", "#quotes", "#BeingForgotten"],
         )
 
     def test_green_requires_average_subject_tag_score_of_72(self):
@@ -210,7 +225,12 @@ class Phase4QualityTests(unittest.TestCase):
         combined = " ".join([package["title"], package["description"], *package["tags"]]).casefold()
         self.assertNotIn("how to is-", combined)
         self.assertNotIn("background of the video is", package["description"].casefold())
-        self.assertIn("you don't give up overnight on someone", package["title"].casefold())
+        # The quote is too long to keep whole, so the title is its punchline
+        # sentence, uncut; "You don't give up overnight on someone" alone
+        # stops before the point.
+        self.assertTrue(package["title"].startswith("You reach a point where your heart quietly says, Enough"))
+        self.assertNotIn("…", package["title"])
+        self.assertNotIn("#shorts", package["title"].casefold())
         self.assertIn("you don't give up overnight on someone", package["description"].casefold())
         # "enough" in a quote no longer adds the stock tag "knowing when to let go".
         self.assertNotIn("knowing when to let go", package["tags"])
@@ -230,12 +250,14 @@ class Phase4QualityTests(unittest.TestCase):
         # "#DeepThoughts #Solitude", "inner silence" and "SILENCE KNOWS" were
         # written for this test quote and given to any quote about silence.
         self.assertTrue(package["title"].casefold().startswith("at the end, it's only me and the silence "))
-        self.assertTrue(package["title"].endswith(" #shorts"))
+        # New contract: #shorts is never injected into a title; the hashtags
+        # are #shorts, #quotes and the hashtag of the feeling the quote names.
+        self.assertNotIn("#shorts", package["title"].casefold())
         # A Short's viewers are watching the street; the description does not narrate it.
         self.assertNotIn("A lone person walks", package["description"])
         self.assertNotIn("A One person", package["description"])
         self.assertNotIn("inner silence", package["tags"])
-        self.assertEqual(package["hashtags"], ["#shorts"])
+        self.assertEqual(package["hashtags"], ["#shorts", "#quotes", "#silence"])
 
         title_rows = [{"title": title, "package_intent": "Browse"} for title in package["variants"]]
         choices = build_title_thumbnail_packages(title_rows, brief, validated=True)
@@ -260,12 +282,15 @@ class Phase4QualityTests(unittest.TestCase):
         )
         self.assertNotEqual(choices[0]["thumbnail_text"], "KNOW YOUR WORTH")
 
-    def test_full_quote_title_is_rejected_when_complementary_titles_exist(self):
+    def test_full_quote_title_is_allowed_beside_complementary_titles_but_a_cut_one_is_not(self):
+        # New contract: the whole quote (or its punchline clause) may be
+        # option 1; a copy cut with "…" never passes.
         quote = "You deserve somebody who knows how hard it is to find somebody like you"
         copied = quote + " ✨ #shorts"
+        cut = "You deserve somebody who knows how hard it is to find... 🌙 #shorts"
         package = {
             "title": copied,
-            "variants": [copied, "Know Your Worth—You're Hard to Replace ✨ #shorts", "You're Rarer Than You Realize 🤍 #shorts"],
+            "variants": [copied, "Know Your Worth—You're Hard to Replace ✨ #shorts", "You're Rarer Than You Realize 🤍 #shorts", cut],
             "description": f'“{quote}”\n\nA reflection about recognizing your worth.',
             "tags": ["know your worth", "being valued", "hard to replace"],
             "hashtags": ["#shorts", "#KnowYourWorth"],
@@ -276,11 +301,13 @@ class Phase4QualityTests(unittest.TestCase):
             enforce_final_tag_rules=False,
         )
         rejected = {item["title"]: {reason["code"] for reason in item["issues"]} for item in gate["rejected_candidates"]}
-        self.assertIn("title_duplicates_on_screen_quote", rejected[copied])
-        self.assertNotEqual(gate["accepted_candidates"][0]["title"], copied)
-        self.assertTrue(title_copies_quote(
-            "You deserve somebody who knows how hard it is to find… 🌙 #shorts", quote,
-        ))
+        self.assertNotIn(copied, rejected)
+        self.assertEqual(gate["accepted_candidates"][0]["title"], copied)
+        self.assertIn("quote_title_cut", rejected[cut])
+        self.assertTrue(title_copies_quote(cut, quote))
+        # Alternatives in new words keep the quote-led package from the
+        # "every title repeats the quote" warning.
+        self.assertNotIn("title_duplicates_on_screen_quote", {item["code"] for item in gate["warnings"]})
 
     def test_semantically_proven_worth_tags_pass_final_grounding(self):
         quote = "You deserve somebody who knows how hard it is to find somebody like you"
@@ -438,23 +465,28 @@ class Phase4QualityTests(unittest.TestCase):
         codes = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
         self.assertIn("relationship_event", codes)
 
-    def test_creator_preferred_short_tags_are_allowed_but_other_platform_filler_is_rejected(self):
+    def test_creator_preferred_shorts_tag_is_kept_but_platform_filler_is_dropped(self):
+        # New contract: tags are advisory. Filler (now including "yt") is
+        # noted and dropped from the package; it never fails it.
         package = valid_package()
         package["tags"] = ["bare minimum quote", "yt", "shorts", "youtube shorts"]
         gate = evaluate_package_quality(package, script="A quote Short")
-        self.assertIn("platform_tag_filler", {item["code"] for item in gate["issues"]})
-        filler_messages = " ".join(item["message"] for item in gate["issues"] if item["code"] == "platform_tag_filler")
-        self.assertIn("youtube shorts", filler_messages)
-        self.assertNotIn("Platform-format filler is not a useful video tag: yt", filler_messages)
+        self.assertNotIn("platform_tag_filler", {item["code"] for item in gate["issues"]})
+        filler = {item["tag"] for item in gate["warnings"] if item["code"] == "platform_tag_filler"}
+        self.assertEqual(filler, {"youtube shorts", "yt"})
+        self.assertEqual(apply_quality_gate(package, gate)["tags"], ["bare minimum quote", "shorts"])
 
-    def test_short_title_contract_requires_one_shorts_hashtag_and_contextual_emoji(self):
+    def test_short_title_shorts_hashtag_is_optional_but_never_duplicated(self):
+        # New contract: YouTube detects a Short by its format, so a title
+        # without #shorts passes; an emoji for the quote's feeling is only suggested.
         missing = valid_package("Did I Deserve More Than the Bare Minimum?")
         gate = evaluate_package_quality(
             missing,
             script='A rainy quote Short: "Didn\'t I at least deserve the bare minimum from them?"',
         )
         rejected = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
-        self.assertIn("missing_shorts_title_hashtag", rejected)
+        self.assertNotIn("missing_shorts_title_hashtag", rejected)
+        self.assertIn("Did I Deserve More Than the Bare Minimum?", [item["title"] for item in gate["accepted_candidates"]])
         self.assertIn("missing_contextual_title_emoji", {item["code"] for item in gate["warnings"]})
 
         duplicated = valid_package("Did I Deserve More? 💔 #shorts #Shorts")
@@ -518,18 +550,20 @@ class Phase4QualityTests(unittest.TestCase):
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
     @patch("win_engine.llm.seo_writer.generate_one")
-    def test_missing_shorts_title_format_uses_the_single_repair(self, mocked_generate, _available):
-        broken = valid_package("Did I Deserve More Than the Bare Minimum?")
-        broken["variants"] = ["Did I Deserve More Than the Bare Minimum?", "The Question I Could Never Ask Them"]
-        mocked_generate.side_effect = [broken, valid_package()]
+    def test_a_short_title_without_shorts_hashtag_needs_no_repair(self, mocked_generate, _available):
+        # New contract: #shorts in a title is optional, so its absence is no
+        # reason to spend a repair call, and it is never injected.
+        written = valid_package("Did I Deserve More Than the Bare Minimum?")
+        written["variants"] = ["Did I Deserve More Than the Bare Minimum?", "The Question I Could Never Ask Them"]
+        mocked_generate.side_effect = [written, valid_package()]
         packages, source = seo_writer.write_multilang_packages_with_source(
             'A rainy quote Short: "Didn\'t I at least deserve the bare minimum from them?"',
             languages=["english"],
         )
-        self.assertEqual(mocked_generate.call_count, 2)
+        self.assertEqual(mocked_generate.call_count, 1)
         self.assertEqual(source, "gemini")
-        self.assertEqual(packages["english"]["title"].lower().count("#shorts"), 1)
-        self.assertTrue(packages["english"]["generation_trace"]["repair_succeeded"])
+        self.assertEqual(packages["english"]["title"], "Did I Deserve More Than the Bare Minimum?")
+        self.assertFalse(packages["english"]["generation_trace"]["repair_attempted"])
 
     @patch("win_engine.llm.seo_writer.gemini_client.is_available", return_value=True)
     @patch("win_engine.llm.seo_writer.generate_one")
