@@ -40,6 +40,26 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("AI Shorts", () => {
+  test("desktop results scroll without moving the input column", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockAiShorts(page, { generated: [], deleted: [] });
+    await page.goto(`/ai-shorts?plan=${AI_SHORTS_PLAN.id}`);
+    const results = page.getByTestId("ai-shorts-results-scroll");
+    const inputs = page.getByTestId("ai-shorts-input-scroll");
+    await expect(page.getByRole("button", { name: "Copy prompt" }).first()).toBeVisible();
+    const before = await inputs.boundingBox();
+    // Only the columns scroll: no outer scrollbar or unused bottom band.
+    expect(await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)).toBeLessThanOrEqual(1);
+    const bounds = await results.boundingBox();
+    expect(bounds!.y).toBeLessThan(220);
+    expect(900 - (bounds!.y + bounds!.height)).toBeLessThan(30);
+    await results.evaluate((element) => { element.scrollTop = 350; });
+    expect(await results.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    expect(await inputs.evaluate((element) => element.scrollTop)).toBe(0);
+    // The entrance animation can leave a sub-pixel transform while settling.
+    expect(Math.abs((await inputs.boundingBox())!.y - before!.y)).toBeLessThan(1);
+  });
+
   test("writes two Flow prompts and the package from a quote, with no console errors", async ({ page }) => {
     const errors = collectErrors(page);
     const calls = { generated: [] as unknown[], deleted: [] as number[] };
@@ -55,7 +75,7 @@ test.describe("AI Shorts", () => {
 
     await page.getByLabel("Quote").fill(QUOTE);
     await expect(write).toBeEnabled();
-    await expect(page.getByText("Uses 2–4 Gemini calls. No YouTube quota.")).toBeVisible();
+    await expect(page.getByText("Uses up to 6 Gemini calls. No YouTube Data API quota; tags are checked against free YouTube search suggestions.")).toBeVisible();
     await write.click();
 
     const header = page.getByRole("region", { name: "This AI Short" });

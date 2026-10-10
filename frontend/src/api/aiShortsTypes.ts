@@ -84,6 +84,30 @@ export interface AiShortsPlan {
   language: string;
   /** The creator's mood or scene wish the plan was written with; "" when none, absent on older plans. */
   mood_hint?: string;
+  creative_direction?: {
+    quote_meaning: string;
+    scene: string;
+    why_it_fits: string;
+    opening: string;
+    middle: string;
+    ending: string;
+    /** The feeling in a few words; absent on plans written before it was asked for. */
+    emotion?: string | null;
+    /** One word from the planner's fixed list (sad, hopeful, healing, ...); null when Gemini gave none. */
+    tone?: string | null;
+    /** How viewers search for this kind of quote; absent on older plans. */
+    search_themes?: string[] | null;
+  };
+  /**
+   * Gemini's reading of the quote, kept even when its scene was thrown away
+   * (a symbol) and the plan has no creative direction; absent on older plans.
+   */
+  quote_understanding?: {
+    quote_meaning: string;
+    emotion?: string | null;
+    tone?: string | null;
+    search_themes?: string[] | null;
+  };
   parts: number;
   /** Null when the stored plan could not be read. */
   total_seconds: number | null;

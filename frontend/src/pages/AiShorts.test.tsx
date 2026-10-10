@@ -108,6 +108,13 @@ afterEach(() => {
 });
 
 describe("AI Shorts form", () => {
+  it("provides independent desktop scroll containers with keyboard-accessible results", () => {
+    renderPage();
+    expect(screen.getByTestId("ai-shorts-input-scroll")).toHaveClass("lg:overflow-y-auto", "lg:min-h-0");
+    expect(screen.getByRole("region", { name: "AI Shorts results" })).toHaveClass("lg:overflow-y-auto", "lg:min-h-0");
+    expect(screen.getByRole("region", { name: "AI Shorts results" })).toHaveAttribute("tabindex", "0");
+  });
+
   it("explains the flow before the first run and keeps the button disabled with the reason", async () => {
     const user = setupUser();
     renderPage();
@@ -125,7 +132,7 @@ describe("AI Shorts form", () => {
 
     await user.type(screen.getByLabelText("Quote"), " words");
     expect(button).toBeEnabled();
-    expect(button).toHaveAccessibleDescription("Uses 2–4 Gemini calls. No YouTube quota.");
+    expect(button).toHaveAccessibleDescription("Uses up to 6 Gemini calls. No YouTube Data API quota; tags are checked against free YouTube search suggestions.");
     // Only the recent list was read; nothing was generated.
     expect(generateBodies()).toHaveLength(0);
   });
@@ -198,6 +205,79 @@ describe("AI Shorts results", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(AI_SHORTS_PLAN.shots[0]!.prompt));
     // The name stays stable for assistive tech; the visible text confirms the copy.
     await waitFor(() => expect(screen.getByRole("button", { name: "Copy prompt for Part 1" })).toHaveTextContent("Copied"));
+  });
+
+  it("says the package makes no YouTube Data API research but checks tags against search suggestions", async () => {
+    const user = setupUser();
+    renderPage();
+    await generate(user);
+
+    const pkg = await screen.findByTestId("shorts-package");
+    expect(within(pkg).getByText(/makes no YouTube Data API research/)).toBeInTheDocument();
+    expect(within(pkg).getByText(/checked against YouTube.s free search suggestions/)).toBeInTheDocument();
+    expect(within(pkg).queryByText(/no YouTube search research/)).not.toBeInTheDocument();
+  });
+
+  it("shows how Gemini read the quote: meaning, emotion, tone, the chosen scene and how viewers search for it", async () => {
+    const direction = {
+      quote_meaning: "Guarding yourself by acting numb so nobody can hurt you again.",
+      scene: "A lone figure seen from behind walks along an empty pier at blue dusk.",
+      why_it_fits: "Walking alone in the cold reads as guarded solitude at a glance.",
+      opening: "The figure walks slowly.",
+      middle: "Wind moves their jacket.",
+      ending: "They keep walking toward the grey sea.",
+      emotion: "guarded, numb after heartbreak",
+      tone: "numb",
+      search_themes: ["heartbreak quotes", "emotional numbness", "sad quotes"],
+    };
+    generateResponse = () => json({ ...AI_SHORTS_PLAN, creative_direction: direction });
+    const user = setupUser();
+    renderPage();
+    await generate(user);
+
+    const mood = await screen.findByTestId("mood-audio");
+    expect(within(mood).getByText(direction.quote_meaning)).toBeInTheDocument();
+    expect(within(mood).getByText(direction.emotion)).toBeInTheDocument();
+    expect(within(mood).getByText("numb")).toBeInTheDocument();
+    expect(within(mood).getByText(direction.scene)).toBeInTheDocument();
+    for (const theme of direction.search_themes) expect(within(mood).getByText(theme)).toBeInTheDocument();
+  });
+
+  it("still shows Gemini's reading of the quote when its scene was thrown away as a symbol", async () => {
+    const understanding = {
+      quote_meaning: "Acting numb so nobody can hurt you again.",
+      emotion: "guarded numbness",
+      tone: "numb",
+      search_themes: ["heartbreak quotes", "emotional numbness"],
+    };
+    generateResponse = () => json({ ...AI_SHORTS_PLAN, creative_direction: undefined, quote_understanding: understanding });
+    const user = setupUser();
+    renderPage();
+    await generate(user);
+
+    const mood = await screen.findByTestId("mood-audio");
+    expect(within(mood).getByText(understanding.quote_meaning)).toBeInTheDocument();
+    expect(within(mood).getByText("guarded numbness")).toBeInTheDocument();
+    expect(within(mood).getByText("emotional numbness")).toBeInTheDocument();
+    // No scene was kept, so there is no scene or visible action to show.
+    expect(within(mood).queryByText("Chosen scene")).not.toBeInTheDocument();
+    expect(within(mood).queryByText("Visible action")).not.toBeInTheDocument();
+  });
+
+  it("shows a plan written before the planner read emotion, tone and search themes", async () => {
+    const { emotion: _e, tone: _t, search_themes: _s, ...older } = {
+      quote_meaning: "Old meaning.", scene: "Old scene.", why_it_fits: "Old reason.",
+      opening: "a", middle: "b", ending: "c", emotion: "x", tone: "sad", search_themes: ["y"],
+    };
+    generateResponse = () => json({ ...AI_SHORTS_PLAN, creative_direction: older });
+    const user = setupUser();
+    renderPage();
+    await generate(user);
+
+    const mood = await screen.findByTestId("mood-audio");
+    expect(within(mood).getByText("Old meaning.")).toBeInTheDocument();
+    expect(within(mood).queryByText("Tone")).not.toBeInTheDocument();
+    expect(within(mood).queryByText("How viewers search for it")).not.toBeInTheDocument();
   });
 
   it("copies every prompt labelled by part, and the package in the shared upload format", async () => {

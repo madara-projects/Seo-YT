@@ -96,7 +96,7 @@ export function verdictChip(verdict: string | undefined): { label: string; tone:
 
 /** The quality gate's notes as sentences, whatever shape the backend sent them in. */
 export function qualityNotes(items: unknown): string[] {
-  return asArray<QualityNote>(items)
+  return [...new Set(asArray<QualityNote>(items)
     .map((item) => {
       if (typeof item === "string") return item.trim();
       if (item && typeof item === "object") {
@@ -105,7 +105,7 @@ export function qualityNotes(items: unknown): string[] {
       }
       return "";
     })
-    .filter(Boolean);
+    .filter(Boolean))];
 }
 
 /** The primary title first, then the variants, with repeats removed. */

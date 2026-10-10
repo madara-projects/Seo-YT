@@ -83,6 +83,12 @@ export function ShortsPackage({ plan }: { plan: AiShortsPlan }) {
         <UnavailableNote>No package was returned for this plan.</UnavailableNote>
       ) : (
         <div className="space-y-6">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Checks assess source fidelity, not predicted views. This package makes no YouTube Data API research
+            (no competitor videos or view counts), so the Opportunity Score is unmeasured. Subject tags come from the
+            quote&apos;s meaning and are checked against YouTube&apos;s free search suggestions, which show what viewers
+            type, not search volume; yt and shorts are format tags.
+          </p>
           {issues.length || warnings.length ? (
             <ul className="space-y-1.5" aria-label="Package quality notes">
               {issues.map((issue, index) => (

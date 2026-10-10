@@ -13,6 +13,10 @@ export function MoodAudio({ plan }: { plan: AiShortsPlan }) {
   const keywords = asArray<string>(mood.keywords);
   const audio = plan.audio ?? {};
   const negative = String(plan.negative_prompt ?? "").trim();
+  const direction = plan.creative_direction;
+  // The reading survives a scene the planner threw away as a symbol.
+  const reading = direction ?? plan.quote_understanding;
+  const themes = asArray<string>(reading?.search_themes).filter((theme) => String(theme ?? "").trim());
 
   return (
     <Panel
@@ -24,6 +28,38 @@ export function MoodAudio({ plan }: { plan: AiShortsPlan }) {
     >
       <div className="space-y-5">
         <dl className="grid gap-4 sm:grid-cols-2">
+          {reading && (
+            <>
+              <Field label="Quote meaning (AI interpretation)" className="sm:col-span-2">{reading.quote_meaning}</Field>
+              {reading.emotion ? <Field label="Emotion">{reading.emotion}</Field> : null}
+              {reading.tone ? <Field label="Tone">{reading.tone}</Field> : null}
+              {direction?.scene ? (
+                <Field label="Chosen scene" className="sm:col-span-2">{direction.scene}</Field>
+              ) : null}
+              {direction ? (
+                <>
+                  <Field label="Why this scene fits" className="sm:col-span-2">{direction.why_it_fits}</Field>
+                  <Field label="Visible action" className="sm:col-span-2">
+                    {`Opening: ${direction.opening} Middle: ${direction.middle} Ending: ${direction.ending}`}
+                  </Field>
+                </>
+              ) : null}
+              {themes.length ? (
+                <Field label="How viewers search for it" className="sm:col-span-2">
+                  <span className="flex flex-wrap gap-1.5">
+                    {themes.map((theme, index) => (
+                      <span
+                        key={`${theme}-${index}`}
+                        className="rounded-lg border border-border bg-elevated px-2 py-0.5 text-xs font-normal text-foreground"
+                      >
+                        {theme}
+                      </span>
+                    ))}
+                  </span>
+                </Field>
+              ) : null}
+            </>
+          )}
           <Field label="Feeling">{displayValue(mood.feeling)}</Field>
           <Field label="Pace">{displayValue(mood.pace)}</Field>
           <Field label="Visual metaphor" className="sm:col-span-2">

@@ -483,7 +483,10 @@ export function AppShell() {
         <main
           id="main-content"
           tabIndex={-1}
-          className="relative z-10 px-4 pb-20 pt-6 outline-none sm:px-6 sm:pt-8 lg:px-10 2xl:px-14"
+          className={cn(
+            "relative z-10 px-4 pb-20 pt-6 outline-none sm:px-6 sm:pt-8 lg:px-10 2xl:px-14",
+            location.pathname === "/ai-shorts" && "lg:h-[calc(100dvh-4rem-1px)] lg:overflow-hidden lg:py-3",
+          )}
         >
           <Outlet />
         </main>

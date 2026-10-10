@@ -97,6 +97,7 @@ describe("package helpers", () => {
       "dup",
     ]);
     expect(qualityNotes(undefined)).toEqual([]);
+    expect(qualityNotes([{ message: "Same note" }, "Same note", { message: "Another note" }])).toEqual(["Same note", "Another note"]);
   });
 
   it("offers the Creator's languages without the one that needs a video", () => {

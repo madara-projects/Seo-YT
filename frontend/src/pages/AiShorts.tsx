@@ -123,16 +123,17 @@ export default function AiShortsPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-page animate-fade-up">
+    <div className="mx-auto w-full max-w-page animate-fade-up lg:flex lg:h-full lg:min-h-0 lg:flex-col">
       <PageHeader
+        compact
         eyebrow="Studio"
         icon={Clapperboard}
         title="AI Shorts"
         description="Type a quote and get Google Flow (Veo 3.1) prompts for each 8-second part, plus the title, description, hashtags and tags for the Short. Nothing here uploads or publishes."
       />
 
-      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
-        <div className="min-w-0 space-y-5">
+      <div className="grid grid-cols-1 items-start gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[22rem_minmax(0,1fr)] lg:items-stretch">
+        <div className="min-w-0 space-y-5 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2 lg:pb-4" data-testid="ai-shorts-input-scroll">
           <QuoteForm
             values={values}
             onChange={(patch) => setValues((prior) => ({ ...prior, ...patch }))}
@@ -151,7 +152,7 @@ export default function AiShortsPage() {
           />
         </div>
 
-        <div ref={detailRef} className="min-w-0 scroll-mt-24 space-y-5">
+        <div ref={detailRef} className="min-w-0 scroll-mt-24 space-y-5 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2 lg:pb-4" data-testid="ai-shorts-results-scroll" tabIndex={0} role="region" aria-label="AI Shorts results">
           {isPending ? (
             <PlanSkeleton mode="writing" elapsed={elapsed} />
           ) : (

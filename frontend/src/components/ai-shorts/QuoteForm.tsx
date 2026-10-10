@@ -158,7 +158,7 @@ export function QuoteForm({
             {isPending ? "Writing…" : "Write Flow prompts"}
           </Button>
           <p id="ai-shorts-reason" className="text-xs leading-relaxed text-muted-foreground" aria-live="polite">
-            {blocker ?? "Uses 2–4 Gemini calls. No YouTube quota."}
+            {blocker ?? "Uses up to 6 Gemini calls. No YouTube Data API quota; tags are checked against free YouTube search suggestions."}
           </p>
         </div>
       </form>
