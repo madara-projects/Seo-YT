@@ -8,11 +8,14 @@ so the published Short can be linked later, and keeps the plan beside that run.
 What this path does not do, by design:
 
 * No YouTube Data API call. The package is written from the quote and the
-  plan's mood alone, through the same writer, tag selector and quality gate as
-  every other package, with the research stage left empty. The Opportunity
-  Score needs research, so it is reported as unmeasured, never as 0.
-* No more than four Gemini calls per request: at most two for the planner and
-  two for the package, each stage under its own ``gemini_client.request_budget``
+  plan's reading of it, through the same writer, tag selector and quality gate
+  as every other package, with the research stage left empty. The Opportunity
+  Score needs research, so it is reported as unmeasured, never as 0. The tags
+  are the phrases viewers search the quote's theme by (``ai_shorts_seo``),
+  checked against YouTube's search suggestions, which cost no API quota.
+* No more than six Gemini calls per request: at most three for the planner and
+  three for the package (its writer, the writer's one repair, and the one
+  refinement that asks for missing title alternatives), each stage under its own ``gemini_client.request_budget``
   with one shared deadline. A nested budget shares the outer allowance, so the
   route must not wrap this in the shared ``_gemini_budget`` decorator, which
   would replace the per-stage caps with the general allowance.
@@ -20,26 +23,33 @@ What this path does not do, by design:
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from typing import Any
 
 from win_engine.analysis.creator_brief import build_creator_brief
+from win_engine.analysis.generation_quality import title_emojis
 from win_engine.analysis.research_insights import build_research_decision
 from win_engine.feedback.ai_shorts_store import AiShortsStore
 from win_engine.feedback.history_store import HistoryStore
+from win_engine.generation.ai_shorts_seo import quote_understanding, repeated_emoji, verify_subject_tags
 from win_engine.generation.seo_generator import generate_seo_suggestions
+from win_engine.generation.strategy_engine import _titles_of_other_videos as titles_of_other_videos
 from win_engine.llm import gemini_client
 
 logger = logging.getLogger(__name__)
 
-PLANNER_MAX_CALLS = 2
-PACKAGE_MAX_CALLS = 2
+PLANNER_MAX_CALLS = 3
+# Two left no room for the writer's repair after a refinement or a retried
+# call: a live package fell back to the local writer with a single title.
+PACKAGE_MAX_CALLS = 3
 MAX_GEMINI_CALLS = PLANNER_MAX_CALLS + PACKAGE_MAX_CALLS
 VIDEO_FORMAT = "youtube_shorts"
 RESEARCH_SKIPPED_WARNING = (
-    "No YouTube research was made on the AI Shorts path: the Opportunity Score is unmeasured, "
-    "and tags and hashtags come from the quote alone."
+    "No YouTube Data API research was made on the AI Shorts path, so the Opportunity Score is unmeasured. "
+    "Tags and hashtags come from the quote's meaning; tags are checked against YouTube search suggestions "
+    "(no API quota) when they can be reached."
 )
 # The generator explains an empty research payload as a search that found
 # nothing. Here no search was made, so that line is replaced by the one above.
@@ -64,11 +74,32 @@ def _check_planner_inputs(quote: str, parts: int) -> None:
         raise QuoteRefused(str(exc)) from exc
 
 
-def _plan_flow_shots(quote: str, *, language: str, parts: int, mood_hint: str) -> dict[str, Any]:
-    """The Flow planner, imported on first use so this module loads without it."""
+def _plan_flow_shots(
+    quote: str, *, language: str, parts: int, mood_hint: str, avoid_scenes: list[str] | None = None,
+) -> dict[str, Any]:
+    """The Flow planner, imported on first use so this module loads without it.
+
+    ``avoid_scenes`` (the newest saved plans' scenes) reaches a planner that
+    accepts it; one that does not is called exactly as before.
+    """
     from win_engine.generation.flow_prompts import plan_flow_shots
 
-    return plan_flow_shots(quote, language=language, parts=parts, mood_hint=mood_hint)
+    extra: dict[str, Any] = {}
+    if avoid_scenes and "avoid_scenes" in inspect.signature(plan_flow_shots).parameters:
+        extra["avoid_scenes"] = list(avoid_scenes)
+    return plan_flow_shots(quote, language=language, parts=parts, mood_hint=mood_hint, creative_direction=True, **extra)
+
+
+RECENT_SCENES = 10
+RECENT_EMOJI_TITLES = 5
+
+
+def _recent_scenes(history: HistoryStore) -> list[str]:
+    try:
+        return AiShortsStore(history).recent_scenes(RECENT_SCENES)
+    except Exception as exc:  # variety is a preference; never worth the request
+        logger.warning("Recent AI Shorts scenes could not be read: %s", type(exc).__name__)
+        return []
 
 
 def creator_brief_for_quote(quote: str, plan: dict[str, Any], *, language: str, region: str) -> dict[str, Any]:
@@ -82,7 +113,7 @@ def creator_brief_for_quote(quote: str, plan: dict[str, Any], *, language: str, 
     mood = plan.get("mood") if isinstance(plan.get("mood"), dict) else {}
     total_seconds = plan.get("total_seconds")
     duration = float(total_seconds) if isinstance(total_seconds, (int, float)) and total_seconds > 0 else None
-    return build_creator_brief(
+    brief = build_creator_brief(
         script=quote,
         video_format=VIDEO_FORMAT,
         exact_quote=quote,
@@ -91,7 +122,39 @@ def creator_brief_for_quote(quote: str, plan: dict[str, Any], *, language: str, 
         duration_seconds=duration,
         language=language,
         region=region,
+        title_style="ai_shorts: one feeling-matched emoji and #shorts at the end of every title",
     )
+    # The quote's reading (tone, emotion, meaning, search themes): the writer
+    # and the AI Shorts branches of the generator read it from here.
+    brief["ai_shorts"] = quote_understanding(quote, plan, language=language)
+    return brief
+
+
+def prepare_tags(
+    history: HistoryStore, reading: dict[str, Any], *, quote: str, language: str, region: str,
+) -> dict[str, Any]:
+    """The reading with its theme phrases checked against YouTube search suggestions, before the writer runs.
+
+    The writer is told which phrases viewers type, and the generator's AI
+    Shorts branch makes them the tags. The emoji the quality gate would reject
+    as a repeated template (the last three compared titles all end with it) is
+    named too, so no stage styles a title with it.
+    """
+    verified = verify_subject_tags(reading, quote=quote, language=language, region=region)
+    try:
+        recent, _ = titles_of_other_videos(history, quote)
+        # The emoji the last few AI Shorts led with is skipped while another
+        # fits: 🌅 led four of sixteen in a row.
+        recent_emojis = [
+            emoji for row in AiShortsStore(history).plans(RECENT_EMOJI_TITLES)
+            for emoji in title_emojis(str(row.get("package_title") or ""))
+        ]
+    except Exception as exc:  # History is read for styling only; never worth the package
+        logger.warning("Recent titles could not be read for the AI Shorts emoji: %s", type(exc).__name__)
+        recent, recent_emojis = [], []
+    avoid = repeated_emoji(recent)
+    return {**reading, **verified, "avoid_emojis": [avoid] if avoid else [],
+            "recent_emojis": list(dict.fromkeys(recent_emojis))}
 
 
 def lean_research(history: HistoryStore, creator_brief: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +164,8 @@ def lean_research(history: HistoryStore, creator_brief: dict[str, Any]) -> dict[
     UNMEASURED (score None) and the gap analysis says demand and competition
     could not be measured; nothing here pretends otherwise.
     """
+    reading = creator_brief.get("ai_shorts") if isinstance(creator_brief.get("ai_shorts"), dict) else {}
+    tag_note = str(reading.get("tag_note") or "").strip()
     return {
         "history_store": history,
         "youtube_results": [],
@@ -116,7 +181,8 @@ def lean_research(history: HistoryStore, creator_brief: dict[str, Any]) -> dict[
             "research_skipped": True,
             "research_skipped_reason": RESEARCH_SKIPPED_WARNING,
         },
-        "research_warnings": [RESEARCH_SKIPPED_WARNING],
+        # What this run's tag check actually did, beside what the path never does.
+        "research_warnings": [RESEARCH_SKIPPED_WARNING, *([tag_note] if tag_note else [])],
         "cache_policy": "not_researched",
     }
 
@@ -175,11 +241,19 @@ def generate_ai_short(
     # Checked first, so a ValueError from deeper in the planner (a provider reply
     # it could not read, say) is the server's failure, never "your quote was refused".
     _check_planner_inputs(quote, parts)
+    # The newest saved plans' scenes, so this one is not the same video again.
+    planner_options: dict[str, Any] = {}
+    avoid_scenes = _recent_scenes(history)
+    if avoid_scenes:
+        planner_options["avoid_scenes"] = avoid_scenes
     with gemini_client.request_budget(max_calls=PLANNER_MAX_CALLS, deadline_seconds=time_left()):
-        plan = dict(_plan_flow_shots(quote, language=language, parts=parts, mood_hint=str(mood_hint or "")))
+        plan = dict(_plan_flow_shots(
+            quote, language=language, parts=parts, mood_hint=str(mood_hint or ""), **planner_options,
+        ))
     plan_parts = int(plan.get("parts") or parts)
 
     creator_brief = creator_brief_for_quote(quote, plan, language=language, region=region)
+    creator_brief["ai_shorts"] = prepare_tags(history, creator_brief["ai_shorts"], quote=quote, language=language, region=region)
     context = {
         "language": language,
         "video_language": language,

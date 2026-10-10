@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     search_suggest_enabled: bool = True
     search_suggest_timeout_seconds: float = Field(default=3.0, ge=0.5, le=15.0)
     search_suggest_max_queries: int = Field(default=6, ge=0, le=12)
+    # The AI Shorts tag check asks the same suggestion endpoint about the
+    # planner's search themes, the language niche and the quote's own subjects.
+    # Its own limit, separate from research's above: 0 turns the AI Shorts check
+    # off, and search_suggest_enabled=false turns both off.
+    ai_shorts_suggest_max_queries: int = Field(default=10, ge=0, le=12)
 
     snapshot_collector_enabled: bool = False
     snapshot_collector_dry_run: bool = False

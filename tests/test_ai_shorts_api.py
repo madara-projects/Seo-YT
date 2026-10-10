@@ -6,6 +6,7 @@ the YouTube client fails the test if anything on this path tries to use it.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -26,6 +27,7 @@ from win_engine.feedback.ai_shorts_store import AiShortsStore
 from win_engine.feedback.history_store import HistoryStore, comparable_format
 from win_engine.feedback.studio_tests import run_is_short
 from win_engine.generation import ai_shorts
+from win_engine.generation.flow_prompts import cautions, flow_steps
 from win_engine.ingestion.research_service import ResearchService
 from win_engine.ingestion.youtube_client import YouTubeClient
 from win_engine.llm import gemini_client
@@ -83,9 +85,9 @@ def _gemini_reply(text: str = '{"title": "t"}') -> MagicMock:
 
 
 def _greedy_planner(statuses: list[str]):
-    """A planner that wants three Gemini calls; its statuses show which were allowed."""
+    """A planner that wants four Gemini calls; its statuses show which were allowed."""
     def plan(quote, *, language, parts, mood_hint):
-        for _ in range(3):
+        for _ in range(4):
             _, trace = gemini_client.generate_with_diagnostics("plan the shots")
             statuses.append(str(trace["status"]))
         return _plan(quote, parts, language, generation_source="gemini")
@@ -93,9 +95,9 @@ def _greedy_planner(statuses: list[str]):
 
 
 def _greedy_writer(statuses: list[str]):
-    """A package stage that wants three Gemini calls, then records its run as the real one does."""
+    """A package stage that wants four Gemini calls, then records its run as the real one does."""
     def generate(script, research, context=None):
-        for _ in range(3):
+        for _ in range(4):
             _, trace = gemini_client.generate_with_diagnostics("write the package")
             statuses.append(str(trace["status"]))
         run_id = research["history_store"].record_analysis_run(
@@ -166,6 +168,8 @@ class GenerateTests(AiShortsTestCase):
             with self.subTest(key=key):
                 self.assertIn(key, package)
         self.assertTrue(package["title"])
+        self.assertTrue(package["title"].endswith("#shorts"))
+        self.assertTrue(all(title.endswith("#shorts") for title in package["title_variants"]))
         self.assertTrue(package["title_thumbnail_packages"])
         self.assertIn(package["generation_quality"]["verdict"], {"GREEN", "YELLOW", "RED"})
         self.assertEqual(package["generation_source"], "fallback")
@@ -342,11 +346,28 @@ class ReadAndDeleteTests(AiShortsTestCase):
         body = self.generate()
         response = self.client.get(f"/api/ai-shorts/plans/{body['id']}")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), body)
+        # All of it, except that the Flow guide is always today's (the fake
+        # planner here writes its own placeholder guide).
+        self.assertEqual(response.json(), {**body, "flow_steps": flow_steps(body["parts"]), "cautions": cautions(body["parts"])})
 
         missing = self.client.get(f"/api/ai-shorts/plans/{body['id'] + 1}")
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(missing.json()["error"]["code"], "http_error")
+
+    def test_a_saved_plan_shows_todays_flow_guide_not_the_one_it_was_saved_with(self):
+        # Plans saved before the guide was corrected still hold its old wording.
+        body = self.generate()
+        with self.store._connect() as connection:
+            stored = json.loads(connection.execute(
+                "SELECT plan_json FROM ai_short_plans WHERE id = ?", (body["id"],)).fetchone()[0])
+            stored["flow_steps"] = ["1. 1080p upscaling needs the Ultra plan."]
+            stored["cautions"] = ["Tick \"Altered or synthetic content\" in YouTube Studio."]
+            connection.execute("UPDATE ai_short_plans SET plan_json = ? WHERE id = ?", (json.dumps(stored), body["id"]))
+
+        plan = self.client.get(f"/api/ai-shorts/plans/{body['id']}").json()
+        self.assertEqual(plan["flow_steps"], flow_steps(body["parts"]))
+        self.assertEqual(plan["cautions"], cautions(body["parts"]))
+        self.assertEqual(plan["shots"], body["shots"])
 
     def test_deleting_a_plan_deletes_its_run_and_queues_the_cloud_tombstone(self):
         body = self.generate()
@@ -396,7 +417,7 @@ class ReadAndDeleteTests(AiShortsTestCase):
 class GeminiBudgetTests(AiShortsTestCase):
     @patch("win_engine.llm.gemini_client.time.sleep")
     @patch("win_engine.llm.gemini_client.httpx.post")
-    def test_each_stage_gets_two_calls_and_the_request_at_most_four(self, post, _sleep):
+    def test_planner_gets_three_writer_three_and_request_at_most_six(self, post, _sleep):
         post.return_value = _gemini_reply()
         self.gemini_off.stop()
         planner_statuses: list[str] = []
@@ -407,8 +428,8 @@ class GeminiBudgetTests(AiShortsTestCase):
             body = self.generate()
 
         self.assertEqual(post.call_count, ai_shorts.MAX_GEMINI_CALLS)
-        self.assertEqual(planner_statuses, ["gemini_success", "gemini_success", "gemini_budget_exhausted"])
-        self.assertEqual(writer_statuses, ["gemini_success", "gemini_success", "gemini_budget_exhausted"])
+        self.assertEqual(planner_statuses, ["gemini_success", "gemini_success", "gemini_success", "gemini_budget_exhausted"])
+        self.assertEqual(writer_statuses, ["gemini_success"] * 3 + ["gemini_budget_exhausted"])
         self.assertEqual(body["generation_source"], "gemini")
         self.assertEqual(body["package"]["source_page"], "ai_shorts")
         self.assertEqual(self.store.history_run(body["analysis_run_id"])["package"]["ai_shorts"]["plan_id"], body["id"])

@@ -245,6 +245,27 @@ def generate_seo_suggestions(
         # own attempts and retries.
         trace.update(with_extra_call(trace, refinement_trace.get("provider_call") or {}))
         trace["gemini_attempted"] = True
+    # Refinement and local fallback can replace writer titles. Apply the
+    # scoped creator preference before final validation and History persistence.
+    # Only the AI Shorts page sets this title style; every Creator package skips both branches.
+    ai_short = short_form and str((creator_brief or {}).get("title_style") or "").startswith("ai_shorts:")
+    if ai_short:
+        # The AI Shorts package follows the quote's reading: titles end with an
+        # emoji of its tone (the whole quote leads when it fits), the tags are
+        # the theme phrases viewers search, and the hashtags name its feeling.
+        # The final gate below judges all of it, so its verdict is current.
+        from win_engine.generation import ai_shorts_seo
+
+        recent = channel_learning.get("recent_titles") or []
+        ordered_titles = ai_shorts_seo.order_titles(
+            [locked_title, *locked_variants], short_quote, creator_brief, recent)
+        locked_title, locked_variants = ordered_titles[0], ordered_titles
+        locked_tags, keyword_research = ai_shorts_seo.final_tags(
+            creator_brief, locked_tags, keyword_research, quote=short_quote)
+        locked_hashtags = ai_shorts_seo.ai_short_hashtags(creator_brief, short_quote)
+        locked_description = format_upload_ready_description(
+            ai_shorts_seo.with_reflection(locked_description, short_quote, creator_brief), locked_hashtags,
+            category=category, topic=main_topic, chapters=chapters)
     final_gate = evaluate_package_quality(
         {
             "title": locked_title, "variants": locked_variants,
@@ -276,6 +297,13 @@ def generate_seo_suggestions(
         locked_description = format_upload_ready_description(
             locked_description, locked_hashtags, category=category, topic=main_topic, chapters=chapters)
     final_gate = enforce_quality_target(final_gate, short_form=short_form)
+    if ai_short:
+        # A Short's sparse tags are only a note to the shared gate; an AI Short
+        # without enough specific subject tags is not GREEN, and its exact-quote
+        # title may run to about 90 characters (see ai_shorts_seo.finalize_gate).
+        final_gate = ai_shorts_seo.finalize_gate(final_gate, locked_title, locked_tags, short_quote)
+        # The writer stage's trace recorded its own tags, before the AI Shorts tag step.
+        ai_shorts_seo.sync_trace(trace, locked_tags, keyword_research)
     # The writer stage records its own verdict under this key; the package the
     # creator receives is the one judged here, after tag selection and refinement.
     trace["writer_quality_verdict"] = trace.get("final_quality_verdict")

@@ -34,6 +34,19 @@ class AiShortsStoreTests(unittest.TestCase):
         with self.history._connect() as connection:
             return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
+    def test_the_runs_listed_title_follows_the_saved_packages_title(self):
+        # History lists the run's title column; a package finalized after the run
+        # was recorded must not leave the list showing an older title.
+        run_id = self._run("Draft title")
+        self.store.save_plan(analysis_run_id=run_id, quote="q", language="english", parts=1, plan=PLAN,
+                             package={"title": "Final title 🖤 #shorts"})
+        run = self.history.history_run(run_id)
+        self.assertEqual((run["title"], run["package"]["title"]), ("Final title 🖤 #shorts", "Final title 🖤 #shorts"))
+        # A package without a title keeps the run's own.
+        other = self._run("Kept title")
+        self.store.save_plan(analysis_run_id=other, quote="q", language="english", parts=1, plan=PLAN, package={})
+        self.assertEqual(self.history.history_run(other)["title"], "Kept title")
+
     def test_a_plan_for_a_run_that_does_not_exist_is_refused_and_writes_nothing(self):
         with self.assertRaises(sqlite3.IntegrityError):
             self.store.save_plan(analysis_run_id=999, quote="q", language="english", parts=2, plan=PLAN, package={})

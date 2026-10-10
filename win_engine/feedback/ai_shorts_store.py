@@ -68,8 +68,12 @@ class AiShortsStore:
                     "generation_source": generation_source,
                 },
             }
+            # The run's title column is what History lists; it follows the
+            # package's final title, so the list and the package never disagree.
+            title = str(package.get("title") or "").strip() or None
             connection.execute(
-                "UPDATE analysis_runs SET payload_json = ? WHERE id = ?", (json.dumps(payload), int(analysis_run_id)),
+                "UPDATE analysis_runs SET payload_json = ?, title = COALESCE(?, title) WHERE id = ?",
+                (json.dumps(payload), title, int(analysis_run_id)),
             )
         return plan_id
 
@@ -136,6 +140,30 @@ class AiShortsStore:
         with self.history._connect() as connection:
             connection.execute("DELETE FROM ai_short_plans WHERE id = ?", (int(plan_id),))
         return True
+
+    def recent_scenes(self, limit: int = 10) -> list[str]:
+        """The scenes of the newest saved plans, so the planner can choose a different one.
+
+        A scene is the creative direction's when the plan has one, else its
+        shots' titles. Sixteen quotes in a row came out as about five scenes.
+        """
+        with self.history._connect() as connection:
+            rows = connection.execute(
+                "SELECT plan_json FROM ai_short_plans ORDER BY created_at DESC, id DESC LIMIT ?",
+                (max(1, min(int(limit), _LIST_LIMIT)),),
+            ).fetchall()
+        scenes: list[str] = []
+        for (value,) in rows:
+            plan = _plan_json(value)
+            direction = plan.get("creative_direction") if isinstance(plan.get("creative_direction"), dict) else {}
+            scene = " ".join(str(direction.get("scene") or "").split())
+            if not scene:
+                titles = [str(shot.get("title") or "").strip() for shot in plan.get("shots") or []
+                          if isinstance(shot, dict) and str(shot.get("title") or "").strip()]
+                scene = "; ".join(dict.fromkeys(titles))
+            if scene and scene[:300] not in scenes:
+                scenes.append(scene[:300])
+        return scenes
 
     def plan_count(self) -> int:
         try:

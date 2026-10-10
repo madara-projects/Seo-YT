@@ -411,6 +411,19 @@ def _build_user_prompt(
     )
     repair_block = ""
     brief = creator_brief or {}
+    if str(brief.get("title_style") or "").startswith("ai_shorts:"):
+        short_title_rule = (
+            "Creator preference for this AI Short: every title, including the primary, ends with exactly one "
+            "feeling-matched emoji followed by #shorts. Keep the complete title under 100 characters. "
+            "This is styling, not a ranking advantage. Use varied source-faithful hooks, not SEO keyword labels. "
+            "Suggest several distinct subject tags grounded in the quote's actual meaning; never describe the "
+            "AI background as the video's topic and never pad with unrelated trending tags."
+        )
+        # The quote's reading (meaning, feeling, the searches its theme is
+        # found by), so titles, emoji and tags follow what the quote means.
+        from win_engine.generation.ai_shorts_seo import writer_guidance
+
+        short_title_rule += writer_guidance(brief)
     quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "").strip()
     silent_quote_rule = ""
     if quote and is_silent_quote_only_short(script, creator_brief):
@@ -742,9 +755,24 @@ def _sanitize_generated_package(
     if not safe_titles and quote:
         safe_titles = [_safe_quote_title(quote)]
     if safe_titles:
+        if str((creator_brief or {}).get("title_style") or "").startswith("ai_shorts:"):
+            safe_titles = [_style_ai_short_title(title, quote, creator_brief) for title in safe_titles]
         cleaned["title"] = safe_titles[0]
         cleaned["variants"] = safe_titles[:5]
     return cleaned
+
+
+def _style_ai_short_title(
+    title: str, quote: str, creator_brief: Optional[dict[str, Any]] = None, recent_titles: Any = (),
+) -> str:
+    """Honor the AI Shorts creator's styling without changing the semantic title body.
+
+    The emoji follows the quote's tone, never a word in it: any quote with
+    "heart" in it got a broken heart, even "My heart finally healed".
+    """
+    from win_engine.generation.ai_shorts_seo import style_title
+
+    return style_title(title, quote, creator_brief, recent_titles)
 
 
 def _unique_text(values: list[str]) -> list[str]:

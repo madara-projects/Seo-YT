@@ -34,6 +34,7 @@ from win_engine.feedback.studio_tests import CreateStudioTestRequest, StudioTest
 from win_engine.core.iso_duration import duration_seconds
 from win_engine.feedback.score_calibration import opportunity_score_calibration
 from win_engine.generation.ai_shorts import QuoteRefused, generate_ai_short
+from win_engine.generation.flow_prompts import MAX_PARTS, cautions, flow_steps
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.ingestion.research_service import ResearchService
 from win_engine.ingestion.youtube_client import YouTubeClient
@@ -890,8 +891,9 @@ def delete_history_runs(payload: DeleteHistoryRunsRequest, request: Request):
 def generate_ai_short_plan(payload: AiShortsGenerateRequest):
     """From a quote alone: Flow prompts per eight-second part and a lean Shorts package, saved to History.
 
-    No YouTube Data API call is made. Gemini is held to four calls, two for the
-    planner and two for the package, by the service's own per-stage budgets;
+    No YouTube Data API call is made; the package's tags are checked against free
+    YouTube search suggestions. Gemini is held to six calls, three for the planner
+    and three for the package, by the service's own per-stage budgets;
     the shared `_gemini_budget` wrapper is deliberately not applied here, since
     a nested budget would replace those caps with the general allowance. The
     path ends in "/generate", so the stricter rate limit for quota-spending
@@ -924,6 +926,13 @@ def get_ai_short_plan(plan_id: RecordId):
     plan = AiShortsStore(HistoryStore(get_settings().database_path)).plan(plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="AI Shorts plan not found.")
+    # The Flow steps and cautions are help about Flow and YouTube, not part of
+    # the plan, so a saved plan shows today's wording instead of the wording it
+    # was saved with (Flow's plans, credits and labels change).
+    parts = plan.get("parts")
+    if isinstance(parts, int) and not isinstance(parts, bool) and 1 <= parts <= MAX_PARTS:
+        plan["flow_steps"] = flow_steps(parts)
+        plan["cautions"] = cautions(parts)
     return plan
 
 

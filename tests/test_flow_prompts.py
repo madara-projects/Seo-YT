@@ -15,6 +15,24 @@ from win_engine.generation import flow_prompts as fp
 from win_engine.llm import gemini_client
 
 QUOTE = "Stop explaining yourself to people who already decided to misunderstand you"
+
+
+def test_still_leaf_prompt_gets_visible_action_that_survives_trimming():
+    prompt = (
+        "Vertical 9:16 portrait composition, one continuous 8-second shot. "
+        "A slow camera pushes toward a leaf resting on dark stone, motionless. "
+        "The upper-middle stays clear for text added later. "
+        + fp.NEGATIVE_PROMPT + " Ambient noise: wind. " + fp.NO_VOICE_SENTENCE
+    )
+    patched, additions = fp.patch_prompt(prompt, part=1, audio="wind")
+    assert "lifts and flutters the leaf edges throughout the shot" in patched
+    assert "motionless" not in patched
+    assert "visible scene motion instead of a still life" in additions
+    trimmed = fp.trim_prompt(patched + " Soft natural lighting." * 60, part=1)
+    assert "Visible motion:" in trimmed
+    again, _ = fp.patch_prompt(trimmed, part=1, audio="wind")
+    assert again.count("Visible motion:") == 1
+
 VARIED_QUOTES = [
     QUOTE,
     "I still check my phone hoping it is you",
@@ -30,13 +48,19 @@ VARIED_QUOTES = [
 ]
 SUCCESS = {"status": "gemini_success", "attempts": 1, "retries": 0, "model": "gemini-test", "failure_category": None}
 
-# A prompt the way Gemini is asked to write one: Veo's order, the shared clause, the audio line.
+# A prompt the way Gemini is asked to write one: Veo's order (shot size, camera move, subject that
+# moves, place, light), the shared clause, the audio line.
 SCENE = (
-    "Slow push-in on a 35mm lens, vertical 9:16 portrait composition, one continuous 8-second shot. A figure in a grey "
-    "coat, seen from behind in the lower third, waits on an empty railway platform at dawn, mist hanging over the tracks "
-    "and the sky above a smooth pale grey. Cinematic natural light, muted palette of grey, pale blue and rust, slow calm "
-    "motion; the upper-middle of the frame stays calm and clear for text added later, detail in the lower third. "
+    "Wide shot, slow push-in on a 35mm lens, vertical 9:16 portrait composition, one continuous 8-second shot. A figure "
+    "in a grey coat, seen from behind in the lower third, waits on an empty railway platform at dawn, mist drifting over "
+    "the tracks and the sky above a smooth pale grey. Cinematic natural light, muted palette of grey, pale blue and rust, "
+    "slow calm motion; the upper-middle of the frame stays calm and clear, detail in the lower third. "
 )
+# Each later part adds a development of its own; a copy of the part before is flagged.
+DEVELOPMENTS = {
+    2: "In the middle, the mist thins and a distant train light passes slowly along the far track. ",
+    3: "In the ending, a light wind lifts the coat hem as the first sunlight reaches the rails. ",
+}
 AUDIO = "Ambient noise: a distant train, wind over the rails. No dialogue, no narration, no music."
 OVERLAYS = {
     1: [[QUOTE]],
@@ -49,7 +73,7 @@ def gemini_prompt(part: int = 1, *, body: str = SCENE, exclusion: str = fp.NEGAT
     opener = "" if part == 1 else (
         "Continuing the same railway platform scene: same location, same camera height and lens, same light and palette. "
     )
-    return f"{opener}{body}{exclusion} {audio}"
+    return f"{opener}{body}{DEVELOPMENTS.get(part, '')}{exclusion} {audio}"
 
 
 def reply(parts: int = 2, **overrides) -> str:
@@ -196,11 +220,15 @@ def test_check_catches_missing_aspect_ratio_and_length():
 def test_check_catches_wrong_length():
     short = "Slow push-in, vertical 9:16, one 8-second shot of an empty platform. " + fp.NEGATIVE_PROMPT + " " + AUDIO
     issues, _ = fp.check_prompt(short, QUOTE, 1)
-    assert any("words" in issue and "70-140" in issue for issue in issues)
-    long = gemini_prompt(1, body=SCENE + "The tracks run on into the mist. " * 12)
+    assert any("words" in issue and f"{fp.MIN_PROMPT_WORDS}-{fp.MAX_PROMPT_WORDS}" in issue for issue in issues)
+    long = gemini_prompt(1, body=SCENE + "The tracks run on into the mist. " * 20)
     assert fp.word_count(long) > fp.MAX_PROMPT_WORDS
-    issues, _ = fp.check_prompt(long, QUOTE, 1)
-    assert any("words" in issue for issue in issues)
+    issues, warnings = fp.check_prompt(long, QUOTE, 1)
+    # Too long is trimmed locally and at worst noted: length alone never costs a repair call.
+    assert not any("words" in issue for issue in issues)
+    assert any("words" in warning for warning in warnings)
+    # About 45 words of boilerplate fit beside a full paragraph of scene.
+    assert fp.MAX_PROMPT_WORDS >= 170
 
 
 def test_check_catches_missing_exclusions_brands_voice_and_continuity():
@@ -243,15 +271,20 @@ def test_check_plan_judges_structure_and_overlay():
 def test_patch_adds_every_missing_boilerplate_sentence_once():
     body = (
         "A figure in a grey coat, seen from behind in the lower third, waits on an empty railway platform at dawn, "
-        "mist hanging over the tracks and the sky above a smooth pale grey. Cinematic natural light, muted palette of "
+        "mist drifting over the tracks and the sky above a smooth pale grey. Cinematic natural light, muted palette of "
         "grey, pale blue and rust; the upper-middle of the frame stays calm for text added later."
     )
     patched, added = fp.patch_prompt(body, part=1, audio="a distant train, wind over the rails")
-    assert added == ["9:16 aspect ratio", "8-second length", "exclusion clause", "audio line", "no dialogue, narration or music"]
+    assert added == [
+        "shot size", "camera move", "9:16 aspect ratio", "8-second length", "exclusion clause", "audio line",
+        "no dialogue, narration or music",
+    ]
+    # The shot size and the camera move lead the prompt, as Veo's structure asks.
+    assert patched.startswith("Wide shot on a 35mm lens with a slow push-in, a figure in a grey coat")
     assert patched.count(fp.NEGATIVE_PROMPT) == 1
     assert "Ambient noise: a distant train, wind over the rails." in patched
     assert patched.endswith(fp.NO_VOICE_SENTENCE)
-    assert fp.check_prompt(patched, QUOTE, 1) == ([], [f"Part 1: prompt names no camera move"])
+    assert fp.check_prompt(patched, QUOTE, 1) == ([], [])
     again, added_again = fp.patch_prompt(patched, part=1, audio="anything")
     assert (again, added_again) == (patched, [])
 
@@ -325,7 +358,7 @@ def test_a_part_that_fails_twice_is_rebuilt_from_the_previous_part_not_the_libra
     first, second = plan["shots"]
     assert first["prompt"] == gemini_prompt(1)
     # Extend continues Part 1's last frame, so Part 2 keeps Part 1's scene rather than the library's.
-    assert second["prompt"].startswith("Continuing the same scene: same location, same camera height and lens")
+    assert second["prompt"].startswith("Continuing the same scene: same location, same framing, same camera height and lens")
     assert "empty railway platform at dawn" in second["prompt"]
     assert "loops to the opening" in second["prompt"]
     assert second["flow_mode"] == "extend" and second["continuity"].startswith("Extend Part 1's clip")
@@ -395,16 +428,21 @@ def test_structure_labels_and_part_references_are_removed_from_prompts():
 
 def test_trimming_keeps_the_layout_cue_for_the_quote():
     opening = (
-        "Slow push-in on a 35mm lens, vertical 9:16 portrait composition, one continuous 8-second shot. "
-        "A figure in a grey coat, seen from behind, waits on an empty railway platform at dawn. "
+        "Wide shot, slow push-in on a 35mm lens, vertical 9:16 portrait composition, one continuous 8-second shot. "
+        "A figure in a grey coat, seen from behind, walks slowly along an empty railway platform at dawn. "
     )
     detail = (
         "A paper cup rests on the bench beside a folded umbrella, both damp with dew. "
         "Far down the line a signal lamp glows faint red, then fades as the mist drifts across it. "
+        "A row of empty benches lines the platform edge, the paint worn pale by years of weather. "
+        "Overhead wires sag between the old iron posts and disappear into the grey haze. "
         "Puddles along the edge hold the pale sky in still, broken pieces. "
         "The platform clock hangs unlit above the far bench, its hands lost in the haze. "
     )
-    layout = "The upper-middle of the frame stays calm and uncluttered so the quote text can be laid over it later."
+    layout = (
+        "The upper-middle of the frame stays calm, uncluttered and in soft focus so the quote text can be laid over "
+        "it later."
+    )
     prompt = f"{opening}{detail}{layout} {fp.NEGATIVE_PROMPT} {AUDIO}"
     assert fp.word_count(prompt) > fp.MAX_PROMPT_WORDS
     trimmed = fp.trim_prompt(prompt, part=1)
@@ -414,13 +452,37 @@ def test_trimming_keeps_the_layout_cue_for_the_quote():
     assert fp.check_prompt(trimmed, QUOTE, 1) == ([], [])
 
 
+def test_trimming_keeps_the_opening_beat_that_introduces_the_subject():
+    # A live plan lost "In the opening, a lone figure ... walks along an empty
+    # pier", leaving "In the middle, the wind ripples their jacket" with no one in it.
+    prompt = (
+        "Vertical 9:16 portrait composition, one continuous 8-second shot. Cinematic natural lighting at cold "
+        "overcast dusk. In the opening, a slow tracking shot follows a lone figure seen from behind walking along "
+        "an empty concrete pier above grey water. The concrete is darkened by old rain and scattered with small "
+        "pools that hold the pale sky in broken, trembling pieces along the edge. Rusted mooring rings line the "
+        "edge of the pier, each one streaked with old salt and pale green weed. Far out, a low bank of fog hides "
+        "the horizon and the sea beneath it in a soft grey haze. Thin cables hang between the "
+        "lamp posts and hum faintly as the cold wind pulls at them from the sea. In the middle, the wind ripples "
+        "their jacket as they pause near the edge of the pier. In the ending, they look down into the grey haze as "
+        "the light slowly dims. The upper-middle of the frame stays calm, low-detail and uncluttered for text "
+        f"overlay. {fp.NEGATIVE_PROMPT} {AUDIO}"
+    )
+    assert fp.word_count(prompt) > fp.MAX_PROMPT_WORDS
+    trimmed = fp.trim_prompt(prompt, part=1)
+    assert fp.word_count(trimmed) <= fp.MAX_PROMPT_WORDS
+    assert "In the opening, a slow tracking shot follows a lone figure" in trimmed
+    assert "In the middle" in trimmed and "In the ending" in trimmed
+
+
 def test_trimming_never_drops_the_only_sentence_stating_the_aspect_ratio_or_the_length():
     # A long reply that forgot the aspect ratio and the length: the patch appends each as
     # its own sentence, right before the exclusion clause, which is where trimming used to
     # start deleting. The part then failed for exactly what had just been added.
     body = SCENE.replace("vertical 9:16 portrait composition, one continuous 8-second shot", "one shot") + (
         "The platform clock hangs unlit above the far bench, its hands lost in the haze. A paper cup rests on the "
-        "bench beside a folded umbrella, both damp with dew. Far down the line a signal lamp glows faint red, then "
+        "bench beside a folded umbrella, both damp with dew. A row of empty benches lines the platform edge, the "
+        "paint worn pale by years of weather. Overhead wires sag between the old iron posts and disappear into the "
+        "grey haze. Far down the line a signal lamp glows faint red, then "
         "fades as the mist drifts across it. Puddles along the edge hold the pale sky in still, broken pieces. "
     )
     patched, added = fp.patch_prompt(body + fp.NEGATIVE_PROMPT + " " + AUDIO, part=1, audio="unused")
@@ -577,7 +639,7 @@ def test_a_reply_with_missing_shots_or_bad_mood_is_completed_from_the_part_befor
     # The missing Part 2 continues Part 1's own scene, so Extend has a scene to continue.
     assert plan["shots"][1]["flow_mode"] == "extend" and plan["shots"][1]["prompt"].startswith("Continuing the same scene")
     assert "empty railway platform at dawn" in plan["shots"][1]["prompt"]
-    assert plan["shots"][1]["title"] == "The light shifts"
+    assert plan["shots"][1]["title"] == "Mist drifts in"
     assert any("rebuilt from Part 1's scene" in warning for warning in plan["checks"]["warnings"])
     # The mood's bad pace falls back to the library's.
     assert plan["mood"]["pace"] == "slow"
@@ -623,7 +685,9 @@ def test_part_two_continues_part_one_and_still_stands_alone():
     opening, middle, last = plan["shots"]
     assert opening["continuity"] is None
     for shot in (middle, last):
-        assert shot["prompt"].startswith("Continuing the same rain-streaked window scene: same location, same camera height and")
+        assert shot["prompt"].startswith(
+            "Continuing the same rain-streaked window scene: same location, same framing, same camera height and",
+        )
         assert "same light and palette" in shot["prompt"]
         assert "vertical 9:16" in shot["prompt"] and "8-second" in shot["prompt"]
         assert "Ambient noise:" in shot["prompt"]
@@ -715,21 +779,38 @@ def test_an_unread_feeling_gets_the_quiet_scene_and_says_so():
 
 def test_flow_steps_follow_flows_interface():
     steps = " ".join(fp.flow_steps(2))
-    for text in ("labs.google/flow", "Text to Video", "Aspect ratio 9:16", "generation length (8 s)", "Scene Builder",
-                 "More → Add to Scene", "click Extend", "Part 2 prompt", "stay the same across extensions",
-                 "only extend Veo-generated videos", "Jump to", "More → Download", "1080p", "Ultra", "\"Veo\" mark",
-                 "YouTube Studio"):
+    for text in ("flow.google", "Click the model name, then Video", "Aspect ratio 9:16", "a Veo 3.1 model",
+                 "generation length (8 s)", "Scenebuilder", "More → Add to Scene", "click Extend", "Part 2 prompt",
+                 "only extend Veo-generated videos", "only 8 s Veo 3.1 clips", "More → Download", "YouTube Studio"):
         assert text in steps, text
+    # Flow moved to flow.google and no longer has a Text to Video menu item or Jump to.
+    for gone in ("labs.google", "Choose \"Text to Video\"", "Jump to", "stay the same across extensions"):
+        assert gone not in steps, gone
     assert fp.flow_steps(2)[0].startswith("1. ") and fp.flow_steps(2)[-1].startswith("8. ")
     assert "Part 3 prompt" in " ".join(fp.flow_steps(3)) and "Part 3 prompt" not in steps
     single = " ".join(fp.flow_steps(1))
     assert "Extend" not in single and "Download" in single
 
 
+def test_the_download_step_gives_flows_current_upscaling_terms():
+    # Flow's credits page: 1080p upscaling costs Plus, Pro and Ultra no credits; 4K is Ultra-only.
+    download = next(step for step in fp.flow_steps(2) if "More → Download" in step)
+    for text in ("1080p upscaling currently costs no credits on Google AI Plus, Pro and Ultra",
+                 "not available to non-subscribers", "4K is Ultra-only and costs credits", "check them under Settings"):
+        assert text in download, text
+    # The old guide had 1080p as Ultra-only and the visible mark as a free and Pro plan export.
+    text = " ".join(fp.flow_steps(2) + fp.cautions(2))
+    for wrong in ("needs the Ultra plan", "export 720p", "Veo\" mark", "Veo mark", "upscale spends credits"):
+        assert wrong not in text, wrong
+
+
 def test_cautions_cover_the_mark_the_disclosure_originality_and_credits():
     text = " ".join(fp.cautions(2))
-    for phrase in ("Veo mark uncovered", "Altered or synthetic content", "2 Oct 2026", "template-based", "Flow credits are your own"):
+    for phrase in ("visible watermark uncovered", "SynthID", "Attributes → \"AI use\", select Yes", "2 Oct 2026",
+                   "template-based", "Flow credits are your own", "charged per generation", "final second"):
         assert phrase in text, phrase
+    # YouTube Studio now asks under "AI use"; the old checkbox name is gone.
+    assert "Altered or synthetic content" not in text
 
 
 def test_the_gemini_prompt_frames_the_quote_as_untrusted_and_cannot_be_closed_early():
@@ -737,7 +818,7 @@ def test_the_gemini_prompt_frames_the_quote_as_untrusted_and_cannot_be_closed_ea
     assert prompt.count('"""') == 2
     assert "untrusted creator input" in prompt
     assert fp.NEGATIVE_PROMPT in prompt and fp.NO_VOICE_SENTENCE in prompt
-    assert "Extend" in prompt and "70-140 words" in prompt
+    assert "Extend" in prompt and f"{fp.MIN_PROMPT_WORDS}-{fp.MAX_PROMPT_WORDS} words" in prompt
     assert "Extend" not in fp._build_plan_prompt(QUOTE, language="english", parts=1, mood_hint="", feeling="letting go")
     assert "ONLY valid JSON" in fp._SYSTEM_PROMPT and "untrusted" in fp._SYSTEM_PROMPT
 
@@ -760,6 +841,37 @@ def test_no_mood_hint_needs_no_fence():
     prompt = fp._build_plan_prompt(QUOTE, language="english", parts=2, mood_hint="", feeling="letting go")
     assert prompt.count('"""') == 2
     assert "Creator's mood hint: none." in prompt
+
+
+def test_the_plan_prompt_asks_for_a_scene_and_palette_that_fit_this_quote():
+    # Live plans for different quotes kept landing on rain at a window, and a
+    # hopeful quote got the same muted gloom as a sad one.
+    prompt = fp._build_plan_prompt(QUOTE, language="english", parts=2, mood_hint="", feeling="letting go")
+    assert "don't default to rain on a window or glass" in prompt
+    assert "warmer and brighter for hope, pride or healing" in prompt
+    assert "a muted palette" not in prompt and "the rain eases" not in prompt
+    # A relatable moment, not a symbol: "pretend you don't have a heart" once
+    # became a gloved hand wrapping a pocket watch in wool.
+    assert "never an abstract symbol or a prop metaphor that needs explaining" in prompt
+    assert "expressive interaction" not in prompt and "hands or a figure" not in prompt
+
+
+def test_the_creative_director_reads_the_quote_then_picks_a_relatable_scene():
+    with patch.object(fp.gemini_client, "generate_with_diagnostics", return_value=("", {})) as generate:
+        fp._creative_direction(QUOTE, "")
+    prompt = generate.call_args.args[0]
+    assert "Step 1, understand the quote" in prompt and "Step 2, name its tone" in prompt
+    assert "Step 3, choose the background a viewer instantly connects" in prompt
+    assert "Write three candidate scenes" in prompt and "Body parts and abstractions are never turned into props" in prompt
+    assert "the scene should show it literally" in prompt and "two people together" in prompt
+    assert "Never use an abstract symbol or a visual puzzle" in prompt
+    assert "no crowds" in prompt and "never stopping, freezing or standing still" in prompt
+    for field in ("quote_meaning", "emotion", "tone", "candidates", "scene", "why_it_fits", "search_themes"):
+        assert f'\\"{field}\\"' in prompt or f'"{field}"' in prompt, field
+    assert ", ".join(fp.TONES) in prompt
+    assert "Prefer expressive hands" not in prompt and "interaction with an object" not in prompt
+    # The director's reply is longer now; 1000 tokens cut a live direction off.
+    assert generate.call_args.kwargs["max_tokens"] >= 1600
 
 
 def test_the_repair_prompt_carries_only_the_previous_copy_and_the_issues():
