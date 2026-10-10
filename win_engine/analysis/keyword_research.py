@@ -30,8 +30,8 @@ from win_engine.ingestion.search_suggest import demand_rank, suggestion_index
 
 
 _FORMAT_GENERIC = {"short", "shorts", "yt", "video", "videos", "youtube", "content", "viral", "trending", "fyp"}
-# "shorts" is the creator's one format tag; "yt" is a tag nobody searches.
-_PREFERRED_SHORT_TAGS = ("shorts",)
+# The creator's format tags for every Short: a strategy choice, not search evidence.
+_PREFERRED_SHORT_TAGS = ("yt", "shorts")
 _BROAD_EMOTIONAL_TERMS = {
     "emotion", "emotional", "feelings", "healing", "hurt", "loneliness", "lonely",
     "motivation", "pain", "sad", "sadness", "selfcare", "self-care",
@@ -439,7 +439,7 @@ def select_final_tags(
             "candidates_rejected_at_selection": rejected_count,
             "candidates_selected": len(chosen),
         },
-        "selection_policy": "Tags are atomic source-grounded search concepts. Multi-word result evidence requires strict phrase-term coverage; planned-query alignment is scored separately and is never represented as search volume. A second tag from the same topic family is retained only when it independently clears 72 or has matching-result evidence and keeps the selected subject-tag average at or above 72. Weak generic, visual-only, title-copy, quote-copy, malformed, duplicate, competitor-derived, and unsupported candidates are excluded; visual context is capped at one tag. The creator-preferred shorts platform tag is appended only for Shorts.",
+        "selection_policy": "Tags are atomic source-grounded search concepts. Multi-word result evidence requires strict phrase-term coverage; planned-query alignment is scored separately and is never represented as search volume. A second tag from the same topic family is retained only when it independently clears 72 or has matching-result evidence and keeps the selected subject-tag average at or above 72. Weak generic, visual-only, title-copy, quote-copy, malformed, duplicate, competitor-derived, and unsupported candidates are excluded; visual context is capped at one tag. The creator-preferred yt and shorts platform tags are appended only for Shorts.",
     }
     return tags, evidence
 

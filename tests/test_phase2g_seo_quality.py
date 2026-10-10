@@ -93,9 +93,7 @@ class Phase2GSeoQualityTests(unittest.TestCase):
                     self.assertNotEqual(gate["verdict"], "RED")
                     self.assertEqual(package["generation_source"], "fallback")
                     if brief["video_format"] == "youtube_shorts":
-                        # "shorts" is the creator's format tag; "yt" is no longer added.
-                        self.assertIn("shorts", package["tags"])
-                        self.assertNotIn("yt", package["tags"])
+                        self.assertTrue({"yt", "shorts"}.issubset(package["tags"]))
                         self.assertNotIn("#shorts", package["title"].casefold())
                     self.assertNotIn("…", package["title"])
                     self.assertFalse(any(tag in {"youtube shorts", "viral shorts"} for tag in package["tags"]))
@@ -132,8 +130,8 @@ class Phase2GSeoQualityTests(unittest.TestCase):
             script=script,
             creator_brief=brief,
         )
-        self.assertTrue(set(tags).issubset({"being misunderstood", "being genuine", "shorts"}))
-        self.assertIn("shorts", tags)
+        self.assertTrue(set(tags).issubset({"being misunderstood", "being genuine", "yt", "shorts"}))
+        self.assertTrue({"yt", "shorts"}.issubset(tags))
         self.assertTrue(all(item["provenance"] in {"script_derived", "combined", "research_discovered", "creator_strategy"} for item in evidence["tag_provenance"]))
         self.assertTrue(any(item["reason"] in {"missing_semantic_support", "irrelevant"} for item in evidence["rejected_candidates"]))
 

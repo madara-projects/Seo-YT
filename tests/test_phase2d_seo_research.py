@@ -231,9 +231,7 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         )
         self.assertIn("silence in grief", tags)
         self.assertIn("absence in grief", tags)
-        # "shorts" closes a Short's tags; the hard-coded "yt" is no longer added.
-        self.assertEqual(tags[-1], "shorts")
-        self.assertNotIn("yt", tags)
+        self.assertEqual(tags[-2:], ["yt", "shorts"])
         topic_scores = [
             row["keyword_relevance_score"] for row in evidence["selected_keywords"]
             if row["classification"] != "platform_format"
@@ -574,7 +572,7 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
             creator_brief={"exact_quote": self.quote},
             is_short=True,
         )
-        self.assertNotIn("yt", tags)
+        self.assertIn("yt", tags)
         self.assertIn("shorts", tags)
         self.assertNotIn("in the end i wasn't abandoned i was erased", tags)
         self.assertTrue(any(tag in {"emotional distance", "feeling forgotten", "emotional healing quotes", "feeling unseen"} for tag in tags))

@@ -119,7 +119,7 @@ export const FORMAT_CHOICES: { value: FormatChoice; label: string; detail: strin
     value: "short",
     label: "Short",
     detail: "Vertical, up to 3 minutes. Quotes, quick tips, one idea.",
-    consequence: "#shorts in the title, a focused tag set, no chapters.",
+    consequence: "#shorts leads the hashtags, a focused tag set, no chapters.",
   },
   {
     value: "long",

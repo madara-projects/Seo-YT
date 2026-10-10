@@ -54,14 +54,13 @@ _UNSUPPORTED_CLAIMS = (
     ("invented_relationship", re.compile(r"\b(?:breakup|toxic relationship|one-sided relationship|just an option)\b", re.IGNORECASE)),
     ("invented_causality", re.compile(r"\b(?:leads? to|causes?|results? in)\b", re.IGNORECASE)),
 )
-# Platform-format words are not subject evidence. ``shorts`` may be retained
-# separately as an explicit creator strategy preference for Shorts; ``yt`` is
-# a tag nobody searches.
+# Platform-format words are not subject evidence. ``yt`` and ``shorts`` may be
+# retained separately as an explicit creator strategy preference for Shorts.
 _PLATFORM_TAGS = {
     "short", "shorts", "yt", "youtube", "youtube shorts", "viral", "viral shorts",
     "trending", "trending shorts", "short video", "video", "fyp",
 }
-_PREFERRED_SHORT_TAGS = {"shorts"}
+_PREFERRED_SHORT_TAGS = {"yt", "shorts"}
 _SHORTS_TITLE_RE = re.compile(r"(?<![\w#])#shorts(?!\w)", re.IGNORECASE)
 _TITLE_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
 _GENERIC_FORMAT_TAGS = {
@@ -1581,7 +1580,8 @@ def _final_semantic_quality(
     elif topic_rows and tag_score is not None and tag_score < 72:
         warnings.append(_issue(
             "weak_tag_usefulness", "tags",
-            "Average subject-tag quality is below the 72-point threshold required for a GREEN package.",
+            ("Subject-tag coverage is limited; this informational Shorts note does not determine the package verdict."
+             if short else "Average subject-tag quality is below the 72-point threshold required for a GREEN package."),
             severity=tag_severity,
         ))
     rich_quote_context = bool(

@@ -465,16 +465,16 @@ class Phase4QualityTests(unittest.TestCase):
         codes = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
         self.assertIn("relationship_event", codes)
 
-    def test_creator_preferred_shorts_tag_is_kept_but_platform_filler_is_dropped(self):
-        # New contract: tags are advisory. Filler (now including "yt") is
-        # noted and dropped from the package; it never fails it.
+    def test_creator_preferred_yt_and_shorts_tags_are_kept_but_platform_filler_is_dropped(self):
+        # New contract: tags are advisory. Filler is noted and dropped from
+        # the package; it never fails it.
         package = valid_package()
         package["tags"] = ["bare minimum quote", "yt", "shorts", "youtube shorts"]
         gate = evaluate_package_quality(package, script="A quote Short")
         self.assertNotIn("platform_tag_filler", {item["code"] for item in gate["issues"]})
         filler = {item["tag"] for item in gate["warnings"] if item["code"] == "platform_tag_filler"}
-        self.assertEqual(filler, {"youtube shorts", "yt"})
-        self.assertEqual(apply_quality_gate(package, gate)["tags"], ["bare minimum quote", "shorts"])
+        self.assertEqual(filler, {"youtube shorts"})
+        self.assertEqual(apply_quality_gate(package, gate)["tags"], ["bare minimum quote", "yt", "shorts"])
 
     def test_short_title_shorts_hashtag_is_optional_but_never_duplicated(self):
         # New contract: YouTube detects a Short by its format, so a title

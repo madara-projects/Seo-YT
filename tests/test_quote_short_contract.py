@@ -399,7 +399,7 @@ class RealSearchTagTests(unittest.TestCase):
             "a window, a typewriter reveal with a text overlay, no voiceover",
             ["text overlay", "typewriter reveal", "quote on the screen", "no voiceover"], video_format="youtube_shorts",
         )
-        self.assertEqual(tags, ["shorts"])
+        self.assertEqual(tags, ["yt", "shorts"])
         reasons = {row["keyword"]: row["reason"] for row in evidence["rejected_candidates"]}
         self.assertEqual(reasons.get("text overlay"), "production_note")
         self.assertEqual(reasons.get("typewriter reveal"), "production_note")

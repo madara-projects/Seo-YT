@@ -128,7 +128,7 @@ describe("Creator setup", () => {
     expect(within(group).getByRole("radio", { name: /Short/ })).toBeChecked();
     expect(within(group).getByRole("radio", { name: /Long video/ })).not.toBeChecked();
     expect(within(group).getByRole("radio", { name: /Not sure/ })).not.toBeChecked();
-    expect(screen.getByText(/#shorts in the title, a focused tag set, no chapters/)).toBeInTheDocument();
+    expect(screen.getByText(/#shorts leads the hashtags, a focused tag set, no chapters/)).toBeInTheDocument();
     expect(screen.getByTestId("setup-summary")).toHaveTextContent("Short · English · Global");
   });
 
@@ -260,7 +260,7 @@ describe("Creator setup", () => {
       const panel = await screen.findByRole("complementary", { name: "Your package" });
       expect(within(panel).getByTestId("setup-summary")).toHaveTextContent("Short · English · Global");
       expect(within(panel).getByRole("combobox", { name: "Output language" })).toBeInTheDocument();
-      expect(within(panel).getByText(/#shorts in the title/)).toBeInTheDocument();
+      expect(within(panel).getByText(/#shorts leads the hashtags/)).toBeInTheDocument();
       expect(within(panel).getByRole("button", { name: "Generate package" })).toBeDisabled();
       // One Generate button and one set of language fields: no bottom bar on wide screens.
       expect(screen.queryByTestId("setup-bar")).not.toBeInTheDocument();

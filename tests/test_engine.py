@@ -255,7 +255,7 @@ class TestEngineStages(unittest.TestCase):
         tags = package["tags"]
         self.assertIn("chennai street food", tags)
         self.assertIn("shorts", tags)
-        self.assertNotIn("yt", tags)  # a tag nobody searches is no longer added
+        self.assertIn("yt", tags)
         self.assertIn("#shorts", package["hashtags"])
         self.assertTrue({"youtube shorts", "viral shorts"}.isdisjoint(tags))
 
