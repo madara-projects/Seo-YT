@@ -25,30 +25,35 @@ It must say Collecting evidence when there is not enough data to support the con
 
 ## Current implementation snapshot
 
-The core implementation for Stages A through F, Stage G1, Stage H, and Stage I is present and verified locally. Personal recommendations remain in the Collecting evidence state until real linked videos reach the documented sample thresholds.
+The core implementation for Stages A through F, Stages G1 through G5, Stage H, and Stage I is present and verified locally. As of 2026-10-06 the app is version 0.13.0 and the database is schema version 12 (`win_engine/feedback/migrations.py`). Personal recommendations remain in the Collecting evidence state until real linked videos reach the documented sample thresholds.
 
-- **Stage A (Package-to-Video Linking)**: `published_video_links` table, fail-closed owned-video verification with stored channel provenance, `POST /api/history/runs/{id}/link-video`, `GET /api/published-videos`, `PATCH /api/published-videos/{id}`, and 1-click link actions in the dashboard.
+- **Interface (2026-09-26)**: the React app (source in `frontend/`, built into `win_engine/api/static/app/`) is the only interface. It is served at `/` and on each page path; `/` opens Creator (or the page of an old `#hash` bookmark), and `/next/*`, `/app` and `/dashboard_view` redirect (308) to the same page. The sidebar groups the pages as Studio (Dashboard, Creator, AI Shorts, History), Performance (Channel), Research lab (Ideas, Demand, Audits, Experiments, Watchlist) and System (Settings). The classic static dashboard, its compatibility bundle, its Chromium tests and the `/dashboard_legacy` rollback route were all removed on 2026-09-26.
+- **Stage A (Package-to-Video Linking)**: `published_video_links` table, fail-closed owned-video verification with stored channel provenance, `POST /api/history/runs/{id}/link-video`, `GET /api/published-videos`, `PATCH /api/published-videos/{id}`, and link actions on the History page.
 - **Stage B (Age-Based Snapshots)**: `video_performance_snapshots` keeps current display data separate from bounded, observable, retryable 24h/7d/28d evidence windows. Only valid Analytics evidence completes a scheduled window.
 - **Stage C (Personal Learning Engine)**: `evidence_policy.py` is the single 5/10/20 threshold source for cohort analytics, History diagnosis, channel learning, and Gemini prompt eligibility. One verified video contributes at most one completed observation to a selected format/language/window cohort.
 - **Stage D (Package Experiments)**: `package_experiments` table and experiment logging endpoints (`POST /api/experiments`) with a real saved performance baseline; all live YouTube changes remain manual.
 - **Stage E (Search/Browse/Audience Packages)**: Gemini multilingual generation producing dedicated Search, Browse, and Returning Audience title/thumbnail packages.
-- **Stage F (Reliability & Test Suite)**: Schema version 6, verified online backup-before-migration, runtime foreign-key enforcement, safe cascades, transactional deletion rollback, SQLite WAL persistence, 179 backend tests, and 38 deterministic Chromium workflow tests. Browser tooling remains development-only.
-- **Phase 3D (Creator Decision Workflow)**: Complete eight-stage flow from Idea through Checklist, truthful Research/provenance, deterministic local package comparison and selection, decision evidence/unknowns, safe copy/export, manual acknowledgments, and Creator renderer ownership in `pages/creator.js`.
+- **Stage F (Reliability & Test Suite)**: Verified online backup-before-migration (the newest ten backups are kept; Settings shows the last backup time), a quick integrity check at every start-up, runtime foreign-key enforcement, safe cascades, transactional deletion rollback, and SQLite WAL persistence. Backend tests are hermetic and run with `python -m pytest tests` (`requirements-dev.txt`); the frontend is checked from `frontend/` with `npx tsc -b --noEmit`, `npx vitest run` and `npm run build`, and the Playwright suite in `frontend/e2e` (`npx playwright test`) drives a running app. Browser tooling remains development-only. (At Phase 8, 23 August 2026, this was schema version 6 with 179 backend tests and 38 Chromium tests for the classic dashboard; those Chromium tests were removed with that dashboard on 2026-09-26.)
+- **Phase 3D (Creator Decision Workflow)**: Superseded 2026-09-26. The classic eight-stage Creator (Idea through Checklist, `pages/creator.js`) was removed with the classic dashboard. The React Creator page has an input screen (choose Short or Long video, then the script/brief) and four result tabs: Package, Compare options, Research and insights, and Before you publish. Research provenance, local package comparison and selection, evidence/unknowns, copy/export and the pre-publish checklist live in those tabs.
 - **Stage H / Phase 4 (Generation Quality & Anti-Repetition Engine)**: Completed 23 August 2026. Structured brief provenance, deterministic Unicode-aware quality/diversity checks, one-repair maximum, evidence-gated personalization trace, package reasons/trade-offs, additive selected-package persistence, and explicit History attribution are implemented. See `docs/phases/PHASE_04.md`.
 - **Stage I / Phase 5 (Hook, Pacing & Retention Assistant)**: Completed 23 August 2026. Deterministic pre-publish hook, first-frame, pacing, quote-presentation, risk-map, practical-alternative, and package-alignment guidance is integrated into the existing Creator flow. Comparable mature post-publish average-view-percentage evidence is correlation-labelled and unavailable retention details remain unavailable. See `docs/phases/PHASE_05.md`.
 - **Stage G1 / Phase 6 (Idea Backlog & Topic Opportunity Workspace)**: Completed 23 August 2026. The Ideas page, schema-v4 lifecycle persistence, immutable dated research snapshots, approved research reuse, existing-generator linkage, verified publication linkage, honest opportunity explanation, pagination, filtering, and stale-evidence protection are implemented. See `docs/phases/PHASE_06.md`.
 - **Stages G2 and G5 / Phase 7 (Watchlist & Honest Demand Explorer)**: Completed 23 August 2026. Verified channel/video watchlists, immutable public snapshots, same-channel comparable-format possible-outlier analysis, dated demand classifications, shared personal-evidence gating, Idea integration, and generation through the existing Creator/History engine are implemented. See `docs/phases/PHASE_07.md`.
 - **Stages G3 and G4 / Phase 8 (Published Audits & Experiment Center)**: Completed 23 August 2026. Immutable generated/selected/published audit snapshots, historical pre-publish traceability, actual observation windows, deterministic findings, controlled-versus-observational experiments, explicit video assignment, comparable-window metrics, and evidence-gated result snapshots are implemented. See `docs/phases/PHASE_08.md`.
+- **Audit and hardening (2026-09-26, schema v10)**: cloud-sync conflicts keep the losing local edit, each owned upload records which channel it belongs to, and every format is stored in one spelling so Shorts made from Creator count toward learning. Docker runs `python:3.11.16-slim` as a non-root user (UID 10001) with a read-only root filesystem, a tmpfs `/tmp`, all capabilities dropped, `no-new-privileges`, memory/CPU/process limits and a Python health check, published only on `127.0.0.1:8000`; Redis (`redis:7.4.11-alpine`) has no host port and runs read-only and unprivileged as user `redis`.
+- **Upload-ready chapters, Shorts path, quota by bucket, outcome learning (2026-09-26, schema v11)**: a long video's valid chapters go in the copied description (Shorts and invalid lists get none); the `youtube_quota_usage` ledger counts YouTube use per Pacific quota day, per bucket and per key slot (`key1`, `key2`…) or `oauth`, never the key itself, and Settings shows today's use; the Opportunity Score shows its five inputs with weights, sources, missing-data warnings and confidence, and a Dashboard card calibrates past scores against published results; long videos can record a YouTube Studio Test & Compare result by hand (`youtube_studio_tests`); completed snapshot windows keep their traffic sources; and a linked video's retention curve can be checked with one Analytics request (nothing stored).
+- **AI Shorts (2026-10-03, schema v12)**: the creator types only a quote; Gemini reads its feeling and writes one Google Flow (Veo 3.1) prompt per 8-second part (two parts by default, one to three allowed: Part 1 for Text to Video, later parts for Flow's Extend), plus Flow steps, a first-frame on-screen text plan and a lean Shorts SEO package (at most six Gemini calls; no YouTube Data API calls; tags checked against free YouTube search suggestions). Since 2026-10-10 Gemini reads the quote first (meaning, emotion, tone, how viewers search for it) and the scene, light, tags, hashtag and emoji follow that reading. Each plan is saved in `ai_short_plans` with its package as a History run, and History links AI Shorts runs back to their plan; plans stay on the device (cloud sync carries only the run). Flow usage details are in the Flow guide on the AI Shorts page. Code: `win_engine/generation/ai_shorts.py`, `win_engine/generation/flow_prompts.py`, `win_engine/feedback/ai_shorts_store.py`; API `POST /api/ai-shorts/generate`, `GET /api/ai-shorts/plans`, `GET`/`DELETE /api/ai-shorts/plans/{id}`.
+- **Package audit (2026-10-05)**: quote Short titles must carry the whole quote or its idea faithfully, verdicts are honest (unsafe RED; weak, sparse or fallback YELLOW; clean GREEN), quote Short hashtags are `#shorts`, `#quotes` and the quote's feeling, tags are cleaned and length-capped, and research fetches 25 results per search (`WIN_ENGINE_YOUTUBE_MAX_RESULTS`, 1–50). See `CHANGELOG.md`.
 
-Stages J through L remain the next product program. Stages G1 through G5, H, and I are complete for their documented scopes. An agent may mark another item complete only after its required database work, backend, dashboard flow, tests, Docker rebuild, and live verification all pass.
+Stages J through L remain the next product program; parts of Stage L (YouTube quota visibility, pre-migration backups, Settings diagnostics) are already done. Stages G1 through G5, H, and I are complete for their documented scopes. An agent may mark another item complete only after its required database work, backend, interface flow, tests, Docker rebuild, and live verification all pass.
 
 ### Current gaps that must be addressed first
 
 - The quota-aware due-snapshot collector is implemented but deliberately opt-in and disabled by default. Until the creator enables it, linked-video refresh remains manual/page-triggered and evidence accumulates more slowly.
 - Existing links migrated from schema version 0 are deliberately unverified and legacy/current snapshots are deliberately excluded from mature evidence until official verification and new scheduled collection succeed.
-- Structured experiments and their dashboard workflow are implemented. Local thumbnail-draft review and creator-visible YouTube Test & Compare import remain future G4 extensions.
-- Automated daily opportunity summaries, personal AI coaching, weekly reports, and the PWA/Android boundary are planned but not implemented. Manual Watchlist and Demand research are implemented.
-- Creator rendering is modularized. Dashboard, History, Analytics, and Settings renderers still share a compatibility bundle and should be extracted incrementally before several more complex pages are added.
+- Structured experiments and their Experiments page are implemented, and since 2026-09-26 a creator-read YouTube Studio Test & Compare result can be recorded by hand for long videos. Local thumbnail/first-frame draft review remains a future G4 extension.
+- Automated daily opportunity summaries, personal AI coaching, weekly reports, encrypted backup/restore, and the PWA/Android boundary are planned but not implemented. Manual Watchlist and Demand research are implemented.
+- Resolved 2026-09-26: the classic dashboard and its shared compatibility bundle were removed; every page is now a React page in `frontend/src/pages`.
 
 ## Rules for any AI agent working on this project
 
@@ -59,14 +64,14 @@ Before editing:
 3. Never delete the database, OAuth token, existing history, or channel snapshots unless the creator explicitly requests that exact deletion.
 4. Use versioned, backup-first, reversible database migrations. Prefer additive changes; when a SQLite relationship requires a table rebuild, preserve and verify every row inside one transaction. Never require a destructive reset.
 5. Show missing data as Not available. Never create guessed analytics values.
-6. Add or update tests for every backend behavior and exercise changed dashboard actions in a browser test.
+6. Add or update tests for every backend behavior and cover changed interface actions with a frontend test (Vitest beside the page, or Playwright in `frontend/e2e` against a running app).
 
 After editing:
 
-1. Run Python compilation and targeted tests.
+1. Run `python -m pytest tests` (hermetic; install `requirements-dev.txt`) or the targeted tests. For frontend changes, run from `frontend/`: `npm ci`, `npx tsc -b --noEmit`, `npx vitest run`, and `npm run build`.
 2. Rebuild with docker compose up -d --build.
 3. Verify docker compose ps is healthy and only 127.0.0.1:8000 is published.
-4. Test changed API endpoints and the matching dashboard flow.
+4. Test changed API endpoints and the matching page in the interface.
 5. Report what changed, what data was preserved, and any remaining limitation.
 
 ## Metadata quality standards
@@ -98,7 +103,7 @@ For each description:
 
 1. Put the main topic and viewer promise in the first two lines.
 2. Explain what the video actually contains.
-3. Add chapters only when appropriate.
+3. Add chapters only when appropriate: long videos only, with the first chapter at 0:00, at least three chapters, each at least 10 s, and the final chapter checked against the stated length. Done 2026-09-26: a long video's valid chapters are placed in the copied description; Shorts and invalid lists get none.
 4. Add a relevant playlist, related-video, or next-view suggestion when the creator provides one.
 5. Add a short natural call to action.
 6. Put relevant hashtags at the end.
@@ -159,9 +164,9 @@ Validation rules:
 - A video may link to one analysis run only unless the creator explicitly replaces the link.
 - Store creator-edited metadata exactly. Do not silently replace it with generated content.
 
-### Dashboard work
+### Interface work
 
-Add to the History detail page:
+Status: done; these actions now live on the React History page. Add to the History detail page:
 
 - Mark as published
 - Paste YouTube URL or select from recent owned videos
@@ -211,6 +216,8 @@ Where the connected report supports them, additionally store:
 - Returning/new viewer information
 
 Use null values for unavailable metrics. Never substitute views for impressions or invent CTR.
+
+Done 2026-09-26 (schema v11): completed snapshot windows keep their traffic sources, and cohorts can be compared by dominant traffic source once five or more comparable videos exist.
 
 The YouTube Analytics API supports metrics including views, watch time, average view duration, average view percentage, likes, comments, shares, and subscribers gained. https://developers.google.com/youtube/analytics/metrics
 
@@ -347,15 +354,15 @@ Start this only after Stages A through C create usable linked data.
 
 - Keep FastAPI as the single business-logic API.
 - Version database migrations and document each schema change.
-- Add paginated history, history search, JSON export, and local encrypted backup.
-- Add database integrity checks and backup-before-migration.
+- Add paginated history, history search, JSON export, and local encrypted backup. Paginated History is done; Creator can download one analysis as JSON. History search, a full JSON export, and encrypted backup are not implemented.
+- Add database integrity checks and backup-before-migration. Done: a quick integrity check runs at start-up, and every migration is preceded by a verified backup (newest ten kept).
 - Keep SQLite, OAuth tokens, Gemini key, YouTube API key, OAuth secret, and encryption key on the laptop.
 
 ### Required tests
 
 - Unit tests for creator brief, title quality gate, keyword rules, score calculations, migrations, link validation, and learning thresholds.
 - API tests for validation errors, rate limits, pagination, linking/unlinking, and OAuth expiry.
-- Browser tests for sidebar routing, generation, History detail, mark-published flow, diagnostics, and errors.
+- Browser tests for sidebar routing, generation, History detail, mark-published flow, diagnostics, and errors. These are now Vitest tests beside the React pages and Playwright tests in `frontend/e2e`; the Chromium tests for the classic dashboard were removed on 2026-09-26.
 - Docker test confirming localhost-only app binding and no Redis host port.
 
 ### Android boundary
@@ -418,7 +425,7 @@ Complete and verify each item before the next one:
 - The implemented labels are: fewer than 5 mature comparable videos = Collecting evidence; 5–9 = Early signal; 10–19 = Moderate evidence; 20 or more = Strong historical pattern.
 - A valid completed 24h/7d/28d snapshot is required for the selected cohort window. Current and legacy snapshots are never promoted automatically.
 - Include cohort identity, sample size, window, median, comparison value, confidence, and data-capture time with every recommendation.
-- Remove or migrate older conflicting labels so History, Analytics, generation, and reports cannot disagree.
+- Remove or migrate older conflicting labels so History, Channel, generation, and reports cannot disagree.
 
 #### Local due-snapshot collector
 
@@ -484,7 +491,7 @@ Show `Not enough personal evidence` when appropriate. Never display a guessed se
 - Linking the generated History run to a verified owned YouTube video automatically completes the idea's published association. Deleting a History run preserves the original idea and returns it to `scripted`.
 - The Ideas page provides list, status filter, pagination, detail, Search/Browse/Existing Audience angles, public result publication dates, personal evidence state, Research, Generate package, Mark scripted, Mark published, Archive/Restore, and History actions.
 - Missing public research and fewer than five mature comparable videos remain unavailable or `insufficient_evidence`; no monthly volume, trend percentage, or outcome confidence is fabricated.
-- Verification covers 134 backend and 31 browser tests (165 total). Detailed architecture and limitations are in `docs/phases/PHASE_06.md`.
+- At completion (23 August 2026) verification covered 134 backend and 31 classic-dashboard browser tests (165 total). Detailed architecture and limitations are in `docs/phases/PHASE_06.md`.
 
 ### G2 — Competitor and outlier watchlist
 
@@ -529,7 +536,7 @@ Evaluate only known fields:
 - Title, description, tags, and hashtags are deterministically labelled exact, changed, missing, unknown, or unavailable across generated-to-selected, selected-to-published, and generated-to-published comparisons.
 - Findings include a code, severity, category, explanation, evidence, evidence state, and recommended interpretation. Summary states describe data availability and maturity, never success/failure or causality.
 - Learning candidates reuse the shared evidence policy and remain insufficient, hypothesis-only, or mature comparable observations. No audit reconstructs unavailable historical facts from current public research.
-- The Published Audits page and API expose candidates, filters, immutable versions, detail, findings, evidence, and refresh actions. Detailed contracts are in `docs/phases/PHASE_08.md`.
+- The Audits page and API expose candidates, filters, immutable versions, detail, findings, evidence, and refresh actions. Detailed contracts are in `docs/phases/PHASE_08.md`.
 
 ### G4 — Experiment center and thumbnail/first-frame comparison
 
@@ -538,7 +545,7 @@ Show two or three saved title/thumbnail packages side by side. Let the creator u
 - For Shorts, treat the first visible frame, on-screen hook, readability, and visual loop as first-class experiment assets rather than assuming a conventional thumbnail controls Shorts-feed performance.
 - Provide mobile-size preview, safe-area overlay, contrast/readability checks, clutter warning, and title-image duplication warning.
 - Let Gemini review an explicitly uploaded local image when quota is available. Label visual advice as an AI review, not measured performance.
-- Allow manual recording or import of creator-visible YouTube Test & Compare results when supported. Do not invent an API result that YouTube does not expose.
+- Allow manual recording or import of creator-visible YouTube Test & Compare results when supported. Do not invent an API result that YouTube does not expose. Done 2026-09-26 (schema v11) for long videos: up to three packages are prepared for Studio's Test & Compare and the result read in Studio is entered by hand (`win_engine/feedback/studio_tests.py`); Shorts are told the test is not available.
 
 - Require one changed variable per experiment: title, thumbnail, description, or tags.
 - Save the latest real linked-video metrics as baseline.
@@ -556,7 +563,7 @@ Every experiment retains original metadata, changed metadata, reason, baseline, 
 - A video is counted only after explicit creator assignment. Duplicate assignment, unverified links, invalid roles, and assignments to closed experiments are rejected.
 - Comparison output shows assigned/eligible/mature group counts, missing metrics, mean, median, absolute and relative differences, evidence state, interpretation, limitations, and next collection step. At least five eligible videos per group are required for a direction.
 - Results are limited to insufficient, directional control/variant, inconclusive, mixed, or observational pattern. No fake statistical significance or causal winner is calculated, and learning candidates are not automatically applied to generation.
-- The Experiment Center page supports creation, filtering, detail, lifecycle, assignment, removal, and comparison. Thumbnail/first-frame draft analysis and creator-visible Test & Compare import remain future extensions, not fabricated API capabilities.
+- The Experiment Center page supports creation, filtering, detail, lifecycle, assignment, removal, and comparison. Manual Test & Compare recording followed on 2026-09-26 (see above); thumbnail/first-frame draft analysis remains a future extension, not a fabricated API capability.
 
 ### G5 — Honest topic-demand explorer and search-position decision
 
@@ -642,7 +649,7 @@ Run a local validation pass after Gemini and before saving:
 - Candidate titles are materially distinct.
 - Description first lines state content and viewer relevance naturally.
 - Description does not repeat a list of SEO phrases or invent facts.
-- Tags are focused; retain the creator-required Shorts tags `shorts`, `yt`, `youtube shorts`, and `viral shorts` for Shorts.
+- Tags are focused. A Short's tags end with the creator-preferred `yt` and `shorts` platform tags, kept as two separate tags; they are format tags, not subject evidence, and long videos never get them. Never add filler such as `youtube shorts` or `viral shorts`.
 - Hashtags contain 1–3 relevant terms and are not duplicated accidentally.
 - Search/Browse/Audience labels match the actual candidate strategy.
 - Emoji use is optional, relevant, and limited.
@@ -668,7 +675,7 @@ For each recommended package, display:
 - Main risk or tradeoff.
 - Generated-versus-heuristic labels for every score.
 
-Opportunity Score remains research context, not a predicted chance of growth. Title Quality remains a rule-based quality assessment, not predicted CTR.
+Opportunity Score remains research context, not a predicted chance of growth. Title Quality remains a rule-based quality assessment, not predicted CTR. Done 2026-09-26: each Opportunity Score shows its five inputs with weights, sources, missing-data warnings and confidence (LOW under five results), and a Dashboard calibration card compares past scores with comparable published results (`win_engine/feedback/score_calibration.py`).
 
 ### Acceptance checks
 
@@ -728,10 +735,12 @@ For narrated or long-form videos, provide a separate structure: opening promise,
 - Duration-based timing bands are emitted only when duration is creator-supplied; otherwise the risk map uses relative opening/setup/middle/payoff stages.
 - The saved analysis payload retains the complete Phase 5 response, while explicit package selection stores a compact retention trace for later attribution.
 - Linked History reports dynamically expose the comparable retention-learning state. A minimum of five eligible completed observations with real average-view-percentage values is required before displaying observed correlations.
-- Official retention curves and exact drop timestamps are not available in the current integration and are never fabricated.
-- Verification covers 114 backend and 29 browser tests (143 total). Schema remains version 3.
+- Exact drop timestamps are never fabricated. Since 2026-09-26 a linked video's retention curve can be checked with one YouTube Analytics request (`win_engine/feedback/retention_probe.py`; nothing is stored, and the answer says why when the curve is unavailable). Learning across many retention curves remains future work.
+- At completion (23 August 2026) verification covered 114 backend and 29 classic-dashboard browser tests (143 total), and the schema was version 3.
 
 ## Stage J — Personal AI coach and weekly channel report
+
+**Status: not started (as of 2026-10-06).**
 
 ### Goal
 
@@ -784,66 +793,23 @@ The report may be generated on demand and on a local schedule while Docker is ru
 - Deleting a chat does not delete packages, analytics, ideas, or experiments.
 - Weekly report generation succeeds without Gemini by showing the deterministic metrics and collection status.
 
-## Phase 3C — Frontend extraction (completed 16 August 2026)
+## Phase 3C — Frontend extraction (completed 16 August 2026; removed 2026-09-26)
 
-### Delivered
+Superseded. Phase 3C extracted the classic dashboard into a static HTML/CSS shell with native ES modules under `win_engine/api/static/`, kept the embedded copy at `/dashboard_legacy` as a rollback route, and covered it with Chromium tests. On 2026-09-26 the `/dashboard_legacy` route was removed in the audit, and then the classic dashboard, its static files and its Chromium tests were removed. The current interface is the React app in `frontend/` (built into `win_engine/api/static/app/`, now the only thing under `win_engine/api/static/`); see the Current implementation snapshot.
 
-- Extracted the embedded dashboard shell and CSS into `win_engine/api/static/index.html` and `css/app.css`.
-- Added FastAPI same-origin static serving at `/static/*`; the default `/`, `/app`, and `/dashboard_view` routes now return the local shell.
-- Added native ES modules for the shared API client, normalized errors, explicit in-memory state, hash-navigation metadata, and five page lifecycle seams.
-- Kept all existing DOM IDs, hash routes, API payloads, request gates, truthfulness labels, Creator advanced-field behavior, History behavior, Analytics evidence separation, and Settings collector vocabulary.
-- Preserved the embedded implementation at `/dashboard_legacy` as a route-only rollback path.
-- Added deterministic browser coverage for static assets, module loading, and the legacy route. The extracted frontend passed 14 Chromium tests and the full local suite passed 79 tests against a fresh local FastAPI process.
+## Phase 3D — Creator decision workflow (completed 16 August 2026; superseded 2026-09-26)
 
-### Deliberate limitations
+Superseded. Phase 3D built an eight-stage classic Creator workflow (Idea, Brief, Research, Angle, Packaging, Compare, Decision, Checklist) in `pages/creator.js`; it was removed with the classic dashboard on 2026-09-26. The React Creator page replaces it with an input screen (choose Short or Long video, then the script/brief) and four result tabs: Package, Compare options, Research and insights, and Before you publish. Public observations, local heuristics, AI suggestions, creator input, and insufficient evidence must stay visibly distinct there.
 
-- Dashboard, History, Analytics, and Settings renderers remain in `js/app.js` as a compatibility bundle while their page seams are introduced. Phase 3D-E later removed all Creator-only rendering and handlers from that bundle.
-- Inline handlers generated inside legacy-compatible dynamic strings remain behind the documented `window` bridge. No new inline handlers were added to the static shell.
-- Docker image rebuild/health and production-image browser-tool inspection were unavailable during Phase 3C itself; final Phase 3D verification later completed those checks successfully.
-
-### Acceptance gate
-
-Phase 3C is complete for local extraction and compatibility. The complete Phase 3D workflow is now delivered and verified without changing the API, database, permissions, or production dependency model.
-
-## Phase 3D — Creator decision workflow (completed 16 August 2026)
-
-### Completed increments
-
-- **3D-A — state and workflow shell:** explicit in-memory Creator state, eight stages, preserved form values, entered-versus-inferred brief provenance, one Analyze owner, and stale-response protection.
-- **3D-B — Research and provenance:** read-only rendering of existing research queries, research decision, public YouTube observations, local scoring candidates, keyword/entity signals, thumbnail metadata, generation context, warnings, and explicit unavailable/error states.
-- **3D-C — package comparison and selection:** deterministic local package IDs, primary/alternative title and thumbnail cards, source-labelled heuristics, safe copy actions, and local selection with zero network calls.
-- **3D-D — decision and checklist:** selected-package summary, evidence/unknown separation, source guide, eight manual acknowledgments, manual-publishing boundary, and full-analysis export with clearly marked local workflow state.
-- **3D-E — Creator renderer migration:** `pages/creator.js` now owns Creator state, Analyze, rendering, selection, copy, checklist, and export. The old Creator renderer, inactive rollback callback block, and temporary Creator window bridge were removed from `app.js`.
-- **3D-F — regression and usability:** active-frontend encoding artifacts were removed, responsive workflow styling was reviewed in real Chromium, request gates remained intact, and local plus Docker verification passed.
-
-### Guardrails retained
-
-- No new API endpoint, response field, schema, migration, database write, OAuth scope, YouTube write, collector behavior, Docker dependency, paid API, quota change, or Ollama change.
-- Stage navigation and evidence presentation make no additional Gemini, YouTube, OAuth, or research calls.
-- Public observations, local heuristics, AI suggestions, creator input, and insufficient evidence remain visibly distinct.
-- Package selection and checklist interactions are local session state. They do not mutate the Analyze response, SQLite History, or YouTube.
-
-### Verification gate
-
-Phase 3D passed 65 backend tests, 27 deterministic Chromium tests, and 92 tests in full local discovery. The rebuilt `win-engine` container is healthy; its backend suite passes with browser tests correctly skipped, and the production image contains no Playwright, Chromium, Node, or Ollama.
-
-## Stage K — Maintainable dashboard, PWA, and Android boundary
+## Stage K — Maintainable interface, PWA, and Android boundary
 
 ### Goal
 
 Make the growing tool fast, testable, mobile-friendly, and safe without prematurely creating a public service.
 
-### K1 — Frontend modularization (Phase 3C foundation complete)
+### K1 — Frontend modularization (superseded 2026-09-26)
 
-Continue splitting the compatibility bundle into:
-
-- HTML templates or a small static application shell.
-- Shared design tokens and responsive CSS.
-- Page-specific JavaScript modules.
-- One reusable API client with timeout, error parsing, request cancellation, and stale-request protection.
-- Reusable modal, toast, table, metric, empty-state, loading, and confirmation components.
-
-Preserve routes and behavior during the split. Phase 3C already delivered the static shell, shared API/error/state/navigation modules, and page lifecycle seams; move renderer bodies one page at a time without redesigning or rewriting every feature in one unreviewable change.
+Superseded by the React interface. The page-by-page split of the classic compatibility bundle is no longer needed: on 2026-09-26 the classic dashboard was removed and every page became a React page in `frontend/src/pages`, with one shared API client in `frontend/src/api` and one navigation source in `frontend/src/layouts/navigation.ts`.
 
 ### K2 — Performance and accessibility
 
@@ -873,7 +839,7 @@ Do not expose port 8000 to the LAN or internet merely to make the PWA reachable.
 
 ### Acceptance checks
 
-- Existing desktop workflows remain functional after modularization.
+- Existing desktop workflows remain functional in the React interface.
 - Main pages work at common phone widths without horizontal page overflow.
 - Browser tests cover navigation, generation, History detail, linking, refresh, ideas, experiments, and errors.
 - The installed PWA never serves stale private API data from a cache.
@@ -887,7 +853,7 @@ Keep normal personal operation free or below the creator's one-dollar monthly ta
 
 ### L1 — Quota and cost controls
 
-- Add a local quota dashboard for Gemini calls, model used, successful generations, repair calls, failures, YouTube Data API operations, and Analytics refreshes.
+- Add a local quota dashboard for Gemini calls, model used, successful generations, repair calls, failures, YouTube Data API operations, and Analytics refreshes. YouTube part done 2026-09-26 (schema v11, `win_engine/feedback/quota_ledger.py`): use is counted per Pacific quota day, per bucket (`search.list` calls in their own bucket, default 100 a day via `WIN_ENGINE_YOUTUBE_SEARCH_CALLS_PER_DAY`; other Data API methods in a shared unit bucket, default 10,000 a day via `WIN_ENGINE_YOUTUBE_UNITS_PER_DAY`, where this app's reads cost 1 unit each; Analytics calls only counted) and per key slot or `oauth`, never the key itself. Settings shows today's use and research warns at 90%; nothing is blocked. A Short plans at most three searches, a long video about five to seven. Gemini usage counts are not yet shown.
 - Cache normalized research queries by query, region, language, format, and freshness class.
 - Reuse deterministic analysis locally instead of asking Gemini to recalculate it.
 - Generate only the selected language by default.
@@ -897,15 +863,15 @@ Keep normal personal operation free or below the creator's one-dollar monthly ta
 
 ### L2 — Data protection and recovery
 
-- Add a versioned migration registry and backup-before-migration.
-- Run SQLite integrity checks and expose the last successful result in Settings.
-- Provide creator-triggered encrypted backup and restore with a dry-run validation step.
-- Provide JSON export for packages, links, snapshots, ideas, experiments, and deterministic reports without exporting secrets.
+- Add a versioned migration registry and backup-before-migration. Done (`schema_migrations`, schema v12 today; automatic verified backups before each migration, newest ten kept).
+- Run SQLite integrity checks and expose the last successful result in Settings. Partly done: a quick integrity check runs at start-up and a database that fails to prepare reports degraded health; Settings does not yet show a last-check result.
+- Provide creator-triggered encrypted backup and restore with a dry-run validation step. Not implemented.
+- Provide JSON export for packages, links, snapshots, ideas, experiments, and deterministic reports without exporting secrets. Not implemented (Creator can download one analysis as JSON).
 - Preserve at least 12 months of raw linked-video snapshots unless the creator explicitly changes retention.
 
 ### L3 — Operational diagnostics
 
-- Settings must show Docker/app version, database path, schema version, database health, last backup, last YouTube sync, OAuth state, Gemini state, and quota summary without revealing secret values.
+- Settings must show Docker/app version, database path, schema version, database health, last backup, last YouTube sync, OAuth state, Gemini state, and quota summary without revealing secret values. Done by 2026-09-26: Settings shows the app version, database file name, schema version, health, last backup time, channel connection and last sync, Gemini diagnostics, collector and cloud-sync state, and today's YouTube quota use.
 - Use structured sanitized logging and stable request IDs.
 - Add health checks for database access and required internal services, but do not make temporary Gemini or YouTube failure mark the local app process unhealthy.
 - Test OAuth expiry, revoked consent, API quota exhaustion, Gemini 429/5xx responses, SQLite lock contention, malformed model JSON, and Docker restart recovery.
@@ -926,29 +892,27 @@ Keep normal personal operation free or below the creator's one-dollar monthly ta
 - Source-aware cohort filters and evidence reporting: implemented with language, format, duration bucket, and topic filters; unknown values remain excluded.
 - Automatic snapshot collector: implemented but disabled by default; dry-run and quota safeguards are available.
 - History comparable-metadata editor and collector status API: implemented.
-- Optional Playwright browser smoke coverage: added; requires separate development installation and Chromium.
+- Optional Playwright browser smoke coverage: added; requires separate development installation and Chromium. (These classic-dashboard browser tests were removed on 2026-09-26; Playwright now lives in `frontend/e2e`.)
 - Docker rebuild, in-container verification, and browser execution were subsequently completed during final Phase 3D verification.
 
-### Phase 3A/3B implementation status (15 August 2026)
+### Phase 3A/3B implementation status (15 August 2026; classic dashboard removed 2026-09-26)
 
 - Phase 3A completed the browser-test harness, deterministic request interception, and production-image separation for browser tooling.
 - Phase 3B completed the embedded dashboard reality fixes: neutral unavailable states, evidence/current-data labels, normalized frontend API errors with request IDs, advanced-brief retention, truthful collector states, targeted copy-button safety, and request-count coverage.
-- Phase 3B remains behaviorally compatible with the extracted dashboard. The complete Creator workflow and evidence presentation are now delivered through Phase 3D-A through 3D-F.
-- Browser tests remain development-only and run with a separately installed Chromium; Playwright and Chromium are not production dependencies.
+- Phase 3B and the Phase 3D Creator workflow were superseded on 2026-09-26, when the classic dashboard was replaced by the React interface.
+- Browser tests remain development-only; Playwright and Chromium are not production dependencies.
 
-### Phase 3C implementation status (16 August 2026)
+### Phase 3C implementation status (16 August 2026; superseded 2026-09-26)
 
-- Same-origin static HTML/CSS/native-module frontend is the default route.
-- Shared API/error handling, explicit frontend state, navigation metadata, and page lifecycle seams are extracted.
-- `/dashboard_legacy` preserved the embedded dashboard for route-only rollback until 2026-09-25, when it was removed: the classic dashboard at `/` and the React interface at `/next` cover every page.
-- 27 deterministic Chromium tests and 92 full local tests pass after the completed Phase 3D workflow.
-- The rebuilt Docker application is healthy on `127.0.0.1:8000`; same-origin assets and `/dashboard_legacy` return HTTP 200, and production excludes Playwright, Chromium, Node, and Ollama.
+- At the time, a same-origin static HTML/CSS/native-module frontend was the default route, with shared API/error handling, explicit frontend state, navigation metadata, and page lifecycle seams.
+- `/dashboard_legacy` preserved the embedded dashboard for route-only rollback until it was removed in the 2026-09-26 audit; the same day the classic dashboard itself was removed and the React interface moved from `/next` to `/`.
+- At the time, 27 deterministic Chromium tests and 92 full local tests passed after the Phase 3D workflow, and production excluded Playwright, Chromium, Node, and Ollama.
 
 Agents must implement the remaining work in this order unless the creator explicitly reprioritizes it:
 
 1. **J** — Add the evidence service, personal coach, and weekly report.
-2. **K1 and K2** — Extract the remaining page renderers and optimize accessibility/performance; Creator ownership is complete.
-3. **L** — Complete quota visibility, encrypted backup/restore, and operational diagnostics.
+2. **K2** — Optimize accessibility and performance of the React interface (K1 was superseded by the React move on 2026-09-26).
+3. **L** — Complete the remaining quota visibility (Gemini usage), encrypted backup/restore, JSON export, and remaining diagnostics; YouTube quota visibility and the Settings diagnostics were done on 2026-09-26.
 4. **K3 and K4** — Add the PWA only after the Android connection architecture is approved.
 
 ### Definition of personal feature parity

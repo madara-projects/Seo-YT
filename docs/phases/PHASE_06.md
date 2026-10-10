@@ -1,5 +1,7 @@
 # Phase 6 - Stage G1 Idea Backlog & Topic Opportunity Workspace
 
+> **Historical record (note added 2026-10-06).** Phase 6 (Stage G1) was completed on 23 August 2026 (schema 4); this page records that milestone and does not describe the current system. Since then the classic dashboard it was built into (the static files and native page modules under `win_engine/api/static/`, `/dashboard_legacy` and the Chromium browser tests) was removed on 2026-09-26, and the React interface (source in `frontend/`, build in `win_engine/api/static/app/`) is served at `/`, with Ideas as one of its pages. The SQLite schema is now v12, and the test counts below are those of that date. Current behaviour is documented in the [README](../../README.md), the [User Guide](../USER_GUIDE.md), the [Roadmap](../ROADMAP.md) and the [CHANGELOG](../../CHANGELOG.md).
+
 ## Objective
 
 Provide one private, durable workflow for original creator ideas: save the idea, collect dated approved research, generate through the existing Win-Engine, associate the saved package, link the verified published video, and eventually expose mature comparable learning. The workspace must never invent demand, search volume, trends, confidence, or performance outcomes.

@@ -1,5 +1,7 @@
 # Phase 5 - Hook, Pacing & Retention Assistant
 
+> **Historical record (note added 2026-10-06).** Phase 5 was completed on 23 August 2026 (schema 3); this page records that milestone and does not describe the current system. Since then the classic dashboard it was built into (the eight-stage Creator workflow, the static files under `win_engine/api/static/`, `/dashboard_legacy` and the Chromium browser tests) was removed on 2026-09-26, and the React interface (source in `frontend/`, build in `win_engine/api/static/app/`) is served at `/`: the Creator page is now an input screen followed by four result tabs (Package, Compare options, Research and insights, Before you publish). A linked video's measured retention curve can now be checked from History with one YouTube Analytics request (2026-09-26). The SQLite schema is now v12, and the test counts below are those of that date. Current behaviour is documented in the [README](../../README.md), the [User Guide](../USER_GUIDE.md), the [Roadmap](../ROADMAP.md) and the [CHANGELOG](../../CHANGELOG.md).
+
 ## 1. Objective
 
 Improve the structure of a video before publishing by identifying opening, first-frame, pacing, quote-presentation, expectation-alignment, reveal, payoff, and loop risks. The assistant provides deterministic guidance and evidence provenance; it does not predict or guarantee retention, views, CTR, reach, subscribers, or growth.

@@ -1,5 +1,7 @@
 # Phase 4 - Generation Quality & Anti-Repetition Engine
 
+> **Historical record (note added 2026-10-06).** Phase 4 was completed on 23 August 2026 (schema 3); this page records that milestone and does not describe the current system. Since then the classic dashboard it was built into (the static files under `win_engine/api/static/` listed below, `/dashboard_legacy` and the Chromium browser tests) was removed on 2026-09-26, and the React interface (source in `frontend/`, build in `win_engine/api/static/app/`) is served at `/`; the SQLite schema is now v12. The gate has changed too: a Short's tags now end with only the creator-preferred `yt` and `shorts` platform tags (format tags, not subject evidence; `youtube shorts` and `viral shorts` are no longer required), `#shorts` is no longer forced into titles (2026-10-05), and quote Short titles are ranked by how faithfully they carry the quote (2026-09-26). Current behaviour is documented in the [README](../../README.md), the [User Guide](../USER_GUIDE.md), the [Roadmap](../ROADMAP.md) and the [CHANGELOG](../../CHANGELOG.md).
+
 ## Objective
 
 Improve generated Creator packages through truthfulness, meaningful diversity, evidence discipline, and traceability. Phase 4 is the implementation milestone for roadmap Stage H. It does not replace completed Phases 1-3 or revive the obsolete historical Phases 1-14 plan; that historical material is not present in this repository.

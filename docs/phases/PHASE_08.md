@@ -1,5 +1,7 @@
 # Phase 8 — Published Audits and Experiment Center
 
+> **Historical record (note added 2026-10-06).** This page records Phase 8 as completed (schema 6) and does not describe the current system. Since then the classic dashboard it was built into (its native frontend modules, `/dashboard_legacy` and the Chromium browser tests) was removed on 2026-09-26, and the React interface (source in `frontend/`, build in `win_engine/api/static/app/`) is served at `/`, with Audits and Experiments as two of its pages. The SQLite schema is now v12, and the test counts below are those of that date. Current behaviour is documented in the [README](../../README.md), the [User Guide](../USER_GUIDE.md), the [Roadmap](../ROADMAP.md) and the [CHANGELOG](../../CHANGELOG.md).
+
 Completed: 23 August 2026  
 Application version: `0.13.0`  
 Database schema: `6`

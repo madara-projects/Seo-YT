@@ -1,6 +1,6 @@
 # Phase 2B — Generation Quality and Package Dynamicity
 
-> **Historical record.** This report describes the repository as it was on its stated date. Schema versions, test counts, file names and routes have changed since; the README and CHANGELOG describe the current state.
+> **Historical record (note added 2026-10-06).** This report describes the generation path as it was on 2026-08-28 (schema 8). Its findings are kept as recorded; they do not describe the current system. Since then, among other changes: `#shorts` is no longer forced into Short titles (the description carries it) and an emoji, when used, follows the quote's feeling (2026-10-05); quote Short titles are ranked by how faithfully they carry the quote, and verdicts are RED for unsafe packages, YELLOW for usable but weak or sparse ones and GREEN only for clean, complete ones (2026-10-05); a Short's tags end with the creator-preferred `yt` and `shorts` platform tags, which long videos never get; valid creator chapters go into a long video's copied description (2026-09-26); and the AI Shorts path writes a lean package from a quote with no YouTube research (2026-10-03). The classic dashboard and its browser suite were removed on 2026-09-26, and the schema is now v12. Current behaviour is documented in the README, [docs/ROADMAP.md](ROADMAP.md) and the CHANGELOG.
 
 Verification date: 2026-08-28  
 Application: 0.13.0 · SQLite schema: 8

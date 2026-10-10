@@ -1,5 +1,7 @@
 # Phase 2C — Data Durability and Cloud Sync Contract
 
+> **Historical record (note added 2026-10-06).** This report describes cloud sync as verified on 2026-08-28 (schema 9). Its findings and test counts are kept as recorded; they do not describe the current system. Since then: the 2026-09-26 audit made rows apply one at a time, kept a moved video's evidence, made deletions always apply, fixed endless revision churn, made pulls incremental and stopped network calls from holding the database lock; schema v10 keeps the losing local edit with each sync conflict; schema v11 adds YouTube Studio tests and snapshot traffic sources, which sync with their package; schema v12 adds AI Shorts plans, which stay on the device (only their History run syncs). The SQLite schema is now v12. Current behaviour is documented in the README, [docs/ROADMAP.md](ROADMAP.md) and the CHANGELOG.
+
 Verification date: 2026-08-28  
 Application: 0.13.0 · SQLite schema: 9
 

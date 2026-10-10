@@ -1,6 +1,6 @@
 # Win-Engine OS — Release Verification Baseline
 
-> **Historical record.** This report describes the repository as it was on its stated date. Schema versions, test counts, file names and routes have changed since; the README and CHANGELOG describe the current state.
+> **Historical record (note added 2026-10-06).** This report describes the repository at the commit named below (schema 8). Its findings are kept as recorded; they do not describe the current system. Since then: the classic dashboard (the static files under `win_engine/api/static/`, the `/dashboard_legacy` route, `requirements-browser.txt` and the Python browser suite in `tests/browser/`) was removed on 2026-09-26, and the React interface (source in `frontend/`, build in `win_engine/api/static/app/`) is served at `/`; the SQLite schema is now v12; backend tests run with `python -m pytest tests` (from `requirements-dev.txt`), and the interface has its own Vitest and Playwright suites in `frontend/`. Current behaviour is documented in the README, [docs/USER_GUIDE.md](USER_GUIDE.md), [docs/ROADMAP.md](ROADMAP.md) and the CHANGELOG.
 
 This is the Phase 1A verification-debt closure record for the current checkout. Product logic and intended UI behavior were preserved; only browser test contracts and this verification document were updated.
 
@@ -116,7 +116,7 @@ The current commit passes all 190 backend tests and all 40 browser tests, plus c
 
 ### Run hand-off
 
-- Files changed in this run: [docs/RELEASE_VERIFICATION.md](docs/RELEASE_VERIFICATION.md), `tests/browser/test_critical_workflows.py`.
+- Files changed in this run: [docs/RELEASE_VERIFICATION.md](RELEASE_VERIFICATION.md), `tests/browser/test_critical_workflows.py`.
 - Pre-existing untracked file observed and left unchanged: `docs/ROADMAP_RECONCILIATION.md`.
 - Tests: backend **190 passed / 0 failed / 0 errors / 0 skipped**; browser **40 passed / 0 failed / 0 errors / 0 skipped**.
 - Unresolved defects: **none confirmed**. The three former browser mismatches are resolved in Section 7; no application source defect was found.

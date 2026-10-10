@@ -31,16 +31,17 @@ Implemented and available now:
 - Package-experiment persistence endpoints.
 - Versioned SQLite migrations, verified backup-before-migration, enforced foreign keys, and transactional deletion.
 - Local rate limiting, request IDs, security headers, encrypted OAuth refresh-token storage, Redis research caching, and SQLite WAL mode.
-- Docker health check and localhost-only application binding.
-- Production Compose verification completed on 16 August 2026: `redis` and `win-engine` are healthy/running, the static routes return HTTP 200, and the application image contains no Playwright, Chromium, Node, or Ollama.
-- Truthful loading, unavailable, and evidence-provenance states across the dashboard, plus one shared frontend API/error layer that preserves request IDs.
-- Advanced Creator brief values persist through accordion collapse and are submitted in the single intentional Analyze request.
+- Docker health check (written in Python; the image has no curl), localhost-only application binding, a read-only root filesystem, memory/CPU/process limits, and an unprivileged, read-only Redis. The production image contains no Node, browser tooling or test tooling.
+- Truthful loading, unavailable, and evidence-provenance states across the interface, plus one shared frontend API/error layer that preserves request IDs.
+- The Creator's optional detail groups (such as visuals, voice and length) are sent with the script in the single intentional Analyze request.
 - Collector status clearly distinguishes disabled, dry-run, and unavailable/error states; collector remains disabled by default.
-- Phase 3C local static frontend extraction: FastAPI serves same-origin HTML/CSS/native ES modules, with shared API/error/state/navigation modules.
-- The React interface at `/` covers every page (Dashboard, Creator, History, Channel, Ideas, Demand, Watchlist, Audits, Experiments, Settings). It replaced the classic dashboard, whose old addresses redirect to the same page.
-- Complete Phase 3D Creator decision workflow: Idea, Brief, Research, Angle, Packaging, Compare, Decision, and Checklist.
+- The React interface at `/` covers every page (Dashboard, Creator, AI Shorts, History, Channel, Ideas, Demand, Audits, Experiments, Watchlist, Settings). It replaced the classic dashboard on 26 September 2026; the classic dashboard's static files and browser tests are gone, and its old addresses redirect to the same page.
+- Creator page: choose Short or Long video and enter the script and optional details, then read the result in four tabs: Package, Compare options, Research and insights, and Before you publish (decision, YouTube Studio test preparation for long videos, and the manual checklist).
 - Deterministic local package comparison, evidence-aware decision summaries, manual pre-publish acknowledgments, safe copy, and full JSON export. Explicit package selection is saved to History; checklist state remains local, and neither action publishes or changes YouTube.
-- Phase 4 generation quality gate checks quote fidelity, unsupported claims, title repetition/diversity, template leakage, description/tag contamination, hashtags, the Shorts title hashtag, contradictions, and Unicode-aware Tamil/Tanglish behavior.
+- AI Shorts page (3 October 2026): from a quote alone, one Google Flow prompt per 8-second part (two parts by default: Part 1 for Text to Video, Part 2 for Flow's Extend), the Flow steps, a first-frame on-screen text plan and a lean Shorts package written without YouTube research. The plan is saved with its package as a History run, which History marks with a link back to the plan.
+- Upload-ready chapters (26 September 2026): a long video's valid creator chapters (first at 0:00, at least three, each at least 10 seconds, the final one checked against the stated length) are placed in the description you copy; Shorts and invalid lists get none.
+- Opportunity Score transparency (26 September 2026): each score shows its five inputs with weights and sources, missing-data warnings and a confidence level, and a Dashboard card compares past scores with your published videos' results once there is enough evidence.
+- Phase 4 generation quality gate checks quote fidelity, unsupported claims, title repetition/diversity, template leakage, description/tag contamination, hashtags, misplaced or repeated `#shorts` in titles (a Short's title no longer needs it), contradictions, and Unicode-aware Tamil/Tanglish behavior. Its verdict is RED for unsafe packages, YELLOW for usable but weak or sparse ones, and GREEN for clean, complete ones.
 - Phase 5 deterministic hook, first-frame, pacing, quote-presentation, package-alignment, and retention-risk guidance is integrated into the existing Creator workflow. It distinguishes creator facts, local inference, heuristics, unavailable data, and mature post-publish evidence.
 - Retention learning uses only verified, comparable, completed-window videos with real average-view-percentage data. Fewer than five eligible videos remains `insufficient_evidence`; observed associations are never presented as causation.
 - Outcome learning also keeps each completed window's traffic sources (YouTube Analytics `insightTrafficSourceType`) and compares comparable videos by their dominant source once five exist; a retention-curve probe and YouTube Studio Test & Compare records (long videos only) are described under YouTube linking and personal learning.
@@ -52,7 +53,7 @@ Implemented and available now:
 - Phase 8 Published Audits append immutable snapshots that preserve the generated package, explicit creator selection or unknown attribution, actual owned-video metadata, saved pre-publish quality/retention/research traces, available post-publish windows, deterministic findings, and evidence-gated learning candidates.
 - Phase 8 Experiment Center records explicit hypotheses, controlled or observational mode, one named variable, control/variant definitions, verified linked-video assignments, comparable observation windows, and immutable result snapshots. Small samples remain `insufficient_evidence`; visible directions are associations, never causal winners.
 - Gemini generation allows at most one quality-repair request. Empty, rejected, or quota-exhausted provider responses stop immediately and use the clearly labelled local fallback.
-- 964 automated backend tests, plus 299 Vitest tests and 78 Playwright checks for the interface; browser tooling stays outside production Docker.
+- Automated backend tests (pytest), plus Vitest unit tests and Playwright checks for the interface (see [Testing](#testing)); browser tooling stays outside production Docker.
 
 Planned but not yet complete:
 
@@ -60,8 +61,8 @@ Planned but not yet complete:
 - Thumbnail/first-frame draft laboratory. (Test & Compare results are entered by hand; the app does not read them from YouTube.)
 - Learning across many retention curves; today one curve is probed and observed at a time, and nothing from it is stored.
 - Personal AI coach and weekly private report.
-- Remaining page-level frontend modularization, installable PWA, and an approved Android architecture.
-- Encrypted backup/restore.
+- Installable PWA and an approved Android architecture. (The page-by-page frontend rewrite is complete: the React interface replaced the classic dashboard on 26 September 2026.)
+- Encrypted backup/restore. (Today a verified backup is made automatically before each schema migration, and the newest ten are kept.)
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the exact implementation sequence, data rules, and acceptance checks.
 
@@ -99,31 +100,31 @@ Comparable cohort evidence for future decisions
 
 The creator always decides what to publish or change. SEO YT does not automatically upload videos or edit live YouTube metadata.
 
-## Dashboard pages
+## Interface pages
 
 | Page | Current purpose |
 |---|---|
-| Dashboard | Channel summary, recent activity, and shortcuts. |
-| Creator Studio | Move from idea and brief through research, angle, packaging, local comparison/selection, final decision, and a manual pre-publish checklist. |
-| AI Shorts | Type only a quote. Gemini reads its feeling and writes one Google Flow (Veo 3.1) prompt per 8-second part (Part 1 as Text to Video, Part 2 for Flow's Extend), with the Flow steps, an on-screen text plan and a lean SEO package; the package is saved to History so the published Short can be linked later. No YouTube quota is spent. |
+| Dashboard | Channel summary, recent activity, shortcuts, and how past Opportunity Scores compare with your published videos' results. |
+| Creator | Choose Short or Long video, enter the script and optional details, then use four result tabs: Package, Compare options, Research and insights, and Before you publish (decision, Studio test preparation for long videos, and a manual pre-publish checklist). |
+| AI Shorts | Type only a quote. Gemini reads its feeling and writes one Google Flow (Veo 3.1) prompt per 8-second part (two parts by default, one to three allowed: Part 1 as Text to Video, Part 2 for Flow's Extend), with the Flow steps, a first-frame on-screen text plan and a lean SEO package whose tags are checked against YouTube search suggestions; the plan and package are saved as a History run so the published Short can be linked later. No YouTube Data API quota is spent. For how to use Flow itself, see the Flow guide on the AI Shorts page. |
+| History | Open complete saved packages (AI Shorts runs are marked and link back to their plan), copy their contents, link an owned published video, and review actual metadata, performance, traffic sources, the retention-curve check and Studio tests. |
+| Channel | View connected-channel metrics, owned videos, linked-video snapshots, cohort-learning status, and traffic-source groups. |
 | Ideas | Save original ideas, refresh dated research, inspect evidence, open Demand research, and generate through the existing Creator engine. |
 | Demand | Research a topic from dated public and eligible personal signals, inspect limitations/provenance, and generate through the existing engine. |
-| Watchlist | Save verified public channels/videos, refresh immutable snapshots, and inspect transparent same-channel possible-outlier analysis. |
-| Published Audits | Preserve generated, selected, and actually published states; inspect historical intelligence, real evidence windows, findings, unknowns, and cautious learning candidates. |
+| Audits | Preserve generated, selected, and actually published states; inspect historical intelligence, real evidence windows, findings, unknowns, and cautious learning candidates. |
 | Experiments | Create planned or observational comparisons, explicitly assign verified linked videos, and compare mature metrics without fake significance or causal claims. |
-| Analytics | View connected-channel metrics, owned videos, linked-video snapshots, and cohort-learning status. |
-| History | Open complete saved packages, copy their contents, link an owned published video, and review actual metadata and performance. |
-| Settings | Inspect YouTube OAuth, AI configuration, collector and cloud-sync state, and local application health. Live diagnostics (one small YouTube and Gemini check) run only when requested. |
+| Watchlist | Save verified public channels/videos, refresh immutable snapshots, and inspect transparent same-channel possible-outlier analysis. |
+| Settings | Inspect YouTube OAuth, AI configuration, today's YouTube quota use, collector and cloud-sync state, and local application health. Live diagnostics (one small YouTube and Gemini check) run only when requested. |
 
 ## Generated package
 
-A successful Creator Studio run can include:
+A successful Creator run can include:
 
 - A primary title and only the materially distinct alternatives that pass local validation; fewer than three are returned honestly when necessary.
 - Title quality heuristic. This is not a CTR prediction.
-- Natural video-specific description.
-- Focused YouTube tags and one to three hashtags.
-- Required creator-selected Shorts tags when the content is a Short.
+- Natural video-specific description; for a long video with valid creator chapters, the chapters are placed in it, before the hashtags.
+- Focused YouTube tags and one to three hashtags. A Short's tags end with the creator-preferred `yt` and `shorts` platform tags, which are format tags rather than evidence about the subject; long videos never get them.
+- A RED, YELLOW or GREEN quality verdict from the local gate.
 - Search, Browse, and Existing Audience title/thumbnail directions.
 - Local comparison cards with deterministic package IDs, source labels, title-quality heuristics, thumbnail direction, and why-suggested context.
 - A persisted selection summary that separates public observations, local heuristics, generated/AI suggestions, and unavailable post-publish evidence.
@@ -134,7 +135,7 @@ A successful Creator Studio run can include:
 - Observed competitor publishing-time guidance with evidence count and limitations.
 - Format-specific pacing guidance.
 
-Gemini output is validated and stored with its generation source. If Gemini is unavailable, the application displays `FALLBACK` and does not claim that the fallback came from Gemini.
+Gemini output is validated and stored with its generation source. If Gemini is unavailable, the result is labelled "Local fallback" instead of "Written with Gemini" and does not claim that the fallback came from Gemini.
 
 Watchlist and Demand results are observations captured at a point in time. They do not prove why a video performed, guarantee future demand, expose private competitor analytics, or represent monthly keyword volume or search rank. YouTube API availability and quota determine whether fresh public evidence can be captured.
 
@@ -173,10 +174,10 @@ YouTube Studio tests: YouTube's own Test & Compare shows up to three title/thumb
 ## Architecture
 
 ```text
-Browser dashboard
+Browser (React interface)
       |
       v
-FastAPI application (local static shell + API)
+FastAPI application (serves the interface build + API)
       |
       +-- Creator brief, research, scoring, and package generation
       |       |
@@ -192,6 +193,7 @@ FastAPI application (local static shell + API)
       |       +-- Packages and creator briefs
       |       +-- YouTube links and actual metadata
       |       +-- Performance snapshots and experiments
+      |       +-- AI Shorts plans and the YouTube quota ledger
       |
       +-- Redis research cache
 ```
@@ -234,7 +236,7 @@ Important variables:
 | `WIN_ENGINE_GEMINI_MODEL` | Gemini model name. | Defaults from `.env.example` |
 | `WIN_ENGINE_YOUTUBE_API_KEY` | Primary YouTube Data API research key. | For live research |
 | `WIN_ENGINE_YOUTUBE_API_KEYS` | Optional comma-separated key pool; duplicates are removed. | Optional |
-| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Public research results per search (1-50). One search call whatever the size; the page's statistics are one 1-unit `videos.list` and one `channels.list` call. A Short's searches ask for short videos (under 4 minutes); a long-form video's ask for every length, unless its stated length sits more than 3 minutes inside YouTube's medium (4-20 minutes) or long (over 20) band. | Optional; default `25` |
+| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Public research results per search (1-50). One search call whatever the size; the page's statistics are one 1-unit `videos.list` and one `channels.list` call. A Short's searches ask for short videos (under 4 minutes), and a Short is compared only with Shorts; a long-form video's ask for every length, unless its stated length sits more than 3 minutes inside YouTube's medium (4-20 minutes) or long (over 20) band. | Optional; default `25` |
 | `WIN_ENGINE_YOUTUBE_SEARCH_CALLS_PER_DAY` | Daily `search.list` calls allowed per key's Google Cloud project; copy it from Cloud Console. | Default `100` |
 | `WIN_ENGINE_YOUTUBE_UNITS_PER_DAY` | Daily units of the shared bucket (every other Data API method) per project; copy it from Cloud Console. | Default `10000` |
 | `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_ID` | Google OAuth web-client ID. | For channel connection |
@@ -245,6 +247,7 @@ Important variables:
 | `WIN_ENGINE_REDIS_URL` | Redis cache URL. Docker Compose sets this internally. | Optional outside Docker |
 | `WIN_ENGINE_CACHE_TTL_TRENDING_SECONDS` | Trending research cache lifetime. | Default `21600` |
 | `WIN_ENGINE_CACHE_TTL_EVERGREEN_SECONDS` | Evergreen research cache lifetime. | Default `604800` |
+| `WIN_ENGINE_AI_SHORTS_SUGGEST_MAX_QUERIES` | YouTube search-suggestion lookups (no API quota) the AI Shorts tag check makes per Short, 0-12. It is separate from research's own limit (`WIN_ENGINE_SEARCH_SUGGEST_MAX_QUERIES`); `0` turns the AI Shorts check off, and `WIN_ENGINE_SEARCH_SUGGEST_ENABLED=false` turns every lookup off. | Default `10` |
 | `WIN_ENGINE_ADMIN_API_TOKEN` | Required header value for protected operational endpoints in production. | Recommended |
 | `WIN_ENGINE_RATE_LIMIT_WINDOW_SECONDS` | In-memory request-rate window. | Default `60` |
 | `WIN_ENGINE_RATE_LIMIT_MAX_REQUESTS` | General requests allowed per client, route and window. | Default `60` |
@@ -320,7 +323,7 @@ Open:
 
 Docker publishes the application only on `127.0.0.1:8000`. Redis is available only to the Compose network and has no host port.
 
-The application container runs as an unprivileged user (UID 10001) on a read-only root filesystem, with every Linux capability dropped and privilege escalation disabled; only `runtime/data` and `/tmp` are writable. Docker Desktop, the supported setup, lets it write the bind-mounted `runtime/data` directory as it is. On a plain Linux Docker host, give that UID write access once with `sudo chown -R 10001:10001 runtime/data`.
+The application container runs as an unprivileged user (UID 10001) on a read-only root filesystem, with every Linux capability dropped and privilege escalation disabled; only `runtime/data` and `/tmp` are writable. It is capped at 1 GB of memory, 2 CPUs and 256 processes, and its health check uses Python's own HTTP client, so the image needs no curl. Redis runs as its own unprivileged user on a read-only filesystem with every capability dropped, capped at 256 MB of memory, and evicts the least-recently-used cache entries at 128 MB. Docker Desktop, the supported setup, lets it write the bind-mounted `runtime/data` directory as it is. On a plain Linux Docker host, give that UID write access once with `sudo chown -R 10001:10001 runtime/data`.
 
 Requests that change data (anything other than GET, HEAD and OPTIONS) are refused when a browser marks them as coming from another website, so a page open in the same browser cannot disconnect the channel or delete packages. Scripts and `curl` calls, which send no such marking, are unaffected.
 
@@ -431,6 +434,7 @@ Example analysis request:
 - Creator package selection is persisted in History; checklist acknowledgments remain browser-session state and never claim that YouTube was changed.
 - Phase 5 opening and pacing scores are deterministic pre-publish heuristics, not measured retention or performance predictions. A published video's measured retention curve can be probed with one YouTube Analytics request; whether it is available depends on the channel, the video's age and views, and the connection's Analytics permission.
 - Idea research depends on the configured YouTube Data API quota. An empty or unavailable research response is saved honestly and does not become a demand estimate. Editing creator idea fields marks the current evidence stale while retaining older dated snapshots.
+- AI Shorts writes the Flow prompts; the clips are made by the creator in Google Flow (see the Flow guide on the AI Shorts page). Its plans stay on this device: cloud sync carries the History run with the package, not the plan.
 - The application is not yet an Android app and remains bound to the local laptop.
 
 ## Testing
@@ -450,7 +454,7 @@ docker run --rm -v "$PWD:/app" -w /app python:3.11.16-slim sh -c "pip install -q
 
 Frontend checks run from `frontend/`: `npm ci`, then `npx tsc -b --noEmit`, `npx vitest run`, and `npm run build`. The Playwright suite (`npx playwright test`) drives a running app at `127.0.0.1:8000` and intercepts every request that could change data.
 
-The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, and API behavior. The current full run has 1,196 backend tests. The interface has its own Vitest and Playwright suites in `frontend/`, and no browser tooling is installed in production Docker.
+The backend suite covers migrations, ownership, snapshots, cloud synchronization, History, package selection, SEO generation quality, research evidence, retention learning, Ideas, experiments, AI Shorts, quota accounting, and API behavior. The interface has its own Vitest suite (next to the source in `frontend/src/`) and Playwright suite (`frontend/e2e/`), and no browser tooling is installed in production Docker.
 
 ## Repository structure
 
