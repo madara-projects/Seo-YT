@@ -162,7 +162,9 @@ def affirmed_feeling_words(text: Any) -> list[str]:
     ]
 
 
-def _stated_duration(brief: dict[str, Any]) -> float | None:
+def stated_duration(brief: dict[str, Any]) -> float | None:
+    """The video's length in seconds when the creator stated it, else None."""
+
     seconds = optional_number(brief.get("duration_seconds"))
     if seconds is None or seconds <= 0:
         return None
@@ -188,7 +190,7 @@ def is_short_video(script: Any = "", creator_brief: dict[str, Any] | None = None
         return True
     if key in _LONG_FORM_FORMATS:
         return False
-    seconds = _stated_duration(brief)
+    seconds = stated_duration(brief)
     if seconds is not None:
         return seconds <= SHORTS_MAX_SECONDS
     source = normalize_unicode(brief.get("content") or script)

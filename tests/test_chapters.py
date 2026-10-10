@@ -14,7 +14,7 @@ from win_engine.analysis.generation_quality import evaluate_package_quality
 from win_engine.analysis.topic_lock import restore_source_casing, source_casing_map
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.automation_engine import build_automation_workflow
-from win_engine.generation.expansion_engine import build_chapters, chapter_block
+from win_engine.generation.expansion_engine import build_chapters, chapter_block, valid_chapters
 from win_engine.generation.seo_generator import format_upload_ready_description, generate_seo_suggestions
 from win_engine.generation.strategy_engine import _fallback_description
 from win_engine.llm import gemini_client
@@ -70,6 +70,41 @@ class ChapterTests(unittest.TestCase):
         ):
             with self.subTest(script=script):
                 self.assertEqual(build_chapters(script + "\n" + LONG_SCRIPT), [])
+
+    def test_a_stated_length_closes_the_last_chapter(self):
+        # A ten-minute video accepted "9:55 Outro", a five-second last chapter
+        # YouTube rejects. The end closes the last chapter like one more start.
+        opening = [{"timestamp": "0:00", "title": "Intro"}, {"timestamp": "4:00", "title": "Brewing"}]
+        for timestamp, valid in (
+            ("9:55", False),   # five seconds before the end
+            ("9:50", True),    # exactly ten seconds
+            ("10:00", False),  # starts at the end
+            ("10:30", False),  # starts after the end
+        ):
+            chapters = [*opening, {"timestamp": timestamp, "title": "Outro"}]
+            script = "\n".join(f"{item['timestamp']} {item['title']}" for item in chapters) + "\n" + LONG_SCRIPT
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(valid_chapters(chapters, duration_seconds=600), valid)
+                self.assertEqual(build_chapters(script, {"content": script, "duration_seconds": 600}),
+                                 chapters if valid else [])
+                # The length as the creator states it in the form.
+                brief = build_creator_brief(script=script, video_format="tutorial", duration_seconds=600)
+                self.assertEqual(build_chapters(script, brief), chapters if valid else [])
+
+    def test_without_a_stated_length_the_last_chapter_is_kept(self):
+        chapters = [{"timestamp": "0:00", "title": "Intro"}, {"timestamp": "4:00", "title": "Brewing"},
+                    {"timestamp": "9:55", "title": "Outro"}]
+        script = "0:00 Intro\n4:00 Brewing\n9:55 Outro\n" + LONG_SCRIPT
+        for duration in (None, 0):
+            with self.subTest(duration_seconds=duration):
+                self.assertTrue(valid_chapters(chapters, duration_seconds=duration))
+                self.assertEqual(build_chapters(script, {"content": script, "duration_seconds": duration}), chapters)
+        # A number read out of the script ("steep it for 5 minutes") is not the
+        # video's length, so it never voids the creator's list.
+        steeped = script + " Let it steep for 5 minutes."
+        brief = build_creator_brief(script=steeped, video_format="tutorial")
+        self.assertEqual(brief["duration_seconds"], 300)
+        self.assertEqual(build_chapters(steeped, brief), chapters)
 
     def test_shorts_never_have_chapters(self):
         script = "0:00 Intro\n0:20 Middle\n0:40 End"
@@ -291,6 +326,19 @@ class ChaptersReachEveryCopyTests(unittest.TestCase):
         response, _ = self.generate(script, None, video_format="youtube_shorts")
         self.assertEqual(response["chapters"], [])
         self.assertNotIn("0:20", response["description"])
+
+    def test_a_last_chapter_the_stated_length_cuts_short_is_never_delivered(self):
+        # The list ends at 11:00: a 670-second video gives that chapter exactly
+        # ten seconds, a 665-second one five, which YouTube would reject.
+        for seconds, chapters in ((670, OBS_CHAPTERS), (665, [])):
+            with self.subTest(duration_seconds=seconds):
+                response, _ = self.generate(OBS_SCRIPT, None, video_format="tutorial", duration_seconds=seconds)
+                self.assertEqual(response["chapters"], chapters)
+                self.assertEqual(response["description"].count(OBS_BLOCK), 1 if chapters else 0)
+                if not chapters:
+                    self.assertNotIn("11:00", response["description"])
+                    self.assertIn("Add manual timestamps once the cut is final.",
+                                  response["automation_workflow"]["publish_workflow"])
 
 
 if __name__ == "__main__":

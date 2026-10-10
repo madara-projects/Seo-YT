@@ -4,7 +4,7 @@ from itertools import pairwise
 from typing import Any
 
 from win_engine.analysis.generation_quality import is_short_content
-from win_engine.analysis.source_cues import timestamp_line, timestamp_seconds
+from win_engine.analysis.source_cues import stated_duration, timestamp_line, timestamp_seconds
 from win_engine.analysis.strategy_layer import diverse_followups
 
 
@@ -24,11 +24,14 @@ def _timestamp_runs(text: str) -> list[list[dict[str, str]]]:
     return [run for run in runs if run]
 
 
-def valid_chapters(chapters: Any) -> bool:
+def valid_chapters(chapters: Any, *, duration_seconds: float | None = None) -> bool:
     """Whether YouTube builds chapters from this list (support.google.com/youtube/answer/9884579).
 
     The first timestamp is 0:00, there are at least three, and each chapter
-    starts at least ten seconds after the one before it.
+    starts at least ten seconds after the one before it. When the video's
+    length is known, its end closes the last chapter the same way: "9:55
+    Outro" in a ten-minute video is a five-second chapter, and one starting
+    at or after the end is no chapter at all.
     """
 
     if not isinstance(chapters, list) or len(chapters) < 3:
@@ -36,8 +39,9 @@ def valid_chapters(chapters: Any) -> bool:
     if not all(isinstance(item, dict) and str(item.get("title") or "").strip() for item in chapters):
         return False
     seconds = [timestamp_seconds(item.get("timestamp")) for item in chapters]
+    end = [duration_seconds] if duration_seconds is not None and duration_seconds > 0 else []
     return (None not in seconds and seconds[0] == 0
-            and all(later - earlier >= 10 for earlier, later in pairwise(seconds)))
+            and all(later - earlier >= 10 for earlier, later in pairwise([*seconds, *end])))
 
 
 def chapter_block(chapters: Any) -> str:
@@ -63,11 +67,14 @@ def build_chapters(
     if is_short_content(script, brief):
         return []
     # YouTube only builds chapters from a list that starts at 0:00, has three
-    # or more entries and moves forward by at least ten seconds each time. The
-    # list is one block of timestamp lines: a narration line elsewhere ("7:45
-    # the flight took off late") neither joins it nor, out of order, voids it.
+    # or more entries and moves forward by at least ten seconds each time, up
+    # to the end of the video when the creator stated its length (a length read
+    # out of the script is not stated, so it never voids the list). The list is
+    # one block of timestamp lines: a narration line elsewhere ("7:45 the
+    # flight took off late") neither joins it nor, out of order, voids it.
+    duration = stated_duration(brief)
     for run in _timestamp_runs(str(brief.get("content") or script or "")):
-        if valid_chapters(run):
+        if valid_chapters(run, duration_seconds=duration):
             return run
     return []
 
