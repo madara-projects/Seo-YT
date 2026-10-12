@@ -81,6 +81,23 @@ class QuoteTitleChecksTests(unittest.TestCase):
             "It's not about who knows you the longest, but it's more about who makes you feel seen",
         ))
 
+    def test_a_denial_stops_at_a_comparison_and_a_cut_before_it_fails(self):
+        # A live AI Short led with the first half, which alone says the opposite,
+        # and refused titles carrying the point as "reversed".
+        quote = "not even the coldest winters can make me shiver the way I did when I found out it was all a lie."
+        self.assertIn("quote_title_cut", _codes("Not even the coldest winters can make me shiver", quote))
+        for title in ("It was all a lie", "The day I found out it was all a lie",
+                      "Nothing chills like finding out it was all a lie",
+                      "Colder than any winter: finding out it was all a lie"):
+            with self.subTest(title=title):
+                self.assertEqual(_codes(title, quote), set())
+        # Dropping the "not even" still reverses it.
+        self.assertIn("reversed_quote_meaning", _codes("The coldest winters make me shiver", quote))
+        # A short cut before a comparison is judged too.
+        self.assertIn("quote_title_cut", _codes("Nothing hurts", "Nothing hurts the way your silence did"))
+        self.assertIn("quote_title_cut", _codes("Love me", "Love me the way I am"))
+        self.assertEqual(_codes("Your silence hurt more than anything", "Nothing hurts the way your silence did"), set())
+
     def test_a_keyword_quotes_construction_fails(self):
         quote = "Stop explaining yourself to people who already decided to misunderstand you"
         self.assertIn("keyword_quotes_title", _codes("Alone quotes for when people misunderstand you", quote))

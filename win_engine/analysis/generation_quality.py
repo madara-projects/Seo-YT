@@ -349,13 +349,31 @@ def title_cuts_quote(title: Any, quote: Any) -> bool:
     flat_quote = _fold_marks(quote)
     tokens = _quote_tokens(flat_quote)
     run = _quote_run(body, flat_quote)
-    if not run or run[1] - run[0] < 4 or run[1] - run[0] >= len(tokens):
+    if not run or run[1] - run[0] < 2 or run[1] - run[0] >= len(tokens):
         return False
     end = run[1]
     if end >= len(tokens):
         return False
     gap = flat_quote[tokens[end - 1][2]:tokens[end][1]]
+    # "Nothing hurts | the way your silence did": cut before its comparison, it says the opposite.
+    if _opens_comparison([word for word, _, _ in tokens], end) and not re.search(r"[.;!?…]", gap):
+        return True
+    if run[1] - run[0] < 4:
+        return False
     return not (re.search(r"[.,;:!?…—–-]", gap) or tokens[end][0] in QUOTE_PHRASE_STARTS)
+
+
+_DENIAL_ENDS = {"but", "yet", "instead", "than"}
+_COMPARED_SUBJECTS = {"i", "you", "we", "they", "he", "she", "it", "someone", "anyone", "everyone"}
+
+
+def _opens_comparison(words: list[str], index: int) -> bool:
+    """Whether a comparison starts at ``index``: "than ...", "the way ...", "like I ...", "as you ..."."""
+
+    word = words[index].casefold() if index < len(words) else ""
+    following = words[index + 1].casefold() if index + 1 < len(words) else ""
+    return (word == "than" or (word == "the" and following == "way")
+            or (word in {"like", "as"} and following in _COMPARED_SUBJECTS))
 
 
 def _quote_run(title: Any, quote: Any) -> tuple[int, int] | None:
@@ -419,20 +437,41 @@ def _negated_at(tokens: list[str], position: int) -> bool:
     return _has_negator(tokens[max(0, position - 2):position])
 
 
+def _denial_end(words: list[str], start: int) -> int:
+    """Where a denial stops: at a contrast or a comparison, which states what is so."""
+
+    for index in range(start, len(words)):
+        if words[index].casefold() in _DENIAL_ENDS or _opens_comparison(words, index):
+            return index
+    return len(words)
+
+
 def _asserts_denied_words(title_tokens: list[str], quote: str) -> bool:
     """Whether the title states, without a negation, three or more words a clause of the quote denies.
 
     "Because you stopped caring, you lose them ..." keeps "because you
     stopped caring" from "You don't lose people because you stopped caring"
-    and drops its "don't". Words the quote also affirms elsewhere are its own.
+    and drops its "don't". Words the quote also affirms elsewhere are its own,
+    and so is what follows a contrast or a comparison: in "Not even the coldest
+    winters can make me shiver the way I did when I found out it was all a
+    lie", only the winters are denied.
     """
 
     clauses = [unicode_words(part, min_length=1) for part in re.split(r"[,.;:!?]+|\s[-–—]\s", quote)]
-    affirmed = [f" {' '.join(words)} " for words in clauses if not _has_negator(words)]
-    title_text = f" {' '.join(title_tokens)} "
+    affirmed_words: list[list[str]] = []
+    predicates: list[list[str]] = []
     for words in clauses:
         denied_at = next((index for index, word in enumerate(words) if is_negator(word)), None)
-        predicate = words[denied_at + 1:] if denied_at is not None else []
+        if denied_at is None:
+            affirmed_words.append(words)
+            continue
+        end = _denial_end(words, denied_at + 1)
+        predicates.append(words[denied_at + 1:end])
+        if end < len(words):
+            affirmed_words.append(words[end:])
+    affirmed = [f" {' '.join(words)} " for words in affirmed_words]
+    title_text = f" {' '.join(title_tokens)} "
+    for predicate in predicates:
         for size in range(len(predicate), 2, -1):
             for start in range(len(predicate) - size + 1):
                 phrase = " ".join(predicate[start:start + size])
