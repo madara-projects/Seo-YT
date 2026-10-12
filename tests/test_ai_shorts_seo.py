@@ -200,6 +200,14 @@ class DescriptionTests(unittest.TestCase):
 
 
 class EmojiAndTitleTests(unittest.TestCase):
+    def test_a_specific_emoji_leads_a_generic_one_and_the_reading_can_name_the_theme(self):
+        # A live self-respect Short led with ✨.
+        reading = {"tone": "empowering", "planner_emojis": ["✨"], "planner_themes": ["self respect quotes"],
+                   "planner_hashtag": "#selfrespect"}
+        order = seo.emoji_candidates(reading, "I didn't lose you. You lost someone who would have done anything for you.")
+        self.assertIn(order[0], {"👑", "💯"})
+        self.assertLess(order.index("👑"), order.index("✨"))
+
     def test_the_emoji_follows_the_tone_not_the_word_heart(self):
         self.assertEqual(seo.style_title("My heart finally healed 💔", HEALED), "My heart finally healed 🌱 #shorts")
         self.assertEqual(seo.style_title("Pretending you don't have a heart", HEART), "Pretending you don't have a heart 🖤 #shorts")
@@ -259,6 +267,17 @@ class HashtagTests(unittest.TestCase):
 
 
 class TagTests(unittest.TestCase):
+    def test_subject_phrases_come_from_nouns_not_describing_words_or_contractions(self):
+        # A live package carried "coldest quotes".
+        winter = seo._subject_themes(
+            "not even the coldest winters can make me shiver the way I did when I found out it was all a lie.")
+        self.assertNotIn("coldest quotes", winter)
+        self.assertIn("winters quotes", winter)
+        self.assertEqual(seo._subject_themes("My mother's hands carried my whole world.")[0], "mother quotes")
+        stars = seo._subject_themes("Stars can't shine without darkness.")
+        self.assertIn("stars quotes", stars)
+        self.assertFalse([theme for theme in stars if "'" in theme])
+
     def test_typed_theme_phrases_become_the_tags_and_untyped_ones_are_dropped(self):
         client = FakeSuggest(untyped=("hiding",))
         brief = _brief(HEART, client)

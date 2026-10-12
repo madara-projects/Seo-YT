@@ -2436,6 +2436,22 @@ _HEAD_TURN_RE = re.compile(
 )
 _BEHIND_RE = re.compile(r",?\s*\bseen (?:entirely |completely |only )?from behind\b", re.IGNORECASE)
 _SIDE_RE = re.compile(r",?\s*\b(?:(?:as|in) (?:a )?side-on silhouette|seen side-on|in profile)\b", re.IGNORECASE)
+_SIDE_CAMERA_RE = re.compile(
+    r"\bside-on ((?:\w+ )?(?:shot|view|angle))\b|\bprofile ((?:tracking )?shot)\b"
+    r"|\b(?:moving|tracking|travell?ing|riding|gliding|pacing) alongside\b",
+    re.IGNORECASE,
+)
+
+
+def _camera_from_behind(match: re.Match[str]) -> str:
+    shot = match.group(1) or match.group(2)
+    return f"{shot} from behind" if shot else "following"
+
+
+def _seen_side_on(match: re.Match[str]) -> str:
+    return re.sub(r"(?:entirely |completely |only )?from behind", "side-on", match.group(0), flags=re.IGNORECASE)
+
+
 # Hands are filmed side-on or from above; "hands seen from behind" cannot be framed.
 _HANDS_BEHIND_RE = re.compile(r"(\bhands?\b[^.;]{0,80}?\bseen\s+)(?:entirely\s+)?from behind\b", re.IGNORECASE)
 # A public interior with nobody in it must say so, or Veo fills it with faces.
@@ -2558,6 +2574,17 @@ def patch_prompt(
                 added.append("one framing")
         framed.append(sentence)
     sentences = framed
+    # A side-on camera ("tracking alongside") and a figure "seen from behind" are two framings too.
+    scene_text = " ".join(sentence for sentence in sentences if not _boilerplate(sentence))
+    if _SIDE_CAMERA_RE.search(scene_text) and _BEHIND_RE.search(scene_text):
+        sentences = [
+            sentence if _boilerplate(sentence)
+            else _BEHIND_RE.sub(_seen_side_on, sentence) if framing == "side"
+            else _SIDE_CAMERA_RE.sub(_camera_from_behind, sentence)
+            for sentence in sentences
+        ]
+        if "one framing" not in added:
+            added.append("one framing")
     # The same sentence twice (a live plan carried its layout sentence twice) says nothing new.
     seen: set[str] = set()
     sentences = [s for s in sentences if not (_tidy(s).casefold() in seen or seen.add(_tidy(s).casefold()))]
@@ -2874,6 +2901,8 @@ def split_overlay_lines(quote: str, parts: int) -> list[list[str]]:
     """
 
     text = normalize_unicode(quote)
+    if sentences := sentence_groups(text, parts):
+        return sentences
     if "\n" in text:
         lines = [_tidy(line) for line in text.split("\n") if _tidy(line)]
     else:
@@ -2899,6 +2928,25 @@ def split_overlay_lines(quote: str, parts: int) -> list[list[str]]:
         lines[shortest:shortest + 2] = [f"{lines[shortest]} {lines[shortest + 1]}"]
     groups = _distribute(lines, parts)
     return groups if _balanced(groups, parts) else _even_groups(text, parts)
+
+
+def sentence_groups(quote: str, parts: int) -> list[list[str]] | None:
+    """One sentence per part when the quote has exactly that many, each a fair share; else None.
+
+    "I didn't lose you. | You lost someone who would have done anything for
+    you." reads better than a cut inside the second sentence. The creator's
+    own line breaks win.
+    """
+
+    text = normalize_unicode(quote)
+    if parts < 2 or "\n" in text:
+        return None
+    sentences = [part for part in re.split(r"(?<=[.!?…])\s+", _tidy(text)) if part]
+    counts = [_line_words(sentence) for sentence in sentences]
+    if len(sentences) != parts or min(counts) < 3 or min(counts) < 0.2 * sum(counts):
+        return None
+    return [list(_split_line(sentence) or [sentence]) if count > 6 else [sentence]
+            for sentence, count in zip(sentences, counts)]
 
 
 def _balanced(groups: list[list[str]], parts: int) -> bool:
@@ -3923,7 +3971,7 @@ def plan_flow_shots(
         assert reply is not None
         mood = _coerce_mood(reply, quote, library_mood, matched)
         audio = {"style": "ambient", "description": f"{audio_text}; no dialogue, no narration, no music"}
-        groups = _overlay_from_reply(reply, quote, parts) or split_overlay_lines(quote, parts)
+        groups = sentence_groups(quote, parts) or _overlay_from_reply(reply, quote, parts) or split_overlay_lines(quote, parts)
     else:
         mood, audio = library_mood, fallback_audio(feeling)
         groups = split_overlay_lines(quote, parts)

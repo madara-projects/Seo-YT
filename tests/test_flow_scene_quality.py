@@ -1230,3 +1230,24 @@ def test_pain_tones_always_get_a_person_in_the_frame():
 
 def test_an_over_long_emotion_keeps_its_first_six_words():
     assert fp.direction_emotion("a very long single clause of more than six words") == "a very long single clause of"
+
+
+def test_a_two_sentence_quote_gets_one_sentence_per_part():
+    quote = "I didn't lose you. You lost someone who would have done anything for you."
+    assert fp.sentence_groups(quote, 2) == [["I didn't lose you."], ["You lost someone", "who would have done anything for you."]]
+    assert fp.split_overlay_lines(quote, 2) == fp.sentence_groups(quote, 2)
+    # Too short a sentence, a different count of sentences, or the creator's own breaks keep the old split.
+    assert fp.sentence_groups("It hurts. Let it.", 2) is None
+    assert fp.sentence_groups(quote, 3) is None
+    assert fp.sentence_groups("I didn't lose you.\nYou lost someone who would have done anything for you.", 2) is None
+
+
+def test_a_side_on_camera_and_a_figure_from_behind_become_one_framing():
+    prompt = ("A wide side-on tracking shot, moving alongside at a slow steady pace, 35mm lens, vertical 9:16 portrait "
+              "composition, one continuous 8-second shot. A lone cyclist in a dark teal jacket, seen entirely from behind "
+              "and in silhouette, pedals along a paved coastal path. At first the cyclist pedals steadily, then the wheels "
+              "roll along the damp pavement while the wind ripples the jacket.")
+    behind, _ = fp.patch_prompt(prompt, part=1, audio="wind", framing="behind")
+    assert "tracking shot from behind, following" in behind and "side-on" not in behind
+    side, _ = fp.patch_prompt(prompt, part=1, audio="wind", framing="side")
+    assert "seen side-on and in silhouette" in side and "from behind" not in side

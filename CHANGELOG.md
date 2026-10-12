@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-12 - Quote titles keep the point after a comparison; cleaner AI Shorts output
+
+- Creator and AI Shorts: a quote's "not" now stops at a comparison or contrast ("the way I did", "like I did", "than", "but"), so a title that keeps the quote's point is no longer refused as "reversed": for "not even the coldest winters can make me shiver the way I did when I found out it was all a lie", "It was all a lie" passes. A title cut just before the comparison is refused, because alone it says the opposite ("Not even the coldest winters can make me shiver", "Nothing hurts"). Dropping the "not even" is still caught.
+- AI Shorts tags are no longer built from describing words or contractions ("coldest quotes", "can't quotes"); "mother's" searches as "mother quotes".
+- AI Shorts prompts keep one framing: a side-on camera ("tracking alongside") no longer comes with a figure "seen entirely from behind"; the camera follows from behind, or the figure is seen side-on, matching the plan's framing.
+- A quote with as many sentences as parts shows one sentence per part on screen ("I didn't lose you." for 0-8 s, then the second sentence), unless a sentence is too short; the creator's own line breaks still win.
+- A title's emoji prefers a specific one over a generic ✨ 💫 🌟 💭 🤍, and the quote's theme can come from Gemini's reading (👑 for a self-respect quote whose words never say "respect").
+
 ## 2026-10-10 - AI Shorts understands the quote before it films it, and packages it for search
 
 - The quote is read first: Gemini states its plain meaning, its one emotion, its tone from a fixed list, how viewers search for quotes like it, the hashtag they follow and the emojis that fit. The tone sets the light (night or blue dusk for sad and lonely quotes, sunrise or golden hour for hopeful and healing ones, cold pre-dawn for discipline). A quote whose own words are unmistakable keeps their tone when Gemini drifts ("Discipline is doing it…" is empowering, not hopeful), and Gemini may not add a loss, breakup or event the quote doesn't state. The page shows this reading, the chosen scene and the search phrases under Mood and audio, and keeps the reading even when the scene is thrown away.

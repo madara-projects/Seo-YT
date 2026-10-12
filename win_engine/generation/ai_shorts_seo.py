@@ -498,7 +498,14 @@ def _subject_themes(quote: str, limit: int = 3) -> list[str]:
     """"<subject> quotes" for the quote's own content words, checked later against what viewers type."""
     found: list[str] = []
     for word in _flat_words(quote).split():
-        if len(word) < 4 or word in _NOT_A_SUBJECT or word in _BROAD_WORDS or word.endswith(("ly", "ed", "ing")):
+        # "mother's" searches as "mother"; contractions ("can't", "you've") name no subject.
+        word = word[:-2] if word.endswith("'s") else word
+        if "'" in word or word in {"ones", "enough", "everything", "nothing", "something", "anything"}:
+            continue
+        # Describing words ("coldest", "colder") name no subject a viewer searches.
+        if (len(word) < 4 or word in _NOT_A_SUBJECT or word in _BROAD_WORDS
+                or word.endswith(("ly", "ed", "ing", "est", "ful", "less", "ous", "ive"))
+                or (word.endswith("er") and word[:-2] in _flat_words(quote).split())):
             continue
         phrase = clean_theme(f"{_SUBJECT_FORMS.get(word, word)} quotes")
         if phrase and phrase not in found:
@@ -570,14 +577,22 @@ def repeated_emoji(recent_titles: Iterable[str]) -> str:
     return ""
 
 
+_GENERIC_EMOJIS = {"✨", "💫", "🌟", "💭", "🤍"}
+
+
 def emoji_candidates(reading: dict[str, Any], quote: str) -> list[str]:
-    """The emojis that fit this quote, best first: the planner's, then its theme's, then its tone's."""
+    """The emojis that fit this quote, best first: the planner's specific ones, its theme's, generic ones, its tone's."""
     tone = str(reading.get("tone") or "")
     text = normalize_unicode(quote).replace("’", "'").casefold()
-    found: list[str] = [str(item) for item in reading.get("planner_emojis") or [] if str(item).strip()]
+    planner = [str(item) for item in reading.get("planner_emojis") or [] if str(item).strip()]
+    # The reading names the theme when the quote's words don't ("self respect quotes").
+    themes = " ".join([*(reading.get("planner_themes") or []), str(reading.get("planner_hashtag") or "")]).casefold()
     theme = next((emojis for pattern, emojis, tones in _THEME_EMOJIS
-                  if _fits(tone, tones) and _affirmed(pattern, text)), ())
+                  if _fits(tone, tones) and (_affirmed(pattern, text) or re.search(pattern, themes))), ())
+    # A specific emoji leads a generic one: 👑 for self-respect before ✨.
+    found = [emoji for emoji in planner if _base(emoji) not in _GENERIC_EMOJIS]
     found.extend(emoji for emoji in theme if _emoji_fits_tone(emoji, tone))
+    found.extend(emoji for emoji in planner if _base(emoji) in _GENERIC_EMOJIS)
     found.extend(TONE_EMOJIS.get(tone, NEUTRAL_EMOJIS))
     unique: dict[str, str] = {}
     for emoji in found:
