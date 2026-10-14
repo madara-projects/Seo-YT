@@ -411,6 +411,14 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(run["package"]["tags"], package["tags"])
                 self.assertEqual(run["package"]["hashtags"], package["hashtags"])
 
+    def test_history_keeps_the_final_research_warnings(self):
+        body = self.generate(HEALED)
+        run = self.store.history_run(body["analysis_run_id"])
+        self.assertEqual(run["package"]["research_warnings"], body["package"]["research_warnings"])
+        self.assertEqual(run["package"]["research_warnings"][0], ai_shorts.RESEARCH_SKIPPED_WARNING)
+        # No stale copy of the generator's "no research" line anywhere in the saved run.
+        self.assertNotIn(ai_shorts._EMPTY_RESEARCH_WARNING_PREFIX, json.dumps(run["package"], ensure_ascii=False))
+
     def test_a_short_whole_quote_leads_the_titles(self):
         package = self.generate(PROUD)["package"]
         self.assertEqual(package["title"], "Be proud of how hard you are trying 💪 #shorts")
@@ -838,6 +846,51 @@ class ToneConsistencyTests(unittest.TestCase):
         self.assertEqual([item["tag"] for item in trace["final_tag_provenance"]], package["tags"])
         self.assertEqual([item["keyword"] for item in trace["final_tag_scores"]], package["tags"])
 
+FUTURE = "Your future needs you. Your past doesn't."
+
+
+class TagVarietyTests(unittest.TestCase):
+    """A live package for FUTURE was four broad searches, two of them one search in two forms."""
+
+    def test_word_forms_count_as_one_search_and_broad_searches_wait(self):
+        self.assertTrue(seo._same_search("motivation quotes", "motivational quotes"))
+        self.assertTrue(seo._same_search("lonely quotes", "loneliness quotes"))
+        self.assertFalse(seo._same_search("heart quotes", "heartbreak quotes"))
+        self.assertFalse(seo._same_search("hope quotes", "hopeless quotes"))
+        self.assertFalse(seo._same_search("tamil sad quotes", "tamil quotes"))
+        direction = {"tone": "empowering", "emotion": "motivated resolve",
+                     "search_themes": ["motivation quotes", "motivational quotes", "inspirational quotes",
+                                       "self motivation", "future quotes"]}
+        reading = seo.quote_understanding(FUTURE, {"creative_direction": direction})
+        client = FakeSuggest()  # asks six phrases at most; a second form must not spend one
+        names = [row["keyword"] for row in seo.verify_subject_tags(reading, quote=FUTURE, client=client)["subject_tags"]]
+        self.assertNotIn("motivational quotes", client.asked)
+        self.assertFalse({"motivation quotes", "motivational quotes"} <= set(names), names)
+        self.assertLessEqual(len([name for name in names if seo.is_generic_tag(name)]), seo.MAX_GENERIC_TAGS, names)
+        self.assertIn("moving on quotes", names)
+        self.assertIn("past quotes", names)
+        self.assertEqual(seo.ai_short_hashtags(None, FUTURE)[-1], "#movingon")
+
+    def test_verbs_are_not_subjects(self):
+        themes = seo._subject_themes("It hurts so much, it really does. Love yourself first.")
+        self.assertIn("hurt quotes", themes)
+        self.assertFalse({"does quotes", "first quotes", "hurts quotes"} & set(themes), themes)
+
+
+class TitleFloorTests(unittest.TestCase):
+    def test_sentences_are_clauses_but_an_elliptical_one_is_not_a_title(self):
+        self.assertEqual(seo.quote_clauses("Stars can't shine without darkness. Embrace your own journey."),
+                         ["Embrace your own journey", "Stars can't shine without darkness"])
+        self.assertEqual(seo.quote_clauses(FUTURE), [])
+
+    def test_a_writer_title_the_gate_rejects_does_not_count_toward_three(self):
+        # "You were my favorite hello" stops before the quote's turn; the gate drops it.
+        titles = seo.order_titles([GOODBYE, "You were my favorite hello", "The goodbye that still hurts the most"],
+                                  GOODBYE)
+        self.assertTrue(any(title.startswith("My hardest goodbye ") for title in titles), titles)
+        self.assertTrue(titles[-1].startswith("You were my favorite hello "), titles)
+
+
 class TopicAnchorTests(unittest.TestCase):
     def test_common_quote_vocabulary_is_not_enough_to_ground_a_topic(self):
         reading = seo.quote_understanding(DISCIPLINE, {"creative_direction": {
@@ -870,6 +923,26 @@ class TopicAnchorTests(unittest.TestCase):
             "tone": "romantic", "quote_meaning": "Gratitude for a loyal friend who remained present.",
         }})
         self.assertEqual(seo.theme_relation("friendship quotes", reading, quote), "planner_reading")
+
+
+class EmojiClusterAndNegationTests(unittest.TestCase):
+    MENDING = chr(0x2764) + chr(0xFE0F) + chr(0x200D) + chr(0x1FA79)
+    PRAYING = chr(0x1F64F) + chr(0x1F3FD)
+
+    def test_a_zwj_or_skin_tone_emoji_is_one_planner_emoji(self):
+        kept = seo._planner_emojis([self.MENDING, self.PRAYING, chr(0x1F494) * 2], "")
+        self.assertEqual(kept, [self.MENDING, self.PRAYING])
+
+    def test_repeated_emoji_reads_a_zwj_emoji_as_the_gate_does(self):
+        recent = [f"Healing slowly {self.MENDING} #shorts", f"Still healing {self.MENDING} #shorts",
+                  f"Healing again {self.MENDING} #shorts"]
+        self.assertEqual(seo.repeated_emoji(recent), chr(0x2764))
+
+    def test_a_negation_stays_in_its_sentence_and_no_one_is_a_subject(self):
+        self.assertTrue(seo._affirmed(r"\blove\b", "it's not over. love will find you again"))
+        self.assertTrue(seo._affirmed(r"\bhurts?\b", "no one hurts you like the ones you trust"))
+        self.assertFalse(seo._affirmed(r"\blove\b", "i do not love you anymore"))
+        self.assertFalse(seo._affirmed(r"\bhurts?\b", "it no longer hurts"))
 
 
 if __name__ == "__main__":

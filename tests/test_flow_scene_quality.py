@@ -1293,3 +1293,111 @@ def test_two_people_do_not_get_conflicting_silhouette_framings(framing):
     patched, _ = fp.patch_prompt(prompt, part=1, audio="wind", framing=framing)
     assert not ("from behind" in patched and "side-on" in patched)
     assert ("from behind" in patched) == (framing == "behind")
+
+
+# A live empowering prompt with the faults the creator saw: an entrance, a fade, light that grows,
+# a second layout sentence and footsteps on gravel over asphalt.
+DAWN_RUN = (
+    "Wide shot, slow tracking move on a 35mm lens, vertical 9:16 portrait composition, one continuous 8-second shot. "
+    "A lone runner in a dark windbreaker, seen from behind and small in the lower third, moves into the frame and "
+    "jogs along an empty asphalt path by the sea under a calm, dark upper sky kept in soft focus. At first the wind "
+    "ripples the jacket, then the first warm golden glow catches their shoulders, finally the runner fades slightly "
+    "into the distance while the warm golden light from the low horizon widens across the sky. Cold blue pre-dawn "
+    f"light. {fp.NEGATIVE_PROMPT} Ambient noise: wind, the crunch of gravel underfoot and distant waves. "
+    f"{fp.NO_VOICE_SENTENCE}"
+)
+DISCIPLINE = "Discipline is doing it even when you don't feel like it."
+
+
+def test_a_live_dawn_run_keeps_one_light_its_subject_on_screen_and_one_layout_sentence():
+    patched, added = fp.patch_prompt(DAWN_RUN, part=1, audio="wind")
+    assert "into the frame" not in patched and "moves through the frame and jogs" in patched
+    assert "fades" not in patched and "finally the runner grows smaller in the distance." in patched
+    assert "catches their shoulders" not in patched and "widens across the sky" not in patched
+    assert "one light for the whole clip" in added
+    assert "upper-middle" not in patched and "a calm upper-middle" not in added
+    assert fp.check_prompt(patched, DISCIPLINE, 1) == ([], [])
+    plan = {"parts": 1, "mood": {"pace": "slow"}, "shots": [
+        {"part": 1, "seconds": 8, "title": "Dawn run", "flow_mode": "text_to_video", "continuity": None, "prompt": DAWN_RUN},
+    ]}
+    assert any("the light changes within the clip" in warning for warning in fp.check_plan(plan, DISCIPLINE)["warnings"])
+    for calm in ("A light mist drifts over the field as a light breeze grows stronger.",
+                 "Soft lamp light spreads across the table.", "The sun-bleached path climbs gently through the dunes."):
+        assert fp._drop_light_growth(calm) == (calm, []), calm
+    assert fp._drop_light_growth("A figure walks on as the sun slowly rises over the bay.")[1]
+
+
+def test_the_subject_is_on_screen_from_the_first_frame_to_the_last():
+    for entrance, shown in (("A lone figure enters the frame from the left", "A lone figure moves through the frame"),
+                            ("A cyclist coming into view rides on", "A cyclist already in view rides on"),
+                            ("A woman walks into the shot and on", "A woman walks through the frame and on")):
+        assert fp._plain_prompt_text(entrance + ".").startswith(shown), entrance
+    assert fp._plain_prompt_text("They disappear into the distance.") == "They grow smaller in the distance."
+    # A train coming into view is a later part's development, not an empty first frame.
+    assert "a train comes into view" in fp._plain_prompt_text("Continuing the same scene, a train comes into view far below.")
+    # Where an extension starts is the last frame, not the opening.
+    assert fp._plain_prompt_text("Continuing from Part 1's last frame, the figure walks on.").startswith(
+        "Continuing from the last frame,")
+    assert "loops back to the opening frame" in fp._plain_prompt_text("The motion loops back to Part 1's first frame.")
+
+
+def test_footsteps_are_heard_on_the_ground_the_picture_shows():
+    patched, added = fp.patch_prompt(DAWN_RUN, part=1, audio="wind")
+    assert "gravel" not in patched and "Ambient noise: wind, distant waves." in patched
+    assert "audio that fits the ground shown" in added
+    patched, added = fp.patch_prompt(DAWN_RUN.replace("asphalt path", "gravel path"), part=1, audio="wind")
+    assert "the crunch of gravel underfoot" in patched and "audio that fits the ground shown" not in added
+    unnamed = ["A figure walks along the path.", "Ambient noise: the crunch of gravel underfoot."]
+    assert fp._audio_fits(unnamed) == (unnamed, [])
+
+
+def test_the_director_and_writer_vary_the_scene_and_never_ask_for_a_light_change():
+    quotes = [f"Keep going, quote number {n}." for n in range(12)]
+    prompts = [fp._director_prompt(quote, "") for quote in quotes]
+    # The tone's light wording rotates with the quote, the same way the writer's does.
+    assert len({re.search(r"empowering: ([^;]+);", prompt).group(1) for prompt in prompts}) == 3
+    assert all(f"empowering: {fp.tone_light('empowering', quote)};" in prompt for quote, prompt in zip(quotes, prompts))
+    assert len({re.search(r"Examples of the range: ([^.]+)\.", prompt).group(1) for prompt in prompts}) >= 6
+    assert fp._director_prompt(DISCIPLINE, "") != fp._director_prompt(DISCIPLINE, "", ["A runner on a seawall at dawn."])
+    assert "never three takes on one lone figure" in prompts[0] and "dark coat, jacket or windbreaker" in prompts[0]
+    writer = fp._build_plan_prompt(HEART, language="english", parts=2, mood_hint="", feeling="x")
+    assert "the light shifts" not in writer and "a bird crosses the sky" in writer
+    assert "never entering it" in writer and "never fading out" in writer and "first glow reaching" in writer
+    assert "footsteps on the ground the scene shows" in writer
+
+
+def test_a_light_correction_names_the_same_wording_as_the_light_rule():
+    dusk = director_reply(scene="A lone figure seen from behind walks along an empty seawall at dusk, city lights glowing.")
+    _, answers = plan_with(dusk, writer_reply(SUNRISE_WALK), quote=HOPEFUL, director=True)
+    wanted = fp.tone_light("hopeful", HOPEFUL)
+    assert f"light it with {wanted}" in answers.prompts[1] and f"light the scene with {wanted}" in answers.prompts[1]
+
+
+def test_a_light_change_in_the_directors_beats_never_reaches_the_writer():
+    plan, answers = plan_with(director_reply(), writer_reply(SUNRISE_WALK), quote=HOPEFUL, director=True)
+    assert "as the sun rises" not in answers.prompts[1] and "The wind moves their coat." in answers.prompts[1]
+    assert plan["creative_direction"]["middle"] == "The wind moves their coat."
+
+
+def test_a_light_change_that_is_ruled_out_is_neither_warned_about_nor_cut():
+    steady = SUNRISE_WALK.replace("keep walking toward the horizon.",
+                                  "keep walking toward the horizon, and the light never fades into dusk.")
+    plan = {"parts": 1, "mood": {"pace": "slow"}, "shots": [
+        {"part": 1, "seconds": 8, "title": "Walk", "flow_mode": "text_to_video", "continuity": None, "prompt": steady},
+    ]}
+    assert not any("the light changes within the clip" in w for w in fp.check_plan(plan, HOPEFUL)["warnings"])
+    assert "the light never fades into dusk" in fp.patch_prompt(steady, part=1, audio="wind")[0]
+    plan["shots"][0]["prompt"] = steady.replace("never fades", "slowly fades")
+    assert any("the light changes within the clip" in w for w in fp.check_plan(plan, HOPEFUL)["warnings"])
+
+
+def test_the_director_and_the_writer_are_offered_the_same_framing():
+    for n in range(24):
+        quote = f"Keep going, quote number {n}."
+        director = fp._director_prompt(quote, "")
+        for tone in ("hopeful", "heartbroken"):
+            assert fp._composition(quote, [], tone) in director, (quote, tone)
+    _, answers = plan_with(director_reply(tone="sad"), writer_reply(NIGHT_WALK), writer_reply(NIGHT_WALK),
+                           quote=HOPEFUL, director=True)
+    writer_pick = re.search(r"for this video prefer ([^\n]+)\n", answers.prompts[1]).group(1)
+    assert writer_pick in answers.prompts[0] and "no person at all" not in writer_pick

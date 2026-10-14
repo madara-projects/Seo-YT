@@ -661,7 +661,10 @@ def test_fallback_passes_check_plan_for_varied_quotes(quote):
 def test_every_library_variant_passes_the_prompt_checks():
     neutral = "a quote whose words appear in no scene"
     for scene in fp._SCENES:
-        for subject, context, camera, lens in product(range(len(scene.subjects)), range(len(scene.contexts)), range(len(fp._CAMERA_MOVES)), range(len(fp._LENSES))):
+        # The lens is one number word that no check reads, so each combination takes the next lens
+        # in turn: every lens is still checked, in a third of the time.
+        for subject, context, camera in product(range(len(scene.subjects)), range(len(scene.contexts)), range(len(fp._CAMERA_MOVES))):
+            lens = (subject + context + camera) % len(fp._LENSES)
             choice = fp._Choice(subject=subject, context=context, camera=camera, lens=lens, developments=(0, 1))
             prompts = {1: fp._opening_prompt(scene, choice), 2: fp._extension_prompt(scene, choice, 2, 3), 3: fp._extension_prompt(scene, choice, 3, 3)}
             for part, prompt in prompts.items():
@@ -889,3 +892,105 @@ def test_the_negative_prompt_is_one_sentence_covering_every_exclusion():
     assert clause.count(". ") == 0 and clause.endswith(".")
     for word in ("no text", "letters", "words", "captions", "subtitles", "signs", "logos", "watermarks", "no human faces", "brand names", "violent", "sexual"):
         assert word in clause, word
+
+
+# ---------------------------------------------------------------------------
+# Audit regressions
+# ---------------------------------------------------------------------------
+
+
+def test_words_that_only_start_like_mom_or_appa_name_no_parent():
+    for quote in ("Some moments stay with you forever", "In that moment I knew it was over",
+                  "Momentum beats motivation", "He mumbled sorry and walked away", "Mumbai nights feel lonely",
+                  "Apparently I was never enough", "I was appalled by how easily you left"):
+        assert fp.quote_subjects(quote) == [], quote
+        assert fp.library_feeling(quote, tone="sad")[0] != "family love", quote
+    for quote, name in (("My mom was right", "a mother"), ("Mummy's hands", "a mother"), ("My mum knew", "a mother"),
+                        ("Ammavin anbu", "a mother"), ("My appa's hands", "a father"), ("Dad was right", "a father")):
+        assert [found for found, _, _ in fp.quote_subjects(quote)] == [name], quote
+
+
+def test_light_that_grows_or_dies_within_the_clip_is_a_light_shift():
+    for shift in ("warm golden light widens across the sky", "the sky slowly darkens", "the light gently fades",
+                  "the glow brightens over the water", "the morning light grows brighter", "the dusk deepens"):
+        assert fp._LIGHT_SHIFT_RE.search(shift), shift
+        sentence = f"A lone figure walks along the shore as {shift}."
+        assert fp._drop_light_shifts(sentence)[0] == "A lone figure walks along the shore.", shift
+    for steady in ("soft light brightens the edges of the leaves", "the morning mist slowly fades",
+                   "golden light spills across the floor", "the light never fades", "in the fading evening light",
+                   "Under a grey morning sky, a lone cyclist moves from left to right"):
+        assert not fp._LIGHT_SHIFT_RE.search(steady), steady
+
+
+def test_a_face_said_to_be_hidden_is_not_a_face_request():
+    for hidden in ("her face is hidden by her hood", "his face stays in shadow", "the face is not visible",
+                   "her face remains turned away", "their faces are kept out of the frame",
+                   "she turns her back to the camera"):
+        assert fp.face_requested(f"A lone figure walks slowly, {hidden}.") is False, hidden
+    for shown in ("her face is visible", "her face is not hidden", "his face lit softly"):
+        assert fp.face_requested(f"A lone figure walks slowly, {shown}.") is True, shown
+
+
+def test_still_meaning_yet_is_not_a_request_for_a_frozen_frame():
+    for yet in ("Everything is still wet from the rain", "The world is still asleep",
+                "The whole scene is still bathed in blue light", "Everything is still glowing faintly"):
+        prompt = f"{yet}, a lone figure walks slowly along the shore."
+        assert fp.stillness_phrases(prompt) == [], yet
+        assert fp.without_stillness(prompt)[0] == prompt
+    for frozen in ("Everything is still", "Everything is still and silent", "The scene remains still during the shot",
+                   "Everything is completely still"):
+        assert fp.stillness_phrases(f"{frozen}, a lone figure walks slowly along the shore."), frozen
+
+
+def test_a_hyphenated_feeling_or_tone_is_read():
+    quote = "I miss you, I still remember the memories we made, I miss your voice"
+    assert fp.detect_feeling(quote)[0] == "missing someone"
+    assert fp.detect_feeling(quote, mood_hint="self-worth")[0] == "self-worth"
+    assert fp.direction_tone("Bitter-sweet") == "bittersweet" and fp.direction_tone("heart-broken") == "heartbroken"
+
+
+def test_no_library_scene_sets_a_sad_quote_at_a_height():
+    for scene in fp._SCENES:
+        for text in (*scene.subjects, *scene.recaps, *scene.contexts):
+            assert fp.unsafe_height(text) == "", (scene.name, text)
+
+
+def test_pain_that_still_goes_on_is_current_whatever_else_is_over():
+    for meaning in ("It still hurts after all these years.", "The past still haunts the speaker.",
+                    "Even after the breakup the love is still painful."):
+        assert fp.pain_tone("I still love you.", {"tone": "romantic", "quote_meaning": meaning}) == "heartbroken", meaning
+    assert fp.pain_tone("Love again.", {"tone": "romantic", "quote_meaning": "After the heartbreak I am still healing."}) is None
+
+
+def test_the_audio_line_does_not_decide_the_motion_line():
+    sentences = ["An empty bench sits under one streetlamp at night.", "Wide shot, slow push-in.", fp.NEGATIVE_PROMPT,
+                 "Ambient noise: distant waves and a cafe murmur.", fp.NO_VOICE_SENTENCE]
+    line, index = fp._motion_line(sentences)
+    assert "water" not in line and "steam" not in line and "dust" not in line and index == 1
+
+
+def test_the_empowering_light_holds_steady_and_is_not_always_dawn():
+    wordings = (fp._TONE_LIGHT["empowering"], *fp._LIGHT_VARIANTS["empowering"])
+    assert not any("first warm glow" in wording or fp._LIGHT_SHIFT_RE.search(wording) for wording in wordings)
+    assert any(not any(word in wording for word in ("dawn", "morning", "sunrise")) for wording in wordings)
+    assert all(fp.light_mismatch(wording, "empowering") == "" for wording in wordings)
+
+
+def test_a_retry_after_ten_saved_scenes_still_rotates_and_every_tone_reading_agrees_on_the_framing():
+    quote = "Discipline is doing it even when you don't feel like it."
+    windows = [[f"scene {n + shift}" for n in range(10)] for shift in range(8)]
+    assert len({fp._seed(quote, window) for window in windows}) == 8
+    assert len({fp._composition(quote, window) for window in windows}) > 1
+    assert fp._seed(quote, []) == fp._seed(quote, None)
+    # A person tone only swaps the empty place for a person; any other pick is the same whatever the tone.
+    for n in range(24):
+        plain, sad = fp._composition(f"quote {n}", []), fp._composition(f"quote {n}", [], "sad")
+        assert "no person at all" not in sad
+        assert "no person at all" in plain or sad == plain
+
+
+def test_the_same_look_in_the_same_place_is_a_repeat_whatever_the_subject_does():
+    recent = ["A lone figure in a dark windbreaker runs along an empty coastal path at dawn."]
+    assert fp.scene_repeats("A lone figure in a dark windbreaker cycles along the coastal path at dusk.", recent)
+    assert not fp.scene_repeats("A lone figure in a yellow raincoat cycles along the coastal path at dusk.", recent)
+    assert not fp.scene_repeats("A lone figure in a dark windbreaker sits on a bench by a lake.", recent)  # other place

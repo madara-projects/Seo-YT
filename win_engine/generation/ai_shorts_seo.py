@@ -30,8 +30,11 @@ from win_engine.analysis.generation_quality import (
     description_prose,
     feeling_hashtag,
     has_unsupported_instructional_framing,
+    quote_title_issues,
     title_body,
     title_emojis,
+    title_fluency_issues,
+    title_similarity,
 )
 from win_engine.analysis.keyword_research import (
     natural_tag_phrase,
@@ -111,7 +114,10 @@ _WORTH = (r"\b(?:only love you when|useful to them|use(?:d)? (?:me|you)|your wor
 _RESPECT = (r"\b(?:stop explaining|explain(?:ing)? yourself|self[- ]?respect)\b|\bmisunderst\w*|"
             r"\b(?:doesn'?t|don'?t|does not|do not) value\b|\bvalue (?:you|your)\b")
 _MOTIVATION = r"\bdisciplin\w*|\bproud\b|\btrying\b|\bkeep going\b|\bgive up\b|\bwork(?:ing)? hard\b"
-_MOVING_ON = r"\bbetter without\b|\b(?:moved|moving|move) on\b|\blet(?:ting)? go\b"
+# A quote that sets its past against its future ("Your future needs you. Your
+# past doesn't.") is about moving on; matched at the start, so no negator precedes it.
+_MOVING_ON = (r"\bbetter without\b|\b(?:moved|moving|move) on\b|\blet(?:ting)? go\b|"
+              r"^(?=[\s\S]*\bpast\b)(?=[\s\S]*\bfuture\b)")
 _MISSING = r"\bmiss(?:ing)? (?:you|someone|him|her|them)\b"
 _LOVE = r"\bhome\b.*\bperson\b|\bperson\b.*\bhome\b|\bmy person\b|\bin love\b|\bi love you\b|\bsoulmate\b"
 # The hashtag of the quote's own theme, before the tone's, when it fits the
@@ -327,6 +333,7 @@ _BANNED_THEME_WORDS = {
     "status", "whatsapp", "instagram", "aesthetic", "edit", "ai", "background", "footage", "flow", "veo",
 }
 MAX_SUBJECT_TAGS = 5
+MAX_GENERIC_TAGS = 2
 # A theme phrase viewers type can be a long tail ("everything happens for a
 # reason quotes"); the shared 30-character cap for a Short's tags exists to stop
 # glued or junk tags, and these phrases are checked against real searches.
@@ -344,9 +351,12 @@ def _clean_line(value: Any, limit: int = 300) -> str:
 def _affirmed(pattern: str, text: str) -> bool:
     """True when a match of ``pattern`` is not denied by a negator just before it."""
     for match in re.finditer(pattern, text, re.IGNORECASE):
-        before = unicode_words(text[:match.start()], min_length=1)[-3:]
+        # A negation stays in its sentence ("It's not over. Love ..."), and "no
+        # one" is a subject like "nobody" ("No one hurts you like ...").
+        before = unicode_words(re.split(r"[.!?;\n]", text[:match.start()])[-1], min_length=1)[-3:]
         # The pattern may carry its own negation ("pretend that you don't have").
-        if not any(is_negator(word) for word in before):
+        if not any(is_negator(word) and not (word == "no" and before[index + 1:index + 2] == ["one"])
+                   for index, word in enumerate(before)):
             return True
     return False
 
@@ -487,11 +497,13 @@ _NOT_A_SUBJECT = {
     "matter", "matters", "deserve", "deserves", "start", "stop", "walk", "come", "comes", "came", "look", "looks",
     "seem", "seems", "turn", "turns", "harder", "easier", "stronger", "bigger", "deeper", "louder", "quieter",
     "softer", "kinder", "longer", "closer", "sooner", "later", "reason", "words", "while", "around",
+    "does", "done", "first", "realize", "realise", "goes", "puts",
 }
 # A subject word whose search viewers type in another form.
 _SUBJECT_FORMS = {
     "friend": "friendship", "friends": "friendship", "mom": "mother", "mum": "mother", "maa": "mother",
     "energy": "positive energy", "goodbyes": "goodbye", "memories": "memories", "dreams": "dream",
+    "hurts": "hurt",
 }
 
 
@@ -542,8 +554,8 @@ def _planner_emojis(value: Any, tone: str) -> list[str]:
     kept: list[str] = []
     for item in (value if isinstance(value, list) else [value] if isinstance(value, str) else [])[:3]:
         text = _clean_line(item, 16)
-        found = title_emojis(text)
-        if (len(found) != 1 or len(_flat_words(text)) or _base(found[0]) not in _FEELING_EMOJIS
+        found = _emoji_clusters(text)
+        if (len(found) != 1 or len(_flat_words(text)) or found[0][0] not in _FEELING_EMOJIS
                 or not _emoji_fits_tone(found[0], tone)):
             continue
         emoji = text.replace(" ", "")
@@ -565,6 +577,18 @@ def _base(emoji: str) -> str:
     return re.sub(r"[︎️‍]", "", emoji)
 
 
+# One visible emoji, whole: its variation selector, skin tone and ZWJ-joined
+# parts belong to it. title_emojis lists "❤️‍🩹" and "🙏🏽" as two emojis each.
+_EMOJI_CLUSTER_RE = re.compile(
+    r"[\U0001F300-\U0001FAFF\U00002600-\U000027BF]\U0000FE0F?[\U0001F3FB-\U0001F3FF]?"
+    r"(?:\U0000200D[\U0001F300-\U0001FAFF\U00002600-\U000027BF]\U0000FE0F?[\U0001F3FB-\U0001F3FF]?)*"
+)
+
+
+def _emoji_clusters(text: Any) -> list[str]:
+    return _EMOJI_CLUSTER_RE.findall(normalize_unicode(text))
+
+
 def repeated_emoji(recent_titles: Iterable[str]) -> str:
     """The emoji the quality gate would reject as a template: the one its three compared recent titles all end with.
 
@@ -572,7 +596,8 @@ def repeated_emoji(recent_titles: Iterable[str]) -> str:
     titles it is given; a title with that same single emoji is rejected.
     """
     recent = [str(item) for item in recent_titles or [] if str(item or "").strip()]
-    signatures = ["".join(title_emojis(title)) for title in recent[-3:]]
+    # The gate reads "❤️‍🩹" as "❤", one emoji (generation_quality._visible_emojis).
+    signatures = ["".join(cluster[0] for cluster in _emoji_clusters(title)) for title in recent[-3:]]
     if len(signatures) == 3 and signatures[0] and all(item == signatures[0] for item in signatures):
         return signatures[0]
     return ""
@@ -633,10 +658,10 @@ def style_title(
     """
     reading = understanding_of(brief, quote)
     body = re.sub(r"(?i)#shorts\b", "", title).strip()
-    emojis = title_emojis(body)
+    emojis = _emoji_clusters(body)
     hard = {_base(item) for item in [*(reading.get("avoid_emojis") or []), repeated_emoji(recent_titles)] if item}
     soft = {_base(item) for item in reading.get("recent_emojis") or [] if item}
-    emoji = _pick_emoji(emoji_candidates(reading, quote), emojis, hard=hard, soft=soft,
+    emoji = _pick_emoji(emoji_candidates(reading, quote), [item[0] for item in emojis], hard=hard, soft=soft,
                         used={_base(item) for item in used if item})
     for existing in emojis:
         body = body.replace(existing, "")
@@ -679,17 +704,26 @@ def near_verbatim(title: str, quote: str) -> bool:
 
 
 MIN_TITLE_OPTIONS = 3
-_CLAUSE_BREAK_RE = re.compile(r"\s*[,;:—–]\s*|\s+(?:but|yet|and|because|so)\s+", re.IGNORECASE)
+_CLAUSE_BREAK_RE = re.compile(r"\s*[,;:—–]\s*|(?<=[.!?…])\s+|\s+(?:but|yet|and|because|so)\s+", re.IGNORECASE)
+# "Your past doesn't" leans on the sentence before it; alone it says nothing.
+_ELLIPTICAL_END_RE = re.compile(r"(?:n['’]t|\bcannot)$", re.IGNORECASE)
 
 
 def quote_clauses(quote: str) -> list[str]:
-    """The quote's own complete clauses, its punchline (the last) first: faithful local title options."""
+    """The quote's own complete clauses and sentences, its punchline (the last) first: faithful local title options."""
     whole = re.sub(r"\s+", " ", normalize_unicode(quote)).strip()
     parts = [part.strip(" .!?…\"'“”") for part in _CLAUSE_BREAK_RE.split(re.sub(r"[.!?…]+$", "", whole))]
-    clauses = [part[:1].upper() + part[1:] for part in parts if len(part.split()) >= 3]
+    clauses = [part[:1].upper() + part[1:] for part in parts
+               if len(part.split()) >= 3 and not _ELLIPTICAL_END_RE.search(part)]
     if len(clauses) < 2:
         return []
     return list(dict.fromkeys([clauses[-1], *clauses[:-1]]))
+
+
+def _passes_title_checks(title: str, quote: str, kept: Iterable[str] = ()) -> bool:
+    """Whether the final gate's quote-title and fluency checks accept this title beside the ones kept."""
+    return not (quote_title_issues(title, quote) or title_fluency_issues(title, quote=quote)
+                or any(title_similarity(title, other) >= 0.82 for other in kept))
 
 
 def order_titles(
@@ -715,15 +749,25 @@ def order_titles(
             seen.add(_title_key(title))
             bodies.append(title)
     bodies = bodies or written[:1]
-    # At least three options: when the writer gave fewer, the quote's own
-    # clauses (its punchline first) stand in; the final gate still judges each.
+    # At least three options the final gate can accept: a writer title it would
+    # reject does not count, so the quote's own clauses (its punchline first)
+    # stand in; the gate still judges each.
+    viable: list[str] = []
+    for title in bodies:
+        if _passes_title_checks(title, quote, viable):
+            viable.append(title)
     for clause in quote_clauses(quote):
-        if len(bodies) >= MIN_TITLE_OPTIONS:
+        if len(viable) >= MIN_TITLE_OPTIONS:
             break
         if _title_key(clause) not in {_title_key(title) for title in bodies}:
             bodies.append(clause)
-    ordered = sorted(bodies, key=lambda title: not is_exact_quote(title, quote)
-                     and len(title_body(title)) < SHORT_PRIMARY_CHARS)[:5]
+            if _passes_title_checks(clause, quote, viable):
+                viable.append(clause)
+    # A title the gate would reject goes after the ones it accepts, so the cap of five keeps those.
+    ordered = sorted(bodies, key=lambda title: (
+        not is_exact_quote(title, quote) and len(title_body(title)) < SHORT_PRIMARY_CHARS,
+        not is_exact_quote(title, quote) and title not in viable,
+    ))[:5]
     styled: list[str] = []
     used: list[str] = []
     for title in ordered:
@@ -1059,9 +1103,34 @@ def _tag_row(phrase: str, *, validated: bool, rank: int | None, planner: bool, r
     }
 
 
+_VARIANT_ENDINGS = frozenset({
+    "", "s", "es", "e", "y", "ly", "al", "ally", "ed", "ing", "ion", "ions", "ional", "ate", "ated", "ation",
+    "ational", "ness", "iness", "ful", "ive", "ity", "ies", "ily",
+})
+
+
+def _variant_words(one: str, other: str) -> bool:
+    """Two forms of one word: "motivation" and "motivational", "lonely" and "loneliness"."""
+    if one == other:
+        return True
+    shared = len(_common_prefix(one, other))
+    return (min(len(one), len(other)) >= 4 and shared >= 3
+            and one[shared:] in _VARIANT_ENDINGS and other[shared:] in _VARIANT_ENDINGS)
+
+
+def _same_search(phrase: str, other: str) -> bool:
+    """One search in two forms: "motivation quotes" and "motivational quotes" count as one tag."""
+    left = [word for word in phrase.split() if word not in _QUOTE_FORM_WORDS]
+    right = [word for word in other.split() if word not in _QUOTE_FORM_WORDS]
+    return bool(left) and len(left) == len(right) and all(
+        any(_variant_words(word, item) for item in right) for word in left
+    ) and all(any(_variant_words(item, word) for word in left) for item in right)
+
+
 def _distinct(phrase: str, chosen: list[str]) -> bool:
     words = set(phrase.split())
-    return all(words != set(other.split()) and phrase not in other and other not in phrase for other in chosen)
+    return all(words != set(other.split()) and phrase not in other and other not in phrase
+               and not _same_search(phrase, other) for other in chosen)
 
 
 def suggest_client(language: str = "english") -> Any:
@@ -1109,6 +1178,10 @@ def verify_subject_tags(
     for theme in reading.get("search_themes") or []:
         if not theme or has_unsupported_instructional_framing(theme, quote):
             continue
+        # A second form of a phrase already asked ("motivational quotes") would
+        # only spend the suggestion query cap; one form can be a tag anyway.
+        if any(_same_search(theme, other) for other in candidates):
+            continue
         if contradicts_tone(theme, tone):
             rejected.append({"keyword": str(theme), "reason": CONTRADICTS_TONE, "source": "ai_shorts_theme"})
             continue
@@ -1154,7 +1227,18 @@ def verify_subject_tags(
     ))
     chosen: list[dict[str, Any]] = []
     names: list[str] = []
+    # A live package was four broad searches and one subject: past
+    # MAX_GENERIC_TAGS, a broad search waits until the quote's own ones are in.
+    deferred: list[tuple[str, int]] = []
     for phrase, rank in validated:
+        if is_generic_tag(phrase) and sum(map(is_generic_tag, names)) >= MAX_GENERIC_TAGS:
+            deferred.append((phrase, rank))
+            continue
+        if len(chosen) < MAX_SUBJECT_TAGS and _distinct(phrase, names):
+            chosen.append(_tag_row(phrase, validated=True, rank=rank, planner=phrase in planner,
+                                   relation=relations[phrase]))
+            names.append(phrase)
+    for phrase, rank in deferred:
         if len(chosen) < MAX_SUBJECT_TAGS and _distinct(phrase, names):
             chosen.append(_tag_row(phrase, validated=True, rank=rank, planner=phrase in planner,
                                    relation=relations[phrase]))
