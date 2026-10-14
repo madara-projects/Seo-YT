@@ -244,5 +244,17 @@ class FormatLockTests(unittest.TestCase):
         self.assertEqual(_format_lock_in([_row(duration="P1DT2H")], [], {})["recommended_format"], "long-form")
 
 
+class MissingTextTests(unittest.TestCase):
+    def test_a_missing_title_description_or_keyword_is_not_the_word_none(self):
+        # str(None) is "None": a keyword without text became a "high" gap called "None".
+        results = [{"title": None, "description": None, "channel_title": None, "subscriber_count": None}] * 5
+        self.assertEqual(_keyword_gaps([{"keyword": None, "mentions": 3}], results), [])
+
+        gaps = analyze_opportunity_gaps([], [], results, [], target_title="Letting go slowly")
+        self.assertEqual(gaps["competitor_shadow"]["dominant_title_pattern"], "other")
+        self.assertEqual(gaps["differentiation"]["avoid_patterns"], [])
+        self.assertIsNone(gaps["ai_uniqueness_score"])  # no title to compare with
+
+
 if __name__ == "__main__":
     unittest.main()

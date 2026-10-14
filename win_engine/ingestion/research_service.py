@@ -380,9 +380,11 @@ class ResearchService:
                     else self._youtube.search_videos(query, max_results, video_duration=video_duration, **locale) or []
                 )
                 attempt["warning"] = self._youtube.runtime_state().get("warning")
+                # A key rotation's note is no failure: the next key answered, an empty page included.
+                failed = bool(attempt["warning"]) and not str(attempt["warning"]).endswith("switched to next key.")
                 complete = [row for row in results if row.get("captured_at")]
                 status = (
-                    "failed" if attempt["warning"] and not results
+                    "failed" if failed and not results
                     else "partial" if len(complete) < len(results)
                     else "success"
                 )

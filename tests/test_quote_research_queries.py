@@ -51,6 +51,16 @@ class PlannerTests(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertTrue(_visual_only_query(query, script, brief))
 
+    def test_a_tamil_quote_is_searched_without_a_semantic_topic(self):
+        # Demand research plans without Gemini; a Tamil topic had no Latin word to keep and got no search.
+        quote = "உன்னை மறக்க முடியாத நினைவுகள் என்னை வாழ வைக்கின்றன"
+        brief = build_creator_brief(script=quote, video_format="youtube_shorts", language="tamil")
+        queries = [item["query"] for item in plan_research_queries(
+            script=quote, creator_brief=brief, semantic_analysis={}, primary_language="tamil", max_queries=3,
+        )]
+        self.assertTrue(queries)
+        self.assertTrue(any("஀" <= char <= "௿" for char in queries[0]), queries)
+
     def test_a_long_form_video_about_its_scenery_keeps_the_old_rule(self):
         brief = {"content": "A walking tour through the old town's rainy streets at night.",
                  "visual_requirements": "rainy streets at night", "video_format": "vlog"}

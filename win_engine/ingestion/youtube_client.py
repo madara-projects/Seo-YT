@@ -19,6 +19,8 @@ from win_engine.feedback.quota_ledger import QuotaLedger, api_key_source
 
 logger = logging.getLogger(__name__)
 _ESCAPED_TEXT_FIELDS = ("title", "description", "channel_title")
+# Detail each result carries for the response only; saved runs and evidence leave it out.
+DETAIL_FIELDS = ("tags", "full_description", "default_audio_language")
 
 # The language of the videos, for relevanceLanguage. Tanglish is Tamil written
 # in Latin letters.
@@ -83,6 +85,8 @@ class YouTubeClient:
     # Short-window limits clear within seconds; the daily quota does not, so
     # only these reasons are retried.
     _BURST_LIMIT_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+    # Google's transient server errors ("backendError", "serviceUnavailable"), also retried.
+    _SERVER_ERRORS = {500, 502, 503, 504}
     # Reasons that condemn the key or its project rather than the request, so
     # another key can succeed. Every "API_KEY_*" detail reason counts too. A bare
     # 403 "forbidden" is about the request and would fail on every key.
@@ -160,6 +164,9 @@ class YouTubeClient:
 
             if not video_id:
                 continue
+            # A scheduled premiere or stream has no views yet; its zero would read as a topic nobody watches.
+            if snippet.get("liveBroadcastContent") == "upcoming":
+                continue
 
             results.append(unescape_result(
                 {
@@ -208,6 +215,10 @@ class YouTubeClient:
             entry["like_count"] = (stats_entry or {}).get("likeCount")
             entry["comment_count"] = (stats_entry or {}).get("commentCount")
             entry["duration"] = (stats_entry or {}).get("duration")
+            # Kept beside the search's own short "description", which every reader still uses.
+            entry["tags"] = (stats_entry or {}).get("tags")
+            entry["full_description"] = (stats_entry or {}).get("full_description")
+            entry["default_audio_language"] = (stats_entry or {}).get("default_audio_language")
             # A hidden subscriber count is unknown, not zero subscribers.
             hidden = bool((channel_entry or {}).get("hiddenSubscriberCount"))
             entry["subscriber_count"] = None if hidden else (channel_entry or {}).get("subscriberCount")
@@ -235,7 +246,9 @@ class YouTubeClient:
         return {
             "channel_id": item.get("id"), "title": snippet.get("title"),
             "description": snippet.get("description"), "thumbnail_url": ((snippet.get("thumbnails") or {}).get("high") or (snippet.get("thumbnails") or {}).get("default") or {}).get("url"),
-            "subscriber_count": stats.get("subscriberCount"), "video_count": stats.get("videoCount"),
+            # A hidden subscriber count is unknown, not zero subscribers.
+            "subscriber_count": None if stats.get("hiddenSubscriberCount") else stats.get("subscriberCount"),
+            "video_count": stats.get("videoCount"),
             "view_count": stats.get("viewCount"), "hidden_subscriber_count": stats.get("hiddenSubscriberCount"),
             "uploads_playlist_id": uploads,
         }
@@ -321,7 +334,8 @@ class YouTubeClient:
         payload = self._request_json(
             self._VIDEOS_URL,
             {
-                "part": "statistics,contentDetails",
+                # snippet costs nothing extra: videos.list is 1 unit whatever the parts.
+                "part": "snippet,statistics,contentDetails",
                 "id": ",".join(video_ids),
             },
             raise_on_error=raise_on_error,
@@ -334,10 +348,14 @@ class YouTubeClient:
             video_id = item.get("id")
             statistics = item.get("statistics", {})
             content_details = item.get("contentDetails", {})
+            snippet = item.get("snippet") or {}
             if video_id:
                 stats_map[video_id] = {
                     **statistics,
                     "duration": content_details.get("duration"),
+                    "tags": snippet.get("tags"),
+                    "full_description": snippet.get("description"),
+                    "default_audio_language": snippet.get("defaultAudioLanguage"),
                 }
 
         return stats_map
@@ -417,13 +435,14 @@ class YouTubeClient:
                     raise
                 return {}
 
-        self._last_warning = " ".join(warnings) if warnings else "All YouTube API keys failed."
+        # Each key's note says "switched to next key"; the last one had none to switch to.
+        self._last_warning = " ".join([*warnings, "All YouTube API keys failed."])
         if raise_on_error and last_error is not None:
             raise last_error
         return {}
 
     def _get_with_backoff(self, url: str, params: dict[str, Any], key_index: int) -> requests.Response:
-        """GET once, retrying briefly when YouTube reports a burst rate limit.
+        """GET once, retrying briefly when YouTube reports a burst rate limit or a server error.
 
         A research run fires several searches back to back; without a retry a
         momentary "rateLimitExceeded" silently dropped that query's evidence.
@@ -444,8 +463,8 @@ class YouTubeClient:
                 self._ledger.record(source, method)
                 raise
             self._ledger.record(source, method)
-            if response.status_code in {403, 429} and attempt < self._RATE_LIMIT_RETRIES:
-                if response.status_code == 429 or self._BURST_LIMIT_REASONS & set(self._error_reasons(response)):
+            if response.status_code in {403, 429, *self._SERVER_ERRORS} and attempt < self._RATE_LIMIT_RETRIES:
+                if response.status_code != 403 or self._BURST_LIMIT_REASONS & set(self._error_reasons(response)):
                     time.sleep(self._RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1))
                     continue
             response.raise_for_status()

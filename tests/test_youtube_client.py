@@ -67,11 +67,25 @@ class KeyTransportTests(_ClientTestCase):
         self.assertNotIn("secret-key", prepared.url)
 
     def test_html_error_body_is_not_repeated_in_the_warning(self):
-        self._get(_response(502, text="<html>" + "x" * 5000 + "</html>"))
+        self._get(*[_response(502, text="<html>" + "x" * 5000 + "</html>")] * 3)  # a 502 is retried twice
         client = YouTubeClient(["key"], timeout_seconds=5)
 
-        self.assertEqual(client._request_json(SEARCH, {}), {})
+        with patch.object(youtube_client.time, "sleep"):
+            self.assertEqual(client._request_json(SEARCH, {}), {})
         self.assertEqual(client.runtime_state()["warning"], "YouTube API request failed: HTTP 502")
+
+    def test_a_server_error_is_retried_before_the_request_fails(self):
+        # A transient "backendError" used to drop that query's evidence at once.
+        get = self._get(_response(503, {"error": {"code": 503, "errors": [{"reason": "backendError"}]}}),
+                        _response(200, {"items": []}))
+        client = YouTubeClient(["key"], timeout_seconds=5)
+
+        with patch.object(youtube_client.time, "sleep") as sleep:
+            self.assertEqual(client._request_json(SEARCH, {}), {"items": []})
+
+        self.assertEqual(get.call_count, 2)
+        sleep.assert_called_once()
+        self.assertIsNone(client.runtime_state()["warning"])
 
 
 class KeyRotationTests(_ClientTestCase):
@@ -109,6 +123,14 @@ class KeyRotationTests(_ClientTestCase):
         # A new client (a new request) goes straight to key 2 and warns about nothing.
         self.assertEqual(get.call_args.kwargs["headers"]["X-Goog-Api-Key"], "fresh")
         self.assertIsNone(client.runtime_state()["warning"])
+
+    def test_when_every_key_is_spent_the_warning_says_so(self):
+        # It used to end on "switched to next key", as if a key had worked.
+        self._get(_key_error(403, classic="quotaExceeded"), _key_error(403, classic="quotaExceeded"))
+        client = YouTubeClient(["k1", "k2"], timeout_seconds=5)
+
+        self.assertEqual(client._request_json(SEARCH, {}), {})
+        self.assertTrue(client.runtime_state()["warning"].endswith("All YouTube API keys failed."))
 
 
 class _Clock(datetime):
@@ -218,8 +240,45 @@ class SearchTests(_ClientTestCase):
         self.assertIsNone(row["subscriber_count"])
         self.assertIsNotNone(row["captured_at"])  # the lookup worked; the count is private
 
+    def test_competitor_tags_full_description_and_audio_language_come_with_the_statistics(self):
+        videos = {"items": [{"id": "vid1", "statistics": {"viewCount": "10"}, "contentDetails": {"duration": "PT1M"},
+                             "snippet": {"tags": ["grief quotes"], "description": "The whole description",
+                                         "defaultAudioLanguage": "ta"}}]}
+        search = {"items": [{"id": {"videoId": "vid1"},
+                             "snippet": {"channelId": "UC1", "title": "T", "description": "The whole..."}}]}
+        get = self._get(_response(200, search), _response(200, videos), _response(200, CHANNELS_OK))
+
+        (row,) = YouTubeClient(["key"], timeout_seconds=5).search_videos("q")
+
+        self.assertEqual(get.call_args_list[1].kwargs["params"]["part"], "snippet,statistics,contentDetails")
+        self.assertEqual((row["tags"], row["full_description"], row["default_audio_language"]),
+                         (["grief quotes"], "The whole description", "ta"))
+        self.assertEqual(row["description"], "The whole...")  # what every reader used before is unchanged
+
+    def test_an_upcoming_premiere_is_not_a_search_result(self):
+        # It has no views yet; its zero read as a topic nobody watches.
+        upcoming = {"id": {"videoId": "soon"},
+                    "snippet": {"channelId": "UC1", "title": "Premiere", "liveBroadcastContent": "upcoming"}}
+        get = self._get(_response(200, {"items": [upcoming, *SEARCH_OK["items"]]}),
+                        _response(200, VIDEOS_OK), _response(200, CHANNELS_OK))
+
+        rows = YouTubeClient(["key"], timeout_seconds=5).search_videos("q")
+
+        self.assertEqual([row["video_id"] for row in rows], ["vid1"])
+        self.assertEqual(get.call_args_list[1].kwargs["params"]["id"], "vid1")
+
 
 class CheapCallTests(_ClientTestCase):
+    def test_a_watched_channel_with_a_hidden_subscriber_count_has_no_count(self):
+        channel = {"items": [{"id": "UC1", "snippet": {"title": "C"}, "contentDetails": {},
+                              "statistics": {"subscriberCount": "0", "hiddenSubscriberCount": True, "videoCount": "7"}}]}
+        self._get(_response(200, channel))
+
+        metadata = YouTubeClient(["key"], timeout_seconds=5).get_channel("UC1")
+
+        self.assertIsNone(metadata["subscriber_count"])
+        self.assertEqual(metadata["video_count"], "7")
+
     def test_channel_uploads_come_from_the_uploads_playlist(self):
         channel = {"items": [{"id": "UC1", "snippet": {"title": "C"}, "statistics": {},
                               "contentDetails": {"relatedPlaylists": {"uploads": "UU1"}}}]}

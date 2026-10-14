@@ -163,7 +163,8 @@ def _copied_phrase(concept: str, sources: Iterable[str]) -> bool:
     candidate = " ".join(_words(concept))
     if len(candidate.split()) < 3:
         return False
-    return any(candidate in " ".join(_words(value)) for value in sources)
+    # Whole words: "art of letting go" is not copied from "heart of letting gold".
+    return any(f" {candidate} " in f" {' '.join(_words(value))} " for value in sources)
 
 
 def _anchor_terms(script: str, brief: dict[str, Any]) -> set[str]:
@@ -217,7 +218,7 @@ def _source_text(script: str, semantic: dict[str, Any], brief: dict[str, Any]) -
 def _score(value: Any) -> int:
     try:
         return max(0, min(100, int(float(value))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # json.loads reads "Infinity"
         return 0
 
 

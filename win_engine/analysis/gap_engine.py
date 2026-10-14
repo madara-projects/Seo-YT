@@ -40,7 +40,7 @@ def analyze_opportunity_gaps(
     # 0.5 used to stand in for it.
     uniqueness_score = None
     competitor_titles = [
-        str(item.get("title", "")).strip()
+        str(item.get("title") or "").strip()
         for item in (youtube_results or [])[:5]
         if isinstance(item, dict) and item.get("title")
     ]
@@ -102,7 +102,7 @@ def _keyword_gaps(
 
     gaps: list[dict[str, Any]] = []
     for signal in keyword_signals:
-        keyword = str(signal.get("keyword", "")).strip()
+        keyword = str(signal.get("keyword") or "").strip()  # str(None) was a "None" gap
         mentions = int(signal.get("mentions", 0))
         if not keyword or keyword in {"youtube", "video", "will", "what"} or mentions < 2:
             continue
@@ -240,7 +240,7 @@ def _differentiation_plan(
     youtube_results: list[dict[str, Any]],
 ) -> dict[str, Any]:
     repeated_openings = _repeated_openings(youtube_results)
-    repeated_shocking = sum(1 for item in youtube_results if "shocking" in str(item.get("title", "")).lower())
+    repeated_shocking = sum(1 for item in youtube_results if "shocking" in str(item.get("title") or "").lower())
 
     # The two most repeated openings; a title that starts the same way blends in.
     avoid_patterns: list[str] = [
@@ -486,7 +486,7 @@ def _competitor_shadow(youtube_results: list[dict[str, Any]]) -> dict[str, Any]:
             "recommended_differentiation": "Not enough competitor data yet.",
         }
 
-    titles = [str(item.get("title", "")) for item in youtube_results]
+    titles = [str(item.get("title") or "") for item in youtube_results]
     # "for 7/30 days" titles, left over from another niche, no longer make an experiment.
     title_pattern_counts = {
         "experiment": sum(1 for title in titles if any(token in title.lower() for token in ["i tried", "i tested"])),

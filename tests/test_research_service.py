@@ -130,6 +130,20 @@ class CacheTests(_ServiceTestCase):
         self.assertEqual(later._youtube.calls, [])
         self.assertEqual(diagnostics["query_attempts"][0]["status"], "success")
 
+    def test_an_empty_answer_after_a_key_rotation_is_cached_not_failed(self):
+        # The next key answered; it used to count as failed and be paid for again on every run.
+        rotated = "API key 1 hit quotaExceeded; switched to next key."
+        _, diagnostics = self.search(self.service({"grief quotes": ([], rotated)}), "grief quotes")
+        self.assertEqual(diagnostics["query_attempts"][0]["status"], "success")
+
+        later = self.service({})
+        _, diagnostics = self.search(later, "grief quotes")
+        self.assertEqual((later._youtube.calls, diagnostics["query_attempts"][0]["cache"]), ([], "hit"))
+
+        spent = "API key 1 hit quotaExceeded; switched to next key. All YouTube API keys failed."
+        _, diagnostics = self.search(self.service({"loss quotes": ([], spent)}), "loss quotes")
+        self.assertEqual(diagnostics["query_attempts"][0]["status"], "failed")
+
     def test_region_language_and_page_size_are_part_of_the_cache_key(self):
         answers = {"grief quotes": ([_row("v1", "Grief")], None)}
         self.search(self.service(answers), "grief quotes", region="india", primary_language="tamil")

@@ -40,7 +40,11 @@ def plan_research_queries(
     semantic_primary = str(semantic.get("primary_topic") or "")
     if _is_visual_semantic(semantic_primary, semantic):
         semantic_primary = ""
-    structured_topic = _keyword_phrase(str(brief.get("topic") or ""), 8)
+    topic_text = str(brief.get("topic") or "")
+    # _keyword_phrase keeps Latin words only, which left a Tamil or Hindi topic no search at all.
+    structured_topic = _keyword_phrase(topic_text, 8) or (
+        _search_phrase(topic_text, 8) if any(char.isalpha() and not char.isascii() for char in topic_text) else ""
+    )
     proven_semantic_topic = _search_phrase(semantic_primary, 6) if semantic.get("concept_evidence_validated") is True else ""
     # Without a validated semantic topic the searches use the creator's own
     # words (the brief's topic, taken from the quote or main phrase). A table of
