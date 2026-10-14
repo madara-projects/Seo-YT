@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from typing import Deque
@@ -35,7 +36,8 @@ class InMemoryRateLimiter:
             bucket.popleft()
 
         if len(bucket) >= self._max_requests:
-            retry_after = max(1, int(self._window_seconds - (now - bucket[0])))
+            # Rounded up: rounded down, a client that waited this long was refused again.
+            retry_after = max(1, math.ceil(self._window_seconds - (now - bucket[0])))
             return False, retry_after
 
         bucket.append(now)

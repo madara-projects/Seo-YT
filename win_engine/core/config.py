@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     cache_ttl_evergreen_seconds: int = 604800
     redis_url: str | None = None
     redis_key_prefix: str = "win_engine"
-    request_timeout_seconds: int = 10
+    # requests raises ValueError, not a network error, for a timeout of 0 or less.
+    request_timeout_seconds: int = Field(default=10, ge=1)
     database_path: str = "runtime/data/win_engine.db"
     creator_timezone: str = "Asia/Kolkata"
 
@@ -84,6 +85,10 @@ class Settings(BaseSettings):
     # Reasoning tokens on thinking models count against maxOutputTokens, so the
     # ceiling leaves room above what a caller sizes for the JSON alone.
     gemini_output_token_ceiling: int = Field(default=8192, ge=1024, le=32768)
+    # Thinking tokens per call (thinkingConfig.thinkingBudget), added on top of
+    # the caller's output budget. -1 sends none (the model's own default);
+    # 0 turns thinking off where the model allows it.
+    gemini_thinking_budget: int = Field(default=1024, ge=-1, le=32768)
     # Consecutive transient failures that pause one kind of Gemini call, and for how long.
     gemini_cooldown_failure_threshold: int = Field(default=2, ge=1, le=5)
     gemini_cooldown_seconds: float = Field(default=60.0, ge=5.0, le=900.0)

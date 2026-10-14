@@ -57,6 +57,18 @@ class RateLimiterTests(unittest.TestCase):
             # Still throttled: its bucket was never the one evicted.
             self.assertFalse(limiter.check("costly")[0])
 
+    def test_a_client_that_waits_retry_after_is_let_through(self):
+        limiter = InMemoryRateLimiter(max_requests=1, window_seconds=60)
+        with patch(CLOCK, return_value=1000.0):
+            limiter.check("a")
+        with patch(CLOCK, return_value=1000.5):
+            allowed, retry_after = limiter.check("a")
+        self.assertFalse(allowed)
+        # Rounded down to 59, the retry came half a second early and was refused again.
+        self.assertEqual(retry_after, 60)
+        with patch(CLOCK, return_value=1000.5 + retry_after):
+            self.assertTrue(limiter.check("a")[0])
+
     def test_a_zero_limit_is_raised_to_one_rather_than_crashing(self):
         limiter = InMemoryRateLimiter(max_requests=0, window_seconds=60)
         with patch(CLOCK, return_value=1000.0):

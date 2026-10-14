@@ -235,9 +235,11 @@ def create_app() -> FastAPI:
     async def limit_request_size(request: Request, call_next):
         declared = request.headers.get("content-length")
         if declared is not None:
-            if not declared.isdigit():
+            # ASCII only: isdigit() also accepts "²", which int() cannot read (a 500).
+            if not (declared.isascii() and declared.isdigit()):
                 return error_response(request, 400, "invalid_content_length", "The Content-Length header is invalid.")
-            if int(declared) > settings.max_request_bytes:
+            # Past 18 digits it is larger than any body, and int() refuses 4300+ digits.
+            if len(declared) > 18 or int(declared) > settings.max_request_bytes:
                 return error_response(request, 413, "payload_too_large", "The request body is too large.")
         elif request.method not in _SAFE_METHODS and "chunked" in request.headers.get("transfer-encoding", "").lower():
             # Every client of this API sends a length; a streamed body cannot be sized up front.
@@ -290,9 +292,10 @@ def create_app() -> FastAPI:
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         errors = list(exc.errors())
-        return error_response(
-            request, 422, "validation_error", _validation_message(errors), details=jsonable_encoder(errors)
-        )
+        # A body that is not JSON is echoed as raw bytes; the default encoder's
+        # strict decode turned a non-UTF-8 one into a 500.
+        details = jsonable_encoder(errors, custom_encoder={bytes: lambda raw: raw.decode("utf-8", "replace")})
+        return error_response(request, 422, "validation_error", _validation_message(errors), details=details)
 
     @app.exception_handler(YouTubeUnavailable)
     async def youtube_unavailable_handler(request: Request, exc: YouTubeUnavailable):

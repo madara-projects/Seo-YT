@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import os
+import runpy
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from google.auth.exceptions import RefreshError
+from pydantic import ValidationError
 from starlette.requests import Request
 
 from win_engine.api import routes
@@ -57,6 +60,21 @@ class PureHelperTests(unittest.TestCase):
         self.assertFalse(is_costly(_request("GET", "/api/watchlist/videos")))
         self.assertFalse(is_costly(_request("POST", "/api/watchlist/videos/2/analyze-outlier")))
         self.assertFalse(is_costly(_request("PATCH", "/api/ideas/4")))
+
+    def test_a_request_timeout_below_one_second_stops_startup(self):
+        # requests raises ValueError for a timeout of 0, which no YouTube call handles.
+        with self.assertRaises(ValidationError):
+            Settings(request_timeout_seconds=0)
+
+
+class EntryPointTests(unittest.TestCase):
+    def test_the_server_ignores_forwarded_headers_and_keeps_access_lines_off(self):
+        with patch("uvicorn.run") as run:
+            runpy.run_path(str(Path(__file__).resolve().parents[1] / "app.py"), run_name="__main__")
+        options = run.call_args.kwargs
+        # Trusted from 127.0.0.1 by default, X-Forwarded-For chose the rate-limit key.
+        self.assertIs(options["proxy_headers"], False)
+        self.assertIs(options["access_log"], False)
 
 
 class MiddlewareTests(unittest.TestCase):
@@ -125,6 +143,19 @@ class MiddlewareTests(unittest.TestCase):
                 self.assert_envelope(response, 422, "validation_error")
                 self.assertNotIn("NaN", response.text)
                 self.assertNotIn("Infinity", response.text)
+
+    def test_a_body_that_is_not_utf8_text_is_refused_not_a_500(self):
+        # Not read as JSON, so the refusal echoes the raw bytes; a strict decode was a 500.
+        for headers in ({"Content-Type": "text/plain"}, {}):
+            with self.subTest(headers=headers):
+                response = self.client.post("/api/ideas", content=b"\xff\xfe", headers=headers)
+                self.assert_envelope(response, 422, "validation_error")
+
+    def test_a_content_length_int_cannot_read_is_refused_not_a_500(self):
+        # "²" passes str.isdigit(); int() refuses it, and any number of 4300+ digits.
+        for declared, status, code in ((b"\xb2", 400, "invalid_content_length"), (b"9" * 5000, 413, "payload_too_large")):
+            with self.subTest(declared=declared[:4]):
+                self.assert_envelope(self.client.get("/meta", headers={"Content-Length": declared}), status, code)
 
     def test_unknown_routes_and_methods_use_the_same_envelope(self):
         self.assert_envelope(self.client.get("/no-such-route"), 404, "http_error")

@@ -21,4 +21,7 @@ if __name__ == "__main__":
         # OAuth code on the way back from Google.
         log_config=None,
         access_log=False,
+        # No proxy sits in front. Trusted by default from 127.0.0.1, X-Forwarded-For
+        # let a local client pick the address its rate limit is counted under.
+        proxy_headers=False,
     )
