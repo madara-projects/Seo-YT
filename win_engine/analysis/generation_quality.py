@@ -344,11 +344,11 @@ def title_cuts_quote(title: Any, quote: Any) -> bool:
     """
 
     body = title_body(title)
-    if "…" in body or "..." in body:
-        return True
     flat_quote = _fold_marks(quote)
     tokens = _quote_tokens(flat_quote)
     run = _quote_run(body, flat_quote)
+    if _ELLIPSIS_RE.search(body) and not _quotes_own_ellipses(body, flat_quote, run):
+        return True
     if not run or run[1] - run[0] < 2 or run[1] - run[0] >= len(tokens):
         return False
     end = run[1]
@@ -363,8 +363,37 @@ def title_cuts_quote(title: Any, quote: Any) -> bool:
     return not (re.search(r"[.,;:!?…—–-]", gap) or tokens[end][0] in QUOTE_PHRASE_STARTS)
 
 
+_ELLIPSIS_RE = re.compile(r"\.{3}|…")
+
+
+def _quotes_own_ellipses(body: str, flat_quote: str, run: tuple[int, int] | None) -> bool:
+    """Whether every ellipsis in a title made of the quote's words is the quote's own, between the same words.
+
+    "I miss you... more than words can say" is the whole quote; "I miss you..." cuts it.
+    """
+
+    if not run:
+        return False
+    text = _fold_marks(body)
+    spans = word_spans(text)
+    quote = _quote_tokens(flat_quote)
+    if len(spans) != run[1] - run[0]:
+        return False
+    title_gaps = [text[:spans[0][1]], *(text[a[2]:b[1]] for a, b in pairwise(spans)), text[spans[-1][2]:]]
+    # Before its first word and after its last, only at the quote's own start and end.
+    quote_gaps = [
+        flat_quote[:quote[0][1]] if run[0] == 0 else "",
+        *(flat_quote[a[2]:b[1]] for a, b in pairwise(quote[run[0]:run[1]])),
+        flat_quote[quote[-1][2]:] if run[1] == len(quote) else "",
+    ]
+    return all(not _ELLIPSIS_RE.search(gap) or _ELLIPSIS_RE.search(own) for gap, own in zip(title_gaps, quote_gaps))
+
+
 _DENIAL_ENDS = {"but", "yet", "instead", "than"}
 _COMPARED_SUBJECTS = {"i", "you", "we", "they", "he", "she", "it", "someone", "anyone", "everyone"}
+# "and I ...", "so we ...": a new clause with its own subject, outside the denial before it.
+_CLAUSE_JOINERS = {"and", "or", "so"}
+_SUBJECT_ONLY_PRONOUNS = {"i", "we", "they", "he", "she"}
 
 
 def _opens_comparison(words: list[str], index: int) -> bool:
@@ -397,7 +426,8 @@ def title_stops_before_payoff(title: Any, quote: Any) -> bool:
     the point without the quote's own words.
     """
 
-    flat_quote = _fold_marks(quote)
+    # One line, as quote_punchline reads it: a quote broken over lines still has its turn.
+    flat_quote = re.sub(r"\s+", " ", _fold_marks(quote))
     punchline = quote_punchline(flat_quote)
     if not punchline:
         return False
@@ -438,10 +468,13 @@ def _negated_at(tokens: list[str], position: int) -> bool:
 
 
 def _denial_end(words: list[str], start: int) -> int:
-    """Where a denial stops: at a contrast or a comparison, which states what is so."""
+    """Where a denial stops: at a contrast, a comparison, or a new clause, which state what is so."""
 
     for index in range(start, len(words)):
         if words[index].casefold() in _DENIAL_ENDS or _opens_comparison(words, index):
+            return index
+        if (words[index].casefold() in _CLAUSE_JOINERS and index + 1 < len(words)
+                and words[index + 1].casefold() in _SUBJECT_ONLY_PRONOUNS):
             return index
     return len(words)
 
@@ -693,8 +726,11 @@ def source_supports_instructional_framing(script: str, creator_brief: dict[str, 
         return True
     # A procedural source can be instructional even when the creator labels it
     # as a Short rather than a tutorial (for example, check/inspect/adjust).
-    actions = _PROCEDURAL_ACTION_RE.findall(source)
-    return len(actions) >= 2 and bool(re.search(r"\b(?:if|then|to)\b", source, re.IGNORECASE))
+    # The quote's own verbs ("Don't try to change people who use you") are not steps.
+    spoken = normalize_unicode(brief.get("exact_quote"))
+    procedure = source.replace(spoken, " ") if spoken else source
+    actions = _PROCEDURAL_ACTION_RE.findall(procedure)
+    return len(actions) >= 2 and bool(re.search(r"\b(?:if|then|to)\b", procedure, re.IGNORECASE))
 
 
 def source_requires_noninstructional_framing(script: str, creator_brief: dict[str, Any] | None = None) -> bool:
@@ -756,7 +792,7 @@ def filter_source_hashtags(
 ) -> list[str]:
     """Drop instructional hashtags when the creator source is non-instructional."""
 
-    values = [normalize_unicode(item) for item in hashtags if normalize_unicode(item)]
+    values = [normalize_unicode(item) for item in _listed(hashtags, split=True) if normalize_unicode(item)]
     if not source_requires_noninstructional_framing(script, creator_brief):
         return values
     return [item for item in values if not has_unsupported_instructional_framing(item, script)]
@@ -853,7 +889,7 @@ def focused_short_hashtags(
         result.append(hashtag)
         compound_used = compound_used or length > 1
 
-    proposals = [str(item) for item in proposed if str(item or "").strip()]
+    proposals = [str(item) for item in _listed(proposed, split=True) if str(item or "").strip()]
     quote_text = normalize_unicode(quote)
     if quote_text:
         push("#quotes")
@@ -872,7 +908,7 @@ def focused_short_hashtags(
             push(item)
     for item in proposals:
         push(item)
-    for tag in tags:
+    for tag in _listed(tags):
         words = [word for word in re.findall(r"[A-Za-z0-9]+", str(tag)) if word.casefold() not in _SHORT_HASHTAG_GENERIC]
         while words and words[0].casefold() in _HASHTAG_LEADING_INTENT:
             words = words[1:]
@@ -898,6 +934,14 @@ def title_emojis(value: Any) -> list[str]:
     """Return visible emoji bases for deterministic count/template checks."""
 
     return _TITLE_EMOJI_RE.findall(normalize_unicode(value))
+
+
+# A skin tone and a ZWJ-joined part belong to the emoji before them: "❤️‍🩹" and "🙏🏽" are one emoji each.
+_EMOJI_PART_RE = re.compile(r"[\U0001F3FB-\U0001F3FF]|\u200d[\U0001F300-\U0001FAFF\u2600-\u27BF]")
+
+
+def _visible_emojis(value: Any) -> list[str]:
+    return title_emojis(_EMOJI_PART_RE.sub("", normalize_unicode(value)))
 
 
 def evaluate_package_quality(
@@ -928,7 +972,7 @@ def evaluate_package_quality(
     quote_feelings = _feeling_keys(exact_quote or source)
     requested_language = normalize_unicode(language).casefold() or "english"
 
-    title_values = [package.get("title"), *(package.get("variants") or [])]
+    title_values = [package.get("title"), *_listed(package.get("variants"))]
     titles = _unique([normalize_unicode(item) for item in title_values if normalize_unicode(item)])
     recent = [normalize_unicode(item) for item in (recent_titles or []) if normalize_unicode(item)]
     published = [normalize_unicode(item) for item in (published_titles or []) if normalize_unicode(item)]
@@ -942,7 +986,7 @@ def evaluate_package_quality(
     for index, title in enumerate(titles):
         reasons: list[dict[str, Any]] = []
         shorts_count = len(_SHORTS_TITLE_RE.findall(title))
-        emojis = title_emojis(title)
+        emojis = _visible_emojis(title)
         # YouTube detects a Short by its format: #shorts in the title is
         # optional, never required and never injected.
         if shorts_count > 1:
@@ -964,10 +1008,11 @@ def evaluate_package_quality(
         if exact_quote and is_short:
             reasons.extend(quote_title_issues(title, exact_quote, index=index))
         signature = "".join(emojis)
-        recent_signatures = ["".join(title_emojis(old)) for old in recent[-3:]]
+        recent_signatures = ["".join(_visible_emojis(old)) for old in recent[-3:]]
         if signature and len(recent_signatures) == 3 and all(item == signature for item in recent_signatures):
             reasons.append(_issue("repeated_emoji_template", "title", "The emoji pattern repeats across the three most recent generated titles.", index=index))
-        if any(pattern.search(title) for pattern in _GENERIC_TITLE_PATTERNS):
+        # A leading emoji or #shorts does not hide the template.
+        if any(pattern.search(title_body(title)) for pattern in _GENERIC_TITLE_PATTERNS):
             reasons.append(_issue("generic_template", "title", "Title uses a repeatedly generic template.", index=index))
         reasons.extend(_title_usefulness_issues(
             title, source, brief, non_instructional, competitors, index=index,
@@ -1010,8 +1055,9 @@ def evaluate_package_quality(
     else:
         if re.search(r"(?i)\ba\s+(?:one|a|an|the)\s+(?:person|man|woman|boy|girl)\b", description):
             issues.append(_issue("broken_description_grammar", "description", "Description contains a duplicated article or production-note fragment."))
-        exact_quote_text = re.sub(r"\s+", " ", exact_quote).strip()
-        normalized_description = re.sub(r"\s+", " ", description).strip()
+        # "it's" and "it’s" are one quote to a reader (see _fold_marks).
+        exact_quote_text = re.sub(r"\s+", " ", _fold_marks(exact_quote)).strip()
+        normalized_description = re.sub(r"\s+", " ", _fold_marks(description)).strip()
         if exact_quote and exact_quote_text not in normalized_description:
             issues.append(_issue("quote_fidelity", "description", "Description does not preserve the exact on-screen quote."))
         for code in _unsupported_claims(description, source):
@@ -1033,8 +1079,10 @@ def evaluate_package_quality(
             # A short quote ("Keep going.") is a short description, not a vague one.
             carries_quote=bool(exact_quote and is_short and _carries_quote(description, exact_quote)),
         ))
+        # The quote's own words ("listen to your heart") claim no narration.
+        own_copy = normalized_description.replace(exact_quote_text, " ") if exact_quote_text else normalized_description
         if normalize_unicode(brief.get("voice_over")).casefold() == "none" and re.search(
-            r"\b(?:listen to|hear (?:me|the)|voice[- ]?over|narrat(?:e|ed|ion))\b", description, re.IGNORECASE
+            r"\b(?:listen to|hear (?:me|the)|voice[- ]?over|narrat(?:e|ed|ion))\b", own_copy, re.IGNORECASE
         ):
             issues.append(_issue("voice_over_contradiction", "description", "Description claims narration although the brief says no voice-over."))
         if requested_language == "tamil" and not _TAMIL_RANGE.search(description):
@@ -1045,7 +1093,7 @@ def evaluate_package_quality(
     # Tags play a minimal role in discovery (support.google.com/youtube/answer/146402)
     # and are advisory here: a bad tag is reported with its text and dropped
     # by apply_quality_gate, never a reason to repair or replace the package.
-    tags = _unique([normalize_unicode(tag).casefold().lstrip("#") for tag in (package.get("tags") or [])])
+    tags = _unique([normalize_unicode(tag).casefold().lstrip("#") for tag in _listed(package.get("tags"))])
     for tag in tags:
         if len(unicode_words(tag)) > 8 or "," in tag:
             warnings.append(_tag_note("tag_list_contamination", f"Tag is not one focused phrase: {tag}", tag=tag))
@@ -1063,11 +1111,11 @@ def evaluate_package_quality(
         )),
     ]))) | set(unicode_words(context_text))
     source_tokens |= set(unicode_words(" ".join(
-        str(item) for item in (brief.get("seo_research_targets") or []) if str(item).strip()
+        str(item) for item in _listed(brief.get("seo_research_targets")) if str(item).strip()
     )))
     selected_tag_evidence = {
         normalize_unicode(item.get("keyword")).casefold(): item
-        for item in (tag_evidence or {}).get("selected_keywords", [])
+        for item in _listed((tag_evidence or {}).get("selected_keywords"))
         if isinstance(item, dict) and normalize_unicode(item.get("keyword"))
     }
 
@@ -1120,7 +1168,7 @@ def evaluate_package_quality(
 
     # Hashtags are rebuilt from the validated tags and the quote's feeling for
     # a Short (focused_short_hashtags); a faulty one is dropped, not repaired.
-    hashtags = [normalize_unicode(item) for item in (package.get("hashtags") or []) if normalize_unicode(item)]
+    hashtags = [normalize_unicode(item) for item in _listed(package.get("hashtags"), split=True) if normalize_unicode(item)]
     normalized_hashtags = [item.casefold().lstrip("#") for item in hashtags]
     if len(normalized_hashtags) != len(set(normalized_hashtags)):
         warnings.append(_issue("duplicate_hashtag", "hashtags", "Hashtags contain duplicates.", severity="warning"))
@@ -1222,9 +1270,9 @@ def apply_quality_gate(package: dict[str, Any], gate: dict[str, Any]) -> dict[st
     dropped_tags = {
         str(item.get("tag")) for item in notes if item.get("field") == "tags" and item.get("code") in _DROPPED_TAG_CODES and item.get("tag")
     }
-    if dropped_tags:
+    if dropped_tags or isinstance(package.get("tags"), str):
         cleaned["tags"] = [
-            tag for tag in (package.get("tags") or [])
+            tag for tag in _listed(package.get("tags"))
             if normalize_unicode(tag).casefold().lstrip("#") not in dropped_tags
         ]
     dropped_hashtags = {
@@ -1232,14 +1280,14 @@ def apply_quality_gate(package: dict[str, Any], gate: dict[str, Any]) -> dict[st
     }
     hashtags: list[str] = []
     seen: set[str] = set()
-    for item in package.get("hashtags") or []:
+    for item in _listed(package.get("hashtags"), split=True):
         value = normalize_unicode(item)
         key = value.casefold()
         if not value or key in seen or key in dropped_hashtags:
             continue
         seen.add(key)
         hashtags.append(value)
-    if hashtags != list(package.get("hashtags") or []) or len(hashtags) > 3:
+    if isinstance(package.get("hashtags"), str) or hashtags != list(package.get("hashtags") or []) or len(hashtags) > 3:
         cleaned["hashtags"] = hashtags[:3]
     cleaned["quality_gate"] = gate
     return cleaned
@@ -1267,11 +1315,13 @@ def _title_usefulness_issues(
         issues.append(_issue("malformed_title_fragment", "title", "Title starts with a creator-input marker instead of natural viewer-facing language.", index=index))
     if re.search(r"(?i)\b(?:used\s+talk\s+every\s+then|quote\s+on\s+(?:the\s+)?(?:reel|screen)|background\s+(?:of\s+the\s+video\s+)?is)\b", clean):
         issues.append(_issue("creator_instruction_leakage", "title", "Title contains parsed input instructions or an unnatural keyword fragment.", index=index))
-    if len(words) < 3 and not (sparse_source and words):
+    # A short quote kept whole ("Keep going.") is its own complete title.
+    if len(words) < 3 and not (sparse_source and words) and not _is_whole_quote(clean, source_quote(source, brief)):
         issues.append(_issue("title_too_vague", "title", "Title is too short to identify a useful topic.", index=index))
     if words and words[0] in {"and", "but", "or", "with", "from", "about", "the"}:
         issues.append(_issue("title_fragment", "title", "Title starts like a sentence fragment.", index=index))
-    if words and words[-1] in {"and", "but", "or", "with", "from", "about", "to", "for"}:
+    if (words and words[-1] in {"and", "but", "or", "with", "from", "about", "to", "for"}
+            and not _ends_quote_phrase(clean, source_quote(source, brief))):
         issues.append(_issue("title_fragment", "title", "Title ends like a sentence fragment.", index=index))
     invented = _invented_context_terms(
         words, source_words, reflective=_is_reflective_source(brief, non_instructional), feelings=feelings,
@@ -1372,7 +1422,10 @@ def _description_usefulness_issues(
         issues.append(_issue("generic_description_filler", "description", "Description uses generic AI-style framing instead of direct audience-facing copy."))
     if re.search(r"\bone[- ]sided\b", description, re.IGNORECASE) and not re.search(r"\b(?:one[- ]sided|bare minimum)\b", source, re.IGNORECASE):
         issues.append(_issue("invented_relationship_dynamic", "description", "Description invents a one-sided dynamic not stated by the creator."))
-    if non_instructional and re.search(r"\b(?:this (?:video|short) (?:teaches|explains|breaks down)|learn how|here are \d+|tips? for)\b", description, re.IGNORECASE):
+    # The quote's own "learn how to let go" is reproduction, not a promise of instruction.
+    supplied = " ".join([source, normalize_unicode(brief.get("exact_quote"))]).casefold()
+    claims = re.findall(r"\b(?:this (?:video|short) (?:teaches|explains|breaks down)|learn how|here are \d+|tips? for)\b", description, re.IGNORECASE)
+    if non_instructional and any(claim.casefold() not in supplied for claim in claims):
         issues.append(_issue("unsupported_instructional_framing", "description", "Description claims instruction the source does not provide."))
     return issues
 
@@ -1384,7 +1437,7 @@ def _tag_provenance_issues(tags: list[str], evidence: dict[str, Any] | None) -> 
         return []
     selected = {
         normalize_unicode(item.get("keyword")).casefold(): item
-        for item in evidence.get("selected_keywords", [])
+        for item in _listed(evidence.get("selected_keywords"))
         if isinstance(item, dict) and normalize_unicode(item.get("keyword"))
     }
     issues: list[dict[str, Any]] = []
@@ -1413,7 +1466,7 @@ _SHORT_REFLECTION_WORDS = 10
 def _carries_quote(text: str, quote: str) -> bool:
     """Whether the text contains the quote word for word (case, spacing and end punctuation aside)."""
     def flat(value: str) -> str:
-        return " ".join(unicode_words(value, min_length=1)).casefold()
+        return " ".join(unicode_words(_fold_marks(value), min_length=1)).casefold()
 
     return bool(flat(quote)) and f" {flat(quote)} " in f" {flat(text)} "
 
@@ -1447,7 +1500,7 @@ def _final_semantic_quality(
     # score as grounded even when the quote says "worst feeling" verbatim.
     # Platform tags and weakly supported rows never contribute.
     selected_tag_rows = [
-        item for item in (tag_evidence or {}).get("selected_keywords", [])
+        item for item in _listed((tag_evidence or {}).get("selected_keywords"))
         if isinstance(item, dict)
         and item.get("classification") != "platform_format"
         and int(item.get("source_support_score") or 0) >= 70
@@ -1530,7 +1583,7 @@ def _final_semantic_quality(
     title_score = _bounded_score(title_score)
     tag_keys = {normalize_unicode(tag).casefold() for tag in tags}
     selected_rows = [
-        item for item in (tag_evidence or {}).get("selected_keywords", [])
+        item for item in _listed((tag_evidence or {}).get("selected_keywords"))
         if isinstance(item, dict) and normalize_unicode(item.get("keyword")).casefold() in tag_keys
     ]
     topic_rows = [item for item in selected_rows if item.get("classification") != "platform_format"]
@@ -1685,7 +1738,7 @@ def primary_search_phrase(tag_evidence: dict[str, Any] | None) -> str:
     """The strongest selected subject tag, preferring one real searchers type."""
 
     rows = [
-        row for row in (tag_evidence or {}).get("selected_keywords", [])
+        row for row in _listed((tag_evidence or {}).get("selected_keywords"))
         if isinstance(row, dict) and row.get("keyword") and row.get("classification") != "platform_format"
     ]
     if not rows:
@@ -1693,7 +1746,7 @@ def primary_search_phrase(tag_evidence: dict[str, Any] | None) -> str:
     demand_backed = [row for row in rows if row.get("demand_validated")] or rows
     # Among real searches, the one naming the most of the video's subject is
     # the main phrase: "chatgpt for excel", not the generic "if function".
-    subjects = {str(term).casefold() for term in (tag_evidence or {}).get("subject_terms") or []}
+    subjects = {str(term).casefold() for term in _listed((tag_evidence or {}).get("subject_terms"))}
     if subjects:
         def subject_weight(row: dict[str, Any]) -> int:
             return len({word.casefold() for word in unicode_words(row.get("keyword"))} & subjects)
@@ -1706,9 +1759,9 @@ def primary_search_phrase(tag_evidence: dict[str, Any] | None) -> str:
 def strong_search_phrases(tag_evidence: dict[str, Any] | None) -> list[str]:
     """Selected phrases viewers really type that name at least two subject words."""
 
-    subjects = {str(term).casefold() for term in (tag_evidence or {}).get("subject_terms") or []}
+    subjects = {str(term).casefold() for term in _listed((tag_evidence or {}).get("subject_terms"))}
     return [
-        str(row["keyword"]) for row in (tag_evidence or {}).get("selected_keywords", [])
+        str(row["keyword"]) for row in _listed((tag_evidence or {}).get("selected_keywords"))
         if isinstance(row, dict) and row.get("keyword") and row.get("demand_validated")
         and len({word.casefold() for word in unicode_words(row["keyword"])} & subjects) >= 2
     ]
@@ -1846,6 +1899,21 @@ def _unique(values: Iterable[str]) -> list[str]:
             seen.add(key)
             result.append(value)
     return result
+
+
+def _listed(value: Any, *, split: bool = False) -> list[Any]:
+    """A list field as a list. A string is one item ("#love #sad" two, with ``split``), never its characters."""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part for part in re.split(r"[\s,]+", value) if part] if split else [value]
+    if isinstance(value, dict):
+        return [value]
+    try:
+        return list(value)
+    except TypeError:
+        return [value]
 
 
 _EXPLANATORY_SOURCE_RE = re.compile(
@@ -2032,7 +2100,7 @@ def title_fluency_issues(title: str, *, index: int | None = None, quote: Any = "
     issues: list[dict[str, Any]] = []
     # "…decided who you are" ends a clause; "The reason people are" does not.
     ends_clause = tokens[-1] in _COPULAS and tokens[-2] in _SUBJECT_PRONOUNS
-    if tokens[-1] in _DANGLING_TITLE_ENDINGS and not ends_clause:
+    if tokens[-1] in _DANGLING_TITLE_ENDINGS and not ends_clause and not _ends_quote_phrase(title, quote):
         issues.append(_issue(
             "broken_title_grammar", "title",
             f"Title ends with the grammar word '{tokens[-1]}', so it reads as a cut-off phrase.",
@@ -2052,9 +2120,15 @@ def title_fluency_issues(title: str, *, index: int | None = None, quote: Any = "
         window = tokens[position + 1:position + 4]
         if token not in window:
             continue
-        between = tokens[position + 1:position + 1 + window.index(token)]
+        repeat = position + 1 + window.index(token)
+        between = tokens[position + 1:repeat]
         # Coordination ("How to Cook and How to Store") is grammatical.
         if set(between) & _COORDINATORS:
+            continue
+        # So is a verb between ("How to talk to your kids", "learn to listen to"),
+        # unless the fragment is echoed ("to make to make").
+        echoed = bool(between) and repeat + 1 < len(tokens) and tokens[repeat + 1] == between[0]
+        if not echoed and any(word not in _NOT_A_VERB_AFTER_HOW_TO for word in between):
             continue
         issues.append(_issue(
             "broken_title_grammar", "title",
@@ -2080,6 +2154,22 @@ def title_fluency_issues(title: str, *, index: int | None = None, quote: Any = "
             index=index,
         ))
     return issues
+
+
+def _ends_quote_phrase(title: Any, quote: Any) -> bool:
+    """Whether a title's last two words end a phrase of the quote: "... worth fighting for" ends one."""
+
+    words = unicode_words(_fold_marks(title_body(title)), min_length=1)
+    flat = _fold_marks(quote)
+    tokens = _quote_tokens(flat)
+    if len(words) < 2:
+        return False
+    for index in range(1, len(tokens)):
+        if [tokens[index - 1][0], tokens[index][0]] != words[-2:]:
+            continue
+        if index + 1 == len(tokens) or re.search(r"[.,;:!?…—–-]", flat[tokens[index][2]:tokens[index + 1][1]]):
+            return True
+    return False
 
 
 def _has_latin_or_tamil(text: str) -> bool:

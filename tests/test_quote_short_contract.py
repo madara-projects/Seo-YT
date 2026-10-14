@@ -572,5 +572,133 @@ class GatedPackageTests(unittest.TestCase):
         self.assertTrue(response["description"].rstrip().endswith(" ".join(response["hashtags"])))
 
 
+class GateReviewRegressionTests(unittest.TestCase):
+    """The quote's own words are never a fault, and a real fault is never hidden."""
+
+    def gate(self, quote: str, titles: list[str], description: str, script: str | None = None, **brief):
+        package = {"title": titles[0], "variants": titles, "description": description,
+                   "tags": ["missing someone"], "hashtags": ["#shorts", "#quotes"]}
+        return evaluate_package_quality(package, script=script or quote, creator_brief={
+            "exact_quote": quote, "video_format": "youtube_shorts", **brief,
+        })
+
+    @staticmethod
+    def codes(gate) -> set[str]:
+        return {item["code"] for item in [*gate["issues"], *(i for r in gate["rejected_candidates"] for i in r["issues"])]}
+
+    def test_the_quotes_own_ellipsis_is_not_a_cut(self):
+        quote = "I miss you... more than words can say"
+        self.assertEqual(_codes(quote, quote), set())
+        self.assertEqual(safe_quote_title(quote), quote)
+        self.assertIn("quote_title_cut", _codes("I miss you...", quote))
+        self.assertIn("quote_title_cut", _codes("Some nights the missing never ends...", quote))
+
+    def test_a_quote_broken_over_lines_keeps_its_turn(self):
+        quote = "You don't lose people because you stopped caring, you lose them\nbecause they stopped trying."
+        self.assertIn("missing_quote_payoff", _codes("You don't lose people because you stopped caring", quote))
+
+    def test_a_new_clause_after_a_denial_is_not_denied(self):
+        quote = "I can't sleep at night and I keep thinking about you"
+        self.assertFalse(title_reverses_quote("Why I keep thinking about you", quote))
+        self.assertTrue(title_reverses_quote("I can sleep at night", quote))
+
+    def test_a_quote_ending_on_a_preposition_is_a_complete_title(self):
+        from win_engine.analysis.generation_quality import title_fluency_issues
+
+        quote = "Find someone who is worth fighting for"
+        self.assertEqual(title_fluency_issues(quote, quote=quote), [])
+        self.assertEqual(title_fluency_issues(
+            "Find someone worth fighting for", quote="Find someone worth fighting for, and never let them go"), [])
+        self.assertTrue(title_fluency_issues(quote))
+        self.assertTrue(title_fluency_issues(
+            "Stop explaining yourself to", quote="Stop explaining yourself to people who never listen"))
+        gate = self.gate(quote, [quote, "The people who are worth fighting for"],
+                         f"“{quote}”\n\nSome people are worth every fight.")
+        self.assertNotIn("broken_title_grammar", self.codes(gate))
+        self.assertTrue(gate["passed"], gate["issues"])
+
+    def test_a_quote_ending_on_about_is_not_a_fragment(self):
+        quote = "This is the quiet life I always dream about"
+        codes = self.codes(self.gate(quote, [quote], f"“{quote}”\n\nFor the quiet dreamers."))
+        self.assertNotIn("title_fragment", codes)
+        self.assertNotIn("broken_title_grammar", codes)
+
+    def test_a_quotes_own_verbs_do_not_make_it_a_tutorial(self):
+        from win_engine.analysis.generation_quality import source_supports_instructional_framing
+
+        quote = "Don't try to change people who use you"
+        brief = {"exact_quote": quote, "video_format": "youtube_shorts"}
+        self.assertFalse(source_supports_instructional_framing(f'Quote: "{quote}" Background: rain on a window', brief))
+        self.assertTrue(source_supports_instructional_framing(
+            f'Quote: "{quote}" Check the filter, then adjust the fan to stop the noise', brief))
+
+    def test_to_or_how_twice_around_a_verb_is_grammatical(self):
+        from win_engine.analysis.generation_quality import title_fluency_issues
+
+        for title in ("How to Talk to Your Kids About Money", "Learn to listen to your heart",
+                      "How to Know How Much to Charge"):
+            with self.subTest(title=title):
+                self.assertEqual(title_fluency_issues(title), [])
+        for title in ("How to you how make cold brew", "Going to to the gym", "How to make to make cold brew"):
+            with self.subTest(title=title):
+                self.assertTrue(title_fluency_issues(title))
+
+    def test_quote_words_are_not_narration_or_instruction(self):
+        quote = "Sometimes you just need someone to listen to you without judging"
+        gate = self.gate(quote, [quote], f"“{quote}”\n\nFor the nights you needed to be heard.", voice_over="none")
+        self.assertNotIn("voice_over_contradiction", self.codes(gate))
+        gate = self.gate(quote, [quote], f"“{quote}”\n\nListen to the voice-over till the end.", voice_over="none")
+        self.assertIn("voice_over_contradiction", self.codes(gate))
+        quote = "One day you will learn how to let go of what keeps hurting you"
+        self.assertNotIn("unsupported_instructional_framing",
+                         self.codes(self.gate(quote, [quote], f"“{quote}”\n\nLetting go takes time.")))
+        self.assertIn("unsupported_instructional_framing",
+                      self.codes(self.gate(quote, [quote], f"“{quote}”\n\nHere are 3 tips for letting go.")))
+
+    def test_a_straight_apostrophe_keeps_the_exact_quote(self):
+        quote = "It’s okay to not be okay all the time, you are still enough"
+        straight = self.gate(quote, [quote], "“It's okay to not be okay all the time, you are still enough”\n\nFor heavy days.")
+        self.assertNotIn("quote_fidelity", self.codes(straight))
+        changed = self.gate(quote, [quote], "“It is okay to not be okay all the time, you are still enough”\n\nFor heavy days.")
+        self.assertIn("quote_fidelity", self.codes(changed))
+
+    def test_a_short_quote_kept_whole_is_not_vague_beside_a_described_scene(self):
+        gate = self.gate("Keep going.", ["Keep going"], "“Keep going.”\n\nOne step at a time.",
+                         script='Quote: "Keep going." Background: a long empty road at sunrise with soft clouds')
+        self.assertNotIn("title_too_vague", self.codes(gate))
+        self.assertTrue(gate["passed"], gate["issues"])
+
+    def test_one_emoji_with_a_skin_tone_or_zwj_counts_once(self):
+        mending_heart = chr(0x2764) + chr(0xFE0F) + chr(0x200D) + chr(0x1FA79)
+        quote = "Healing is slow, but it is still healing"
+        for title in (f"Healing slowly, but still healing {mending_heart}{chr(0x1F940)}",
+                      f"Healing slowly, but still healing {chr(0x1F64F)}{chr(0x1F3FD)}{chr(0x1F494)}"):
+            with self.subTest(title=title):
+                self.assertNotIn("excessive_title_emojis", self.codes(self.gate(quote, [title], f"“{quote}”")))
+        three = f"Healing slowly, but still healing {chr(0x1F940)}{chr(0x1F494)}{chr(0x1F319)}"
+        self.assertIn("excessive_title_emojis", self.codes(self.gate(quote, [three], f"“{quote}”")))
+
+    def test_a_string_list_field_is_read_as_items_not_characters(self):
+        from win_engine.analysis.generation_quality import apply_quality_gate
+
+        quote = "I miss you more than words can say"
+        variant = "Missing you more than words can say"
+        package = {"title": quote, "variants": variant, "description": f"“{quote}”",
+                   "tags": "missing someone", "hashtags": "#quotes #missingyou"}
+        gate = evaluate_package_quality(package, script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"})
+        self.assertIn(variant, {item["title"] for item in [*gate["accepted_candidates"], *gate["rejected_candidates"]]})
+        self.assertFalse({"excessive_hashtags", "duplicate_hashtag"} & {item["code"] for item in gate["warnings"]})
+        cleaned = apply_quality_gate(package, gate)
+        self.assertEqual(cleaned["hashtags"], ["#quotes", "#missingyou"])
+        self.assertIsInstance(cleaned["tags"], list)
+        hashtags = focused_short_hashtags("cold brew coffee")
+        self.assertEqual([item.casefold() for item in hashtags], ["#shorts", "#coldbrewcoffee"])
+
+    def test_a_leading_emoji_does_not_hide_a_generic_template(self):
+        quote = "I miss you more than words can say"
+        gate = self.gate(quote, [f"{chr(0x1F494)} The honest truth about missing you"], f"“{quote}”")
+        self.assertIn("generic_template", self.codes(gate))
+
+
 if __name__ == "__main__":
     unittest.main()
