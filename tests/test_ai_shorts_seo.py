@@ -838,5 +838,39 @@ class ToneConsistencyTests(unittest.TestCase):
         self.assertEqual([item["tag"] for item in trace["final_tag_provenance"]], package["tags"])
         self.assertEqual([item["keyword"] for item in trace["final_tag_scores"]], package["tags"])
 
+class TopicAnchorTests(unittest.TestCase):
+    def test_common_quote_vocabulary_is_not_enough_to_ground_a_topic(self):
+        reading = seo.quote_understanding(DISCIPLINE, {"creative_direction": {
+            "tone": "empowering", "quote_meaning": "Consistency and effort build strength.",
+            "search_themes": ["mother quotes", "friendship quotes", "discipline quotes"],
+        }})
+        checked = seo.verify_subject_tags(reading, quote=DISCIPLINE, client=FakeSuggest())
+        names = {row["keyword"] for row in checked["subject_tags"]}
+        self.assertIn("discipline quotes", names)
+        self.assertFalse({"mother quotes", "friendship quotes"} & names)
+        self.assertEqual(seo.theme_relation("motivational quotes", reading, DISCIPLINE), "quote_niche")
+
+    def test_unrelated_topics_do_not_reach_the_saved_package(self):
+        direction = {"tone": "empowering", "quote_meaning": "Consistency and effort build strength.",
+                     "search_themes": ["mother quotes", "friendship quotes", "discipline quotes"]}
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(gemini_client, "is_available", return_value=False), \
+                patch.object(seo, "suggest_client", return_value=FakeSuggest()), \
+                patch.object(ai_shorts, "_plan_flow_shots", return_value=_plan(DISCIPLINE, direction)):
+            saved = ai_shorts.generate_ai_short(HistoryStore(str(Path(folder) / "topics.db")),
+                                                quote=DISCIPLINE, parts=1)
+        package = saved["package"]
+        self.assertIn("discipline quotes", package["tags"])
+        self.assertFalse({"mother quotes", "friendship quotes"} & set(package["tags"]))
+        self.assertEqual(package["generation_trace"]["final_tags"], package["tags"])
+
+    def test_meaning_can_ground_a_theme_without_copying_quote_words(self):
+        quote = "You stayed when the world walked away."
+        reading = seo.quote_understanding(quote, {"creative_direction": {
+            "tone": "romantic", "quote_meaning": "Gratitude for a loyal friend who remained present.",
+        }})
+        self.assertEqual(seo.theme_relation("friendship quotes", reading, quote), "planner_reading")
+
+
 if __name__ == "__main__":
     unittest.main()

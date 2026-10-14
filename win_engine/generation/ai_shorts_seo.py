@@ -282,6 +282,7 @@ _WORD_THEMES: tuple[tuple[str, tuple[str, ...], frozenset[str]], ...] = (
     (r"\b(?:alone|lonely|loneliness)\b", ("loneliness quotes",), _LONELY_TONES),
     (r"\b(?:overthink(?:ing)?|anxiety)\b", ("overthinking quotes",), _OVERTHINKING_TONES),
     (r"\bmotivat", ("motivational quotes",), _MOTIVATION_TONES),
+    (r"\b(?:recognition|self[- ]?value|deserv\w*)\b", ("self worth quotes",), _WORTH_TONES | _MOTIVATION_TONES),
     (_MOVING_ON, ("moving on quotes",), _MOVING_ON_TONES),
     (_MISSING, ("missing someone quotes",), _MISSING_TONES),
     (_LOVE, ("love quotes",), _LOVE_TONES),
@@ -1020,6 +1021,13 @@ def theme_relation(theme: Any, reading: dict[str, Any], quote: str) -> str:
         elif word in _NICHE_WORDS or _stem(word) in _NICHE_WORDS or word in phrase_niche:
             levels.append(1)
         else:
+            return ""
+    if max(levels) == 1:
+        tone = str(reading.get("tone") or "")
+        supported = {*_local_themes(quote, tone), *_TONE_THEMES.get(tone, ())}
+        if reading.get("meaning"):
+            supported.update(_local_themes(str(reading["meaning"]), tone))
+        if phrase not in supported:
             return ""
     return {3: "quote_words", 2: "planner_reading", 1: "quote_niche"}[min(levels)]
 

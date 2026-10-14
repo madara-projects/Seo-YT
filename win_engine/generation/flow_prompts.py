@@ -1508,7 +1508,7 @@ _PAIN_RE = re.compile(
 )
 # Pain that is over ("after the heartbreak", "healed") belongs to a healing or hopeful quote.
 _OVERCOME_RE = re.compile(
-    r"\b(?:after|past|healed|heal(?:s|ing)?|overcome|overcame|recover\w*|through|survived|moved on|no longer|"
+    r"\b(?:after|past|healed|heal(?:s|ing)?|overcome|overcame|recover\w*|survived|moved on|no longer|"
     r"behind (?:me|you|us|them))\b",
     re.IGNORECASE,
 )
@@ -1517,6 +1517,22 @@ _PAINLESS_TONES = frozenset({"romantic", "calm"})
 # Tones whose pain a person carries: the rotation never leaves them an empty place.
 _PERSON_TONES = frozenset({"heartbroken", "sad", "lonely", "numb", "angry", "anxious"})
 _PAIN_TONES = frozenset({"heartbroken", "sad", "lonely", "numb", "bittersweet", "angry", "anxious"})
+
+
+def _current_pain(text: str) -> bool:
+    for clause in re.split(r"[.;,!?]|\b(?:but|yet|however|although)\b", text, flags=re.IGNORECASE):
+        if _OVERCOME_RE.search(clause):
+            continue
+        for match in _PAIN_RE.finditer(clause):
+            if re.match(r"[- ]free\b", clause[match.end():], re.IGNORECASE):
+                continue
+            before = re.sub(r"\bnot only\b", "", clause[:match.start()], flags=re.IGNORECASE)
+            if re.search(r"\b(?:free (?:from|of)|absence of|untainted by|untouched by|devoid of)\b[^.;,!?]*$",
+                         before, re.IGNORECASE):
+                continue
+            if not _negated(before, len(before)):
+                return True
+    return False
 
 
 def pain_tone(quote: str, reading: dict[str, Any]) -> str | None:
@@ -1528,8 +1544,8 @@ def pain_tone(quote: str, reading: dict[str, Any]) -> str | None:
 
     if reading.get("tone") not in _PAINLESS_TONES:
         return None
-    meaning = " ".join(str(reading.get(key) or "") for key in ("quote_meaning", "emotion"))
-    if not _PAIN_RE.search(meaning) or _OVERCOME_RE.search(meaning):
+    meaning = ". ".join(str(reading.get(key) or "") for key in ("quote_meaning", "emotion"))
+    if not _current_pain(meaning):
         return None
     return "heartbroken" if _LOVE_RE.search(f"{quote} {meaning}") else "bittersweet"
 
@@ -2435,7 +2451,7 @@ _HEAD_TURN_RE = re.compile(
     re.IGNORECASE,
 )
 _BEHIND_RE = re.compile(r",?\s*\bseen (?:entirely |completely |only )?from behind\b", re.IGNORECASE)
-_SIDE_RE = re.compile(r",?\s*\b(?:(?:as|in) (?:a )?side-on silhouette|seen side-on|in profile)\b", re.IGNORECASE)
+_SIDE_RE = re.compile(r",?\s*\b(?:(?:as|in) (?:a )?side-on silhouettes?|seen side-on|in profile)\b", re.IGNORECASE)
 _SIDE_CAMERA_RE = re.compile(
     r"\bside-on ((?:\w+ )?(?:shot|view|angle))\b|\bprofile ((?:tracking )?shot)\b"
     r"|\b(?:moving|tracking|travell?ing|riding|gliding|pacing) alongside\b",
@@ -3457,8 +3473,9 @@ def _director_prompt(quote: str, mood_hint: str, recent: list[str] | None = None
     return (
         "Plan the background footage for a YouTube Shorts quote video. The quote is laid over the footage "
         "afterwards; the footage must make a viewer scrolling past feel the quote's emotion in the first second.\n"
-        "Step 1, understand the quote: its plain meaning, the one emotion it carries, and who would feel it and in "
-        "what real-life situation (who they are, what happened, how it feels). Keep its exact meaning: do not turn "
+        "Step 1, understand the quote: its plain meaning and the emotion it carries. Separately consider who might "
+        "relate to it. A hypothetical viewer's situation is creative context, not evidence about the quote's tone "
+        "or meaning. Keep its exact meaning: do not turn "
         "self-protection or emotional denial into unrequited love unless the quote says that, do not add a loss, a "
         "breakup, an absence or any event the quote doesn't state (\"Home is not a place, it's a person\" is love and "
         "belonging, warm, not missing someone), and a quote that encourages stays hopeful even when the person it "

@@ -1251,3 +1251,45 @@ def test_a_side_on_camera_and_a_figure_from_behind_become_one_framing():
     assert "tracking shot from behind, following" in behind and "side-on" not in behind
     side, _ = fp.patch_prompt(prompt, part=1, audio="wind", framing="side")
     assert "seen side-on and in silhouette" in side and "from behind" not in side
+
+
+@pytest.mark.parametrize("meaning", [
+    "A healthy relationship is loving without causing pain.",
+    "Love should never hurt you.",
+    "Love is not supposed to cause pain.",
+    "A pain-free love feels safe.",
+    "Our love is free from pain.",
+    "The absence of pain makes this love safe.",
+    "The quote expresses affection that is secure, tender, and entirely untainted by hurt.",
+])
+def test_negated_pain_does_not_turn_safe_love_into_heartbreak(meaning):
+    assert fp.pain_tone("Love should never hurt you.", {"tone": "romantic", "quote_meaning": meaning}) is None
+
+
+def test_past_pain_in_another_clause_does_not_hide_current_pain():
+    reading = {"tone": "romantic", "quote_meaning": "After years of love, it hurts to stay together."}
+    assert fp.pain_tone("Love hurts when staying feels impossible.", reading) == "heartbroken"
+
+
+def test_a_safe_love_plan_keeps_its_warm_tone():
+    quote = "Love should never hurt you."
+    plan, _ = plan_with(love_reply("A healthy relationship is loving without causing pain."),
+                        writer_reply(SUNRISE_WALK), writer_reply(SUNRISE_WALK), quote=quote, director=True)
+    assert plan["quote_understanding"]["tone"] == "romantic"
+
+
+def test_an_imagined_viewer_is_not_evidence_for_the_quotes_meaning():
+    assert "hypothetical viewer's situation is creative context, not evidence" in fp._director_prompt(
+        "Love is gentle, safe, and free from pain.", "",
+    )
+
+
+@pytest.mark.parametrize("framing", ["behind", "side"])
+def test_two_people_do_not_get_conflicting_silhouette_framings(framing):
+    prompt = SUNRISE_WALK.replace(
+        "A lone figure in a dark coat, seen from behind",
+        "Two people in dark coats, seen entirely from behind as side-on silhouettes",
+    )
+    patched, _ = fp.patch_prompt(prompt, part=1, audio="wind", framing=framing)
+    assert not ("from behind" in patched and "side-on" in patched)
+    assert ("from behind" in patched) == (framing == "behind")
