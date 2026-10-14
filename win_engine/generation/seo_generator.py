@@ -13,7 +13,7 @@ from win_engine.analysis.generation_quality import (
     focused_short_hashtags,
     is_short_content,
 )
-from win_engine.analysis.package_builder import build_title_thumbnail_packages, title_gate_status
+from win_engine.analysis.package_builder import build_title_thumbnail_packages, is_filler_phrase, title_gate_status
 from win_engine.analysis.strategy_layer import build_content_graph_strategy
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.keyword_research import select_final_tags, synchronize_tag_evidence
@@ -39,6 +39,7 @@ from win_engine.generation.automation_engine import build_automation_workflow
 from win_engine.generation.expansion_engine import build_binge_bridge, build_session_expansion, chapter_block
 from win_engine.generation.strategy_engine import build_seo_package, resolve_output_language, title_quality_score
 from win_engine.generation.quality_refinement import refine_package, enforce_quality_target
+from win_engine.ingestion.youtube_client import DETAIL_FIELDS
 from win_engine.llm.seo_writer import with_extra_call
 
 
@@ -77,6 +78,12 @@ def _without_risk_terms(titles: list[str], source: str) -> list[str]:
 
     clean = [title for title in titles if not unsupported_risk_terms(title, source)]
     return clean or [normalize_risk_terms(title, source=source) for title in titles]
+
+
+def _youtube_safe(text: str) -> str:
+    """YouTube rejects "<" and ">" in a title or description ("<3", "->")."""
+
+    return text.replace("<", "‹").replace(">", "›")
 
 
 def _fallback_warning(trace: dict[str, Any]) -> str:
@@ -226,7 +233,8 @@ def generate_seo_suggestions(
     locked_title = _without_risk_terms([refined["title"], *refined["variants"]], risk_source)[0]
     locked_variants = _without_risk_terms(refined["variants"], risk_source)
     locked_tags = [
-        tag for tag in (refined.get("tags") or locked_tags) if not unsupported_risk_terms(tag, risk_source)
+        tag for tag in (refined.get("tags") or locked_tags)
+        if not unsupported_risk_terms(tag, risk_source) and not is_filler_phrase(tag)
     ]
     keyword_research = synchronize_tag_evidence(keyword_research, locked_tags)
     locked_hashtags = (focused_short_hashtags(locked_tags, casing, quote=short_quote, proposed=filter_source_hashtags(
@@ -285,8 +293,9 @@ def generate_seo_suggestions(
          "tags": locked_tags, "hashtags": locked_hashtags},
         final_gate,
     )
-    locked_title = gated["title"]
-    locked_variants = gated["variants"]
+    # Every title source (writer, refinement, fallback, AI Shorts) ends here.
+    locked_title = _youtube_safe(gated["title"])
+    locked_variants = list(dict.fromkeys(_youtube_safe(title) for title in gated["variants"]))
     # A tag or hashtag the final gate noted is dropped, never shipped; the
     # evidence and the description's hashtag line follow the final lists.
     if gated["tags"] != locked_tags:
@@ -296,7 +305,8 @@ def generate_seo_suggestions(
         locked_hashtags = list(gated["hashtags"])
         locked_description = format_upload_ready_description(
             locked_description, locked_hashtags, category=category, topic=main_topic, chapters=chapters)
-    final_gate = enforce_quality_target(final_gate, short_form=short_form)
+    final_gate = enforce_quality_target(final_gate, short_form=short_form,
+                                        tag_score_before_pruning=refinement_trace.get("tag_score_before_pruning"))
     if ai_short:
         # A Short's sparse tags are only a note to the shared gate; an AI Short
         # without enough specific subject tags is not GREEN, and its exact-quote
@@ -357,23 +367,24 @@ def generate_seo_suggestions(
     # Strip junk from any keyword_signals that came back from research.
     locked_signals = [
         s for s in (research_payload.get("keyword_signals") or [])
-        if not is_junk_tag(str(s.get("keyword", "")))
+        if not is_junk_tag(str(s.get("keyword") or ""))
     ]
 
     # ---- Selected-language package -------------------------------------
     def _lock_pkg(p: dict[str, Any], lang: str) -> dict[str, Any]:
         if not isinstance(p, dict):
             return {}
-        title = force_topic_in_title(p.get("title", ""), main_topic, category, short_form=short_form)
+        title = force_topic_in_title(p.get("title") or "", main_topic, category, short_form=short_form)
         variants = list(dict.fromkeys(
             force_topic_in_title(v, main_topic, category, variant_index=i, short_form=short_form)
             for i, v in enumerate(p.get("variants", []) or [])
         ))
         # Every language package gets the risk filter the selected one gets.
-        title = _without_risk_terms([title, *variants], risk_source)[0]
-        variants = _without_risk_terms(variants, risk_source)
+        title = _youtube_safe(_without_risk_terms([title, *variants], risk_source)[0])
+        variants = [_youtube_safe(variant) for variant in _without_risk_terms(variants, risk_source)]
         tags = locked_tags if lang == selected_language else [
-            tag for tag in p.get("tags", []) or [] if not unsupported_risk_terms(tag, risk_source)
+            tag for tag in p.get("tags", []) or []
+            if not unsupported_risk_terms(tag, risk_source) and not is_filler_phrase(tag)
         ]
         hashtags = filter_source_hashtags(
             force_hashtags(p.get("hashtags", []) or [], main_topic, category, tags=tags, casing=casing),
@@ -534,8 +545,14 @@ def generate_seo_suggestions(
     if isinstance(history_store, HistoryStore) and isinstance(history_run_id, int):
         # The run was recorded with the writer-stage score; refinement may have
         # replaced that title, so the score of the one delivered goes with it.
+        # The saved run is cloud-synced; research-only detail on each result stays in the response.
+        saved = {**response, **{
+            field: [{key: value for key, value in row.items() if key not in DETAIL_FIELDS}
+                    if isinstance(row, dict) else row for row in response.get(field) or []]
+            for field in ("youtube_results", "top_opportunities")
+        }}
         history_store.update_analysis_payload(
-            history_run_id, response["title"], response,
+            history_run_id, response["title"], saved,
             title_score=(response.get("ctr_prediction") or {}).get("title_quality_score"),
         )
     return response
@@ -595,7 +612,8 @@ def format_upload_ready_description(
         and not re.search(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", text)
     ):
         lowered = f"{topic} {category}".lower()
-        if any(term in lowered for term in ("heartbreak", "unrequited", "sad", "betrayal")):
+        # Whole words: "sad" inside "Sadhguru" or "ambassador" is no heartbreak.
+        if re.search(r"\b(?:heartbreak|unrequited|sad(?:ness|der|dest|ly)?\b|betrayal)", lowered):
             emoji = "💔"
         else:
             emoji = emoji_by_category[category_key]
@@ -614,4 +632,4 @@ def format_upload_ready_description(
             existing.add(hashtag.casefold())
     if selected:
         text = f"{text}\n\n{' '.join(selected)}"
-    return text
+    return _youtube_safe(text)

@@ -38,6 +38,47 @@ class QualityTargetTests(unittest.TestCase):
         gate = {"verdict": "RED", "final_seo_quality": {"verdict": "RED"}}
         self.assertEqual(enforce_quality_target(gate)["verdict"], "RED")
 
+    def _refine_tags(self, rows):
+        script = ("Cold brew coffee at home: coarse grounds steep in a mason jar of cold water for 12 to 18 hours, "
+                  "then strain through a paper filter for a smooth, less bitter cup.")
+        package = {"title": "Cold brew coffee at home in a mason jar", "variants": [],
+                   "description": "Make smooth cold brew coffee at home in a mason jar with coarse grounds and cold water.",
+                   "tags": [keyword for keyword, _ in rows], "hashtags": ["#ColdBrew"]}
+        evidence = {"selected_keywords": [{"keyword": k, "keyword_relevance_score": s, "source_support_score": 100}
+                                          for k, s in rows]}
+        with patch("win_engine.generation.quality_refinement.gemini_client.is_available", return_value=False):
+            return refine_package(package, script=script, brief={"content": script, "video_format": "tutorial"},
+                                  language="english", region="global", evidence=evidence, competitors=[])
+
+    def test_grounded_tags_are_not_pruned_to_lift_the_average(self):
+        rows = [("cold brew coffee", 88), ("cold brew at home", 86), ("mason jar coffee", 85), ("cold brew ratio", 84),
+                ("coarse ground coffee", 83), ("cold brew steeping time", 82), ("paper filter coffee", 80),
+                ("smooth coffee", 75)]
+        refined, trace = self._refine_tags(rows)
+        self.assertEqual(refined["tags"], [keyword for keyword, _ in rows])
+        self.assertNotIn("pruned_tags", trace)
+
+    def test_weak_tags_are_pruned_but_pruning_does_not_earn_green(self):
+        rows = [("cold brew coffee", 96), ("cold brew at home", 94), ("mason jar coffee", 92), ("cold brew ratio", 90),
+                ("coffee hacks", 68), ("kitchen tips", 72)]
+        refined, trace = self._refine_tags(rows)
+        self.assertEqual(trace["pruned_tags"], ["coffee hacks", "kitchen tips"])
+        self.assertEqual(refined["tags"], ["cold brew coffee", "cold brew at home", "mason jar coffee", "cold brew ratio"])
+        self.assertLess(trace["tag_score_before_pruning"], 90)
+        gate = {"verdict": "GREEN", "final_seo_quality": {"title_score": 95, "description_score": 95, "tag_score": 93}}
+        result = enforce_quality_target(gate, tag_score_before_pruning=trace["tag_score_before_pruning"])
+        self.assertEqual(result["verdict"], "YELLOW")
+        self.assertFalse(result["quality_target"]["met"])
+        self.assertEqual(result["quality_target"]["shortfalls"], ["tag_score"])
+        self.assertEqual(result["final_seo_quality"]["tag_score"], 93)
+        self.assertEqual(enforce_quality_target(gate, tag_score_before_pruning=92)["verdict"], "GREEN")
+
+    def test_an_explicit_quote_short_flag_alone_does_not_crash(self):
+        gate = {"verdict": "GREEN", "final_seo_quality": {"title_score": 95, "description_score": 95, "tag_score": 95}}
+        target = enforce_quality_target(gate, quote_short=True)["quality_target"]
+        self.assertIn("title_score", target["not_counted"])
+        self.assertTrue(target["met"])
+
     @patch("win_engine.generation.quality_refinement.generate_one")
     @patch("win_engine.generation.quality_refinement.gemini_client.is_available", return_value=True)
     @patch("win_engine.generation.quality_refinement.evaluate_package_quality")

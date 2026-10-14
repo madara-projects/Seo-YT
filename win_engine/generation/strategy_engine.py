@@ -568,7 +568,7 @@ def _topic_from_signals(
     """Pick primary / secondary topic from research keyword signals."""
     picks: list[str] = []
     for signal in keyword_signals:
-        kw = str(signal.get("keyword", "")).strip()
+        kw = str(signal.get("keyword") or "").strip()
         if not kw or kw.lower() in _TOPIC_STOPWORDS:
             continue
         if kw.lower() in {p.lower() for p in picks}:
@@ -591,7 +591,7 @@ def _select_content_angle(intent: str, script: str, top_opportunities: list[dict
     if intent == "SEARCH":
         return "Authority"
     if top_opportunities and any(
-        "shocking" in str(item.get("title", "")).lower() for item in top_opportunities
+        "shocking" in str(item.get("title") or "").lower() for item in top_opportunities
     ):
         return "Curiosity"
     return "Story"
@@ -1005,6 +1005,10 @@ def _fallback_description(content: str, promise: str = "", max_words: int = 220)
         count = len(sentence.split())
         if kept and words + count > max_words:
             break
+        if count > max_words:
+            # Unpunctuated text (a caption transcript) is one "sentence"; kept
+            # whole it passed YouTube's 5,000-character description limit.
+            sentence, count = " ".join(sentence.split()[:max_words]), max_words
         kept.append(sentence if re.search(r"[.!?।]$", sentence) else sentence + ".")
         words += count
     paragraphs = [" ".join(kept[index:index + 2]) for index in range(0, len(kept), 2)]
@@ -1037,10 +1041,9 @@ def _safe_minimal_package(primary_topic: str, creator_brief: dict[str, Any] | No
         description = "\n\n".join(part for part in (f"“{quote}”", scene) if part)
     else:
         body = re.sub(r"\s+", " ", primary_topic or content).strip(" .") or "The Video Topic"
-        # Timestamp lines are the chapter list, not a sentence (see _fallback_description).
-        prose = " ".join(line for line in content.splitlines() if not timestamp_line(line))
-        excerpt = re.sub(r"\s+", " ", prose).strip(" .")
-        description = (excerpt or body).rstrip(".") + "."
+        # The whole script as one paragraph ran past YouTube's 5,000-character
+        # limit; the creator's sentences are bounded as the richer fallback's are.
+        description = _fallback_description(content) or body.rstrip(".") + "."
         title = _uncut_title(body)
     return {
         "title": title,

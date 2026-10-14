@@ -14,6 +14,9 @@ TARGET = 90.0
 SCORE_FIELDS = ("title_score", "description_score", "tag_score")
 # A tag this weak is dropped even from a small package.
 _WEAK_TAG_SCORE = 60.0
+# Only a tag under this score (or with no research row) is ever pruned: dropping
+# grounded 80s to lift the average cut a good eight-tag list to two.
+_PRUNE_BELOW = 75.0
 # Minimum title score for search-phrase presence to decide between titles.
 _KEYWORD_TITLE_FLOOR = 70.0
 
@@ -54,8 +57,14 @@ def target_fields(short_form: bool = False, quote_short: bool = False) -> tuple[
     return tuple(field for field in SCORE_FIELDS if field not in skipped)
 
 
-def enforce_quality_target(gate: dict[str, Any], *, short_form: bool = False, quote_short: bool | None = None) -> dict[str, Any]:
-    """Annotate shortfalls without replacing scores or treating missing data as zero evidence."""
+def enforce_quality_target(gate: dict[str, Any], *, short_form: bool = False, quote_short: bool | None = None,
+                           tag_score_before_pruning: float | None = None) -> dict[str, Any]:
+    """Annotate shortfalls without replacing scores or treating missing data as zero evidence.
+
+    ``tag_score_before_pruning`` is the tag score before refinement dropped weak
+    tags; the reported score stays the average of the tags kept, but a target
+    reached only by dropping tags is not met.
+    """
     result = deepcopy(gate)
     quality = result.setdefault("final_seo_quality", {})
     if quote_short is None:
@@ -66,20 +75,29 @@ def enforce_quality_target(gate: dict[str, Any], *, short_form: bool = False, qu
     unmeasured = [field for field in fields if quality.get(field) is None]
     shortfalls = [field for field in fields
                   if quality.get(field) is None or float(quality[field]) < TARGET]
+    pruned_only = ["tag_score"] if (
+        "tag_score" in fields and "tag_score" not in shortfalls
+        and tag_score_before_pruning is not None and float(tag_score_before_pruning) < TARGET
+    ) else []
+    shortfalls += pruned_only
     result["quality_target"] = {"minimum": TARGET, "met": not shortfalls,
                                 "shortfalls": shortfalls, "not_measured": unmeasured,
                                 "basis": "local_heuristic_not_performance"}
+    if pruned_only:
+        result["quality_target"]["tag_score_before_pruning"] = float(tag_score_before_pruning)
     if short_form:
         result["quality_target"]["not_counted"] = {
             "tag_score": "Tags play a minimal role in a Short's discovery; the score is reported, not targeted.",
         }
     if quote_short:
-        result["quality_target"]["not_counted"]["title_score"] = (
+        result["quality_target"].setdefault("not_counted", {})["title_score"] = (
             "A quote Short's title passes or fails its checks (the quote kept whole or to its punchline, "
             "no cut, no reversed meaning); the score is reported, not targeted."
         )
     if shortfalls:
-        named = [f"{field} (not measured)" if field in unmeasured else field for field in shortfalls]
+        named = [f"{field} (not measured)" if field in unmeasured
+                 else f"{field} (met only after dropping weak tags)" if field in pruned_only
+                 else field for field in shortfalls]
         issue = {"code": "quality_target_not_met", "field": "package", "severity": "warning",
                  "message": "/".join(["90"] * len(fields)) + " target not met: " + ", ".join(named)
                  + ". Manual review required."}
@@ -219,7 +237,7 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
         # and only when validated searches are there to carry the package.
         while scored_topics and (sum(s for _, s in scored_topics) / len(scored_topics)) < TARGET:
             lowest = scored_topics[0][1]
-            if lowest >= TARGET:
+            if lowest >= _PRUNE_BELOW:
                 break
             if len(scored_topics) > 2 or (protected and lowest < _WEAK_TAG_SCORE):
                 scored_topics.pop(0)
@@ -264,6 +282,7 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
 
     best = deepcopy(package)
     gate = evaluate(best)
+    original_tag_score = (gate.get("final_seo_quality") or {}).get("tag_score")
     # Check local tag refinement first
     candidate_tag_pkg = refine_tags_locally(best)
     if candidate_tag_pkg != best:
@@ -345,4 +364,9 @@ def refine_package(package: dict[str, Any], *, script: str, brief: dict[str, Any
             if trace["accepted"]:
                 best, gate = fit_order(best, gate)
     trace["after"] = deepcopy(gate.get("final_seo_quality", {}))
+    pruned = [tag for tag in package.get("tags") or [] if tag not in (best.get("tags") or [])]
+    if pruned:
+        # Lets the final target see the score before pruning (see enforce_quality_target).
+        trace["pruned_tags"] = pruned
+        trace["tag_score_before_pruning"] = original_tag_score
     return best, trace

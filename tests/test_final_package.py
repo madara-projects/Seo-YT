@@ -147,6 +147,22 @@ class RescoredFinalTitleTests(unittest.TestCase):
                 self.assertEqual(package["quality_status"], expected)
 
 
+class SavedRunTests(unittest.TestCase):
+    def test_the_saved_run_leaves_out_research_only_result_detail(self):
+        # analysis_runs.payload_json is cloud-synced; competitor tags and full descriptions only made it grow.
+        store = HistoryStore(":memory:")
+        row = {"video_id": "v1", "title": "Cold brew in 5 minutes", "view_count": 100, "tags": ["cold brew"],
+               "full_description": "x" * 4000, "default_audio_language": "en"}
+        with patch.object(store, "update_analysis_payload") as save:
+            response, _ = _run(_research(store, youtube_results=[row], top_opportunities=[row]),
+                               _writer_package(), available=False)
+        saved = save.call_args.args[2]
+        for field in ("youtube_results", "top_opportunities"):
+            with self.subTest(field=field):
+                self.assertEqual(saved[field][0], {"video_id": "v1", "title": "Cold brew in 5 minutes", "view_count": 100})
+                self.assertEqual(response[field][0]["tags"], ["cold brew"])  # the response keeps them
+
+
 class TitleHistoryTests(unittest.TestCase):
     def test_refinement_cannot_reuse_a_recent_title(self):
         store = HistoryStore(":memory:")
@@ -320,6 +336,48 @@ class PackageLabelTests(unittest.TestCase):
             [{"title": "How to Make Cold Brew Coffee With a Mason Jar"}], {"content": COLD_BREW},
         )
         self.assertEqual((packages[0]["quality_status"], packages[0]["misleading_risk"]), ("approved", "low"))
+
+
+class YouTubeSafeCopyTests(unittest.TestCase):
+    def test_a_missing_keyword_or_title_is_not_the_word_none(self):
+        from win_engine.generation.strategy_engine import _select_content_angle, _topic_from_signals
+
+        self.assertEqual(_topic_from_signals([{"keyword": None}, {"keyword": "cold brew coffee"}]),
+                         ("cold brew coffee", "engagement"))
+        self.assertEqual(_select_content_angle("BROWSE", "A calm walk.", [{"title": None}]), "Story")
+
+    def test_narration_about_the_video_is_never_a_tag_or_thumbnail_text(self):
+        from win_engine.analysis.package_builder import is_filler_phrase
+
+        for phrase in ("இந்த வீடியோவில் வீட்டிலேயே", "இந்த வீடியோவில்", "வீடியோவில் வீட்டிலேயே சுலபமாக",
+                       "इस वीडियो में", "walk through", "in this video"):
+            self.assertTrue(is_filler_phrase(phrase), phrase)
+        for phrase in ("வீட்டிலேயே சுலபமாக செட்டிநாடு", "mod apk malware", "game walkthrough", "video editing"):
+            self.assertFalse(is_filler_phrase(phrase), phrase)
+        packages = build_title_thumbnail_packages(
+            [{"title": "இந்த வீடியோவில் வீட்டிலேயே சுலபமாக செட்டிநாடு பிரியாணி"}], {}, validated=True,
+            focus_phrases=["இந்த வீடியோவில் வீட்டிலேயே", "வீட்டிலேயே சுலபமாக செட்டிநாடு"])
+        self.assertEqual(packages[0]["thumbnail_text"], "வீட்டிலேயே சுலபமாக செட்டிநாடு")
+
+    def test_no_delivered_title_carries_characters_youtube_rejects(self):
+        from win_engine.analysis.generation_quality import apply_quality_gate
+
+        # Whatever produced the titles, the final step makes them uploadable.
+        def with_brackets(package, gate):
+            gated = apply_quality_gate(package, gate)
+            return {**gated, "title": f"{gated['title']} <3", "variants": [f"{t} -> now" for t in gated["variants"]]}
+
+        store = HistoryStore(":memory:")
+        with patch("win_engine.generation.seo_generator.apply_quality_gate", side_effect=with_brackets):
+            response, _ = _run(_research(store), _writer_package(REPAIRED_TITLE), available=False)
+        options = response["title_optimization"]
+        titles = [response["title"], *response["title_variants"], options["best_title"],
+                  *(item["title"] for item in options["scored_variants"]),
+                  *(item["title"] for item in response["title_thumbnail_packages"]),
+                  *(text for package in response["multilang"].values() for text in [package["title"], *package["variants"]])]
+        self.assertFalse([title for title in titles if "<" in title or ">" in title])
+        self.assertTrue(response["title"].endswith("‹3"))
+        self.assertEqual(store.history_run(response["history_run_id"])["title"], response["title"])
 
 
 if __name__ == "__main__":

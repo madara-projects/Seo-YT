@@ -8,7 +8,26 @@ from typing import Any
 from win_engine.ai_enhancement import find_content_similarity
 from win_engine.analysis.generation_quality import candidate_mechanism, is_short_content
 from win_engine.analysis.source_cues import has_short_cue
-from win_engine.analysis.text_tokens import unicode_words
+from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
+
+
+# Narration about the video itself ("இந்த வீடியோவில்", "इस वीडियो में", "in this
+# video") and process words ("walk through") are no search and no thumbnail text.
+_FILLER_WORDS = {normalize_unicode(word).casefold() for word in ("இந்த", "इस", "यह")}
+_FILLER_PREFIXES = tuple(normalize_unicode(word).casefold() for word in ("வீடியோ", "वीडियो"))
+_FILLER_PHRASE_RE = re.compile(r"\b(?:walk(?:ing)?\s+(?:you\s+)?through|this\s+video)\b")
+
+
+def _is_filler_word(word: str) -> bool:
+    folded = normalize_unicode(word).casefold()
+    return folded in _FILLER_WORDS or folded.startswith(_FILLER_PREFIXES)
+
+
+def is_filler_phrase(text: Any) -> bool:
+    """Whether a tag or thumbnail phrase is narration about the video rather than its subject."""
+
+    words = unicode_words(text, min_length=1)
+    return bool(_FILLER_PHRASE_RE.search(" ".join(words))) or any(_is_filler_word(word) for word in words)
 
 
 _GENERIC_WORDS = {
@@ -239,7 +258,8 @@ def _thumbnail_text(title: str, focus_phrases: list[str] | None = None, *, used:
 
 
 def _thumbnail_candidates(title: str, focus_phrases: list[str] | None) -> list[str]:
-    phrases = [" ".join(str(item).split()) for item in (focus_phrases or []) if str(item).strip()]
+    phrases = [" ".join(str(item).split()) for item in (focus_phrases or [])
+               if str(item).strip() and not is_filler_phrase(item)]
     title_folded = f" {' '.join(unicode_words(title))} ".casefold()
     candidates: list[str] = []
 
@@ -257,7 +277,7 @@ def _thumbnail_candidates(title: str, focus_phrases: list[str] | None) -> list[s
     # people" glued "TALKING PEOPLE", a phrase nobody wrote. Small words stay
     # and cannot start or end a window (_EDGE_WORDS).
     ignored = {"the", "a", "an", "really", "shorts"}
-    words = [word for word in unicode_words(title) if word.lower() not in ignored]
+    words = [word for word in unicode_words(title) if word.lower() not in ignored and not _is_filler_word(word)]
     # Next: the strongest tag sharing a word with this title (stems, so
     # "loving" finds "love quotes"). A real search phrase reads cleanly; a
     # window cut from a sentence gave "HIDDEN DETAIL IN NEW".

@@ -341,5 +341,41 @@ class ChaptersReachEveryCopyTests(unittest.TestCase):
                                   response["automation_workflow"]["publish_workflow"])
 
 
+class UploadReadyDescriptionTests(unittest.TestCase):
+    """The description and checklist must be usable in YouTube as delivered."""
+
+    def test_the_checklist_does_not_ask_to_paste_chapters_the_description_has(self):
+        steps = " ".join(build_automation_workflow("Cold brew at home", ["#ColdBrew"], OBS_CHAPTERS,
+                                                   {"supporting_topics": []})["publish_workflow"])
+        self.assertNotIn("Paste your chapter", steps)
+        self.assertIn("already includes your chapter timestamps", steps)
+
+    def test_an_unpunctuated_transcript_gives_a_bounded_description(self):
+        from win_engine.generation.strategy_engine import _safe_minimal_package
+
+        transcript = " ".join(["so today we brew cold coffee with a jar and cold water"] * 120)
+        brief = build_creator_brief(script=transcript, video_format="tutorial")
+        for description in (_fallback_description(transcript), _safe_minimal_package("cold brew coffee", brief)["description"]):
+            with self.subTest(description=description[:30]):
+                self.assertLessEqual(len(description.split()), 220)
+                self.assertLess(len(description), 5000)
+                self.assertTrue(description.startswith("so today we brew cold coffee"))
+
+    def test_angle_brackets_youtube_rejects_are_replaced(self):
+        description = format_upload_ready_description(
+            "Love you <3\n\nStep 1 -> grind the beans", ["#ColdBrew"], chapters=OBS_CHAPTERS)
+        self.assertNotIn("<", description)
+        self.assertNotIn(">", description)
+        self.assertIn("Step 1 -› grind the beans", description)
+        self.assertEqual(format_upload_ready_description(description, ["#ColdBrew"], chapters=OBS_CHAPTERS),
+                         description)
+
+    def test_sad_inside_another_word_is_not_heartbreak(self):
+        for topic, emoji in (("sadhguru quotes on life", "💭"), ("sad love quotes", "💔"), ("sadness", "💔")):
+            with self.subTest(topic=topic):
+                self.assertTrue(format_upload_ready_description("A line to keep.", [], category="quotes",
+                                                                topic=topic).startswith(emoji))
+
+
 if __name__ == "__main__":
     unittest.main()
