@@ -39,6 +39,15 @@ class WinningPatternTests(unittest.TestCase):
         self.assertEqual(patterns["best_title_so_far"], "")
 
 
+class CtrGuidanceTests(unittest.TestCase):
+    def test_ctr_is_never_promised_from_the_analytics_connection(self):
+        # The YouTube Analytics API has no impressions or CTR metric; only Studio shows them.
+        ctr = _feedback({"total_runs": 0})["ctr_prediction"]
+        self.assertIsNone(ctr["actual_ctr_percent"])
+        self.assertIn("only in YouTube Studio", ctr["expected_band"])
+        self.assertNotIn("Analytics impressions", ctr["expected_band"])
+
+
 class PerformanceSyncTests(unittest.TestCase):
     def test_missing_outlier_scores_are_left_out_of_the_average(self):
         research = {"youtube_results": [

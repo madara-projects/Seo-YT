@@ -137,6 +137,21 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(result["compared_sample_size"], 20)
         self.assertEqual({group["language"]: group["spearman_rho"] for group in result["groups"]}, {"english": 1.0, "tamil": -1.0})
 
+    def test_two_small_groups_need_the_margin_of_their_combined_error(self):
+        # 0.7 in five videos and 0.6 in six: a weighted 0.645 cleared 1.96 / sqrt(11 - 1) = 0.62,
+        # but the mean of two separate groups is noisier than one group of eleven.
+        samples = (_samples(list(zip(_scores(5), [100, 200, 500, 300, 400])))
+                   + _samples(list(zip(_scores(6), [400, 100, 200, 300, 600, 500])), language="tamil", start=5))
+        result = calibrate_opportunity_score(samples, snapshot_window="7d")
+        self.assertEqual({group["language"]: group["spearman_rho"] for group in result["groups"]}, {"english": 0.7, "tamil": 0.6})
+        self.assertEqual(result["spearman_rho"], 0.645)
+        self.assertEqual(result["association_threshold"], 0.653)
+        self.assertEqual(result["status"], "no_clear_relationship")
+        self.assertEqual(result["recommendation"], "recalibrate")
+
+    def test_one_group_keeps_its_margin(self):
+        self.assertEqual(calibrate_opportunity_score(_samples(UNRELATED), snapshot_window="7d")["association_threshold"], 0.653)
+
     def test_equal_scores_are_neither_higher_nor_lower(self):
         result = calibrate_opportunity_score(_samples([(50, 100 * index) for index in range(1, 7)]), snapshot_window="7d")
         group = result["groups"][0]

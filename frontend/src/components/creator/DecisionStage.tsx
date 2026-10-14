@@ -153,8 +153,8 @@ export function DecisionStage({
         >
           <div className="space-y-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
             <p>
-              Actual impressions, CTR, retention, views, and causal performance evidence are
-              unavailable for this package.
+              Actual views, retention and performance evidence are unavailable for this package.
+              Impressions and click-through rate are shown only in YouTube Studio.
             </p>
             <p>
               Link the published video in History and collect mature comparable snapshots before

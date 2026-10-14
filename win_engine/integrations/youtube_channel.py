@@ -28,7 +28,12 @@ from httplib2 import HttpLib2Error
 
 from win_engine.core.config import Settings
 from win_engine.feedback.channel_learning import learning_summary, save_video_snapshots
-from win_engine.feedback.history_store import ANALYTICS_ZONE, SNAPSHOT_WINDOWS, reportable_window
+from win_engine.feedback.history_store import (
+    ANALYTICS_REPORTING_LAG_DAYS,
+    ANALYTICS_ZONE,
+    SNAPSHOT_WINDOWS,
+    reportable_window,
+)
 from win_engine.feedback.migrations import connect_managed
 from win_engine.feedback.quota_ledger import OAUTH_SOURCE, api_key_source, recording_request_builder
 
@@ -262,13 +267,14 @@ class YouTubeChannelService:
                 logger.warning("Channel uploads could not be read: %s", _describe(exc))
                 partial_failures.append("uploads")
 
-        today = datetime.now(_ANALYTICS_ZONE).date()
-        start = today - timedelta(days=28)
-        previous_start = today - timedelta(days=56)
+        # Two 28-day periods ending on the last day YouTube Analytics has fully reported.
+        end = datetime.now(_ANALYTICS_ZONE).date() - timedelta(days=ANALYTICS_REPORTING_LAG_DAYS)
+        start = end - timedelta(days=27)
+        previous_start = start - timedelta(days=28)
         current: dict[str, Any] = {}
         previous: dict[str, Any] = {}
         try:
-            current = self._query(analytics, start, today - timedelta(days=1), _CHANNEL_METRICS)
+            current = self._query(analytics, start, end, _CHANNEL_METRICS)
             previous = self._query(analytics, previous_start, start - timedelta(days=1), _CHANNEL_METRICS)
         except _UPSTREAM_ERRORS as exc:
             logger.warning("Channel analytics could not be read: %s", _describe(exc))
@@ -288,7 +294,7 @@ class YouTubeChannelService:
                 "video_count": _optional_int(statistics.get("videoCount")),
                 "real_total_views": _optional_int(statistics.get("viewCount")),
             },
-            "period": {"start": start.isoformat(), "end": (today - timedelta(days=1)).isoformat()},
+            "period": {"start": start.isoformat(), "end": end.isoformat()},
             "current_28_days": current,
             "previous_28_days": previous,
             "recent_videos": {"sort": "published_at_desc", "rows": uploaded_video_rows},
@@ -423,19 +429,23 @@ class YouTubeChannelService:
         store = self._history_store()
         now = datetime.now(timezone.utc)
         age_hours = max(0.0, (now - published_at).total_seconds() / 3600)
-        # Analytics reports whole Pacific days, up to yesterday. A window is
+        # Analytics reports whole Pacific days, complete after a lag. A window is
         # due only once YouTube has reported every day in it (reportable_window,
         # which the collector plans with too).
         first_day = published_at.astimezone(_ANALYTICS_ZONE).date()
-        analytics_end = now.astimezone(_ANALYTICS_ZONE).date() - timedelta(days=1)
-        due = [
-            (label, hours, days)
-            for label, hours in _WINDOWS
-            if (windows is None or label in windows)
-            and (days := reportable_window(published_at, hours, now))
-            and not store.has_snapshot_window(video_id, label)
-            and (force or store.snapshot_retry_allowed(video_id, label))
-        ]
+        analytics_end = now.astimezone(_ANALYTICS_ZONE).date() - timedelta(days=ANALYTICS_REPORTING_LAG_DAYS)
+
+        def due_windows(published: datetime) -> list[tuple[str, float, tuple[date, date]]]:
+            return [
+                (label, hours, days)
+                for label, hours in _WINDOWS
+                if (windows is None or label in windows)
+                and (days := reportable_window(published, hours, now))
+                and not store.has_snapshot_window(video_id, label)
+                and (force or store.snapshot_retry_allowed(video_id, label))
+            ]
+
+        due = due_windows(published_at)
 
         if not due and not collect_current:
             return {
@@ -482,6 +492,14 @@ class YouTubeChannelService:
             raise LinkUnavailable("This video does not belong to the connected YouTube channel.")
         store.update_linked_video_metadata(link_id, metadata)
         store.mark_link_ownership_verified(link_id, str(metadata.get("channel_id") or ""))
+        # A link made before the video went public now holds YouTube's publish
+        # time: its windows are measured from that, not from the upload.
+        stored = _parse_timestamp(str((store.published_video_link(link_id) or {}).get("published_at") or ""))
+        if stored and stored != published_at:
+            published_at = stored
+            age_hours = max(0.0, (now - published_at).total_seconds() / 3600)
+            first_day = published_at.astimezone(_ANALYTICS_ZONE).date()
+            due = due_windows(published_at)
 
         analytics_current: dict[str, Any] = {}
         if collect_current and analytics_end >= first_day:
@@ -600,7 +618,8 @@ class YouTubeChannelService:
             "private_analytics_available": False,
             "message": (
                 "Public metadata and cumulative views, likes, and comments were refreshed. "
-                "Reconnect the owning channel for impressions, CTR, watch time, retention, shares, and subscriber impact."
+                "Connect the channel that owns this video for watch time, retention, shares, and subscriber impact. "
+                "Impressions and click-through rate are shown only in YouTube Studio; the YouTube Analytics API does not report them."
             ),
         }
 
@@ -673,7 +692,7 @@ class YouTubeChannelService:
             )
         published_at = _parse_timestamp(str(link.get("published_at") or ""))
         first_day = published_at.astimezone(_ANALYTICS_ZONE).date() if published_at else None
-        last_day = datetime.now(timezone.utc).astimezone(_ANALYTICS_ZONE).date() - timedelta(days=1)
+        last_day = datetime.now(timezone.utc).astimezone(_ANALYTICS_ZONE).date() - timedelta(days=ANALYTICS_REPORTING_LAG_DAYS)
         if not first_day or last_day < first_day:
             return unavailable("no_data_yet", "YouTube Analytics has not reported a full day for this video yet.")
         try:

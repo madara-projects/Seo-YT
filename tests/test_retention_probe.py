@@ -148,6 +148,23 @@ class ProbeTests(ProbeBase):
         self.assertEqual((result["reason"], result["requests"]), ("not_connected", 0))
         build_client.assert_not_called()
 
+    def test_the_curve_ends_on_the_last_fully_reported_day(self):
+        class Frozen(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                moment = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)  # 13:00 on 25 September, Pacific
+                return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+
+        with patch.object(youtube_channel, "datetime", Frozen):
+            reported, _, query_rows = self.probe(self.link("reportedv01", published_at="2026-09-23T18:00:00+00:00"),
+                                                 rows=list(curve(0.5)))
+            self.assertEqual((reported["status"], reported["end_date"]), ("available", "2026-09-23"))
+            self.assertEqual(query_rows.call_args.args[2].isoformat(), "2026-09-23")
+            # Published on 24 September: that day may still be filling in, so nothing is asked.
+            filling, _, query_rows = self.probe(self.link("fillingv001", published_at="2026-09-24T18:00:00+00:00"))
+            self.assertEqual((filling["reason"], filling["requests"]), ("no_data_yet", 0))
+            query_rows.assert_not_called()
+
     def test_a_grant_without_the_analytics_scope_is_missing_scope_and_a_revoked_one_asks_to_reconnect(self):
         link = self.link("grantvideo1")
         with patch.object(self.service, "_fresh_credentials", side_effect=RefreshError("invalid_scope: Bad Request")):
@@ -204,6 +221,14 @@ class ObservationTests(unittest.TestCase):
         short = curve_observations(points(curve(0.5)), duration_seconds=40, chapters=CHAPTERS, short=True)
         self.assertEqual(short["chapters"], [])
         self.assertIsNone(short["biggest_drop"]["chapter"])
+
+    def test_a_curve_that_never_falls_names_no_drop(self):
+        # Rewatches can hold a Short's curve flat or rising: no point is a drop.
+        rising = [{"elapsed_ratio": step / 10, "audience_watch_ratio": 1.0 + step / 100} for step in range(1, 11)]
+        result = curve_observations(rising, duration_seconds=600, chapters=CHAPTERS, short=False)
+        self.assertIsNone(result["biggest_drop"])
+        self.assertFalse(any("drop" in item or "loses the most" in item for item in result["observations"]))
+        self.assertTrue(result["observations"])  # the hook is still described
 
     def test_too_few_points_make_no_observation(self):
         result = curve_observations(points(curve(0.5))[:1], duration_seconds=600, chapters=[], short=False)

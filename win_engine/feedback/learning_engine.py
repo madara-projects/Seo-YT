@@ -48,7 +48,8 @@ def _ctr_prediction(
         "title_quality_score": quality_score,
         "actual_ctr_percent": None,
         "confidence": "PRE-PUBLICATION",
-        "expected_band": "Actual CTR requires linked YouTube Analytics impressions.",
+        # The YouTube Analytics API reports neither impressions nor CTR.
+        "expected_band": "Actual CTR is shown only in YouTube Studio; this app cannot read it.",
         "reason": "Title quality heuristic only; this is not a CTR prediction.",
     }
 

@@ -68,8 +68,10 @@ FORMAT_VALUES = {
 # A "long_form" filter selects every known format that is not a Short; a quote
 # video is a Short here (see retention_assistant).
 _LONG_FORM_VALUES = frozenset(FORMAT_VALUES - {"youtube_shorts", "quote", "unknown"})
-# YouTube Analytics reports whole days in Pacific time, up to yesterday.
+# YouTube Analytics reports whole days in Pacific time. A day's figures can
+# still be filling in the next day, so a day counts as reported this many days on.
 ANALYTICS_ZONE = ZoneInfo("America/Los_Angeles")
+ANALYTICS_REPORTING_LAG_DAYS = 2
 # evidence_policy.sample_is_eligible in SQL, for links `p`, their comparable
 # metadata `m` and a completed snapshot `x`; keep them in step.
 _VERIFIED_LINK_SQL = """p.ownership_state = 'verified' AND p.ownership_verified = 1
@@ -418,10 +420,16 @@ class HistoryStore:
         with self._connect() as connection:
             if not connection.execute("SELECT 1 FROM analysis_runs WHERE id = ?", (analysis_run_id,)).fetchone():
                 raise ValueError("Generated analysis run does not exist.")
+            # The idea's video is the new package's, if any: a link kept from an
+            # earlier package would let the idea be marked published unlinked.
             cursor = connection.execute(
-                """UPDATE content_ideas SET analysis_run_id = ?, status = 'package_generated', updated_at = ?
+                """UPDATE content_ideas SET analysis_run_id = ?,
+                          published_video_link_id = (SELECT id FROM published_video_links WHERE analysis_run_id = ?),
+                          status = CASE WHEN EXISTS (SELECT 1 FROM published_video_links WHERE analysis_run_id = ?)
+                                        THEN 'published' ELSE 'package_generated' END,
+                          updated_at = ?
                    WHERE id = ?""",
-                (analysis_run_id, now, idea_id),
+                (analysis_run_id, analysis_run_id, analysis_run_id, now, idea_id),
             )
             if cursor.rowcount == 0:
                 return None
@@ -472,16 +480,6 @@ class HistoryStore:
                 "ai_shorts": ai_shorts,
             })
         return result
-
-    def recent_generated_titles(self, limit: int = 10) -> list[str]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """SELECT title FROM analysis_runs
-                   WHERE title IS NOT NULL AND TRIM(title) != ''
-                   ORDER BY created_at DESC LIMIT ?""",
-                (max(1, min(limit, 50)),),
-            ).fetchall()
-        return [str(row[0]).strip() for row in rows if row[0] and str(row[0]).strip()]
 
     def recent_published_titles(self, limit: int = 10) -> list[str]:
         """Return observed uploaded titles without inferring package selection."""
@@ -1310,18 +1308,36 @@ class HistoryStore:
         """
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
+            # The collector and a manual refresh can merge at once; locking
+            # before the read keeps one from writing over the other's fields.
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT youtube_metadata_json FROM published_video_links WHERE id = ?", (link_id,)
+                "SELECT youtube_metadata_json, published_at, youtube_video_id FROM published_video_links WHERE id = ?",
+                (link_id,),
             ).fetchone()
             if not row:
                 return False
             complete = metadata.get("metadata_source") == "youtube_data_api"
             merged = {**_json_value(row[0]), **{key: value for key, value in metadata.items() if complete or value is not None}}
+            # A video linked while private or scheduled holds its upload time; its
+            # windows start at the real publish time, unless one is already measured.
+            published_at = row[1]
+            youtube_published = _parse_datetime_safe(str(metadata.get("published_at") or "")) if complete else None
+            if (
+                youtube_published
+                and youtube_published != _parse_datetime_safe(str(row[1] or ""))
+                and not connection.execute(
+                    """SELECT 1 FROM video_performance_snapshots WHERE youtube_video_id = ?
+                       AND snapshot_window IN ('24h', '7d', '28d') AND snapshot_status = 'complete' LIMIT 1""",
+                    (row[2],),
+                ).fetchone()
+            ):
+                published_at = youtube_published.astimezone(timezone.utc).isoformat()
             connection.execute(
                 """UPDATE published_video_links
-                   SET youtube_metadata_json = ?, metadata_synced_at = ?, updated_at = ?
+                   SET youtube_metadata_json = ?, published_at = ?, metadata_synced_at = ?, updated_at = ?
                    WHERE id = ?""",
-                (json.dumps(merged), now, now, link_id),
+                (json.dumps(merged), published_at, now, now, link_id),
             )
             return True
 
@@ -2575,7 +2591,7 @@ def reportable_window(published_at: datetime, hours: float, now: datetime) -> tu
     if now - published_at < timedelta(hours=hours):
         return None
     last_day = (published_at + timedelta(hours=hours)).astimezone(ANALYTICS_ZONE).date()
-    if last_day > now.astimezone(ANALYTICS_ZONE).date() - timedelta(days=1):
+    if last_day > now.astimezone(ANALYTICS_ZONE).date() - timedelta(days=ANALYTICS_REPORTING_LAG_DAYS):
         return None
     return published_at.astimezone(ANALYTICS_ZONE).date(), last_day
 

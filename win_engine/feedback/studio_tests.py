@@ -279,6 +279,9 @@ def _result(test: dict[str, Any], changes: dict[str, Any]) -> tuple[str | None, 
     total = sum(shares.values())
     if total > 100 + _SHARE_TOLERANCE or (len(shares) == len(labels) and total < 100 - _SHARE_TOLERANCE):
         raise StudioTestError("Studio's watch-time shares add up to 100%. Check the numbers you entered.")
+    # Studio picks the winner by watch-time share, so a winner behind another variant is a misread.
+    if winner in shares and any(share > shares[winner] for share in shares.values()):
+        raise StudioTestError(f"Studio's winner has the largest watch-time share, but {winner}'s is smaller than another variant's.")
     return winner, {
         "outcome": outcome,
         "watch_time_share": shares,

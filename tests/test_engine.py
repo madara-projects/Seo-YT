@@ -213,18 +213,6 @@ class TestEngineStages(unittest.TestCase):
         self.assertEqual(analytics["median_views"], 200.0)
         self.assertEqual(analytics["confidence_label"], "Early signal")
 
-    def test_recent_generated_titles_returns_newest_first(self):
-        with self.store._connect() as conn:
-            conn.execute(
-                "INSERT INTO analysis_runs (query, created_at, title) VALUES (?, ?, ?)",
-                ("older", "2026-08-01T00:00:00Z", "Older title"),
-            )
-            conn.execute(
-                "INSERT INTO analysis_runs (query, created_at, title) VALUES (?, ?, ?)",
-                ("newer", "2026-08-02T00:00:00Z", "Newer title"),
-            )
-        self.assertEqual(self.store.recent_generated_titles(2), ["Newer title", "Older title"])
-
     def test_learning_summary_recent_runs_include_database_ids(self):
         with self.store._connect() as conn:
             cursor = conn.execute(

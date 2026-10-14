@@ -81,14 +81,19 @@ def calibrate_opportunity_score(samples: list[dict[str, Any]], *, snapshot_windo
     compared_size = sum(group["sample_size"] for group in compared)
     largest = max((group["sample_size"] for group in group_results), default=0)
 
-    rho = threshold = None
+    rho = threshold = margin = None
     if not compared:
         status = "insufficient_evidence"
     else:
         # Each group's correlation, weighted by its size: groups are never pooled.
         rho = round(sum(group["spearman_rho"] * group["sample_size"] for group in compared) / compared_size, 3)
-        # Below about 1.96 / sqrt(n - 1) a rank correlation is within chance for n videos.
-        threshold = round(max(MIN_ASSOCIATION, 1.96 / math.sqrt(compared_size - 1)), 3)
+        # A group of n videos is within chance below about 1.96 / sqrt(n - 1); the
+        # weighted mean of several groups has the combined error, wider than one
+        # group of the same total would have.
+        margin = 1.96 * math.sqrt(sum(
+            (group["sample_size"] / compared_size) ** 2 / (group["sample_size"] - 1) for group in compared
+        ))
+        threshold = round(max(MIN_ASSOCIATION, margin), 3)
         directions = {group["direction"] for group in compared}
         if rho >= threshold and directions == {"higher"}:
             status = "higher_scores_did_better"
@@ -98,7 +103,7 @@ def calibrate_opportunity_score(samples: list[dict[str, Any]], *, snapshot_windo
             status = "no_clear_relationship"
 
     level = evidence_level(compared_size)
-    recommendation = _recommendation(status, level.key, rho, compared_size)
+    recommendation = _recommendation(status, level.key, rho, margin)
     return {
         "status": status,
         "verdict_label": _VERDICT_LABELS[status],
@@ -176,9 +181,9 @@ def _group_result(fmt: str, language: str, members: list[dict[str, Any]]) -> dic
     }
 
 
-def _recommendation(status: str, level: str, rho: float | None, compared_size: int) -> str | None:
+def _recommendation(status: str, level: str, rho: float | None, margin: float | None) -> str | None:
     # A recommendation needs at least moderate evidence; an early signal only reports.
-    if status == "insufficient_evidence" or level in {"display_only", "early_signal"} or rho is None:
+    if status == "insufficient_evidence" or level in {"display_only", "early_signal"} or rho is None or margin is None:
         return None
     if status == "higher_scores_did_better":
         return "keep"
@@ -186,7 +191,6 @@ def _recommendation(status: str, level: str, rho: float | None, compared_size: i
         return "retire"
     # Missing the threshold is not proof the score is useless: it is retired only
     # when even the correlation plus its margin stays below a useful association.
-    margin = 1.96 / math.sqrt(compared_size - 1)
     return "retire" if rho + margin < MIN_ASSOCIATION else "recalibrate"
 
 

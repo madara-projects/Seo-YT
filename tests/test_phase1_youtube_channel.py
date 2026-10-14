@@ -23,10 +23,12 @@ class Phase1YouTubeSnapshotTests(unittest.TestCase):
                 ("snapshot test", datetime.now(timezone.utc).isoformat(), "Snapshot package"),
             ).lastrowid
         self.video_id = "phase1vid01"
+        # Old enough that YouTube has reported the 24h window's last day (two days' lag).
+        self.published_at = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
         self.link_id = self.store.link_published_video(
             int(run_id),
             self.video_id,
-            (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat(),
+            self.published_at,
             ownership_state="verified",
             ownership_verified=True,
             verified_channel_id="owner-channel",
@@ -53,7 +55,7 @@ class Phase1YouTubeSnapshotTests(unittest.TestCase):
                         "channelId": "owner-channel",
                         "title": "Owned video",
                         "description": "Description",
-                        "publishedAt": "2026-08-01T00:00:00Z",
+                        "publishedAt": self.published_at,
                         "tags": ["owned"],
                         "thumbnails": {},
                     },
@@ -152,6 +154,9 @@ class Phase1YouTubeSnapshotTests(unittest.TestCase):
         self.assertEqual(result["current"]["views"], 321)
         self.assertEqual(result["current"]["snapshot_status"], "display_only")
         self.assertIsNone(result["current"]["avg_view_percentage"])
+        # The Analytics API has no impressions or CTR, so connecting cannot promise them.
+        self.assertNotIn("for impressions", result["message"])
+        self.assertIn("only in YouTube Studio", result["message"])
 
 
 if __name__ == "__main__":

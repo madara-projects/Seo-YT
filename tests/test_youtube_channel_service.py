@@ -128,6 +128,20 @@ class RefreshTests(ChannelServiceTestCase):
         self.assertEqual(status["channel"]["id"], "UC-now")
         self.assertIsNotNone(status["latest_sync"])
 
+    def test_the_28_day_periods_end_on_the_last_fully_reported_day(self):
+        # 25 September, Pacific: 24 September may still be filling in, so it is left out.
+        self.service._save_connection("refresh", "UC-now", "Now")
+        with (
+            patch.object(youtube_channel, "datetime", _FrozenDatetime),
+            patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
+            patch(BUILD, side_effect=[self._youtube({}), MagicMock()]),
+            patch.object(self.service, "_query", return_value={"views": 1}) as query,
+        ):
+            payload = self.service.refresh()
+        ranges = [(call.args[1].isoformat(), call.args[2].isoformat()) for call in query.call_args_list]
+        self.assertEqual(ranges, [("2026-08-27", "2026-09-23"), ("2026-07-30", "2026-08-26")])
+        self.assertEqual(payload["period"], {"start": "2026-08-27", "end": "2026-09-23"})
+
     def test_an_unreachable_youtube_is_an_error_not_an_empty_channel(self):
         self.service._save_connection("refresh", "UC-now", "Now")
         youtube = MagicMock()
@@ -281,9 +295,10 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
         )
         return self.store.published_video_link(link_id) or {}
 
-    def youtube(self, channel_id: str | None) -> MagicMock:
+    def youtube(self, channel_id: str | None, published_at: str | None = None) -> MagicMock:
         youtube = MagicMock()
-        items = [{"snippet": {"channelId": channel_id, "publishedAt": "2026-09-23T18:00:00Z"}, "statistics": {}}] if channel_id else []
+        snippet = {"channelId": channel_id, **({"publishedAt": published_at} if published_at else {})}
+        items = [{"snippet": snippet, "statistics": {}}] if channel_id else []
         youtube.videos.return_value.list.return_value.execute.return_value = {"items": items}
         return youtube
 
@@ -296,7 +311,7 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
         self.assertIn("no YouTube API call", result["message"])
 
     def test_a_reported_window_is_queried_over_pacific_days(self):
-        link = self.link("windowvid02", "2026-09-23T18:00:00+00:00")
+        link = self.link("windowvid02", "2026-09-22T18:00:00+00:00")
         with (
             patch.object(youtube_channel, "datetime", _FrozenDatetime),
             patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
@@ -305,7 +320,53 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
         ):
             self.service.refresh_linked_video_performance(link, collect_current=False)
         start, end = query.call_args.args[1:3]
-        self.assertEqual((start.isoformat(), end.isoformat()), ("2026-09-23", "2026-09-24"))
+        self.assertEqual((start.isoformat(), end.isoformat()), ("2026-09-22", "2026-09-23"))
+
+    def test_a_day_counts_as_reported_two_days_on(self):
+        # Yesterday (24 September, Pacific) may still be filling in: neither a
+        # window ending then nor the current figures read it.
+        self.assertEqual(youtube_channel.ANALYTICS_REPORTING_LAG_DAYS, 2)
+        link = self.link("windowvid10", "2026-09-23T18:00:00+00:00")
+        with (
+            patch.object(youtube_channel, "datetime", _FrozenDatetime),
+            patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
+            patch(BUILD, side_effect=[self.youtube("UC-owner"), MagicMock()]),
+            patch.object(self.service, "_query", return_value={"views": 12}) as query,
+        ):
+            result = self.service.refresh_linked_video_performance(link, collect_current=True)
+        self.assertEqual(result["captured"], [])
+        self.assertEqual([(call.args[1].isoformat(), call.args[2].isoformat()) for call in query.call_args_list],
+                         [("2026-09-23", "2026-09-23")])
+        self.assertEqual(self.store.snapshot_window_state("windowvid10", "24h")["status"], "pending")
+
+    def test_the_real_publish_time_replaces_an_upload_time_until_a_window_completes(self):
+        # Linked while scheduled: the link holds the upload time, YouTube the publish time.
+        link = self.link("windowvid11", "2026-09-01T00:00:00+00:00")
+        with (
+            patch.object(youtube_channel, "datetime", _FrozenDatetime),
+            patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
+            patch(BUILD, side_effect=[self.youtube("UC-owner", "2026-09-10T15:00:00Z"), MagicMock()]),
+            patch.object(self.service, "_query", return_value={"views": 12}) as query,
+            patch.object(self.service, "_traffic_sources", return_value=None),
+        ):
+            self.service.refresh_linked_video_performance(link, collect_current=False)
+        stored = self.store.published_video_link(link["id"])["published_at"]
+        self.assertEqual(datetime.fromisoformat(stored), datetime(2026, 9, 10, 15, tzinfo=timezone.utc))
+        # Every window is measured from the publish time, in this same refresh.
+        self.assertEqual(sorted((call.args[1].isoformat(), call.args[2].isoformat()) for call in query.call_args_list),
+                         [("2026-09-10", "2026-09-11"), ("2026-09-10", "2026-09-17")])
+
+        # Once a window is measured, the time it was measured from stays.
+        completed = self.link("windowvid12", "2026-09-01T00:00:00+00:00")
+        self.store.record_performance_snapshot("windowvid12", 24, views=5, snapshot_window="24h")
+        self.store.update_linked_video_metadata(
+            completed["id"], {"published_at": "2026-09-10T15:00:00Z", "metadata_source": "youtube_data_api"}
+        )
+        self.assertEqual(self.store.published_video_link(completed["id"])["published_at"], "2026-09-01T00:00:00+00:00")
+        # A source without a date (oEmbed) changes nothing.
+        oembed = self.link("windowvid13", "2026-09-01T00:00:00+00:00")
+        self.store.update_linked_video_metadata(oembed["id"], {"published_at": None, "metadata_source": "oembed"})
+        self.assertEqual(self.store.published_video_link(oembed["id"])["published_at"], "2026-09-01T00:00:00+00:00")
 
     def test_a_video_gone_from_the_channel_is_no_longer_collected(self):
         link = self.link("windowvid03", "2026-08-01T00:00:00+00:00")
@@ -320,11 +381,11 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
 
     def test_the_planner_and_the_refresh_agree_on_when_a_window_is_due(self):
         # Old enough for its 24h window, but YouTube has not reported that window's last day yet.
-        self.link("windowvid06", "2026-09-24T18:00:00+00:00")
+        self.link("windowvid06", "2026-09-23T18:00:00+00:00")
         now = _FrozenDatetime.now(timezone.utc)
         self.assertEqual(self.store.due_snapshot_links(now=now), [])
         # A day earlier, the window is reported and both plan it.
-        link = self.link("windowvid07", "2026-09-23T18:00:00+00:00")
+        link = self.link("windowvid07", "2026-09-22T18:00:00+00:00")
         self.assertEqual([item["due_windows"] for item in self.store.due_snapshot_links(now=now)], [["24h"]])
         with (
             patch.object(youtube_channel, "datetime", _FrozenDatetime),

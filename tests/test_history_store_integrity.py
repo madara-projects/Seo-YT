@@ -230,6 +230,45 @@ class ReportTests(HistoryStoreTestCase):
         self.assertEqual(cohort["excluded_count"], 0)
 
 
+class WriteIntegrityTests(HistoryStoreTestCase):
+    def test_a_metadata_merge_holds_the_write_lock_from_its_read(self):
+        run = self.run_id()
+        link_id = self.link(run, "mergevideo1")
+        self.store.update_linked_video_metadata(link_id, {"title": "Old", "metadata_source": "youtube_data_api"})
+        real_json_value = history_module._json_value
+        other_writer: list[str] = []
+
+        def refresh_in_between(value):
+            # Another refresh writing between this merge's read and its write would be lost.
+            other = sqlite3.connect(self.path, timeout=0.2)
+            try:
+                other.execute("UPDATE published_video_links SET youtube_metadata_json = '{}' WHERE id = ?", (link_id,))
+                other.commit()
+                other_writer.append("written")
+            except sqlite3.OperationalError:
+                other_writer.append("waited")
+            finally:
+                other.close()
+            return real_json_value(value)
+
+        with patch.object(history_module, "_json_value", side_effect=refresh_in_between):
+            self.store.update_linked_video_metadata(link_id, {"title": "New", "metadata_source": "oembed"})
+        self.assertEqual(other_writer, ["waited"])
+        self.assertEqual(self.store.published_video_link(link_id)["youtube_metadata"]["title"], "New")
+
+    def test_a_new_package_for_a_published_idea_does_not_keep_the_old_video(self):
+        idea = self.store.create_content_idea({"topic": "Idea with two packages"})
+        old_run = self.run_id("Old package")
+        self.store.attach_content_idea_analysis(idea["id"], old_run)
+        self.link(old_run, "ideavideo01")
+        self.assertEqual(self.store.content_idea(idea["id"])["status"], "published")
+
+        regenerated = self.store.attach_content_idea_analysis(idea["id"], self.run_id("New package"))
+        self.assertEqual((regenerated["status"], regenerated["published_video_link_id"]), ("package_generated", None))
+        with self.assertRaisesRegex(ValueError, "Link the generated package"):
+            self.store.update_content_idea(idea["id"], {"status": "published"})
+
+
 class StartupTests(unittest.TestCase):
     def test_a_database_that_fails_to_prepare_is_not_retried_on_every_request(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -172,6 +172,7 @@ class RecordTests(StudioTestCase):
             ({"outcome": "winner", "winner_variant": "A", "watch_time_share": {"A": 120}}, "between 0 and 100"),
             ({"outcome": "winner", "winner_variant": "A", "watch_time_share": {"A": 70, "B": 70}}, "add up to 100"),
             ({"outcome": "winner", "winner_variant": "A", "watch_time_share": {"A": 30, "B": 30}}, "add up to 100"),
+            ({"outcome": "winner", "winner_variant": "A", "watch_time_share": {"A": 41.2, "B": 58.8}}, "largest watch-time share"),
             ({"winner_variant": "A"}, "Choose the outcome"),
         ):
             with self.subTest(changes=changes), self.assertRaisesRegex(StudioTestError, message):

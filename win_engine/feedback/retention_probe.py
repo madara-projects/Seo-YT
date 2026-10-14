@@ -43,10 +43,12 @@ def curve_observations(
         zip(curve, curve[1:]),
         key=lambda pair: float(pair[0]["audience_watch_ratio"]) - float(pair[1]["audience_watch_ratio"]),
     )
+    # A curve that never falls (flat, or rising with rewatches) has no drop to name.
+    falls = float(earlier["audience_watch_ratio"]) > float(later["audience_watch_ratio"])
     at_ratio = float(later["elapsed_ratio"])
     at_seconds = round(at_ratio * duration) if duration else None
     chapter = next(
-        (item for item in chapter_rows if at_seconds is not None and item["start_seconds"] <= at_seconds < item["end_seconds"]),
+        (item for item in chapter_rows if falls and at_seconds is not None and item["start_seconds"] <= at_seconds < item["end_seconds"]),
         None,
     )
     drop = {
@@ -56,7 +58,7 @@ def curve_observations(
         "drop_points": round((float(earlier["audience_watch_ratio"]) - float(later["audience_watch_ratio"])) * 100, 1),
         "in_hook": at_ratio <= HOOK_RATIO,
         "chapter": chapter["title"] if chapter else None,
-    }
+    } if falls else None
 
     hook_points = [point for point in curve if float(point["elapsed_ratio"]) <= HOOK_RATIO]
     relative = [_number(point.get("relative_retention_performance")) for point in hook_points]
@@ -71,7 +73,7 @@ def curve_observations(
     observations = [
         f"The biggest single drop ({drop['drop_points']:.1f} points of the audience) comes {where}, "
         + ("within the hook (the first 15%)." if drop["in_hook"] else "after the hook (the first 15%).")
-    ]
+    ] if drop else []
     if hook["still_watching_percent"] is not None:
         observations.append(f"{hook['still_watching_percent']:.0f}% of the audience is still watching at the end of the hook.")
     if hook["relative_retention_performance"] is not None:
@@ -85,8 +87,8 @@ def curve_observations(
             f'The biggest drop falls in chapter "{chapter["title"]}" '
             f'({_clock(chapter["start_seconds"])}–{_clock(chapter["end_seconds"])}).'
         )
-    if chapter_rows:
-        steepest = max(chapter_rows, key=lambda item: item["viewers_lost_points"])
+    steepest = max(chapter_rows, key=lambda item: item["viewers_lost_points"], default=None)
+    if steepest and steepest["viewers_lost_points"] > 0:
         observations.append(
             f'Chapter "{steepest["title"]}" ({_clock(steepest["start_seconds"])}) loses the most audience: '
             f'{steepest["viewers_lost_points"]:.1f} points.'
