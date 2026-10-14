@@ -234,9 +234,11 @@ Important variables:
 | `WIN_ENGINE_GEMINI_API_KEY` | Gemini package generation. | For Gemini output |
 | `WIN_ENGINE_BIND_HOST` | Direct-Python bind address. Keep `127.0.0.1` for private laptop use; Compose overrides this only inside its container. | Default `127.0.0.1` |
 | `WIN_ENGINE_GEMINI_MODEL` | Gemini model name. | Defaults from `.env.example` |
+| `WIN_ENGINE_GEMINI_FALLBACK_MODEL` | Backup model, tried once when the main model is overloaded (503) or rate-limited (429) before the local writer takes over. Empty turns it off. | Default `gemini-3.1-flash-lite` |
+| `WIN_ENGINE_GEMINI_THINKING_BUDGET` | Thinking tokens per Gemini call, on top of the output budget. `-1` leaves the model's default; `0` turns thinking off where the model allows it. | Default `1024` |
 | `WIN_ENGINE_YOUTUBE_API_KEY` | Primary YouTube Data API research key. | For live research |
 | `WIN_ENGINE_YOUTUBE_API_KEYS` | Optional comma-separated key pool; duplicates are removed. | Optional |
-| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Public research results per search (1-50). One search call whatever the size; the page's statistics are one 1-unit `videos.list` and one `channels.list` call. A Short's searches ask for short videos (under 4 minutes), and a Short is compared only with Shorts; a long-form video's ask for every length, unless its stated length sits more than 3 minutes inside YouTube's medium (4-20 minutes) or long (over 20) band. | Optional; default `25` |
+| `WIN_ENGINE_YOUTUBE_MAX_RESULTS` | Public research results per search (1-50). One search call whatever the size; the page's statistics are one 1-unit `videos.list` and one `channels.list` call. A Short's searches ask for short videos (under 4 minutes), and a Short is compared only with Shorts; a long-form video's ask for every length, unless its stated length sits more than 3 minutes inside YouTube's medium (4-20 minutes) or long (over 20) band. | Optional; default `25`, `.env.example` sets `50` at the same quota cost |
 | `WIN_ENGINE_YOUTUBE_SEARCH_CALLS_PER_DAY` | Daily `search.list` calls allowed per key's Google Cloud project; copy it from Cloud Console. | Default `100` |
 | `WIN_ENGINE_YOUTUBE_UNITS_PER_DAY` | Daily units of the shared bucket (every other Data API method) per project; copy it from Cloud Console. | Default `10000` |
 | `WIN_ENGINE_YOUTUBE_OAUTH_CLIENT_ID` | Google OAuth web-client ID. | For channel connection |
@@ -246,7 +248,7 @@ Important variables:
 | `WIN_ENGINE_DATABASE_PATH` | SQLite database path. | Default `runtime/data/win_engine.db` |
 | `WIN_ENGINE_REDIS_URL` | Redis cache URL. Docker Compose sets this internally. | Optional outside Docker |
 | `WIN_ENGINE_CACHE_TTL_TRENDING_SECONDS` | Trending research cache lifetime. | Default `21600` |
-| `WIN_ENGINE_CACHE_TTL_EVERGREEN_SECONDS` | Evergreen research cache lifetime. | Default `604800` |
+| `WIN_ENGINE_CACHE_TTL_EVERGREEN_SECONDS` | Evergreen research cache lifetime. | Default `604800`; `.env.example` sets `86400` so cached view counts are at most a day old |
 | `WIN_ENGINE_AI_SHORTS_SUGGEST_MAX_QUERIES` | YouTube search-suggestion lookups (no API quota) the AI Shorts tag check makes per Short, 0-12. It is separate from research's own limit (`WIN_ENGINE_SEARCH_SUGGEST_MAX_QUERIES`); `0` turns the AI Shorts check off, and `WIN_ENGINE_SEARCH_SUGGEST_ENABLED=false` turns every lookup off. | Default `10` |
 | `WIN_ENGINE_ADMIN_API_TOKEN` | Required header value for protected operational endpoints in production. | Recommended |
 | `WIN_ENGINE_RATE_LIMIT_WINDOW_SECONDS` | In-memory request-rate window. | Default `60` |
