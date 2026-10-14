@@ -4,14 +4,28 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from win_engine.feedback import migrations
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.migrations import (
     CURRENT_SCHEMA_VERSION,
     MigrationError,
+    configure_connection,
+    connect_managed,
+    initialize_current_schema,
     online_backup,
     prepare_database,
 )
+
+
+class _NoWalConnection(sqlite3.Connection):
+    """A connection whose file system refuses WAL, as SQLite reports it: the old mode stays."""
+
+    def execute(self, sql, *args):
+        if " ".join(sql.split()).upper() == "PRAGMA JOURNAL_MODE = WAL":
+            sql = "PRAGMA journal_mode"
+        return super().execute(sql, *args)
 
 
 class Phase1MigrationTests(unittest.TestCase):
@@ -58,6 +72,59 @@ class Phase1MigrationTests(unittest.TestCase):
             self.assertEqual(backup.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0], 1)
         finally:
             backup.close()
+
+    def test_wal_databases_sync_normally_and_others_in_full(self):
+        wal_path = self.root / "wal.db"
+        prepare_database(str(wal_path))
+        with connect_managed(str(wal_path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+            self.assertEqual(connection.execute("PRAGMA synchronous").fetchone()[0], 1)  # NORMAL
+
+        path = self.root / "no-wal.db"
+        connection = sqlite3.connect(path, factory=_NoWalConnection)
+        try:
+            with patch.object(migrations, "_WAL_FALLBACK_LOGGED", False):
+                with self.assertLogs("win_engine.feedback.migrations", level="WARNING") as logs:
+                    initialize_current_schema(configure_connection(connection))
+                self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "delete")
+                self.assertEqual(connection.execute("PRAGMA synchronous").fetchone()[0], 2)  # FULL
+                # Logged once, and without the database's location.
+                with self.assertNoLogs("win_engine.feedback.migrations", level="WARNING"):
+                    initialize_current_schema(connection)
+        finally:
+            connection.close()
+        self.assertIn("synchronous=FULL", logs.output[0])
+        self.assertNotIn(str(self.root), "".join(logs.output))
+        with connect_managed(str(path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA synchronous").fetchone()[0], 2)
+
+    def test_a_backup_that_fails_verification_is_deleted(self):
+        path = self.root / "source.db"
+        prepare_database(str(path))
+        backups = self.root / "backups"
+        real_connect = sqlite3.connect
+
+        class _FailedCheck:
+            def execute(self, _sql):
+                return self
+
+            def fetchone(self):
+                return ("*** in database main ***",)
+
+            def close(self):
+                return None
+
+        def connect(target, *args, **kwargs):
+            # Only the independent reopen of the backup finds it damaged.
+            if isinstance(target, str) and ".backup-" in target:
+                return _FailedCheck()
+            return real_connect(target, *args, **kwargs)
+
+        with patch("win_engine.feedback.migrations.sqlite3.connect", side_effect=connect):
+            with self.assertRaises(MigrationError):
+                online_backup(str(path), str(backups))
+
+        self.assertEqual(list(backups.iterdir()), [])
 
     def test_v0_migration_is_backup_first_and_preserves_relationship_rows(self):
         path = self.root / "legacy.db"

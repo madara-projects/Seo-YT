@@ -180,6 +180,19 @@ class CloudPushTests(unittest.TestCase):
         self.assertEqual(remote.pushed[0][1], "device-b")
         self.assertEqual(self._query("SELECT origin_device_id, pending FROM cloud_sync_tombstones"), [("device-b", 0)])
 
+    def test_an_unreadable_package_does_not_stop_the_others_from_staging(self):
+        broken = self._package("broken package")
+        self._package("good package")
+        self._query("UPDATE analysis_runs SET payload_json = '{not json' WHERE id = ?", (broken,))
+
+        with self.assertLogs("win_engine.feedback.cloud_sync", level="WARNING") as logs:
+            self.assertEqual(self.service._stage_local_packages(), 1)
+
+        self.assertIn("JSONDecodeError", logs.output[0])
+        self.assertEqual(self._query("""SELECT a.query FROM cloud_sync_outbox o
+                                        JOIN cloud_sync_packages p ON p.sync_uuid = o.sync_uuid
+                                        JOIN analysis_runs a ON a.id = p.analysis_run_id"""), [("good package",)])
+
     def test_a_failed_row_is_logged_by_class_and_short_id_only(self):
         run_id = self._package("shared package")
         self.service._stage_local_packages()

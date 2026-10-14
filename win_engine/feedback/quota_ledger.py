@@ -101,8 +101,9 @@ def _connect(database_path: str, timeout: float = _DATABASE_TIMEOUT_SECONDS) -> 
     # mode=rw: counting never creates a database where there is none.
     uri = f"{Path(database_path).resolve().as_uri()}?mode=rw"
     connection = sqlite3.connect(uri, uri=True, timeout=timeout, factory=ClosingConnection)
-    # As on the app's other connections; in WAL mode it skips an fsync per commit.
-    connection.execute("PRAGMA synchronous = NORMAL")
+    # As on the app's other connections: NORMAL only in WAL, where it cannot corrupt the file.
+    wal = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+    connection.execute(f"PRAGMA synchronous = {'NORMAL' if wal else 'FULL'}")
     return connection
 
 

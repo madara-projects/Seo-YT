@@ -18,6 +18,7 @@ _BACKUPS_KEPT = 10
 # The pre-migration state is what a backup must preserve, so a migration that
 # is retried in the same process does not copy the whole database again.
 _BACKED_UP_PATHS: set[str] = set()
+_WAL_FALLBACK_LOGGED = False
 _APPLICATION_TABLES = {
     "analysis_runs",
     "video_snapshots",
@@ -57,9 +58,23 @@ def configure_connection(connection: sqlite3.Connection) -> sqlite3.Connection:
 
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 10000")
-    # Per-connection, so it must be set here; in WAL mode NORMAL cannot corrupt the file.
-    connection.execute("PRAGMA synchronous = NORMAL")
+    # Per-connection, so it must be set here. NORMAL cannot corrupt a WAL
+    # database, but a rollback-journal one can be corrupted by a power loss.
+    wal = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+    connection.execute(f"PRAGMA synchronous = {'NORMAL' if wal else 'FULL'}")
     return connection
+
+
+def _enable_wal(connection: sqlite3.Connection) -> None:
+    """Switch to WAL; where the file system refuses it, every commit is synced in full."""
+    global _WAL_FALLBACK_LOGGED
+    mode = str(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]).lower()
+    connection.execute(f"PRAGMA synchronous = {'NORMAL' if mode == 'wal' else 'FULL'}")
+    # An in-memory database never uses WAL and has no file to protect.
+    if mode not in ("wal", "memory") and not _WAL_FALLBACK_LOGGED:
+        _WAL_FALLBACK_LOGGED = True
+        logger.warning("SQLite could not switch the database to WAL (journal mode is %s); "
+                       "using synchronous=FULL instead.", mode)
 
 
 def connect_managed(database_path: str, *, timeout: float = 10) -> sqlite3.Connection:
@@ -104,12 +119,20 @@ def online_backup(database_path: str, backup_directory: str | None = None) -> st
         source.close()
 
     # Reopen independently so verification does not rely on the backup handle.
-    verification = sqlite3.connect(f"file:{destination_path.as_posix()}?mode=ro", uri=True, timeout=10)
     try:
-        if verification.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise MigrationError("The reopened SQLite backup failed verification.")
-    finally:
-        verification.close()
+        verification = sqlite3.connect(f"file:{destination_path.as_posix()}?mode=ro", uri=True, timeout=10)
+        try:
+            if verification.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise MigrationError("The reopened SQLite backup failed verification.")
+        finally:
+            verification.close()
+    except Exception:
+        # A failed backup is not kept, so it never takes the place of a good one when old backups are pruned.
+        try:
+            destination_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     _prune_backups(destination_dir, source_path.stem)
     return str(destination_path)
 
@@ -194,7 +217,7 @@ def prepare_database(database_path: str, *, backup_before_migration: bool = True
         configure_connection(connection)
         _verify_database(connection)
         # The migration steps run in rollback-journal mode; switch once they are done.
-        connection.execute("PRAGMA journal_mode = WAL")
+        _enable_wal(connection)
     except Exception as exc:
         connection.rollback()
         if isinstance(exc, MigrationError):
@@ -219,7 +242,7 @@ def initialize_memory_database(connection: sqlite3.Connection) -> None:
 def initialize_current_schema(connection: sqlite3.Connection) -> None:
     """Create the current schema without rewriting existing compatible tables."""
 
-    connection.execute("PRAGMA journal_mode = WAL")
+    _enable_wal(connection)
     _create_independent_tables(connection)
     _add_owned_snapshot_channel(connection)
     _create_relational_tables(connection)

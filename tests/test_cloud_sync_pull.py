@@ -166,6 +166,57 @@ class CloudPullTests(unittest.TestCase):
         kept = self._query("SELECT local_payload_json FROM cloud_sync_conflicts")[0][0]
         self.assertIn("Local edit", kept)
 
+    def test_an_edit_made_after_staging_is_kept_when_a_later_revision_replaces_it(self):
+        run_id = self._source_package("shared package")
+        self.service._pull(_PullRemote([self._remote_row(run_id)]))
+        def cloud_edit(title):
+            return lambda payload: payload["analysis"].update(title=title)
+
+        self.service._pull(_PullRemote([self._remote_row(run_id, revision=2, mutate=cloud_edit("Cloud 2"))]))
+        self.assertEqual(self._query("SELECT COUNT(*) FROM cloud_sync_conflicts"), [(0,)])
+        # Edited after the run staged its packages, so nothing is queued yet.
+        self._query("UPDATE analysis_runs SET title = 'Unstaged edit'")
+
+        self.assertEqual(self.service._pull(_PullRemote([self._remote_row(run_id, revision=3, mutate=cloud_edit("Cloud 3"))])), 1)
+
+        self.assertEqual(self._query("SELECT title FROM analysis_runs"), [("Cloud 3",)])
+        self.assertEqual(self._query("SELECT winner, local_revision, remote_revision FROM cloud_sync_conflicts"),
+                         [("remote", 2, 3)])
+        self.assertIn("Unstaged edit", self._query("SELECT local_payload_json FROM cloud_sync_conflicts")[0][0])
+
+    def test_a_remote_delete_keeps_an_edit_made_after_staging(self):
+        run_id = self._source_package("shared package")
+        row = self._remote_row(run_id)
+        self.service._pull(_PullRemote([row]))
+        self._query("UPDATE analysis_runs SET title = 'Unstaged edit'")
+        tombstone = (row[0], "device-a", 2, "tombstone-hash", "{}", UPDATED_AT, UPDATED_AT)
+
+        self.assertEqual(self.service._pull(_PullRemote([tombstone])), 1)
+
+        self.assertEqual(self._query("SELECT COUNT(*) FROM analysis_runs"), [(0,)])
+        self.assertEqual(self._query("SELECT winner FROM cloud_sync_conflicts"), [("tombstone",)])
+        self.assertIn("Unstaged edit", self._query("SELECT local_payload_json FROM cloud_sync_conflicts")[0][0])
+
+    def test_a_pushed_version_replaced_by_an_equal_revision_is_kept(self):
+        run_id = self._source_package("shared package")
+        self.service._pull(_PullRemote([self._remote_row(run_id)]))
+        self._query("UPDATE analysis_runs SET title = 'Pushed edit'")
+        self.service._stage_local_packages()
+        # As a push that reached the cloud leaves it.
+        self._query("UPDATE cloud_sync_packages SET last_synced_hash = content_hash")
+        self._query("DELETE FROM cloud_sync_outbox")
+        local_hash = self._query("SELECT content_hash FROM cloud_sync_packages")[0][0]
+        # Another device's edit of the same revision, with a greater hash, replaced it in the cloud.
+        row = next(candidate for candidate in (
+            self._remote_row(run_id, revision=2, mutate=lambda p, n=n: p["analysis"].update(title=f"Other edit {n}"))
+            for n in range(64)) if candidate[3] > local_hash)
+
+        self.assertEqual(self.service._pull(_PullRemote([row])), 1)
+
+        self.assertEqual(self._query("SELECT winner, local_revision, remote_revision FROM cloud_sync_conflicts"),
+                         [("remote", 2, 2)])
+        self.assertIn("Pushed edit", self._query("SELECT local_payload_json FROM cloud_sync_conflicts")[0][0])
+
     def test_a_local_database_outage_fails_the_pull_instead_of_skipping_rows(self):
         run_id = self._source_package("shared package")
 

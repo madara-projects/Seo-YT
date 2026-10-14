@@ -424,10 +424,15 @@ class CloudSyncService:
                        FROM cloud_sync_packages p LEFT JOIN cloud_sync_outbox o ON o.sync_uuid = p.sync_uuid
                        WHERE p.analysis_run_id = ?""", (run_id,)
                 ).fetchone()
-                payload = self._package_payload(connection, run_id)
+                try:
+                    payload = self._package_payload(connection, run_id)
+                    content_hash = _hash(payload) if payload is not None else ""
+                except (TypeError, ValueError) as exc:
+                    # One unreadable package must not stop every other package from syncing.
+                    logger.warning("Cloud sync skipped package %s that it could not read: %s", run_id, type(exc).__name__)
+                    continue
                 if payload is None:
                     continue  # deleted after the ids were listed
-                content_hash = _hash(payload)
                 # A pulled package can keep observations its cloud version lacks
                 # (a completed window, a newer display snapshot), so it is also
                 # compared with what the pull stored, not only with the version.
@@ -486,19 +491,31 @@ class CloudSyncService:
 
     @staticmethod
     def _record_conflict(local, *, sync_uuid: str, local_revision: int, local_hash: str,
-                         remote_revision: int, remote_hash: str, winner: str) -> None:
+                         remote_revision: int, remote_hash: str, winner: str,
+                         local_payload: str | None = None) -> None:
         # An edit made here that loses is kept with the record, so it can be recovered.
-        queued = None if winner == "local" else local.execute(
-            "SELECT payload_json FROM cloud_sync_outbox WHERE sync_uuid = ?", (sync_uuid,)
-        ).fetchone()
+        if winner == "local":
+            local_payload = None
+        elif local_payload is None:
+            queued = local.execute(
+                "SELECT payload_json FROM cloud_sync_outbox WHERE sync_uuid = ?", (sync_uuid,)
+            ).fetchone()
+            local_payload = queued[0] if queued else None
         local.execute(
             """INSERT OR IGNORE INTO cloud_sync_conflicts
                    (sync_uuid,local_revision,local_content_hash,remote_revision,remote_content_hash,winner,detected_at,
                     local_payload_json)
                VALUES(?,?,?,?,?,?,?,?)""",
-            (sync_uuid, local_revision, local_hash, remote_revision, remote_hash, winner, _now(),
-             queued[0] if queued else None),
+            (sync_uuid, local_revision, local_hash, remote_revision, remote_hash, winner, _now(), local_payload),
         )
+
+    def _local_copy(self, local, run_id: int) -> tuple[str, str] | None:
+        """The package as this device holds it, as (JSON, hash); None when it cannot be read."""
+        try:
+            payload = self._package_payload(local, run_id)
+            return (json.dumps(payload, ensure_ascii=False), _hash(payload)) if payload is not None else None
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _remote_active_wins(*, local_hash: str, remote_hash: str) -> bool:
@@ -899,7 +916,7 @@ class CloudSyncService:
         ).fetchone()
         # A queued outbox row is an edit made here that the cloud has not accepted yet.
         mapping = local.execute(
-            """SELECT p.analysis_run_id,p.revision,p.content_hash,o.sync_uuid IS NOT NULL
+            """SELECT p.analysis_run_id,p.revision,p.content_hash,o.sync_uuid IS NOT NULL,p.last_synced_hash
                FROM cloud_sync_packages p LEFT JOIN cloud_sync_outbox o ON o.sync_uuid = p.sync_uuid
                WHERE p.sync_uuid = ?""", (sync_uuid,)
         ).fetchone()
@@ -908,10 +925,13 @@ class CloudSyncService:
                 return 0, False
             conflict = False
             if mapping:
-                if mapping[3]:
+                copy = self._local_copy(local, int(mapping[0]))
+                # An edit made after this run staged its packages is not queued yet, but loses all the same.
+                if mapping[3] or (copy and copy[1] not in {mapping[2], mapping[4]}):
                     self._record_conflict(
                         local, sync_uuid=sync_uuid, local_revision=int(mapping[1]), local_hash=str(mapping[2]),
                         remote_revision=revision, remote_hash=content_hash, winner="tombstone",
+                        local_payload=copy[0] if copy else None,
                     )
                     conflict = True
                 now = _now()
@@ -975,22 +995,27 @@ class CloudSyncService:
         payload = self._remote_payload(payload_json, content_hash)
         conflict = False
         if mapping:
+            # Kept even when it reached the cloud: an equal revision may have replaced it there.
+            copy = self._local_copy(local, run_id)
             if revision == local_revision:
                 remote_wins = self._remote_active_wins(local_hash=local_hash, remote_hash=content_hash)
                 self._record_conflict(
                     local, sync_uuid=sync_uuid, local_revision=local_revision,
                     local_hash=local_hash, remote_revision=revision,
                     remote_hash=content_hash, winner="remote" if remote_wins else "local",
+                    local_payload=copy[0] if copy else None,
                 )
                 if not remote_wins:
                     return 0, True
                 conflict = True
-            elif mapping[3]:
-                # An edit made here that never reached the cloud loses to a
-                # later revision from another device; the audit row keeps a trace.
+            elif mapping[3] or (copy and copy[1] not in {local_hash, mapping[4]}):
+                # An edit made here that never reached the cloud (queued, or made
+                # after this run staged) loses to a later revision from another
+                # device; the audit row keeps it.
                 self._record_conflict(
                     local, sync_uuid=sync_uuid, local_revision=local_revision, local_hash=local_hash,
                     remote_revision=revision, remote_hash=content_hash, winner="remote",
+                    local_payload=copy[0] if copy else None,
                 )
                 conflict = True
         analysis = payload["analysis"]
