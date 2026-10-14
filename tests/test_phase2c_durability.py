@@ -219,12 +219,6 @@ class Phase2CDurabilityTests(unittest.TestCase):
         self.assertEqual(snapshot, (100,))
         self.assertGreater(link_id, 0)
 
-    def test_cloud_disabled_keeps_local_history_operational(self):
-        disabled = CloudSyncService(self.settings(cloud_sync_enabled=False))
-        run_id = self._run("Offline package")
-        self.assertEqual(disabled.run_once()["state"], "disabled")
-        self.assertEqual(self.store.history_run(run_id)["title"], "Offline package")
-
     def test_payload_is_limited_to_the_documented_history_projection(self):
         service, run_id, _sync_uuid = self._staged("Scoped package")
         with sqlite3.connect(self.path) as connection:

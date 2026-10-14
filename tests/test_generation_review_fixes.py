@@ -22,8 +22,6 @@ from win_engine.analysis.generation_quality import title_similarity
 from win_engine.analysis.keyword_research import select_final_tags
 from win_engine.analysis.numbers import optional_number
 from win_engine.analysis.research_planner import brief_research_text
-from win_engine.analysis.search_opportunities import UNSUPPORTED_ADJACENT_CONTEXT
-from win_engine.analysis.strategy_layer import build_channel_intelligence
 from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
 from win_engine.analysis.topic_lock import (
     is_junk_tag,
@@ -268,15 +266,6 @@ class SharedHelperTests(unittest.TestCase):
             self.assertIsNone(optional_number(value), value)
         self.assertEqual(optional_number("12"), 12.0)
         self.assertEqual(optional_number(7), 7.0)
-
-    def test_hidden_subscriber_counts_stay_unknown(self):
-        self.assertEqual(build_channel_intelligence([{"title": "t", "subscriber_count": ""}])["dominant_channel_size"],
-                         "unknown")
-        self.assertEqual(build_channel_intelligence([{"title": "t", "subscriber_count": "5000"}])["dominant_channel_size"],
-                         "small")
-
-    def test_adjacent_context_terms_are_public(self):
-        self.assertIn("gaming", UNSUPPORTED_ADJACENT_CONTEXT)
 
     def test_demand_phrases_are_counted_in_whole_hindi_words(self):
         evidence = {"search_demand": {"validated_keywords": ["चाय बनाने का तरीका"]}}

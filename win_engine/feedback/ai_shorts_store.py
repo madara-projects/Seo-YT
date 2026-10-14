@@ -14,14 +14,11 @@ path so the run's cloud tombstone is queued like any other deletion.
 from __future__ import annotations
 
 import json
-import logging
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
 from win_engine.feedback.history_store import HistoryStore
 
-logger = logging.getLogger(__name__)
 SOURCE_PAGE = "ai_shorts"
 _LIST_LIMIT = 100
 
@@ -164,14 +161,6 @@ class AiShortsStore:
             if scene and scene[:300] not in scenes:
                 scenes.append(scene[:300])
         return scenes
-
-    def plan_count(self) -> int:
-        try:
-            with self.history._connect() as connection:
-                return int(connection.execute("SELECT COUNT(*) FROM ai_short_plans").fetchone()[0])
-        except sqlite3.Error as exc:
-            logger.warning("AI Shorts plans could not be counted: %s", type(exc).__name__)
-            return 0
 
 
 def _plan_json(value: Any) -> dict[str, Any]:

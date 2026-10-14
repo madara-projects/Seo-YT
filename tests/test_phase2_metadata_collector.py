@@ -5,10 +5,12 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from win_engine.core.config import Settings
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.snapshot_collector import SnapshotCollector
+from win_engine.integrations.youtube_channel import YouTubeChannelService
 
 
 class Phase2MetadataTests(unittest.TestCase):
@@ -66,12 +68,18 @@ class Phase2CollectorTests(unittest.TestCase):
     def test_disabled_and_dry_run_do_not_call_services(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp) / "collector.db")
-            HistoryStore(path)
-            disabled = SnapshotCollector(Settings(database_path=path, snapshot_collector_enabled=False))
-            self.assertEqual(disabled.run_once()["state"], "disabled")
-            dry = SnapshotCollector(Settings(database_path=path, snapshot_collector_enabled=True, snapshot_collector_dry_run=True))
-            result = dry.run_once()
+            store = HistoryStore(path)
+            with store._connect() as c:
+                c.execute("INSERT INTO analysis_runs (query, created_at) VALUES ('q', 'now')")
+            link_id = store.link_published_video(1, "abcdefghijk", (datetime.now(timezone.utc) - timedelta(days=9)).isoformat(), format_val="short", language="english", ownership_state="verified", ownership_verified=True, verified_channel_id="c", ownership_verified_at="now")
+            with patch.object(YouTubeChannelService, "refresh_linked_video_performance") as refresh:
+                disabled = SnapshotCollector(Settings(database_path=path, snapshot_collector_enabled=False))
+                self.assertEqual(disabled.run_once()["state"], "disabled")
+                dry = SnapshotCollector(Settings(database_path=path, snapshot_collector_enabled=True, snapshot_collector_dry_run=True))
+                result = dry.run_once()
             self.assertEqual(result["state"], "dry-run")
+            self.assertEqual([item["link_id"] for item in result["planned"]], [link_id])
+            refresh.assert_not_called()
             c = sqlite3.connect(path)
             try:
                 self.assertEqual(c.execute("SELECT COUNT(*) FROM video_performance_snapshots").fetchone()[0], 0)
@@ -84,7 +92,7 @@ class Phase2CollectorTests(unittest.TestCase):
             store = HistoryStore(path)
             with store._connect() as c:
                 c.execute("INSERT INTO analysis_runs (query, created_at) VALUES ('q', 'now')")
-            store.link_published_video(1, "abcdefghijk", (datetime.now(timezone.utc) - timedelta(days=8)).isoformat(), format_val="short", language="english", ownership_state="verified", ownership_verified=True, verified_channel_id="c", ownership_verified_at="now")
+            store.link_published_video(1, "abcdefghijk", (datetime.now(timezone.utc) - timedelta(days=9)).isoformat(), format_val="short", language="english", ownership_state="verified", ownership_verified=True, verified_channel_id="c", ownership_verified_at="now")
             store.record_performance_snapshot("abcdefghijk", 24, views=10, snapshot_window="24h", snapshot_status="complete")
             due = store.due_snapshot_links()
             self.assertEqual(due[0]["due_windows"], ["7d"])

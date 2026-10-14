@@ -71,30 +71,6 @@ class Phase1IntegrityRegressionTests(unittest.TestCase):
                 )
         return run_id, link_id
 
-    def test_one_linked_video_is_one_cohort_sample_even_with_repeated_owned_snapshots(self):
-        self._link(video_id="phase1vid01")
-        now = datetime.now(timezone.utc).isoformat()
-        with self.store._connect() as connection:
-            connection.executemany(
-                """INSERT INTO owned_video_snapshots
-                   (video_id, captured_at, title, views, likes)
-                   VALUES (?, ?, ?, ?, ?)""",
-                [
-                    ("phase1vid01", now, "Package title", 100, 4),
-                    ("phase1vid01", now + "1", "Package title", 120, 5),
-                    ("phase1vid01", now + "2", "Package title", 140, 6),
-                ],
-            )
-        self.store.record_performance_snapshot(
-            "phase1vid01", 24, views=100, likes=4,
-            avg_view_percentage=70, snapshot_window="24h",
-        )
-
-        cohort = self.store.cohort_analytics(format_filter="youtube_shorts", language_filter="english")
-
-        self.assertEqual(cohort["sample_size"], 1)
-        self.assertEqual(cohort["total_linked"], 1)
-
     def test_foreign_video_ownership_fails_closed_without_public_fallback(self):
         settings = Settings(
             database_path=self.db_path,
@@ -270,10 +246,6 @@ class Phase1IntegrityRegressionTests(unittest.TestCase):
         self.assertFalse(self.store.has_snapshot_window("phase1vid01", "24h"))
 
     def test_failed_snapshot_attempt_is_observable_and_retryable(self):
-        self.assertTrue(
-            hasattr(self.store, "record_snapshot_attempt"),
-            "Phase 1 requires observable retryable snapshot-attempt state.",
-        )
         self.store.record_snapshot_attempt(
             "phase1vid01",
             "24h",

@@ -17,26 +17,6 @@ class GeminiRateLimitTests(unittest.TestCase):
     def tearDown(self):
         gemini_client.reset_provider_health()
 
-    def _success(self):
-        response = MagicMock(status_code=200)
-        response.json.return_value = {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}
-        return response
-
-    @patch("win_engine.llm.gemini_client.time.sleep")
-    @patch("win_engine.llm.gemini_client.httpx.post")
-    def test_transient_429_retries_and_succeeds(self, post, sleep):
-        limited = MagicMock(status_code=429)
-        limited.headers = {"retry-after": "2"}
-        post.side_effect = [limited, self._success()]
-        with patch.dict(os.environ, {"WIN_ENGINE_GEMINI_API_KEY": "test", "WIN_ENGINE_GEMINI_MODEL": "test"}):
-            text, trace = gemini_client.generate_with_diagnostics("test")
-        self.assertEqual(text, "{}")
-        self.assertEqual(post.call_count, 2)
-        self.assertEqual(trace["status"], "gemini_success")
-        self.assertEqual(trace["retries"], 1)
-        self.assertTrue(trace["rate_limited_before_success"])
-        self.assertGreaterEqual(sleep.call_args.args[0], 2)
-
     @patch("win_engine.llm.gemini_client.time.sleep")
     @patch("win_engine.llm.gemini_client.httpx.post")
     def test_repeated_429_has_bounded_safe_failure(self, post, _sleep):

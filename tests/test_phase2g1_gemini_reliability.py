@@ -78,6 +78,8 @@ class GeminiProviderReliabilityTests(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
         self.assertEqual(trace["status"], "gemini_success")
         self.assertEqual(trace["retry_reasons"], ["rate_limit"])
+        self.assertEqual(trace["retries"], 1)
+        self.assertTrue(trace["rate_limited_before_success"])
         self.assertGreaterEqual(sleep.call_args.args[0], 1)
 
     @patch("win_engine.llm.gemini_client.time.sleep")

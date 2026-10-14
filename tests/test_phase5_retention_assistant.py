@@ -54,8 +54,10 @@ class Phase5DeterministicAnalysisTests(unittest.TestCase):
 
     def test_visual_subject_identification(self):
         result = analyze("Basil root rot tutorial", visual_requirements="Basil roots and damaged leaves", video_format="tutorial")
-        self.assertIn(result["first_frame"]["main_subject_identifiable"], {True, False})
+        self.assertIs(result["first_frame"]["main_subject_identifiable"], True)
         self.assertEqual(result["first_frame"]["visual_analysis_basis"], "creator_description_only")
+        unrelated = analyze("Basil root rot tutorial", visual_requirements="A sunset over a quiet harbour", video_format="tutorial")
+        self.assertIs(unrelated["first_frame"]["main_subject_identifiable"], False)
 
     def test_quote_heavy_opening(self):
         quote = "Some endings look beautiful because they teach us how to release what can no longer stay with us"

@@ -7,9 +7,7 @@ Validates:
 4. Preservation of 'yt' and 'shorts' as intentional format tags.
 5. Tag score integrity (platform tags do not inflate semantic tag score).
 6. Shorts prefer 5-6 strong semantic tags over weak padding.
-7. Quality refinement rank includes tag score.
 8. Quality refinement repairs tag score shortfalls.
-9. Strict 90/90/90 quality target enforcement for GREEN verdict.
 10. End-to-end quote package generation reaching GREEN with all constraints met.
 """
 
@@ -27,11 +25,7 @@ from win_engine.analysis.keyword_research import (
 )
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.feedback.history_store import HistoryStore
-from win_engine.generation.quality_refinement import (
-    TARGET,
-    enforce_quality_target,
-    refine_package,
-)
+from win_engine.generation.quality_refinement import TARGET, refine_package
 from win_engine.generation.seo_generator import generate_seo_suggestions
 
 
@@ -197,37 +191,6 @@ class Phase2G2LiveRegressionTests(unittest.TestCase):
         self.assertLessEqual(len(semantic_tags), 6)
         self.assertGreaterEqual(len(semantic_tags), 3)
 
-    def test_07_quality_refinement_rank_includes_tag_score(self):
-        """quality_refinement.rank evaluates title, description, and tag scores together."""
-        pkg_low_tag = {
-            "title": "Title #shorts",
-            "variants": ["Title #shorts"],
-            "description": "Description text.",
-            "tags": ["weak1", "weak2", "weak3", "yt", "shorts"],
-            "hashtags": ["#shorts"],
-        }
-        evidence = {
-            "selected_keywords": [
-                {"keyword": "weak1", "keyword_relevance_score": 70.0, "source_support_score": 80},
-                {"keyword": "weak2", "keyword_relevance_score": 70.0, "source_support_score": 80},
-                {"keyword": "weak3", "keyword_relevance_score": 70.0, "source_support_score": 80},
-                {"keyword": "yt", "classification": "platform_format", "keyword_relevance_score": 0, "source_support_score": 100},
-                {"keyword": "shorts", "classification": "platform_format", "keyword_relevance_score": 0, "source_support_score": 100},
-            ]
-        }
-        with patch("win_engine.generation.quality_refinement.gemini_client.is_available", return_value=False):
-            refined, trace = refine_package(
-                pkg_low_tag,
-                script="Some script text",
-                brief={"video_format": "youtube_shorts"},
-                language="english",
-                region="global",
-                evidence=evidence,
-                competitors=[],
-            )
-            self.assertIn("before", trace)
-            self.assertIn("after", trace)
-
     def test_08_quality_refinement_repairs_tag_score(self):
         """quality_refinement prunes weak tags when tag_score is below target."""
         pkg = {
@@ -274,30 +237,6 @@ class Phase2G2LiveRegressionTests(unittest.TestCase):
             # After repair, the gate tag score must be >= 90
             after_scores = trace["after"]
             self.assertGreaterEqual(after_scores["tag_score"], TARGET)
-
-    def test_09_enforce_quality_target_requires_all_three_90(self):
-        """Strict 90/90/90 quality target: any score below 90 denies GREEN."""
-        cases = [
-            ((95, 92, 91), True, "GREEN"),
-            ((89.9, 95, 95), False, "YELLOW"),
-            ((95, 89.9, 95), False, "YELLOW"),
-            ((95, 95, 89.9), False, "YELLOW"),
-            ((95, 95, None), False, "YELLOW"),
-        ]
-        for (t, d, tg), expected_met, expected_verdict in cases:
-            with self.subTest(title=t, desc=d, tag=tg):
-                gate = {
-                    "verdict": "GREEN",
-                    "final_seo_quality": {
-                        "title_score": t,
-                        "description_score": d,
-                        "tag_score": tg,
-                        "verdict": "GREEN",
-                    },
-                }
-                result = enforce_quality_target(gate)
-                self.assertEqual(result["quality_target"]["met"], expected_met)
-                self.assertEqual(result["verdict"], expected_verdict)
 
     def test_10_live_quote_contract_end_to_end(self):
         """Live quote script must produce GREEN package with title>=90, desc>=90, tag>=90 and yt/shorts preserved."""

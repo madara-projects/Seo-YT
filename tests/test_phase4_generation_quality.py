@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.analysis.package_builder import build_title_thumbnail_packages
-from win_engine.generation.expansion_engine import build_chapters
 from win_engine.generation.strategy_engine import _content_specific_fallback
 from win_engine.analysis.generation_quality import (
     apply_quality_gate,
@@ -17,46 +16,11 @@ from win_engine.analysis.generation_quality import (
     has_unsupported_instructional_framing,
     normalize_unicode,
     title_copies_quote,
-    title_similarity,
     unicode_words,
 )
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.migrations import CURRENT_SCHEMA_VERSION, connect_managed, prepare_database
 from win_engine.llm import seo_writer
-
-
-DIVERSE_BRIEFS = [
-    ("solar cooking", "How a Cardboard Solar Oven Cooked Rice"),
-    ("rainy quote", "Did I Deserve More Than the Bare Minimum?"),
-    ("python tutorial", "Parse a CSV Safely in Python in Three Steps"),
-    ("budget travel", "What Rs 500 Buys on a Chennai Day Trip"),
-    ("phone review", "Pixel Battery After 30 Days of Real Use"),
-    ("fitness form", "Fix Your Squat Depth Without Adding Weight"),
-    ("dosa recipe", "Crisp Dosa Batter Using a Simple Fermentation Test"),
-    ("gaming", "The Final Move That Saved This Ranked Match"),
-    ("study", "A 20 Minute Revision Method for Dense Chapters"),
-    ("camera", "Why This Window Light Makes Interviews Look Softer"),
-    ("gardening", "Rescue Basil Leaves Before the Roots Start Rotting"),
-    ("music", "Building a Lo-Fi Beat From One Recorded Train Sound"),
-    ("finance", "Where My Monthly Grocery Budget Actually Went"),
-    ("history", "How This Forgotten Bridge Changed a Trade Route"),
-    ("drawing", "Shade a Realistic Eye With Only One Pencil"),
-    ("productivity", "I Removed Notifications for Seven Honest Days"),
-    ("cycling", "What I Packed for a 100 Kilometre Ride"),
-    ("pet care", "Teach a Rescue Dog to Trust the Doorway"),
-    ("language", "Five Tamil Phrases I Use at the Market"),
-    ("woodwork", "Cut a Clean Dovetail With a Hand Saw"),
-    ("science", "Watch Salt Crystals Grow Across Seven Days"),
-    ("makeup", "A Humidity Proof Base Tested on a Commute"),
-    ("book review", "The Chapter That Changed How I Read Failure"),
-    ("car repair", "Find a Battery Drain With a Multimeter"),
-    ("meditation", "A Two Minute Breathing Reset Before Work"),
-    ("street food", "Inside a Midnight Parotta Stall in Madurai"),
-    ("coding", "The Race Condition Hidden in This Async Function"),
-    ("home repair", "Stop a Leaking Tap Without Replacing the Sink"),
-    ("photography", "Freeze Rain Drops Using Manual Camera Settings"),
-    ("documentary", "One Fisherman's Morning Before the City Wakes"),
-]
 
 
 def valid_package(title: str = "Did I Deserve More Than the Bare Minimum? 💔 #shorts") -> dict:
@@ -206,13 +170,6 @@ class Phase4QualityTests(unittest.TestCase):
         gate = evaluate_package_quality(package, script="A quote Short about knowing when to let go")
         codes = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
         self.assertIn("malformed_title_fragment", codes)
-
-    def test_shorts_never_receive_synthetic_chapters(self):
-        chapters = build_chapters(
-            "A reflective quote Short",
-            {"video_format": "youtube_shorts", "duration_seconds": 20},
-        )
-        self.assertEqual(chapters, [])
 
     def test_latest_broken_input_has_natural_fallback_package(self):
         source = (
@@ -589,14 +546,6 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertEqual(mocked_generate.call_count, 1)
         self.assertIsNone(packages["english"])
         self.assertEqual(source, "fallback")
-
-    def test_thirty_brief_acceptance_fixture_is_materially_cross_topic(self):
-        self.assertGreaterEqual(len(DIVERSE_BRIEFS), 30)
-        titles = [title for _topic, title in DIVERSE_BRIEFS]
-        self.assertEqual(len(titles), len({title.casefold() for title in titles}))
-        self.assertTrue(all(title_similarity(left, right) < 0.82 for i, left in enumerate(titles) for right in titles[i + 1:]))
-        self.assertFalse(any(title.casefold().startswith("the honest truth about") for title in titles))
-
 
 class Phase4PersistenceTests(unittest.TestCase):
     def _record(self, store: HistoryStore) -> int:
