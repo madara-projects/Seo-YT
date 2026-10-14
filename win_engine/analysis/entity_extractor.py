@@ -30,8 +30,9 @@ def extract_entity_signals(script: str, youtube_results: Iterable[dict[str, obje
 
     samples = [script]
     for result in youtube_results:
-        samples.append(str(result.get("title", "")))
-        samples.append(str(result.get("description", "")))
+        # A missing description is None, which str() made the top entity "None".
+        samples.append(str(result.get("title") or ""))
+        samples.append(str(result.get("description") or ""))
 
     counter: Counter[str] = Counter()
     for sample in samples:

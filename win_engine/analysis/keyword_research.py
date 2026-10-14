@@ -175,10 +175,11 @@ def build_keyword_research(
     # "... in malayalam" and "s25 ultra vs iphone 17" do not.
     demand_index = suggestion_index(search_demand)
     source_letters = _single_letters(script, brief.get("content"), quote)
+    painful = _voices_pain(script, brief)
     grounded_suggestions = [
         phrase for phrase in demand_index
         if _suggestion_is_grounded(phrase, source_terms, content_terms) and _mentions_subject(phrase, subjects)
-        and not _foreign_single_letters(phrase, source_letters)
+        and not _foreign_single_letters(phrase, source_letters) and not _unvoiced_mood(phrase, painful)
     ]
     for phrase in grounded_suggestions:
         _add(candidates, phrase, "search_demand", "long_tail", content_terms, visual_terms)
@@ -190,8 +191,10 @@ def build_keyword_research(
     scored: list[dict[str, Any]] = []
     rejected_before_selection = 0
     subject_text = _subject_text(script, brief)
+    app_roots = _app_brief_roots(script, brief) | _footage_roots(script, brief)
     for candidate in candidates.values():
-        entry = None if _production_note(candidate["keyword"], subject_text) else _score(
+        skip = _production_note(candidate["keyword"], subject_text) or _uses_app_brief_text(candidate["keyword"], app_roots)
+        entry = None if skip else _score(
             candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms,
         )
         if entry and not (non_instructional and has_unsupported_instructional_framing(entry.get("keyword"))):
@@ -296,9 +299,20 @@ def select_final_tags(
     eligible: list[dict[str, Any]] = []
     rejected_count = 0
     subject_text = _subject_text(script, brief)
+    painful = _voices_pain(script, brief)
+    app_roots = _app_brief_roots(script, brief)
+    footage_roots = _footage_roots(script, brief)
     unresearched = not research.get("candidates") and not research.get("search_demand")
     for item in indexed.values():
         entry = dict(item)
+        if _unvoiced_mood(entry.get("keyword"), painful):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "mood_not_in_source", "source": entry.get("source")})
+            continue
+        if _uses_app_brief_text(entry.get("keyword"), app_roots):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "app_brief_text", "source": entry.get("source")})
+            continue
         # The quote's own words ("stop explaining yourself") reproduce the
         # source; only instructional wording it does not contain is a claim.
         if non_instructional and has_unsupported_instructional_framing(entry.get("keyword"), f"{script}\n{quote}"):
@@ -308,6 +322,10 @@ def select_final_tags(
         if _production_note(entry.get("keyword"), subject_text):
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "production_note", "source": entry.get("source")})
+            continue
+        if _uses_app_brief_text(entry.get("keyword"), footage_roots):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "footage_not_topic", "source": entry.get("source")})
             continue
         reject_reason = _reject_reason(entry, title, quote, content_terms)
         if reject_reason:
@@ -525,6 +543,10 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     classification = str(candidate.get("classification") or "generic")
     opportunity = candidate.get("opportunity") if isinstance(candidate.get("opportunity"), dict) else {}
     semantic_evidence = candidate.get("semantic_evidence") if isinstance(candidate.get("semantic_evidence"), dict) else {}
+    # The cited phrase must be the creator's words; one leaning on app-written
+    # brief text ("loved preserve") proves nothing.
+    if semantic_evidence and _source_support(str(semantic_evidence.get("source_phrase") or ""), source_terms)[0] < 100:
+        semantic_evidence = {}
     semantic_confirmation = bool(opportunity.get("semantic_confirmed")) and int(opportunity.get("script_relevance_score") or 0) >= 70
     # Gemini confirmation may score and describe an opportunity, but it cannot
     # replace an actual anchor in the creator source/semantic core. This stops
@@ -985,10 +1007,49 @@ def _source_terms(script: str, brief: dict[str, Any]) -> set[str]:
     """Use only creator supplied material to prove a research-derived tag."""
     values = [script]
     values.extend(brief.get(field) for field in (
-        "content", "exact_quote", "on_screen_text", "topic", "viewer_promise", "unique_angle",
-        "factual_claims", "visual_requirements", "creator_intent", "content_constraints",
+        "content", "exact_quote", "on_screen_text", "topic", "factual_claims", "visual_requirements",
     ))
+    # The app fills these when the creator leaves them empty ("Preserve and package
+    # the exact emotional idea..."); that text gave "loved preserve" full support.
+    values.extend(brief.get(field) for field in _APP_FILLED_FIELDS if _brief_field_is_creator_supplied(brief, field))
     return {token for value in values for token in _tokens(value)} | _declared_context_terms(script, brief)
+
+
+_APP_FILLED_FIELDS = ("viewer_promise", "unique_angle", "creator_intent", "content_constraints")
+
+
+def _app_brief_roots(script: str, brief: dict[str, Any]) -> set[str]:
+    """Roots of words only the app's own brief text uses ("preserve", "package"), never the creator."""
+
+    written = {
+        token for field in _APP_FILLED_FIELDS if not _brief_field_is_creator_supplied(brief, field)
+        for token in _tokens(brief.get(field))
+    }
+    return {_term_root(token) for token in written} - {_term_root(token) for token in _source_terms(script, brief)}
+
+
+def _uses_app_brief_text(text: Any, app_roots: set[str]) -> bool:
+    return bool(app_roots) and any(_term_root(token) in app_roots for token in _tokens(text))
+
+
+# A quote Short's footage ("the video is of road, recorded from the car front
+# window") is presentation; it shipped as the tag "car front window".
+_FOOTAGE_CLAUSE_RE = re.compile(
+    r"[^.\n?!]*\b(?:the\s+video\s+is|video\s+is\s+of|background\s+is|in\s+(?:the\s+)?background|recorded\s+from|footage)\b[^.\n?!]*",
+    re.IGNORECASE,
+)
+
+
+def _footage_roots(script: str, brief: dict[str, Any]) -> set[str]:
+    """Roots of words only a quote Short's footage description uses, never its quote or topic."""
+
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "")
+    if not quote or not is_short_content(script, brief):
+        return set()
+    footage = [str(brief.get("visual_requirements") or ""),
+               *_FOOTAGE_CLAUSE_RE.findall(f"{script}\n{brief.get('content') or ''}")]
+    kept = {_term_root(token) for token in [*_tokens(f"{quote} {brief.get('topic') or ''}"), *_FUNCTION_WORDS]}
+    return {_term_root(token) for text in footage for token in _tokens(text)} - kept
 
 
 def _creator_visual_concepts(value: Any) -> list[str]:
@@ -1091,9 +1152,14 @@ def _specificity_score(text: str) -> int:
     return 12 if 2 <= count <= 5 else (7 if count == 1 else 0)
 
 
+# Generic like "motivation", but kept out of _STOP: there grounding would stop
+# seeing them and "motivational love quotes" would pass on a heartbreak quote.
+_GENERIC_MOODS = {"motivational", "inspirational"}
+
+
 def _is_generic(text: str) -> bool:
     words = _tokens(text)
-    return not words or all(word in _TOPIC_GENERIC | _FORMAT_GENERIC for word in words)
+    return not words or all(word in _TOPIC_GENERIC | _FORMAT_GENERIC | _GENERIC_MOODS for word in words)
 
 
 def _malformed(text: str) -> bool:
@@ -1317,15 +1383,28 @@ _TYPED_FILLER = {"the", "a", "an", "of", "in", "for", "to", "and", "on", "with"}
 
 
 def _typed_similarity(left: str, right: str) -> float:
-    a = set(_normalize(left).split()) - _TYPED_FILLER
-    b = set(_normalize(right).split()) - _TYPED_FILLER
-    return len(a & b) / max(len(a | b), 1)
+    a = _search_forms(re.split(r"[\s-]+", _normalize(left)), _TYPED_FILLER)
+    b = _search_forms(re.split(r"[\s-]+", _normalize(right)), _TYPED_FILLER)
+    if a and "".join(a) == "".join(b):
+        return 1.0  # "break up quotes" / "breakup quotes"
+    return _form_overlap(a, b)
 
 
 def _evidence_similarity(left: str, right: str) -> float:
     """Compare final tags while retaining intent words such as quote/quotes."""
 
-    a, b = set(_evidence_tokens(left)), set(_evidence_tokens(right))
+    return _form_overlap(_search_forms(_evidence_tokens(left)), _search_forms(_evidence_tokens(right)))
+
+
+def _search_forms(words: Iterable[str], skip: Iterable[str] = ()) -> list[str]:
+    # One form per word: "self love quote" and "self-love quotes" are one search, not two tags.
+    return [_term_root(word) for word in words if word and word not in skip]
+
+
+def _form_overlap(left: list[str], right: list[str]) -> float:
+    a = set(left)
+    # Another form of a long word ("motivation"/"motivational") is the same word.
+    b = {next((word for word in a if min(len(word), len(other)) >= 7 and _same_long_stem(word, other)), other) for other in right}
     return len(a & b) / max(len(a | b), 1)
 
 
@@ -1381,7 +1460,8 @@ def _normalized_text(text: str) -> str:
             char if char in "' -" or is_word_character(char) else " "
             for char in normalize_unicode(text).casefold()
         ))
-    return re.sub(r"\s+", " ", kept).strip(" -")
+    # Quotation marks around a word ("'sad' quotes") are not apostrophes.
+    return " ".join(word for word in (part.strip("'") for part in kept.split()) if word).strip(" -")
 
 
 @lru_cache(maxsize=4096)
@@ -1469,9 +1549,27 @@ _QUOTE_THEMES = {
 
 _PAINFUL_QUOTE_RE = re.compile(
     r"\b(?:pain(?:ful)?|hurts?|hurting|cry(?:ing)?|tears?|broken|lonely|alone|miss(?:ing)?|sad(?:ness)?|"
-    r"heartbreak|regrets?|lost|never)\b",
+    r"heartbreak|regrets?|lost|betray(?:al|ed|s)?|cheat(?:ed|ing)|breakup|loneliness)\b"
+    # "Never give up" is encouragement; "you never loved me", "they would have
+    # never told you" and "never again" are loss. "You never know" is an idiom.
+    r"|\b(?:i|you|he|she|they|we|it)(?:['’](?:ll|d|ve)|\s+(?:will|would|could|can|did|have|had)){0,2}\s+never\b(?!\s+know\b)"
+    r"|\bnever\s+again\b",
     re.IGNORECASE,
 )
+# "sad" is a stopword, so grounding never checked it: "sad love quotes" passed on
+# "Never give up on the people you love". It needs a quote that voices pain.
+_SAD_WORDS = {"sad"}
+
+
+def _voices_pain(script: str, brief: dict[str, Any]) -> bool:
+    """Whether the quote (else the script) voices pain; production notes ("sad piano") are not the quote."""
+
+    quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "")
+    return bool(_PAINFUL_QUOTE_RE.search(quote or f"{script} {brief.get('content') or ''}"))
+
+
+def _unvoiced_mood(text: Any, painful: bool) -> bool:
+    return not painful and bool(_SAD_WORDS & set(_normalize(text).split()))
 
 
 def quote_themes(*sources: Any) -> list[str]:

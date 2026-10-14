@@ -8,6 +8,7 @@ and follow-up spokes made up when no validated phrase exists.
 
 import unittest
 
+from win_engine.analysis.entity_extractor import extract_entity_signals
 from win_engine.analysis.keyword_extractor import extract_keyword_signals
 from win_engine.analysis.strategy_layer import (
     build_channel_intelligence,
@@ -81,6 +82,10 @@ class KeywordSignalTests(unittest.TestCase):
         self.assertTrue(any("பிரியாணி" in keyword for keyword in keywords))
         # "இந்த வீடியோவில்" ("in this video") names no subject.
         self.assertFalse([keyword for keyword in keywords if "இந்த" in keyword or "வீடியோவில்" in keyword])
+
+    def test_a_missing_description_is_not_an_entity(self):
+        signals = extract_entity_signals("Trust is earned.", [{"title": "Trust Quotes", "description": None}] * 3)
+        self.assertNotIn("None", [row["entity"] for row in signals])
 
     def test_a_script_without_words_admits_no_result_phrases(self):
         rows = [{"title": "iPhone Pro review", "description": "iphone pro camera"}] * 3

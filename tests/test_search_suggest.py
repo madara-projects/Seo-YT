@@ -15,6 +15,10 @@ class NormalizePhraseTests(unittest.TestCase):
     def test_single_characters_and_apostrophes_survive(self):
         self.assertEqual(normalize_phrase("GTA 5 Map’s Secrets"), "gta 5 map's secrets")
 
+    def test_quotation_marks_are_not_apostrophes(self):
+        self.assertEqual(normalize_phrase("love quotes ‘sad’"), "love quotes sad")
+        self.assertEqual(normalize_phrase("'hello' world"), "hello world")
+
     def test_emoji_marks_and_joiners_are_not_kept(self):
         # U+FE0F after an emoji is a combining mark; kept, it glued itself to the next word.
         self.assertEqual(normalize_phrase("❤️love quotes"), "love quotes")

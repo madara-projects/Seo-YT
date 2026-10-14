@@ -143,8 +143,8 @@ def extract_keyword_signals(script: str, youtube_results: Iterable[dict[str, obj
 
     script_tokens = set(_tokenize(script))
     for result in youtube_results:
-        title = str(result.get("title", ""))
-        description = str(result.get("description", ""))
+        title = str(result.get("title") or "")
+        description = str(result.get("description") or "")
         title_phrases = _extract_phrases(title)
         desc_phrases = _extract_phrases(description)
         for phrase in title_phrases + desc_phrases:

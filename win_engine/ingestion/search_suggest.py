@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from typing import Any, Iterable
@@ -50,7 +49,8 @@ def normalize_phrase(value: Any) -> str:
     text = normalize_unicode(value).casefold().replace("’", "'")
     # An emoji's variation selector is a mark too, but belongs to no word.
     kept = "".join(char if char in "' " or is_word_character(char) else " " for char in text)
-    return re.sub(r"\s+", " ", strip_stray_joiners(kept)).strip()
+    # Quotation marks around a word ("‘sad’") are not apostrophes.
+    return " ".join(word for word in (part.strip("'") for part in strip_stray_joiners(kept).split()) if word)
 
 
 class SearchSuggestClient:
