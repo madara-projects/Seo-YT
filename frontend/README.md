@@ -27,7 +27,7 @@ npm run dev        # http://localhost:5173/, proxies the API to 127.0.0.1:8000
 npm run build      # builds into ../win_engine/api/static/app/
 npm run test       # Vitest
 npm run typecheck  # tsc --noEmit
-npm run gen:api    # regenerate src/api/schema.d.ts from the running backend
+npm run gen:api    # optional: write src/api/schema.d.ts from the running backend (not committed)
 ```
 
 The dev server proxies `/analyze`, `/api`, `/health`, `/meta`, `/diagnostics`,
@@ -50,8 +50,8 @@ to an icon rail (the button in its header, or Ctrl/⌘ B), remembered in
 
 ## API types
 
-`src/api/schema.d.ts` is generated from the live FastAPI OpenAPI document and
-should not be hand-edited — run `npm run gen:api` with the backend up.
+`src/api/schema.d.ts` is not committed: the UI uses the hand-written types in `src/api/`. To inspect the
+backend's OpenAPI types, run `npm run gen:api` with the backend up; the file is generated, never hand-edited.
 
 It covers the request contract and the top-level response scalars. It does not
 usefully describe the nested analysis structures: those are declared as bare

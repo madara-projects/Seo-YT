@@ -2,7 +2,7 @@
  * Domain view models for the `/analyze` payload.
  *
  * The nested structures arrive as bare `dict` in the Pydantic models, so the
- * generated `schema.d.ts` types them as `Record<string, never>`, which would
+ * OpenAPI-generated types (`npm run gen:api`) give them `Record<string, never>`, which would
  * make every real field access a type error. These interfaces describe the
  * shapes the UI actually reads, and every field is optional because the
  * backend's contract is to omit what it cannot evidence rather than to invent
