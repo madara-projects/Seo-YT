@@ -4,6 +4,13 @@ import unicodedata
 from collections import Counter
 from typing import Any
 
+# The creator's selection decides. Only English and Tamil were honoured, so a
+# Hinglish or Tanglish quote without enough marker words read as English.
+_SELECTED_LANGUAGES = {
+    "english": "english", "tamil": "tamil", "tanglish": "tanglish",
+    "hindi": "hinglish_or_hindi", "hinglish": "hinglish_or_hindi",
+}
+
 
 def build_language_strategy(script: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build language and localization guidance."""
@@ -22,8 +29,8 @@ def build_language_strategy(script: str, context: dict[str, Any] | None = None) 
     tanglish_score = sum(normalized.count(token) for token in tanglish_markers)
     script_name = _dominant_script(script)
 
-    if selected_language in {"english", "tamil"}:
-        primary_language = selected_language
+    if selected_language in _SELECTED_LANGUAGES:
+        primary_language = _SELECTED_LANGUAGES[selected_language]
     # The writing system decides first. Counting any non-ASCII character
     # called Tamil script, and English with curly quotes or an emoji, Hindi.
     elif script_name == "tamil":

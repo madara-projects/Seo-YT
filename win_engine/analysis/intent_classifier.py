@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 
@@ -39,10 +40,15 @@ def classify_intent(script: str) -> IntentLabel:
         "what happened",
     ]
 
-    if any(token in lower for token in search_markers):
+    # A marker opens a word ("reviews" counts); "history" is not a story,
+    # "preview" not a review and "fingertips" not tips.
+    def has(markers: list[str]) -> bool:
+        return any(re.search(rf"\b{re.escape(token)}", lower) for token in markers)
+
+    if has(search_markers):
         return "SEARCH"
 
-    if any(token in lower for token in browse_markers):
+    if has(browse_markers):
         return "BROWSE"
 
     return "SUGGESTED"

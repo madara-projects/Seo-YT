@@ -11,8 +11,7 @@ import re
 from typing import Any, Iterable
 
 from win_engine.analysis.generation_quality import title_similarity
-from win_engine.analysis.numbers import optional_number
-from win_engine.analysis.source_cues import is_short_video, source_quote
+from win_engine.analysis.source_cues import is_short_video, source_quote, stated_duration
 from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
 from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES
 
@@ -58,7 +57,8 @@ def analyze_retention_assistant(
     topic = normalize_unicode(brief.get("topic"))
     promise = normalize_unicode(brief.get("viewer_promise"))
     claims = normalize_unicode(brief.get("factual_claims"))
-    duration = optional_number(brief.get("duration_seconds"))
+    # "Microwave it for 90 seconds" in a recipe is not the video's length.
+    duration = stated_duration(brief)
     is_short = is_short_video(source, brief)
 
     if not source:

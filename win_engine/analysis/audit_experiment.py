@@ -7,6 +7,7 @@ import json
 from statistics import mean, median
 from typing import Any
 
+from win_engine.analysis.text_tokens import is_word_character
 from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES, confidence_payload, mature_snapshot
 
 
@@ -42,6 +43,20 @@ def _items(value: Any) -> list[str]:
     if not isinstance(value, (list, tuple)):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _hashtags(text: str) -> list[str]:
+    # Tamil and Hindi vowel signs are not \w: "#காதல்" was read as "#க".
+    tags = []
+    for raw in re.findall(r"#[^\s#]+", text):
+        body = ""
+        for char in raw[1:]:
+            if char != "_" and not is_word_character(char):
+                break
+            body += char
+        if body:
+            tags.append("#" + body)
+    return tags
 
 
 def _normalized(value: Any) -> Any:
@@ -104,7 +119,7 @@ def build_published_audit(context: dict[str, Any]) -> dict[str, Any]:
         "title": _text(published.get("title")) or None,
         "description": published_description or None,
         "tags": _items(published.get("tags")),
-        "hashtags": re.findall(r"#[\w]+", published_description, flags=re.UNICODE),
+        "hashtags": _hashtags(published_description),
     }
     comparisons = [
         _comparison(field, generated[field], selected_values[field], published_values[field], bool(selection), published_available)

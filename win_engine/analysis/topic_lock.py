@@ -12,7 +12,7 @@ from functools import lru_cache
 from typing import Iterable, List
 
 from win_engine.analysis.source_cues import source_quote, timestamp_line
-from win_engine.analysis.text_tokens import is_word_character, strip_stray_joiners, unicode_words
+from win_engine.analysis.text_tokens import JOINERS, is_word_character, strip_stray_joiners, unicode_words
 
 # ---------------------------------------------------------------------------
 # Category awareness: keyword sets per category
@@ -368,7 +368,8 @@ _TRAILING_FUNCTION_WORDS = {
     "she", "he", "they", "we", "i", "who", "when", "while", "if", "so", "as", "because", "even", "still",
     "என்று", "பற்றி", "மற்றும்",
 }
-_SPAN_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’-]*|[஀-௿]+")
+# Devanagari words without the danda (।, ॥): a Hindi source had no topic at all.
+_SPAN_WORD_RE = re.compile(rf"[A-Za-z0-9][A-Za-z0-9'’-]*|[஀-௿]+|[ऀ-ॣ०-ॿ][ऀ-ॣ०-ॿ{JOINERS}]*")
 
 
 def strip_lead_in(text: str) -> str:
@@ -394,7 +395,7 @@ def source_lead_phrase(text: str, max_words: int = 12) -> str:
 
     body = strip_lead_in(text)
     clause = next(
-        (part.strip() for part in re.split(r"[.!?\n:;|]+|\s[-–—]\s", body) if part.strip()),
+        (part.strip() for part in re.split(r"[.!?\n:;|।॥]+|\s[-–—]\s", body) if part.strip()),
         "",
     )
     words = _SPAN_WORD_RE.findall(clause)
@@ -505,9 +506,21 @@ _HASHTAG_STOPWORDS = {
 }
 # Placeholders that must never reach an upload.
 _PLACEHOLDER_TOPICS = {"deep quote", "this topic", "the video topic", "video topic", "aesthetic quote"}
-# Letters and digits in any script, plus Indic vowel signs, which Python's \w
-# does not treat as word characters.
-_HASHTAG_PIECE_RE = re.compile(r"(?:[^\W_]|[ऀ-෿])+")
+def _hashtag_pieces(text: str) -> list[str]:
+    """Runs of letters, digits and combining marks of any script.
+
+    Tamil and Hindi vowel signs are marks, which Python's \\w does not match;
+    the danda (।) is punctuation and ends a piece.
+    """
+
+    pieces, current = [], ""
+    for char in text:
+        if char != "_" and is_word_character(char):
+            current += char
+        elif current:
+            pieces.append(current)
+            current = ""
+    return [*pieces, current] if current else pieces
 
 
 # A Latin word or model code standing alone: "don" in "don't" is not a token.
@@ -601,7 +614,7 @@ def normalize_hashtag(raw: str) -> str:
     is joined in CamelCase ("#ColdBrew"); one-word input keeps its casing.
     """
 
-    pieces = _HASHTAG_PIECE_RE.findall(str(raw or ""))
+    pieces = _hashtag_pieces(str(raw or ""))
     if not pieces:
         return ""
     if len(pieces) == 1:
@@ -637,6 +650,9 @@ def force_hashtags(existing: list[str] | None, topic: str, category: str,
     returned — YouTube does not reward a padded set, and a wrong hashtag shows
     above the title.
     """
+    # package_builder imports generation_quality, which imports this module.
+    from win_engine.analysis.package_builder import is_filler_phrase
+
     out: list[str] = []
     seen: set[str] = set()
 
@@ -652,7 +668,8 @@ def force_hashtags(existing: list[str] | None, topic: str, category: str,
     for raw in existing or []:
         tag = normalize_hashtag(restore_source_casing(str(raw or ""), casing or {}))
         body = tag.lstrip("#")
-        if not body or len(tag) > 30 or is_junk_tag(body):
+        # "#இந்த" ("this") or "#वीडियो" ("video") is narration, not a subject.
+        if not body or len(tag) > 30 or is_junk_tag(body) or is_filler_phrase(body):
             continue
         _push(tag)
         if len(out) >= count:

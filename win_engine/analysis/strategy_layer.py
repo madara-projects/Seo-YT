@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from math import log10
+from math import isfinite, log10
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -196,22 +196,28 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
 
 
+def _finite(value: Any) -> float:
+    # An unreadable, NaN or infinite figure counts as 0 instead of crashing the timing.
+    number = optional_number(value)
+    return number if number is not None and isfinite(number) else 0.0
+
+
 def _reliable_audience_window(analytics: dict[str, Any] | None) -> tuple[str, int, int, int] | None:
     activity = (analytics or {}).get("audience_activity")
     if not isinstance(activity, dict) or activity.get("reliable") is not True:
         return None
-    sample_size = int(activity.get("sample_size") or 0)
+    sample_size = int(_finite(activity.get("sample_size")))
     rows = activity.get("windows") or activity.get("rows") or []
     if sample_size < 7 or not isinstance(rows, list):
         return None
     valid = [row for row in rows if isinstance(row, dict) and str(row.get("day") or "").title() in _DAY_NAMES]
     if not valid:
         return None
-    best = max(valid, key=lambda row: float(row.get("activity") or row.get("score") or 0))
+    best = max(valid, key=lambda row: _finite(row.get("activity") or row.get("score")))
     try:
         start = max(0, min(23, int(best.get("start_hour") or 0)))
         end = max(start + 1, min(24, int(best.get("end_hour") or start + 2)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return str(best["day"]).title(), start, end, sample_size
 
@@ -224,7 +230,7 @@ def _historical_window(videos: list[dict[str, Any]], zone: ZoneInfo) -> tuple[st
         retention = item.get("average_view_percentage")
         if parsed is None or (views is None and retention is None):
             continue
-        weight = 1.0 + log10(max(0, int(views or 0)) + 1) + max(0.0, float(retention or 0)) / 100.0
+        weight = 1.0 + log10(max(0, int(_finite(views))) + 1) + max(0.0, _finite(retention)) / 100.0
         rows.append((parsed.astimezone(zone), weight))
     if len(rows) < 5:
         return None

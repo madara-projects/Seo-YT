@@ -207,6 +207,13 @@ def build_creator_brief(
 def _extract_duration(content: str) -> float | None:
     # Units spelled out or as sec/min, singular or plural. The bare "s" and "m"
     # read "iPhone 5s" as five seconds, while "45 seconds" never matched.
+    # "1 min 30 sec" is 90 seconds; the seconds pattern alone read 30.
+    match = re.search(
+        r"\b(\d+(?:\.\d+)?)[\s-]*(?:minutes?|mins?)[\s,-]*(?:and\s+)?(\d+(?:\.\d+)?)[\s-]*(?:seconds?|secs?)\b",
+        content, re.IGNORECASE,
+    )
+    if match:
+        return float(match.group(1)) * 60 + float(match.group(2))
     match = re.search(r"\b(\d+(?:\.\d+)?)[\s-]*(?:seconds?|secs?)\b", content, re.IGNORECASE)
     if match:
         return float(match.group(1))
@@ -282,7 +289,9 @@ def creator_topic(creator_brief: dict[str, Any] | None) -> str:
             if part.strip(" \t\r\n.,;:!?—–-")
         ]
         focus = clauses[-1] if len(clauses) > 1 else quote_text
-        words = re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", focus)
+        # A Tamil or Hindi quote has no Latin words; its topic came from the
+        # label around it ("quote is- ...").
+        words = re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", focus) or _phrase_words(focus)
         if words and words[0].lower() in {"a", "an", "the"}:
             words = words[1:]
         if words:

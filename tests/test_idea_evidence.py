@@ -60,5 +60,17 @@ class PossibleOutlierTests(unittest.TestCase):
         self.assertIn("not monthly search volume", evidence["opportunity_explanation"])
 
 
+class StoredRowFieldsTests(unittest.TestCase):
+    def test_competitor_tags_descriptions_and_audio_language_are_not_stored(self):
+        row = _result(5.0, tags=["a"], full_description="long text", default_audio_language="ta", video_id="v1")
+        research = {"youtube_results": [row], "top_opportunities": [dict(row)]}
+        evidence = build_idea_evidence(research)
+        for field in ("youtube_results", "top_opportunities"):
+            with self.subTest(field=field):
+                self.assertEqual(evidence[field], [{"title": "Public result", "outlier_score": 5.0, "video_id": "v1"}])
+        # The live research rows keep them for the response.
+        self.assertEqual(research["youtube_results"][0]["tags"], ["a"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,24 +9,27 @@ from win_engine.core.iso_duration import duration_seconds
 def _optional_int(value: Any) -> int | None:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # NaN and infinity are unknown, not counts
         return None
 
 
-def _days_since(published_at: Any) -> float | None:
-    if not published_at:
+def _parse_time(value: Any) -> datetime | None:
+    if not value:
         return None
-
-    normalized = str(published_at).replace("Z", "+00:00")
     try:
-        published_dt = datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
 
-    if published_dt.tzinfo is None:
-        published_dt = published_dt.replace(tzinfo=timezone.utc)
 
-    delta = datetime.now(timezone.utc) - published_dt
+def _days_since(published_at: Any, until: Any = None) -> float | None:
+    published_dt = _parse_time(published_at)
+    if published_dt is None:
+        return None
+    # Cached counts were taken at capture time: dividing a week-old count by
+    # today's age read a young video's velocity up to 7x too low.
+    delta = (_parse_time(until) or datetime.now(timezone.utc)) - published_dt
     return max(delta.total_seconds() / 86400, 1.0)
 
 
@@ -95,7 +98,7 @@ def score_outliers(youtube_results: List[dict[str, Any]]) -> List[dict[str, Any]
         likes = _optional_int(result.get("like_count"))
         comments = _optional_int(result.get("comment_count"))
         subscribers = _optional_int(result.get("subscriber_count"))
-        days_live = _days_since(result.get("published_at"))
+        days_live = _days_since(result.get("published_at"), result.get("captured_at"))
         length = duration_seconds(result.get("duration"))
 
         views_per_day = views / days_live if views is not None and days_live is not None else None

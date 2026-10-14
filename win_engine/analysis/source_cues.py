@@ -29,9 +29,14 @@ _FORMAT_ALIASES = {
     "quote_short": "youtube_shorts", "quote_shorts": "youtube_shorts", "longform": "long_form",
 }
 # The platform's own words for the format. A bare "short" is not one: "short
-# ribs", "in short" and "a short guide" describe long videos.
+# ribs", "in short" and "a short guide" describe long videos. Nor is a bare
+# "reel": "fishing reel" and "highlight reel" name things, so a reel counts
+# only as a format ("reels", "#reel", "Instagram reel", "as a reel", "reel video").
 _SHORT_CUE_RE = re.compile(
-    r"(?<![\w#])#shorts?\b|\b(?:youtube|yt)[\s_-]*shorts?\b|\bshort[\s_-]?form\b|\breels?\b|\bquote[\s_-]+shorts?\b",
+    r"(?<![\w#])#(?:shorts?|reels?)\b|\b(?:youtube|yt)[\s_-]*shorts?\b|\bshort[\s_-]?form\b|"
+    r"\b(?:instagram|insta|ig|facebook|fb)[\s_-]*reels?\b|\bas\s+(?:an?\s+|my\s+)?reels?\b|"
+    r"(?<!fishing\s)(?<!highlight\s)(?<!film\s)(?:\breels\b|\breels?[\s_-]+(?:videos?|format)\b)|"
+    r"\bquote[\s_-]+(?:shorts?|reels?)\b",
     re.IGNORECASE,
 )
 
@@ -143,7 +148,12 @@ def feeling_words(text: Any) -> list[str]:
 
 # Words that turn a verb around. "nothing" and "nobody" are subjects, not a
 # negation of the verb ("nothing hurts more than ...").
-NEGATORS = frozenset({"never", "not", "no", "without", "cannot", "neither", "nor"})
+NEGATORS = frozenset({
+    "never", "not", "no", "without", "cannot", "neither", "nor",
+    # Casual quotes drop the apostrophe: "dont cry" is "don't cry".
+    "dont", "cant", "didnt", "wont", "isnt", "doesnt", "wasnt", "werent", "arent",
+    "couldnt", "wouldnt", "shouldnt", "havent", "hasnt", "hadnt", "aint",
+})
 
 
 def is_negator(word: str) -> bool:
@@ -158,8 +168,18 @@ def affirmed_feeling_words(text: Any) -> list[str]:
     flat = normalize_unicode(text)
     return [
         match.group(0).casefold() for match in _STRONG_QUOTE_WORDS.finditer(flat)
-        if not any(is_negator(word) for word in unicode_words(flat[:match.start()], min_length=1)[-2:])
+        if not _denied_before(flat[:match.start()])
     ]
+
+
+def _denied_before(prefix: str) -> bool:
+    # A negation stays in its sentence ("It's not over. Love ..."), and "no
+    # one" is a subject like "nobody" ("No one hurts you like ...").
+    words = unicode_words(re.split(r"[.!?;\n]", prefix)[-1], min_length=1)[-2:]
+    return any(
+        is_negator(word) and not (word == "no" and words[index + 1:index + 2] == ["one"])
+        for index, word in enumerate(words)
+    )
 
 
 def stated_duration(brief: dict[str, Any]) -> float | None:
@@ -664,7 +684,8 @@ def _leading_phrase(text: str, question: bool, max_chars: int) -> str:
     best = ""
     for count in range(len(words) - 1, 3, -1):
         candidate = _title_form(" ".join(words[:count]), question=question, ends_quote=False, starts_quote=True)
-        if len(candidate) > max_chars:
+        # Words of punctuation alone ("- - - -") leave no title.
+        if not candidate or len(candidate) > max_chars:
             continue
         if words[count].casefold().strip(",.;:") in QUOTE_PHRASE_STARTS and candidate.split()[-1].casefold() not in _INCOMPLETE_ENDINGS:
             return candidate

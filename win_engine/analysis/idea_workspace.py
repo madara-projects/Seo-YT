@@ -8,6 +8,7 @@ from statistics import median
 from typing import Any
 
 from win_engine.analysis.numbers import optional_number
+from win_engine.ingestion.youtube_client import DETAIL_FIELDS
 
 
 # keyword_research carries the tag candidates and the search-suggestion
@@ -52,6 +53,15 @@ def build_idea_evidence(
 
     captured_at = datetime.now(timezone.utc).isoformat()
     payload = {field: _json_safe(research.get(field)) for field in RESEARCH_FIELDS}
+    # Competitor tags, full descriptions and audio language stay out of the
+    # stored snapshot, as they do from a saved analysis run.
+    for field in ("youtube_results", "top_opportunities"):
+        if isinstance(payload.get(field), list):
+            payload[field] = [
+                {key: value for key, value in row.items() if key not in DETAIL_FIELDS}
+                if isinstance(row, dict) else row
+                for row in payload[field]
+            ]
     results = payload.get("youtube_results") if isinstance(payload.get("youtube_results"), list) else []
     queries = payload.get("research_queries") if isinstance(payload.get("research_queries"), list) else []
     publication_dates = sorted(
@@ -146,7 +156,7 @@ def _json_safe(value: Any) -> Any:
         return json.loads(json.dumps(value))
     except (TypeError, ValueError):
         if isinstance(value, dict):
-            return {str(key): _json_safe(item) for key, item in value.items() if not key.lower().endswith("token")}
+            return {str(key): _json_safe(item) for key, item in value.items() if not str(key).lower().endswith("token")}
         if isinstance(value, (list, tuple)):
             return [_json_safe(item) for item in value]
         return None

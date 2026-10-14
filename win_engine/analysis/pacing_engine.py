@@ -4,6 +4,12 @@ import re
 from typing import Any
 
 from win_engine.analysis.source_cues import is_short_video, source_quote
+from win_engine.analysis.text_tokens import unicode_words
+
+
+def _count_words(text: str, terms: list[str]) -> int:
+    # Whole words: "now" is not in "know", nor "but" in "button".
+    return sum(len(re.findall(rf"\b{re.escape(term)}\b", text)) for term in terms)
 
 
 def analyze_script_pacing(script: str, video_format: str = "", exact_quote: str = "") -> dict[str, Any]:
@@ -12,7 +18,8 @@ def analyze_script_pacing(script: str, video_format: str = "", exact_quote: str 
     format_brief = {"video_format": video_format}
     quote = exact_quote.strip() or source_quote(script, format_brief)
     if quote and is_short_video(script, format_brief):
-        quote_words = re.findall(r"\b[\w'’]+\b", quote)
+        # \w splits Tamil and Hindi words at every vowel sign.
+        quote_words = unicode_words(quote, min_length=1)
         word_count = len(quote_words)
         reading_seconds = max(3, round(word_count / 2.8))
         return {
@@ -30,8 +37,8 @@ def analyze_script_pacing(script: str, video_format: str = "", exact_quote: str 
         }
 
     cleaned = re.sub(r"\s+", " ", script).strip()
-    sentences = [part.strip() for part in re.split(r"[.!?]+", cleaned) if part.strip()]
-    words = re.findall(r"\b[\w']+\b", cleaned)
+    sentences = [part.strip() for part in re.split(r"[.!?।॥]+", cleaned) if part.strip()]
+    words = unicode_words(cleaned, min_length=1)
 
     if not sentences:
         return {
@@ -68,8 +75,8 @@ def analyze_script_pacing(script: str, video_format: str = "", exact_quote: str 
         "watch",
         "now",
     ]
-    hook_count = sum(cleaned.lower().count(term) for term in hook_terms)
-    pattern_interrupts = sum(cleaned.lower().count(term) for term in interrupt_terms)
+    hook_count = _count_words(cleaned.lower(), hook_terms)
+    pattern_interrupts = _count_words(cleaned.lower(), interrupt_terms)
 
     if avg_sentence_length <= 14:
         pace_label = "fast"
