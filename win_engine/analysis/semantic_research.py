@@ -127,7 +127,7 @@ def _parse(raw: str) -> dict[str, Any] | None:
     for field in _FIELDS[1:5]:
         result[field] = _strings(value.get(field), limit=12)
     clusters: list[dict[str, Any]] = []
-    for item in value.get("keyword_clusters") or []:
+    for item in _items(value.get("keyword_clusters")):
         if not isinstance(item, dict):
             continue
         cluster = _clean(item.get("cluster"))[:100]
@@ -137,7 +137,7 @@ def _parse(raw: str) -> dict[str, Any] | None:
     result["keyword_clusters"] = clusters[:8]
     evidence: list[dict[str, str]] = []
     seen_evidence: set[tuple[str, str]] = set()
-    for item in value.get("concept_evidence") or []:
+    for item in _items(value.get("concept_evidence")):
         if not isinstance(item, dict):
             continue
         concept = _clean(item.get("concept"))[:160]
@@ -455,6 +455,12 @@ def _strings(value: Any, *, limit: int) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def _items(value: Any) -> list[Any]:
+    # A number or true where an array belongs raised TypeError out of research;
+    # a lone object stands for an array of one.
+    return value if isinstance(value, list) else [value] if isinstance(value, dict) else []
 
 
 def _label(item: Any) -> Any:

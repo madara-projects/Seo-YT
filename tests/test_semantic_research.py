@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from win_engine.analysis import search_opportunities
+from win_engine.analysis import search_opportunities, semantic_research
 from win_engine.analysis.search_opportunities import discover_search_opportunities
 from win_engine.analysis.semantic_research import (
     analyze_script_semantics,
@@ -122,6 +122,18 @@ class SearchOpportunityGroundingTests(unittest.TestCase):
         self.assertEqual(result["status"], "gemini_confirmed")
 
 
+class OpportunityValidationTests(unittest.TestCase):
+    def test_a_phrase_is_copied_only_word_for_word(self):
+        # "art of letting go" sat inside "heart of letting gold" as letters and was rejected as copied.
+        self.assertFalse(search_opportunities._copied_phrase("art of letting go", ["The heart of letting gold shine"]))
+        self.assertTrue(search_opportunities._copied_phrase("art of letting go", ["The art of letting go, slowly"]))
+
+    def test_an_infinite_relevance_is_no_score_rather_than_a_crash(self):
+        # json.loads reads "Infinity"; int() of it raised OverflowError and failed the research.
+        self.assertEqual(search_opportunities._score(float("inf")), 0)
+        self.assertEqual(search_opportunities._score("1e999"), 0)
+
+
 class ViewerIntentTests(unittest.TestCase):
     def test_both_research_steps_read_intent_the_same_way(self):
         for script in (
@@ -155,6 +167,21 @@ class SemanticResearchTests(unittest.TestCase):
         refine_research_semantics(self.SCRIPT, {}, [{"query": "galaxy s25 ultra review"}])
         self.assertTrue(generate.call_args_list)
         self.assertTrue(all(call.kwargs.get("purpose") == "research" for call in generate.call_args_list))
+
+
+class ReplyShapeTests(unittest.TestCase):
+    def test_a_number_where_an_array_belongs_is_ignored_not_a_crash(self):
+        parsed = semantic_research._parse(json.dumps(
+            {"primary_topic": "letting go", "keyword_clusters": 3, "concept_evidence": True}
+        ))
+        self.assertEqual((parsed["keyword_clusters"], parsed["concept_evidence"]), ([], []))
+
+    def test_a_lone_cluster_object_is_one_cluster(self):
+        parsed = semantic_research._parse(json.dumps({
+            "primary_topic": "letting go",
+            "keyword_clusters": {"cluster": "letting go", "candidates": ["letting go quotes"]},
+        }))
+        self.assertEqual(parsed["keyword_clusters"], [{"cluster": "letting go", "candidates": ["letting go quotes"]}])
 
 
 class GroundingTokenTests(unittest.TestCase):

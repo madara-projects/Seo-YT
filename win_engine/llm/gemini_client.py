@@ -42,6 +42,8 @@ _PURPOSE_HEALTH: dict[str, dict[str, object]] = {"package": _PROVIDER_HEALTH}
 # An attempt with less time left than the shortest timeout Settings allows
 # would be cut off mid-generation.
 _MIN_ATTEMPT_SECONDS = 5.0
+# Models that answered a thinkingConfig with HTTP 400 and then accepted the request without one.
+_THINKING_CONFIG_REJECTED: set[str] = set()
 
 
 def _gemini_settings() -> Settings:
@@ -78,13 +80,18 @@ def _get_key() -> str:
     return (_gemini_settings().gemini_api_key or "").strip()
 
 
+def _model_name(value: str | None) -> str:
+    # ListModels names a model "models/gemini-…"; the request URL adds that prefix itself.
+    return (value or "").strip().removeprefix("models/").strip()
+
+
 def _get_model() -> str:
-    configured = (_gemini_settings().gemini_model or "").strip()
+    configured = _model_name(_gemini_settings().gemini_model)
     return configured or str(Settings.model_fields["gemini_model"].default)
 
 
 def _get_fallback_model() -> str:
-    return (_gemini_settings().gemini_fallback_model or "").strip()
+    return _model_name(_gemini_settings().gemini_fallback_model)
 
 
 def is_available() -> bool:
@@ -236,6 +243,7 @@ def reset_provider_health() -> None:
     with _HEALTH_LOCK:
         for health in _PURPOSE_HEALTH.values():
             health.update(_healthy())
+        _THINKING_CONFIG_REJECTED.clear()
 
 
 def _record_provider_success(purpose: str) -> None:
@@ -319,6 +327,19 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
             return None
 
 
+# Finish reasons for a candidate Gemini stopped or withheld on content grounds.
+_BLOCKING_FINISH_REASONS = {"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "LANGUAGE"}
+
+
+def _block_reason(body: Any, finish_reason: str) -> str | None:
+    """Why Gemini withheld its answer: the prompt's blockReason, else a blocking finishReason."""
+    feedback = body.get("promptFeedback") if isinstance(body, dict) else None
+    reason = str(feedback.get("blockReason") or "") if isinstance(feedback, dict) else ""
+    if reason.upper() in {"", "BLOCK_REASON_UNSPECIFIED"}:
+        reason = finish_reason if finish_reason in _BLOCKING_FINISH_REASONS else ""
+    return re.sub(r"[^A-Z_]", "", reason.upper())[:40] or None
+
+
 def _backoff_delay(attempt: int, retry_after: float | None) -> float | None:
     """Seconds to wait before a retry, or None when the server asks for longer than allowed."""
     settings = _gemini_settings()
@@ -378,17 +399,24 @@ def generate_with_diagnostics(
     switched_model = False
     # The failure that sent this call to the backup model, with its HTTP status.
     switch_cause: tuple[str, int | None] | None = None
+    # The HTTP status of a primary model this key could not use.
+    primary_rejected_status: int | None = None
 
     # 30s timed out routinely on full packages, costing a dead wait plus a retry.
     timeout = settings.gemini_timeout_seconds
     ceiling = settings.gemini_output_token_ceiling
+    thinking_budget = settings.gemini_thinking_budget
+    # Thinking tokens count against maxOutputTokens, so the budget comes on top of the caller's.
+    thinking_headroom = max(thinking_budget, 0)
+    # Models that rejected the thinkingConfig during this call.
+    thinking_refused: set[str] = set()
 
     payload = {
         "systemInstruction": {"parts": [{"text": system}]} if system else None,
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
-            "maxOutputTokens": min(max(max_tokens, 256), ceiling),
+            "maxOutputTokens": min(max(max_tokens, 256) + thinking_headroom, ceiling),
             "responseMimeType": "application/json",
         },
     }
@@ -480,6 +508,10 @@ def generate_with_diagnostics(
     while True:
         attempts += 1
         attempt_timeout = min(timeout, seconds_left())
+        if thinking_budget >= 0 and model not in _THINKING_CONFIG_REJECTED and model not in thinking_refused:
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+        else:
+            payload["generationConfig"].pop("thinkingConfig", None)
         try:
             response = httpx.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -505,6 +537,28 @@ def generate_with_diagnostics(
                 assert diagnostic is not None
                 _LAST_DIAGNOSTIC.set(diagnostic)
                 return "", diagnostic
+            if (
+                response.status_code == 400 and "thinkingConfig" in payload["generationConfig"]
+                and seconds_left() >= _MIN_ATTEMPT_SECONDS
+            ):
+                # A model without thinking controls rejects the field; ask it once more without one.
+                logger.warning("Gemini model %s rejected the thinking budget; retrying without it.", model)
+                thinking_refused.add(model)
+                retry_reasons.append("thinking_config_rejected")
+                continue
+            if (
+                response.status_code == 404 and not switched_model and fallback_model and fallback_model != model
+                and seconds_left() >= _MIN_ATTEMPT_SECONDS
+            ):
+                # A configured model this key cannot use; the backup is a different model.
+                logger.warning("Gemini model %s is not available (HTTP 404); check the model setting. "
+                               "Trying backup model %s.", model, fallback_model)
+                retry_reasons.append("primary_model_not_found:switched_to_backup_model")
+                primary_rejected_status = 404
+                model = fallback_model
+                switched_model = True
+                retries = 0
+                continue
             if response.status_code in {400, 401, 403, 404}:
                 logger.warning("Gemini request rejected for model %s with HTTP %d; not retrying.", model, response.status_code)
                 if switch_cause is not None:
@@ -513,6 +567,8 @@ def generate_with_diagnostics(
                     diagnostic = {"status": "gemini_permanent_error", "attempts": attempts, "retries": retries,
                                   "retry_reasons": retry_reasons, "http_status": response.status_code,
                                   "failure_category": "authentication_or_configuration"}
+                    if primary_rejected_status is not None:
+                        diagnostic["primary_model_http_status"] = primary_rejected_status
                 _LAST_DIAGNOSTIC.set(diagnostic)
                 return "", diagnostic
             if response.status_code == 408 or response.status_code >= 500:
@@ -526,6 +582,8 @@ def generate_with_diagnostics(
                 _LAST_DIAGNOSTIC.set(diagnostic)
                 return "", diagnostic
             response.raise_for_status()
+            if model in thinking_refused:
+                _THINKING_CONFIG_REJECTED.add(model)
             try:
                 body = response.json()
             except (TypeError, ValueError):
@@ -537,12 +595,16 @@ def generate_with_diagnostics(
             parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
             out_text = "".join(str(part.get("text") or "") for part in parts).strip()
             finish_reason = str(candidates[0].get("finishReason") or "").upper() if candidates else ""
+            usage = body.get("usageMetadata") if isinstance(body, dict) else None
+            thoughts = usage.get("thoughtsTokenCount") if isinstance(usage, dict) else None
+            thoughts_tokens = thoughts if isinstance(thoughts, int) and not isinstance(thoughts, bool) else 0
             # A truncated candidate still carries text, so without this check the caller
             # receives half a JSON object labelled "success", fails to parse it, and the
             # run is misreported as "Gemini unavailable".
             if finish_reason == "MAX_TOKENS":
                 current_cap = int(payload["generationConfig"].get("maxOutputTokens") or 0)
-                widened = min(current_cap * 2, ceiling)
+                # Straight to the ceiling: a thinking model can spend a doubled cap on reasoning alone.
+                widened = ceiling
                 if widened > current_cap and retries < transient_retries and seconds_left() >= _MIN_ATTEMPT_SECONDS:
                     retries += 1
                     retry_reasons.append("output_token_limit")
@@ -552,30 +614,49 @@ def generate_with_diagnostics(
                         current_cap, retries, transient_retries, widened,
                     )
                     continue
+                if fallback_model and fallback_model != model and not switched_model and seconds_left() >= _MIN_ATTEMPT_SECONDS:
+                    # A thinking model can spend even the ceiling on reasoning; the backup gets the same room.
+                    logger.warning("Gemini truncated on %s; switching to backup model %s.", model, fallback_model)
+                    retry_reasons.append("output_token_limit:switched_to_backup_model")
+                    model = fallback_model
+                    switched_model = True
+                    retries = 0
+                    payload["generationConfig"]["maxOutputTokens"] = max(current_cap, ceiling)
+                    continue
                 # Truncation follows from the prompt and the token budget, not
                 # from provider health, so it never counts toward the cooldown.
                 health = provider_health(purpose)
                 diagnostic = {"status": "gemini_truncated", "failure_category": "output_token_limit",
                               "attempts": attempts, "retries": retries, "retry_reasons": retry_reasons,
-                              "max_output_tokens": current_cap,
+                              "max_output_tokens": current_cap, "thoughts_tokens": thoughts_tokens,
                               "transient_failure_count": health["transient_failure_count"],
                               "cooldown_triggered": False,
                               "cooldown_remaining_seconds": health["cooldown_remaining_seconds"]}
                 _LAST_DIAGNOSTIC.set(diagnostic)
                 return "", diagnostic
-            if out_text:
+            # A blocked prompt has no candidate, and a blocked candidate at most part of its JSON.
+            block_reason = _block_reason(body, finish_reason)
+            if out_text and not block_reason:
                 _record_provider_success(purpose)
                 diagnostic = {"status": "gemini_success", "attempts": attempts, "retries": retries,
                               "retry_reasons": retry_reasons, "rate_limited_before_success": rate_limited,
                               "retry_after_seen": retry_after_seen, "failure_category": None,
-                              "model": model, "backup_model_used": switched_model}
+                              "model": model, "backup_model_used": switched_model,
+                              "thoughts_tokens": thoughts_tokens}
+                if primary_rejected_status is not None:
+                    diagnostic["primary_model_http_status"] = primary_rejected_status
                 _LAST_DIAGNOSTIC.set(diagnostic)
                 return out_text, diagnostic
-            diagnostic = {"status": "gemini_invalid_response", "failure_category": "malformed_provider_response",
+            diagnostic = {"status": "gemini_invalid_response",
+                          "failure_category": "content_blocked" if block_reason else "malformed_provider_response",
                           "attempts": attempts, "retries": retries, "retry_reasons": retry_reasons}
+            if block_reason:
+                logger.warning("Gemini withheld its answer (%s).", block_reason)
+                diagnostic["block_reason"] = block_reason
             _LAST_DIAGNOSTIC.set(diagnostic)
             return "", diagnostic
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        # A dropped connection ("Server disconnected") is a ProtocolError, not a NetworkError.
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
             if isinstance(exc, httpx.TimeoutException) and attempt_timeout < timeout:
                 # The request's own deadline cut this attempt short, which says
                 # nothing about the provider's health.

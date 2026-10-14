@@ -104,7 +104,7 @@ _SYSTEM_PROMPT = (
     "Output ONLY valid JSON with keys: \"title\", \"variants\" (array of 5 strings), "
     "\"description\", \"tags\" (array of up to 12 contextual strings), and \"hashtags\" (array of up to 3 strings). "
     "Every title must be an exact, upload-ready value rather than a stem or template. "
-    "For reflective quotes, use concise natural titles and one short complementary description paragraph. "
+    "For reflective quote Shorts, use concise natural titles and one short complementary description paragraph. "
     "Avoid inflated claims such as 'changes everything', generic analysis language such as 'this video explores', "
     "and repeating the same meaning in multiple paragraphs. Preserve the quote and its conditional meaning. "
 )
@@ -543,7 +543,7 @@ Constraints:
 - tags must be natural phrases that a person might type into search. Preserve contractions such as "didn't"; never make a tag by deleting grammar words from a quote, and never return a bag of unrelated quote words
 - research-backed SEO targets are candidates, not mandatory tags. Do not copy a title, exact quote, or competitor title into tags; use only targets that accurately describe the video
 - tags must be atomic search concepts: one natural topic, intent, entity, or useful long-tail phrase per tag, each 30 characters or fewer, never a fragment of the brief's notes. Never glue separate concepts into one tag, such as "heartbreak loneliness emotional rejection healing". For a Short, include the creator-preferred platform tags "yt" and "shorts" as two separate tags; do not include youtube shorts, viral shorts, hashtags, generic mood words, or visual footage terms unless the creator explicitly says viewers search for that visual subject
-- hashtags: #shorts first for a Short, then up to two hashtags viewers actually follow: for a quote Short #quotes and one established feeling or niche hashtag (#heartbreak, #love, #healing, #SelfWorth, #SadLoveQuotes); for other videos the strongest validated subject tags. A hashtag is a real word or a phrase of at most three words; never coin a longer PascalCase phrase. Avoid #viral, #trending, and #fyp
+- hashtags: #shorts first for a Short, then up to two hashtags viewers actually follow: for a quote Short #quotes and one established feeling or niche hashtag that the quote itself carries (#heartbreak, #love, #healing, #SelfWorth, #SadLoveQuotes); for other videos the strongest validated subject tags. A hashtag is a real word or a phrase of at most three words; never coin a longer PascalCase phrase. Avoid #viral, #trending, and #fyp
 - tags must come from the actual topic, named entities, exact phrases, useful spelling variants, and language transliterations. Return only tags justified by this specific video; do not pad the list to a fixed count and do not add generic viral/trending filler
 - for long-form, aim for 8-12 tags when the video supports them: the exact main search phrase first, then its closest real-search variants (prefer the search phrases listed above), then named products or entities written exactly as the source writes them, including model numbers (for example "galaxy s25 ultra review")
 - a researched YouTube title or result phrase is evidence only, never text to copy into a title, description, or tag. Research may improve wording for the same source-supported subject, but may not introduce a new situation, entity, relationship, product, lesson, or claim
@@ -721,17 +721,25 @@ def _sanitize_generated_package(
             description = f'“{quote}”\n\nA quiet reflection for anyone who connects with these words.'
         elif re.sub(r"\s+", " ", quote).strip() not in re.sub(r"\s+", " ", description).strip():
             paragraphs = [item.strip() for item in re.split(r"\n\s*\n", description) if item.strip()]
-            quote_words = set(re.findall(r"[\w’']+", quote.casefold(), re.UNICODE))
+
+            def words(value: str) -> set[str]:
+                # "didn’t" and "didn't" are one word.
+                return {word.strip("'") for word in re.findall(r"[\w']+", value.replace("’", "'").casefold(), re.UNICODE)} - {""}
+
+            quote_words = words(quote)
+            # A copied sentence of a two-sentence quote holds only part of the whole quote's words.
+            quote_parts = [quote_words, *(part for part in map(words, re.split(r"(?<=[.!?])\s+|\n+", quote)) if len(part) >= 3)]
+
+            def echoes_quote(sentence: str) -> bool:
+                found = words(sentence)
+                return any(len(part & found) >= 0.8 * len(part) for part in quote_parts)
+
             if paragraphs:
                 # Replace only the sentences that paraphrase the quote. Replacing
                 # the whole first paragraph threw away every line of commentary
                 # the model wrote after the quote in that same paragraph.
                 sentences = re.split(r"(?<=[.!?”\"])\s+", paragraphs[0])
-                rest = [
-                    sentence for sentence in sentences
-                    if not quote_words or len(quote_words & set(re.findall(r"[\w’']+", sentence.casefold(), re.UNICODE)))
-                    / len(quote_words) < 0.8
-                ]
+                rest = [sentence for sentence in sentences if not quote_words or not echoes_quote(sentence)]
                 paragraphs = [f'“{quote}”', *([" ".join(rest)] if rest else []), *paragraphs[1:]]
             else:
                 paragraphs = [f'“{quote}”']

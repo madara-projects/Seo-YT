@@ -166,6 +166,27 @@ class PromptHygieneTests(unittest.TestCase):
     def test_system_prompt_sentences_do_not_run_together(self):
         self.assertNotRegex(seo_writer._SYSTEM_PROMPT, r"[a-z][.!?][A-Z]")
 
+    def test_quote_short_rules_do_not_reach_other_cases(self):
+        # One short paragraph is a quote Short's description, not long-form's 120-220
+        # words; a feeling hashtag such as #healing must be carried by the quote.
+        self.assertIn("For reflective quote Shorts, use concise natural titles", seo_writer._SYSTEM_PROMPT)
+        prompt = seo_writer._build_user_prompt("Cold brew coffee at home.", "", "english", "global", "general")
+        self.assertIn("one established feeling or niche hashtag that the quote itself carries", prompt)
+
+
+class QuoteDescriptionTests(unittest.TestCase):
+    def test_a_two_sentence_quote_the_model_copied_inexactly_appears_once(self):
+        quote = "I didn’t lose you. You lost someone who truly loved you."
+        package = {
+            "title": "You Lost Someone Who Truly Loved You", "variants": ["You Lost Someone Who Truly Loved You"],
+            "description": "“I didn't lose you. You lost someone who truly loved you.” Some endings are beginnings.",
+            "tags": [], "hashtags": [],
+        }
+        description = seo_writer._sanitize_generated_package(package, quote, {"exact_quote": quote})["description"]
+        self.assertIn(quote, description)
+        self.assertEqual(description.count("lose you"), 1)
+        self.assertIn("Some endings are beginnings.", description)
+
 
 class TitleSimilarityTests(unittest.TestCase):
     def test_the_writer_judges_repetition_like_the_quality_gate(self):

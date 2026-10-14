@@ -177,12 +177,29 @@ class BackupModelRejectionTests(unittest.TestCase):
         self.assertTrue(gemini_client.provider_health()["cooldown_active"])
 
     def test_rejected_primary_is_still_a_configuration_error(self, post, _sleep):
+        # A primary the key cannot use now tries the backup once; with both
+        # missing it is still a configuration error naming the primary's rejection.
         post.return_value = _status(404)
         with patch.dict(os.environ, self.ENVIRONMENT):
             _, trace = gemini_client.generate_with_diagnostics("test")
         self.assertEqual(trace["status"], "gemini_permanent_error")
         self.assertEqual(trace["failure_category"], "authentication_or_configuration")
-        self.assertEqual(post.call_count, 1)
+        self.assertEqual(trace["primary_model_http_status"], 404)
+        self.assertIn("primary_model_not_found:switched_to_backup_model", trace["retry_reasons"])
+        self.assertEqual(post.call_count, 2)
+        self.assertFalse(gemini_client.provider_health()["cooldown_active"])
+
+    def test_a_primary_the_key_cannot_use_falls_to_the_backup_model(self, post, _sleep):
+        post.side_effect = lambda url, **_kwargs: _status(404) if "/primary:" in url else _success()
+        environment = {**self.ENVIRONMENT, "WIN_ENGINE_GEMINI_API_KEY": "key-never-logged"}
+        with patch.dict(os.environ, environment):
+            with self.assertLogs("win_engine.llm.gemini_client", "WARNING") as logs:
+                text, trace = gemini_client.generate_with_diagnostics("test")
+        self.assertTrue(text)
+        self.assertTrue(trace["backup_model_used"])
+        self.assertEqual(trace["primary_model_http_status"], 404)
+        self.assertTrue(any("primary" in line for line in logs.output))
+        self.assertFalse(any("key-never-logged" in line for line in logs.output))
 
 
 @patch("win_engine.llm.gemini_client.time.sleep")
@@ -367,6 +384,131 @@ class JsonReplyTests(unittest.TestCase):
         raw = '{"parts": ' + "1" * 5000 + "}"
         self.assertIsNone(gemini_client.parse_json_object(raw))
         self.assertIsNone(gemini_client.parse_json_object("```json\n" + raw + "\n```"))
+
+
+@patch("win_engine.llm.gemini_client.time.sleep")
+@patch("win_engine.llm.gemini_client.httpx.post")
+class ProviderReplyTests(unittest.TestCase):
+    def test_a_dropped_connection_is_retried_as_a_network_error(self, post, _sleep):
+        post.side_effect = [httpx.RemoteProtocolError("Server disconnected without sending a response."), _success()]
+        with patch.dict(os.environ, {**ENV, "WIN_ENGINE_GEMINI_TRANSIENT_RETRIES": "1"}):
+            text, trace = gemini_client.generate_with_diagnostics("test")
+        self.assertTrue(text)
+        self.assertEqual(trace["retry_reasons"], ["network_error"])
+        self.assertEqual(post.call_count, 2)
+
+    def test_a_blocked_prompt_is_reported_as_blocked_without_retry_or_cooldown(self, post, _sleep):
+        blocked = MagicMock(status_code=200, headers={})
+        blocked.json.return_value = {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}}
+        post.return_value = blocked
+        with patch.dict(os.environ, {**ENV, "WIN_ENGINE_GEMINI_COOLDOWN_FAILURE_THRESHOLD": "1"}):
+            text, trace = gemini_client.generate_with_diagnostics("test")
+        self.assertEqual(text, "")
+        self.assertEqual(trace["status"], "gemini_invalid_response")
+        self.assertEqual((trace["failure_category"], trace["block_reason"]), ("content_blocked", "PROHIBITED_CONTENT"))
+        self.assertEqual(post.call_count, 1)
+        self.assertFalse(gemini_client.provider_health()["cooldown_active"])
+
+    def test_a_candidate_stopped_for_recitation_is_not_a_success(self, post, _sleep):
+        post.return_value = _success('{"title": "I didn', finish_reason="RECITATION")
+        with patch.dict(os.environ, ENV):
+            text, trace = gemini_client.generate_with_diagnostics("test")
+        self.assertEqual(text, "")
+        self.assertEqual((trace["failure_category"], trace["block_reason"]), ("content_blocked", "RECITATION"))
+
+    def test_a_truncated_reply_is_retried_at_the_ceiling_not_a_doubled_cap(self, post, _sleep):
+        caps: list[int] = []
+
+        def fake_post(_url, **kwargs):
+            caps.append(kwargs["json"]["generationConfig"]["maxOutputTokens"])
+            return _success('{"title": ', finish_reason="MAX_TOKENS") if len(caps) == 1 else _success()
+
+        post.side_effect = fake_post
+        environment = {**ENV, "WIN_ENGINE_GEMINI_TRANSIENT_RETRIES": "1", "WIN_ENGINE_GEMINI_OUTPUT_TOKEN_CEILING": "16384",
+                       "WIN_ENGINE_GEMINI_THINKING_BUDGET": "0"}
+        with patch.dict(os.environ, environment):
+            text, _ = gemini_client.generate_with_diagnostics("test", max_tokens=2400)
+        self.assertTrue(text)
+        self.assertEqual(caps, [2400, 16384])
+
+    def test_a_reply_still_truncated_at_the_ceiling_goes_to_the_backup_model(self, post, _sleep):
+        def fake_post(url, **_kwargs):
+            return _success('{"title": ', finish_reason="MAX_TOKENS") if "/thinker:" in url else _success()
+
+        post.side_effect = fake_post
+        environment = {**ENV, "WIN_ENGINE_GEMINI_MODEL": "thinker", "WIN_ENGINE_GEMINI_FALLBACK_MODEL": "lite",
+                       "WIN_ENGINE_GEMINI_TRANSIENT_RETRIES": "1", "WIN_ENGINE_GEMINI_OUTPUT_TOKEN_CEILING": "8192"}
+        with patch.dict(os.environ, environment):
+            text, trace = gemini_client.generate_with_diagnostics("test")
+        self.assertTrue(text)
+        self.assertTrue(trace["backup_model_used"])
+        self.assertEqual(post.call_count, 3)
+        self.assertIn("output_token_limit:switched_to_backup_model", trace["retry_reasons"])
+
+    def test_a_model_named_the_way_list_models_names_it_is_accepted(self, post, _sleep):
+        post.return_value = _success()
+        environment = {**ENV, "WIN_ENGINE_GEMINI_MODEL": "models/gemini-test-pro",
+                       "WIN_ENGINE_GEMINI_FALLBACK_MODEL": " models/gemini-test-flash "}
+        with patch.dict(os.environ, environment):
+            gemini_client.generate_with_diagnostics("test")
+            self.assertEqual(gemini_client._get_fallback_model(), "gemini-test-flash")
+        self.assertTrue(post.call_args.args[0].endswith("/v1beta/models/gemini-test-pro:generateContent"))
+
+
+THINKING_ENV = {**ENV, "WIN_ENGINE_GEMINI_THINKING_BUDGET": "1024"}
+
+
+@patch("win_engine.llm.gemini_client.time.sleep")
+class ThinkingBudgetTests(unittest.TestCase):
+    def test_the_thinking_budget_is_sent_and_added_on_top_of_the_callers_budget(self, _sleep):
+        sent: list[dict[str, object]] = []
+
+        def fake_post(_url, **kwargs):
+            sent.append(json.loads(json.dumps(kwargs["json"]["generationConfig"])))
+            return _success()
+
+        with patch("win_engine.llm.gemini_client.httpx.post", side_effect=fake_post):
+            with patch.dict(os.environ, {**ENV, "WIN_ENGINE_GEMINI_THINKING_BUDGET": "512", "WIN_ENGINE_GEMINI_OUTPUT_TOKEN_CEILING": "8192"}):
+                gemini_client.generate_with_diagnostics("test", max_tokens=2400)
+            with patch.dict(os.environ, {**ENV, "WIN_ENGINE_GEMINI_THINKING_BUDGET": "-1", "WIN_ENGINE_GEMINI_OUTPUT_TOKEN_CEILING": "8192"}):
+                gemini_client.generate_with_diagnostics("test", max_tokens=2400)
+        self.assertEqual(sent[0]["thinkingConfig"], {"thinkingBudget": 512})
+        self.assertEqual(sent[0]["maxOutputTokens"], 2912)
+        self.assertNotIn("thinkingConfig", sent[1])
+        self.assertEqual(sent[1]["maxOutputTokens"], 2400)
+
+    def test_a_model_that_rejects_thinking_is_asked_again_without_it_and_remembered(self, _sleep):
+        def fake_post(_url, **kwargs):
+            return _status(400) if "thinkingConfig" in kwargs["json"]["generationConfig"] else _success()
+
+        with patch("win_engine.llm.gemini_client.httpx.post", side_effect=fake_post) as post:
+            with patch.dict(os.environ, THINKING_ENV):
+                text, trace = gemini_client.generate_with_diagnostics("test")
+                self.assertTrue(text)
+                self.assertIn("thinking_config_rejected", trace["retry_reasons"])
+                self.assertEqual(post.call_count, 2)
+                text, _ = gemini_client.generate_with_diagnostics("again")
+        # The second call went without the field at once.
+        self.assertTrue(text)
+        self.assertEqual(post.call_count, 3)
+
+    def test_a_400_that_is_not_about_thinking_is_still_a_configuration_error(self, _sleep):
+        with patch("win_engine.llm.gemini_client.httpx.post", return_value=_status(400)) as post:
+            with patch.dict(os.environ, THINKING_ENV):
+                _, trace = gemini_client.generate_with_diagnostics("test")
+                self.assertEqual(trace["status"], "gemini_permanent_error")
+                self.assertEqual(post.call_count, 2)
+                gemini_client.generate_with_diagnostics("again")
+        # Nothing was learned from a 400 the thinking-free request also got.
+        self.assertEqual(post.call_count, 4)
+
+    def test_thinking_tokens_are_reported(self, _sleep):
+        reply = _success()
+        reply.json.return_value["usageMetadata"] = {"thoughtsTokenCount": 731, "candidatesTokenCount": 120}
+        with patch("win_engine.llm.gemini_client.httpx.post", return_value=reply):
+            with patch.dict(os.environ, THINKING_ENV):
+                _, trace = gemini_client.generate_with_diagnostics("test")
+        self.assertEqual(trace["thoughts_tokens"], 731)
 
 
 if __name__ == "__main__":
