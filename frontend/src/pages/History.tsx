@@ -194,6 +194,20 @@ export default function HistoryPage() {
     ? String(Math.round(scored.reduce((sum, value) => sum + value, 0) / scored.length))
     : UNAVAILABLE;
   const openRun = runs.find((run) => run.id === openRunId);
+  // What a delete takes with it. The open detail stands in for a package
+  // opened from a link that is older than the loaded list.
+  const deleteCascade = useMemo(() => {
+    let linkedCount = 0;
+    let shortsCount = 0;
+    for (const id of deleteTargets ?? []) {
+      const listed = runs.find((run) => run.id === id);
+      const detail = detailQuery.data?.id === id ? detailQuery.data : null;
+      if (listed ? listed.linked_youtube_video_id : detail?.linked_video_report?.linked) linkedCount += 1;
+      const planId = toFiniteNumber((listed ?? detail)?.ai_shorts?.plan_id);
+      if (planId !== null && planId > 0) shortsCount += 1;
+    }
+    return { linked: linkedCount, shorts: shortsCount };
+  }, [deleteTargets, runs, detailQuery.data]);
   const partial = runs.length < total;
   // Without a loaded list the counts are unknown, not zero.
   const loaded = Boolean(runsQuery.data);
@@ -374,12 +388,17 @@ export default function HistoryPage() {
           const detail = detailQuery.data;
           if (detail) setLinkTarget({ id: detail.id, isRelink: Boolean(detail.linked_video_report?.linked) });
         }}
+        onDelete={() => {
+          const detail = detailQuery.data;
+          if (detail) setDeleteTargets([detail.id]);
+        }}
       />
 
       <DeleteRunsDialog
         open={Boolean(deleteTargets?.length)}
         count={deleteTargets?.length ?? 0}
-        linked={runs.filter((run) => deleteTargets?.includes(run.id) && run.linked_youtube_video_id).length}
+        linked={deleteCascade.linked}
+        shorts={deleteCascade.shorts}
         pending={deleteRuns.isPending}
         onConfirm={handleDelete}
         onOpenChange={(open) => {

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import HistoryPage from "./History";
+import { AI_SHORTS_PLAN } from "@/test/fixtures/aiShorts";
 
 const RUNS = [
   {
@@ -424,8 +425,11 @@ describe("HistoryPage", () => {
     ai_shorts: { plan_id: 31, parts: 2, total_seconds: 16, language: "english", generation_source: "gemini" },
   };
 
-  function mockAiShortsRun() {
-    fetchMock.mockImplementation(async (url: string) => {
+  /** The run's plan is served unless a test says otherwise; a 404 is a deleted plan. */
+  function mockAiShortsRun(plan: () => unknown = () => jsonResponse({ ...AI_SHORTS_PLAN, analysis_run_id: 1 })) {
+    const calls: { url: string; method: string }[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET" });
       if (String(url).includes("/api/history/runs?")) {
         return jsonResponse({
           runs: [{ ...RUNS[0], source_page: "ai_shorts", ai_shorts: { plan_id: 31, parts: 2, total_seconds: 16 } }, RUNS[1]],
@@ -434,11 +438,13 @@ describe("HistoryPage", () => {
       if (String(url).endsWith("/api/history/runs/1")) {
         return jsonResponse({ id: 1, title: "Three Morning Habits", created_at: "2026-09-22T17:53:19Z", package: AI_SHORTS_PACKAGE });
       }
+      if (String(url) === "/api/ai-shorts/plans/31") return plan();
       return jsonResponse({});
     });
+    return calls;
   }
 
-  it("marks a package written on the AI Shorts page and links back to its plan", async () => {
+  it("opens an AI Shorts package on its Flow prompts from View package, and keeps the badge link", async () => {
     mockAiShortsRun();
     const user = userEvent.setup();
     renderPage();
@@ -450,15 +456,27 @@ describe("HistoryPage", () => {
       "/ai-shorts?plan=31",
     );
     expect(within(rows[1]!).queryByText("AI Shorts")).not.toBeInTheDocument();
+    // The AI Shorts page records no choice, so the row doesn't call it unknown.
+    expect(within(rows[0]!).queryByText("Selection unknown")).not.toBeInTheDocument();
 
     await user.click(within(rows[0]!).getByRole("button", { name: "View package" }));
     const detail = await screen.findByTestId("history-detail");
     expect(await within(detail).findByText("AI Shorts · 2 parts · 16 s")).toBeInTheDocument();
-    expect(within(detail).getByRole("link", { name: "Open AI Short" })).toHaveAttribute("href", "/ai-shorts?plan=31");
+    expect(within(detail).getByRole("link", { name: "Open in AI Shorts" })).toHaveAttribute("href", "/ai-shorts?plan=31");
+
+    const prompts = await within(detail).findAllByTestId("shot-prompt");
+    expect(prompts).toHaveLength(2);
+    expect(within(detail).getByRole("button", { name: "Copy prompt for Part 1" })).toBeInTheDocument();
+    expect(within(detail).queryByTestId("studio-test-panel")).not.toBeInTheDocument();
   });
 
   it("copies a saved package's tags as one comma-separated line with no comma inside a tag", async () => {
-    mockAiShortsRun();
+    // With the plan deleted, the drawer shows the saved package's own fields.
+    mockAiShortsRun(() => ({
+      ok: false,
+      status: 404,
+      text: async () => JSON.stringify({ error: { code: "http_error", message: "AI Shorts plan not found." } }),
+    }));
     const writeText = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     // user-event installs its own clipboard stub, so the mock goes in after it.
@@ -467,6 +485,7 @@ describe("HistoryPage", () => {
       renderPage("/history?run=1");
       const detail = await screen.findByTestId("history-detail");
       await within(detail).findByText("A quote Short.");
+      expect(await within(detail).findByText("The Flow prompts for this Short were deleted")).toBeInTheDocument();
       const tagsSection = within(detail).getByRole("heading", { name: "Tags" }).closest("section")!;
 
       // The tags on screen are the tags pasted: the stray comma is gone from both.
@@ -476,7 +495,8 @@ describe("HistoryPage", () => {
       await user.click(within(tagsSection).getByRole("button", { name: "Copy" }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith("deep quotes, life quotes"));
 
-      await user.click(within(detail).getByRole("button", { name: "Copy upload package" }));
+      const actions = within(detail).getByRole("group", { name: "Package actions" });
+      await user.click(within(actions).getByRole("button", { name: "Copy upload package" }));
       await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
       const [bundle] = writeText.mock.calls[1] as [string];
       expect(bundle).toContain("\nTAGS\ndeep quotes, life quotes\n");
@@ -484,5 +504,22 @@ describe("HistoryPage", () => {
     } finally {
       delete (navigator as { clipboard?: unknown }).clipboard;
     }
+  });
+
+  it("deletes the open package from its detail only after confirming, and says its Flow prompts go too", async () => {
+    const calls = mockAiShortsRun();
+    const user = userEvent.setup();
+    renderPage("/history?run=1");
+    const detail = await screen.findByTestId("history-detail");
+    await within(detail).findAllByTestId("shot-card");
+
+    await user.click(within(detail).getByRole("button", { name: "Delete this package" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete saved package" });
+    expect(within(dialog).getByText(/Its AI Shorts plan, with the Flow prompts, is deleted with it/)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete saved package" })).not.toBeInTheDocument());
+    expect(calls.every((call) => call.method !== "DELETE")).toBe(true);
+    expect(screen.getByTestId("history-detail")).toBeInTheDocument();
   });
 });

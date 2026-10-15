@@ -22,15 +22,23 @@ function linkedEvidenceNote(count: number, linked: number): string {
   return ` ${linked === count ? "All of them are" : `${linked} of them are`} linked to a video; those videos' collected snapshots, audits and experiment assignments are deleted with them.`;
 }
 
+/** An AI Short's plan is stored under its package, so its Flow prompts go with it. */
+function aiShortsNote(count: number, shorts: number): string {
+  if (shorts <= 0) return "";
+  if (count === 1) return " Its AI Shorts plan, with the Flow prompts, is deleted with it.";
+  return ` ${shorts === count ? "All of them are" : `${shorts} of them are`} AI Shorts; their Flow prompts are deleted with them.`;
+}
+
 /**
  * Replaces the legacy `confirm()` call. It says that a delete propagates to
- * the creator's other synced devices, and what a linked video loses with it:
- * neither can be undone from here.
+ * the creator's other synced devices, and what a linked video or an AI Short
+ * loses with it: none of it can be undone from here.
  */
 export function DeleteRunsDialog({
   open,
   count,
   linked = 0,
+  shorts = 0,
   pending,
   onConfirm,
   onOpenChange,
@@ -39,6 +47,8 @@ export function DeleteRunsDialog({
   count: number;
   /** How many of the packages are linked to a YouTube video. */
   linked?: number;
+  /** How many of the packages have an AI Shorts plan on this device. */
+  shorts?: number;
   pending: boolean;
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
@@ -53,7 +63,8 @@ export function DeleteRunsDialog({
         (count === 1
           ? "Delete this saved package? It will be removed from this device and marked deleted for your synced devices."
           : `Delete ${count} selected packages? They will be removed locally and marked deleted in cloud sync for every synced device.`) +
-        linkedEvidenceNote(count, linked)
+        linkedEvidenceNote(count, linked) +
+        aiShortsNote(count, shorts)
       }
       confirmLabel={count === 1 ? "Delete package" : `Delete ${count} packages`}
       pendingLabel="Deleting…"

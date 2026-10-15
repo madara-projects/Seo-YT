@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronDown, Eye, Link2, Trash2 } from "lucide-react";
+import { ChevronDown, Clapperboard, Eye, Link2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/common/Badge";
@@ -65,7 +65,8 @@ export function HistoryRow({
   const inputsId = `opportunity-inputs-${run.id}`;
   const isLinked = Boolean(run.linked_youtube_video_id);
   const angle = run.content_angle || run.intent || "General";
-  // Written on the AI Shorts page: the row says so and leads back to its Flow prompts.
+  // Written on the AI Shorts page: "View package" opens its Flow prompts, and
+  // the badge leads back to the AI Shorts page.
   const aiShorts = run.source_page === "ai_shorts" || Boolean(run.ai_shorts);
   const planId = toFiniteNumber(run.ai_shorts?.plan_id);
 
@@ -96,7 +97,7 @@ export function HistoryRow({
           className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-soft font-display text-base font-semibold text-brand ring-1 ring-inset ring-brand-border"
           aria-hidden="true"
         >
-          {initialOf(title)}
+          {aiShorts ? <Clapperboard className="size-5" /> : initialOf(title)}
         </span>
         <div className="min-w-0 flex-1 space-y-1.5">
           <button
@@ -113,7 +114,8 @@ export function HistoryRow({
             <span>{angle}</span>
             {run.selected_package_id ? (
               <EvidenceChip tone="ok">Selected package</EvidenceChip>
-            ) : (
+            ) : aiShorts ? null : (
+              // The AI Shorts page records no package choice, so this would always read unknown.
               <EvidenceChip tone="neutral">Selection unknown</EvidenceChip>
             )}
             {isLinked ? <EvidenceChip tone="ok">YouTube linked</EvidenceChip> : null}
@@ -122,7 +124,7 @@ export function HistoryRow({
                 <Link
                   to={`/ai-shorts?plan=${planId}`}
                   aria-label={`Open AI Short for ${title}`}
-                  title="Open its Flow prompts on the AI Shorts page"
+                  title="Open it on the AI Shorts page"
                   className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <Badge variant="brand">AI Shorts</Badge>
@@ -160,7 +162,11 @@ export function HistoryRow({
       </div>
 
       <div className="flex shrink-0 flex-wrap gap-1.5 pl-[4.35rem] lg:justify-end lg:pl-0">
-        <Button size="sm" onClick={onOpen}>
+        <Button
+          size="sm"
+          onClick={onOpen}
+          title={aiShorts ? "Open its Flow prompts, on-screen text and upload package" : undefined}
+        >
           <Eye aria-hidden="true" />
           View package
         </Button>

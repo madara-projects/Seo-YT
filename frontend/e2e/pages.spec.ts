@@ -1,11 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
+  HISTORY_RUNS,
   VIEWPORTS,
   blockWrites,
   collectErrors,
   expectNoHorizontalOverflow,
   mockHistoryRuns,
 } from "./helpers";
+import { AI_SHORTS_PLAN } from "../src/test/fixtures/aiShorts";
 
 /**
  * Dashboard and History against the running backend. Requires
@@ -156,6 +158,54 @@ async function savedRowCount(page: Page): Promise<number> {
   return rows.count();
 }
 
+/** A package the AI Shorts page saved, listed above the History fixtures. */
+const SHORT_RUN = {
+  id: 903,
+  created_at: "2026-09-28T09:12:44Z",
+  title: AI_SHORTS_PLAN.package!.title!,
+  query: AI_SHORTS_PLAN.quote,
+  content_angle: "Story",
+  opportunity_score: null,
+  opportunity_label: "UNMEASURED",
+  title_score: 8.5,
+  selected_package_id: null,
+  linked_youtube_video_id: null,
+  source_page: "ai_shorts",
+  ai_shorts: { plan_id: AI_SHORTS_PLAN.id, parts: 2, total_seconds: 16, language: "english", generation_source: "gemini" },
+};
+
+/** The History fixtures plus `SHORT_RUN`, its detail and its plan. Reads only. */
+async function mockShortsHistory(page: Page) {
+  await mockHistoryRuns(page);
+  // Registered later, so it answers first and hands everything else back.
+  await page.route("**/api/history/runs**", (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return route.fallback();
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/history/runs") {
+      return route.fulfill({
+        json: { runs: [SHORT_RUN, ...HISTORY_RUNS], total: HISTORY_RUNS.length + 1, limit: 100, offset: 0 },
+      });
+    }
+    if (path === `/api/history/runs/${SHORT_RUN.id}`) {
+      return route.fulfill({
+        json: {
+          ...SHORT_RUN,
+          package: { ...AI_SHORTS_PLAN.package, source_page: "ai_shorts", ai_shorts: SHORT_RUN.ai_shorts },
+          selected_package: null,
+          linked_video_report: { linked: false },
+        },
+      });
+    }
+    return route.fallback();
+  });
+  await page.route(`**/api/ai-shorts/plans/${AI_SHORTS_PLAN.id}`, (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({ json: { ...AI_SHORTS_PLAN, analysis_run_id: SHORT_RUN.id } })
+      : route.fallback(),
+  );
+}
+
 test.describe("History", () => {
   test("lists saved packages with no console errors", async ({ page }) => {
     const errors = collectErrors(page);
@@ -223,6 +273,48 @@ test.describe("History", () => {
     const row = page.getByTestId("history-row").filter({ hasText: "Top AI Tools" });
     await expect(row.getByRole("group", { name: "Package scores" })).toContainText("Unavailable");
     await expect(row.getByRole("group", { name: "Package scores" })).not.toContainText("0/100");
+  });
+
+  test("opens an AI Short on its Flow prompts from View package", async ({ page }) => {
+    const errors = collectErrors(page);
+    await page.setViewportSize(VIEWPORTS.desktop);
+    await mockShortsHistory(page);
+    await page.goto("/history");
+    expect(await savedRowCount(page)).toBe(3);
+
+    const row = page.getByTestId("history-row").filter({ hasText: SHORT_RUN.title });
+    await row.getByRole("button", { name: "View package" }).click();
+    const detail = page.getByTestId("history-detail");
+    await expect(detail.getByTestId("shot-prompt")).toHaveCount(2);
+    await expect(detail.getByRole("button", { name: "Copy prompt for Part 1" })).toBeVisible();
+    await expect(detail.getByRole("link", { name: "Open in AI Shorts" })).toHaveAttribute(
+      "href",
+      `/ai-shorts?plan=${AI_SHORTS_PLAN.id}`,
+    );
+    // Test & Compare is for long videos only.
+    await expect(detail.getByTestId("studio-test-panel")).toHaveCount(0);
+    // 64rem on a desktop (the root is 80% there), so a prompt reads as a paragraph.
+    const rem = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+    expect((await detail.boundingBox())!.width).toBeGreaterThanOrEqual(64 * rem - 1);
+    await page.screenshot({ path: "screenshots/history-ai-short-desktop.png" });
+
+    expect(errors).toEqual([]);
+  });
+
+  test("fits an AI Short's detail on a phone without sideways scrolling", async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS.mobile);
+    await mockShortsHistory(page);
+    await page.goto(`/history?run=${SHORT_RUN.id}`);
+
+    const detail = page.getByTestId("history-detail");
+    await expect(detail.getByTestId("shot-prompt")).toHaveCount(2);
+    expect((await detail.boundingBox())!.width).toBeLessThanOrEqual(VIEWPORTS.mobile.width);
+    // The sheet is fixed, so the page's own overflow check can't see inside it.
+    for (const scroller of [detail, detail.getByTestId("history-detail-body")]) {
+      expect(await scroller.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    }
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: "screenshots/history-ai-short-mobile.png" });
   });
 
   for (const [name, viewport] of Object.entries(VIEWPORTS)) {
