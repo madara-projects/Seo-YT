@@ -517,6 +517,21 @@ class CloudSyncService:
         except (TypeError, ValueError):
             return None
 
+    def _copies_before_pull(self, local, rows) -> dict[str, tuple[str, str] | None]:
+        """The local copy of each package a row deletes or changes, read before any row applies.
+
+        An earlier row can take a later row's video, and that is no edit made here.
+        """
+        copies: dict[str, tuple[str, str] | None] = {}
+        for row in rows:
+            sync_uuid = str(row[0])
+            mapping = local.execute(
+                "SELECT analysis_run_id, content_hash FROM cloud_sync_packages WHERE sync_uuid = ?", (sync_uuid,)
+            ).fetchone()
+            if mapping and (row[6] or str(mapping[1]) != str(row[3])):
+                copies[sync_uuid] = self._local_copy(local, int(mapping[0]))
+        return copies
+
     @staticmethod
     def _remote_active_wins(*, local_hash: str, remote_hash: str) -> bool:
         """Resolve two different versions with the same revision.
@@ -907,10 +922,14 @@ class CloudSyncService:
             raise ValueError("invalid_selection_payload")
         return payload
 
-    def _apply_remote_row(self, local, row) -> tuple[int, bool]:
-        """Apply one cloud row: (1 when local data changed, whether a conflict was recorded)."""
+    def _apply_remote_row(self, local, row, before: dict[str, tuple[str, str] | None] | None = None) -> tuple[int, bool]:
+        """Apply one cloud row: (1 when local data changed, whether a conflict was recorded).
+
+        `before` holds local copies read when the pull began (_copies_before_pull).
+        """
         sync_uuid, origin, revision, content_hash, payload_json, updated_at, deleted_at = row
         sync_uuid, revision, content_hash, updated_at = str(sync_uuid), int(revision), str(content_hash), str(updated_at)
+        before = before or {}
         tombstone = local.execute(
             "SELECT revision,pending,deleted_at FROM cloud_sync_tombstones WHERE sync_uuid = ?", (sync_uuid,)
         ).fetchone()
@@ -925,7 +944,7 @@ class CloudSyncService:
                 return 0, False
             conflict = False
             if mapping:
-                copy = self._local_copy(local, int(mapping[0]))
+                copy = before.pop(sync_uuid) if sync_uuid in before else self._local_copy(local, int(mapping[0]))
                 # An edit made after this run staged its packages is not queued yet, but loses all the same.
                 if mapping[3] or (copy and copy[1] not in {mapping[2], mapping[4]}):
                     self._record_conflict(
@@ -996,7 +1015,7 @@ class CloudSyncService:
         conflict = False
         if mapping:
             # Kept even when it reached the cloud: an equal revision may have replaced it there.
-            copy = self._local_copy(local, run_id)
+            copy = before.pop(sync_uuid) if sync_uuid in before else self._local_copy(local, run_id)
             if revision == local_revision:
                 remote_wins = self._remote_active_wins(local_hash=local_hash, remote_hash=content_hash)
                 self._record_conflict(
@@ -1089,10 +1108,12 @@ class CloudSyncService:
                 # Parked links belong to no package until the batch ends, so
                 # foreign keys are checked at commit instead of per statement.
                 local.execute("PRAGMA defer_foreign_keys = ON")
+                # Read with the write lock held, so no local edit lands between this read and the rows.
+                before = self._copies_before_pull(local, rows)
                 for row in rows:
                     try:
                         with _savepoint(local, "cloud_row"):
-                            applied, conflict = self._apply_remote_row(local, row)
+                            applied, conflict = self._apply_remote_row(local, row, before)
                     except sqlite3.OperationalError:
                         raise  # a locked, full or failing database is an outage, not a bad row
                     except Exception as exc:

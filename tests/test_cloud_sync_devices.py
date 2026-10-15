@@ -208,8 +208,11 @@ class TwoDeviceSyncTests(unittest.TestCase):
         self.store_b.link_published_video(self._runs(self.store_b)["new package"], "video-0008", "2026-08-01T10:00:00+00:00")
         self.device_b.run_once()
 
-        self.device_a.run_once()
+        result = self.device_a.run_once()
 
+        # Device A edited nothing, so the move is not a conflict.
+        self.assertEqual(result["counts"]["conflicts"], 0)
+        self.assertEqual(self._query(self.store_a, "SELECT COUNT(*) FROM cloud_sync_conflicts"), [(0,)])
         self.assertEqual(self._query(self.store_a, "SELECT COUNT(*) FROM published_video_audits"), [(1,)])
         self.assertEqual(self._query(self.store_a, "SELECT COUNT(*) FROM experiment_video_assignments"), [(1,)])
         owner = "SELECT p.id, a.query FROM published_video_links p JOIN analysis_runs a ON a.id = p.analysis_run_id"
@@ -239,8 +242,10 @@ class TwoDeviceSyncTests(unittest.TestCase):
             "SELECT deleted_at IS NOT NULL FROM seo_yt_synced_packages ORDER BY updated_at DESC LIMIT 2").fetchall()
         self.assertEqual(newest, [(1,), (0,)])
 
-        self.device_a.run_once()
+        result = self.device_a.run_once()
 
+        self.assertEqual(result["counts"]["conflicts"], 0)
+        self.assertEqual(self._query(self.store_a, "SELECT COUNT(*) FROM cloud_sync_conflicts"), [(0,)])
         owner = "SELECT p.id, a.query FROM published_video_links p JOIN analysis_runs a ON a.id = p.analysis_run_id"
         self.assertEqual(self._query(self.store_a, owner), [(link_id, "new package")])
         self.assertEqual(self._query(self.store_a, "SELECT COUNT(*) FROM experiment_video_assignments"), [(1,)])

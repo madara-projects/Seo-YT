@@ -217,6 +217,63 @@ class CloudPullTests(unittest.TestCase):
                          [("remote", 2, 2)])
         self.assertIn("Pushed edit", self._query("SELECT local_payload_json FROM cloud_sync_conflicts")[0][0])
 
+    def _moved_video_rows(self, *, deleted=False):
+        """Device-a moves the video of a package synced here to another one, then maybe deletes the first.
+
+        The package that takes the video reaches the cloud, and this pull, first.
+        """
+        giving = self._source_package("old package", video_id="video-moved")
+        taking = self._source_package("new package")
+        self.service._pull(_PullRemote([self._remote_row(giving), self._remote_row(taking)]))
+        self.source_store.link_published_video(taking, "video-moved", "2026-08-01T10:00:00+00:00")
+        given_up = self._remote_row(giving, revision=2)
+        if deleted:
+            given_up = (given_up[0], "device-a", 2, "tombstone-hash", "{}", UPDATED_AT, UPDATED_AT)
+        return [self._remote_row(taking, revision=2), given_up]
+
+    def _owner(self):
+        return self._query("""SELECT a.query, p.youtube_video_id FROM published_video_links p
+                              JOIN analysis_runs a ON a.id = p.analysis_run_id""")
+
+    def test_a_video_another_device_moved_to_another_package_is_no_conflict(self):
+        self.assertEqual(self.service._pull(_PullRemote(self._moved_video_rows())), 2)
+
+        self.assertEqual(self.service._last_pull_conflicts, 0)
+        self.assertEqual(self._query("SELECT COUNT(*) FROM cloud_sync_conflicts"), [(0,)])
+        self.assertEqual(self._owner(), [("new package", "video-moved")])
+
+    def test_deleting_the_package_a_video_moved_from_is_no_conflict(self):
+        self.assertEqual(self.service._pull(_PullRemote(self._moved_video_rows(deleted=True))), 2)
+
+        self.assertEqual(self.service._last_pull_conflicts, 0)
+        self.assertEqual(self._query("SELECT COUNT(*) FROM cloud_sync_conflicts"), [(0,)])
+        self.assertEqual(self._owner(), [("new package", "video-moved")])
+
+    def test_an_edit_made_after_staging_is_kept_as_it_stood_when_the_pull_also_moves_its_video(self):
+        rows = self._moved_video_rows()
+        self._query("UPDATE analysis_runs SET title = 'Unstaged edit' WHERE query = 'old package'")
+
+        self.assertEqual(self.service._pull(_PullRemote(rows)), 2)
+
+        self.assertEqual(self._query("SELECT winner, local_revision, remote_revision FROM cloud_sync_conflicts"),
+                         [("remote", 1, 2)])
+        kept = self._query("SELECT local_payload_json FROM cloud_sync_conflicts")[0][0]
+        # Still holding the video an earlier row of the pull took from it.
+        self.assertIn("Unstaged edit", kept)
+        self.assertIn("video-moved", kept)
+
+    def test_a_deletion_keeps_an_edit_made_after_staging_as_it_stood_when_the_pull_also_moves_its_video(self):
+        rows = self._moved_video_rows(deleted=True)
+        self._query("UPDATE analysis_runs SET title = 'Unstaged edit' WHERE query = 'old package'")
+
+        self.assertEqual(self.service._pull(_PullRemote(rows)), 2)
+
+        self.assertEqual(self._query("SELECT winner FROM cloud_sync_conflicts"), [("tombstone",)])
+        kept = self._query("SELECT local_payload_json FROM cloud_sync_conflicts")[0][0]
+        self.assertIn("Unstaged edit", kept)
+        self.assertIn("video-moved", kept)
+        self.assertEqual(self._owner(), [("new package", "video-moved")])
+
     def test_a_local_database_outage_fails_the_pull_instead_of_skipping_rows(self):
         run_id = self._source_package("shared package")
 
