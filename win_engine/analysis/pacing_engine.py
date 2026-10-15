@@ -8,8 +8,9 @@ from win_engine.analysis.text_tokens import unicode_words
 
 
 def _count_words(text: str, terms: list[str]) -> int:
-    # Whole words: "now" is not in "know", nor "but" in "button".
-    return sum(len(re.findall(rf"\b{re.escape(term)}\b", text)) for term in terms)
+    # Whole words with their endings ("mistakes", "watching"): "now" is not in
+    # "know", nor "but" in "button".
+    return sum(len(re.findall(rf"\b{re.escape(term)}(?:s|es|ed|ing)?\b", text)) for term in terms)
 
 
 def analyze_script_pacing(script: str, video_format: str = "", exact_quote: str = "") -> dict[str, Any]:

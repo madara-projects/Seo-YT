@@ -29,13 +29,13 @@ _FORMAT_ALIASES = {
     "quote_short": "youtube_shorts", "quote_shorts": "youtube_shorts", "longform": "long_form",
 }
 # The platform's own words for the format. A bare "short" is not one: "short
-# ribs", "in short" and "a short guide" describe long videos. Nor is a bare
-# "reel": "fishing reel" and "highlight reel" name things, so a reel counts
-# only as a format ("reels", "#reel", "Instagram reel", "as a reel", "reel video").
+# ribs", "in short" and "a short guide" describe long videos. A reel is one
+# unless it names a thing: a "fishing reel", "highlight reel" or "film reel".
 _SHORT_CUE_RE = re.compile(
     r"(?<![\w#])#(?:shorts?|reels?)\b|\b(?:youtube|yt)[\s_-]*shorts?\b|\bshort[\s_-]?form\b|"
-    r"\b(?:instagram|insta|ig|facebook|fb)[\s_-]*reels?\b|\bas\s+(?:an?\s+|my\s+)?reels?\b|"
-    r"(?<!fishing\s)(?<!highlight\s)(?<!film\s)(?:\breels\b|\breels?[\s_-]+(?:videos?|format)\b)|"
+    r"\b(?:instagram|insta|ig|facebook|fb)[\s_-]*reels?\b|"
+    r"(?<!fishing[\s-])(?<!highlight[\s-])(?<!highlights[\s-])(?<!film[\s-])"
+    r"(?:\breels?\b|\breels?[\s_-]+(?:videos?|format)\b)|"
     r"\bquote[\s_-]+(?:shorts?|reels?)\b",
     re.IGNORECASE,
 )
@@ -168,14 +168,24 @@ def affirmed_feeling_words(text: Any) -> list[str]:
     flat = normalize_unicode(text)
     return [
         match.group(0).casefold() for match in _STRONG_QUOTE_WORDS.finditer(flat)
-        if not _denied_before(flat[:match.start()])
+        if not denied_before(flat[:match.start()])
     ]
 
 
-def _denied_before(prefix: str) -> bool:
-    # A negation stays in its sentence ("It's not over. Love ..."), and "no
-    # one" is a subject like "nobody" ("No one hurts you like ...").
-    words = unicode_words(re.split(r"[.!?;\n]", prefix)[-1], min_length=1)[-2:]
+# A sentence ends at a full stop, "!", "?" or ";". The dots of a pause ("I
+# don't... love you") do not end one, and a line break ends one only after
+# that punctuation ("No more\ntears for people" is one sentence).
+_SENTENCE_END_RE = re.compile(r"(?<![.…])\.(?![.…])|[!?;]")
+
+
+def denied_before(prefix: str, *, window: int = 2) -> bool:
+    """True when a negator among the last ``window`` words of ``prefix``'s last sentence denies what follows.
+
+    A negation stays in its sentence ("It's not over. Love ..."), and "no
+    one" is a subject like "nobody" ("No one hurts you like ...").
+    """
+
+    words = unicode_words(_SENTENCE_END_RE.split(prefix)[-1], min_length=1)[-window:]
     return any(
         is_negator(word) and not (word == "no" and words[index + 1:index + 2] == ["one"])
         for index, word in enumerate(words)

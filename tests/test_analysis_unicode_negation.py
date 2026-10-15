@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from win_engine.analysis.audit_experiment import _hashtags, build_published_audit
 from win_engine.analysis.creator_brief import _extract_duration, build_creator_brief, creator_topic
+from win_engine.analysis.generation_quality import feeling_hashtag
 from win_engine.analysis.idea_workspace import build_idea_evidence
 from win_engine.analysis.intent_classifier import classify_intent
 from win_engine.analysis.language_engine import build_language_strategy
@@ -13,6 +14,8 @@ from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.source_cues import affirmed_feeling_words, is_negator, is_short_video, quote_title
 from win_engine.analysis.strategy_layer import build_upload_timing
 from win_engine.analysis.topic_lock import extract_main_topic, force_hashtags, normalize_hashtag, source_lead_phrase
+from win_engine.generation import ai_shorts_seo as seo
+from win_engine.generation.strategy_engine import _feeling_emoji
 from win_engine.scoring.outlier_engine import score_outliers
 
 HINDI = "कभी कभी खामोशी सब कुछ कह देती है। दिल टूट जाता है।"
@@ -29,6 +32,30 @@ class NegationScopeTests(unittest.TestCase):
     def test_real_denials_still_count(self):
         self.assertEqual(affirmed_feeling_words("Don't cry because it's over"), [])
         self.assertEqual(affirmed_feeling_words("Not one tear fell"), [])
+
+    def test_a_pause_does_not_end_a_negation(self):
+        for quote in ("I don't... love you anymore.", "I don't… love you anymore.", "Don't... cry for me.",
+                      "I don't...\nlove you anymore."):
+            with self.subTest(quote=quote):
+                self.assertEqual(affirmed_feeling_words(quote), [])
+
+    def test_a_line_break_ends_a_negation_only_after_a_sentence_end(self):
+        self.assertEqual(affirmed_feeling_words("No more\ntears for people\nwho never cared."), [])
+        self.assertEqual(affirmed_feeling_words("I'm not\nlonely anymore"), [])
+        self.assertIn("love", affirmed_feeling_words("It's not over.\nLove always finds a way"))
+        self.assertIn("love", affirmed_feeling_words("It's not over... It never was. Love stays"))
+
+    def test_shorts_keep_a_negation_across_a_pause_or_a_line_break(self):
+        love, cry = "I don't... love you anymore.", "Don't... cry for me."
+        for quote in (love, cry):
+            with self.subTest(quote=quote):
+                self.assertEqual((feeling_hashtag(quote), _feeling_emoji(quote)), ("", ""))
+        self.assertNotEqual(seo.local_tone(cry), "sad")
+        self.assertNotIn("😢", seo.emoji_candidates(seo.quote_understanding(cry, {}), cry))
+        self.assertNotIn("#sadquotes", seo.ai_short_hashtags(None, "No more\ntears for people\nwho never cared."))
+        self.assertNotIn("#loneliness", seo.ai_short_hashtags(None, "I'm not\nlonely anymore"))
+        self.assertFalse(seo._affirmed(r"\blove\b", "i don't... love you anymore"))
+        self.assertTrue(seo._affirmed(r"\blove\b", "it's not over.\nlove will find you again"))
 
 
 class OddInputTests(unittest.TestCase):
@@ -51,6 +78,18 @@ class IndicPacingTests(unittest.TestCase):
         pacing = analyze_script_pacing("I know you know the snow. Knowledge is power. Butter is tasty.", video_format="tutorial")
         self.assertEqual(pacing["hook_density"], "low")
         self.assertEqual(pacing["pattern_interrupts"], 0)
+
+    def test_cue_words_count_with_their_endings(self):
+        script = "Two mistakes I made. Three secrets I kept. More mistakes, more secrets. Keep watching, I know."
+        pacing = analyze_script_pacing(script, video_format="tutorial")
+        self.assertEqual(pacing["hook_density"], "medium")
+        self.assertEqual(pacing["pattern_interrupts"], 1)  # "watching"; "know" is not "now"
+        for word in ("watches", "watched", "buts"):
+            with self.subTest(word=word):
+                self.assertEqual(analyze_script_pacing(f"No {word} here.", video_format="tutorial")["pattern_interrupts"], 1)
+        for word in ("nowhere", "button", "watchtower", "thence"):
+            with self.subTest(word=word):
+                self.assertEqual(analyze_script_pacing(f"No {word} here.", video_format="tutorial")["pattern_interrupts"], 0)
 
 
 class PublishedHashtagTests(unittest.TestCase):
@@ -129,7 +168,9 @@ class CasualContractionTests(unittest.TestCase):
 class ReelCueTests(unittest.TestCase):
     def test_a_fishing_or_highlight_reel_is_not_a_short(self):
         for script in ("My new fishing reel review: drag, gear ratio and line capacity",
-                       "Season highlight reel from our football club"):
+                       "Season highlight reel from our football club", "Restoring an old film reel from 1962",
+                       "Best fishing reels under 100 dollars", "Our season highlights reel",
+                       "A highlight-reel save from our keeper"):
             with self.subTest(script=script):
                 self.assertFalse(is_short_video(script, {}))
 
@@ -138,6 +179,15 @@ class ReelCueTests(unittest.TestCase):
                        "reel video: rain on a window", "quote reels for sad nights", "#reels"):
             with self.subTest(script=script):
                 self.assertTrue(is_short_video(script, {}))
+
+    def test_a_single_reel_as_the_format_is_a_short(self):
+        for script in ("Make a reel on this quote", "reel: The quietest people usually have the loudest minds.",
+                       "Soft piano for this reel", "My next reel is about city lights at night"):
+            with self.subTest(script=script):
+                self.assertTrue(is_short_video(script, {}))
+        for video_format in ("quote_reel", "ig_reel", "reel_video"):
+            with self.subTest(video_format=video_format):
+                self.assertTrue(is_short_video("", {"video_format": video_format}))
 
 
 class OddNumberTests(unittest.TestCase):

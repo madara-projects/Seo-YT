@@ -11,23 +11,56 @@ from win_engine.analysis.source_cues import has_short_cue
 from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
 
 
+def _folded(*words: str) -> list[str]:
+    return [normalize_unicode(word).casefold() for word in words]
+
+
+def _either(words: list[str]) -> str:
+    return "|".join(map(re.escape, words))
+
+
 # Narration about the video itself ("இந்த வீடியோவில்", "इस वीडियो में", "in this
 # video") and process words ("walk through") are no search and no thumbnail text.
-_FILLER_WORDS = {normalize_unicode(word).casefold() for word in ("இந்த", "इस", "यह")}
-_FILLER_PREFIXES = tuple(normalize_unicode(word).casefold() for word in ("வீடியோ", "वीडियो"))
-_FILLER_PHRASE_RE = re.compile(r"\b(?:walk(?:ing)?\s+(?:you\s+)?through|this\s+video)\b")
+# "This" or "video" inside a subject is: "यह भी गुजर जाएगा", "वीडियो एडिटिंग".
+_THIS_WORDS = _folded("this", "இந்த", "இந்தக்", "इस", "यह", "ये")
+_MEDIA_WORDS = _folded("video", "videos", "vlog", "channel")
+_MEDIA_STEMS = _folded("வீடியோ", "காணொளி", "காணொலி", "சேனல", "वीडियो", "विडियो", "चैनल")
+_HINDI_POSTPOSITIONS = _folded("में", "मे", "को", "के", "की", "का", "पर", "से")
+# Matched against words joined by single spaces.
+_THIS_VIDEO_RE = re.compile(
+    rf"(?<![^ ])(?:{_either(_THIS_WORDS)}) (?:{_either(_MEDIA_WORDS)}|(?:{_either(_MEDIA_STEMS)})[^ ]*)"
+    rf"(?: (?:{_either(_HINDI_POSTPOSITIONS)}))?(?![^ ])"
+)
+_WALK_THROUGH_RE = re.compile(r"\bwalk(?:ing)?\s+(?:you\s+)?through\b")
+# "வீடியோவில் வீட்டிலேயே சுலபமாக" is "in this video" with its "this" cut off.
+_IN_THE_VIDEO = set(_folded("வீடியோவில்", "வீடியோவுல", "வீடியோல", "காணொளியில்", "காணொலியில்"))
+# A tag of these words alone ("#இந்த", "#वीडियो"); "#वीडियोएडिटिंग" is a subject.
+_THIS_OR_VIDEO = {*_IN_THE_VIDEO, *_folded("இந்த", "இந்தக்", "इस", "यह", "ये", "வீடியோ", "வீடியோக்கள்",
+                                            "காணொளி", "காணொலி", "वीडियो", "वीडियोज", "विडियो")}
 
 
-def _is_filler_word(word: str) -> bool:
-    folded = normalize_unicode(word).casefold()
-    return folded in _FILLER_WORDS or folded.startswith(_FILLER_PREFIXES)
+def _is_this_video(words: list[str]) -> bool:
+    return bool(words) and (
+        bool(_THIS_VIDEO_RE.search(" ".join(words)))
+        or words[0] in _IN_THE_VIDEO
+        or all(word in _THIS_OR_VIDEO for word in words)
+    )
 
 
 def is_filler_phrase(text: Any) -> bool:
     """Whether a tag or thumbnail phrase is narration about the video rather than its subject."""
 
     words = unicode_words(text, min_length=1)
-    return bool(_FILLER_PHRASE_RE.search(" ".join(words))) or any(_is_filler_word(word) for word in words)
+    return _is_this_video(words) or bool(_WALK_THROUGH_RE.search(" ".join(words)))
+
+
+def _this_video_positions(words: list[str]) -> set[int]:
+    joined = " ".join(words)
+    positions: set[int] = set()
+    for match in _THIS_VIDEO_RE.finditer(joined):
+        first = joined.count(" ", 0, match.start())
+        positions.update(range(first, first + match.group(0).count(" ") + 1))
+    return positions
 
 
 _GENERIC_WORDS = {
@@ -265,7 +298,7 @@ def _thumbnail_candidates(title: str, focus_phrases: list[str] | None) -> list[s
 
     def add(text: str) -> None:
         text = text.upper()
-        if text and text not in candidates:
+        if text and text not in candidates and not _is_this_video(unicode_words(text, min_length=1)):
             candidates.append(text)
 
     # A validated search phrase that the title contains is a ready-made,
@@ -277,11 +310,15 @@ def _thumbnail_candidates(title: str, focus_phrases: list[str] | None) -> list[s
     # people" glued "TALKING PEOPLE", a phrase nobody wrote. Small words stay
     # and cannot start or end a window (_EDGE_WORDS).
     ignored = {"the", "a", "an", "really", "shorts"}
-    words = [word for word in unicode_words(title) if word.lower() not in ignored and not _is_filler_word(word)]
+    words = [word for word in unicode_words(title) if word.lower() not in ignored]
+    # Narration ("इस वीडियो में") is kept out of every window; deleting it
+    # glued its neighbours into a phrase nobody wrote.
+    narration = _this_video_positions(words)
     # Next: the strongest tag sharing a word with this title (stems, so
     # "loving" finds "love quotes"). A real search phrase reads cleanly; a
     # window cut from a sentence gave "HIDDEN DETAIL IN NEW".
-    title_stems = {_stem(word) for word in words if word.lower() not in _EDGE_WORDS}
+    title_stems = {_stem(word) for index, word in enumerate(words)
+                   if index not in narration and word.lower() not in _EDGE_WORDS}
 
     def shared_count(phrase: str) -> int:
         return len({_stem(word) for word in phrase.split()} & title_stems)
@@ -298,6 +335,8 @@ def _thumbnail_candidates(title: str, focus_phrases: list[str] | None) -> list[s
     windows: list[tuple[tuple[int, int, int, int], list[str]]] = []
     for size in (4, 3, 2):
         for start in range(max(len(words) - size, 0) + 1):
+            if narration.intersection(range(start, start + size)):
+                continue
             window = words[start:start + size]
             while window and window[0].lower() in _EDGE_WORDS:
                 window = window[1:]
@@ -311,7 +350,14 @@ def _thumbnail_candidates(title: str, focus_phrases: list[str] | None) -> list[s
     for _, window in sorted(windows, key=lambda item: item[0], reverse=True):
         add(" ".join(window))
     if not candidates:
-        chosen = words[:4]
+        # The stretch of the title around any narration that says the most.
+        runs: list[list[str]] = [[]]
+        for index, word in enumerate(words):
+            if index in narration:
+                runs.append([])
+            else:
+                runs[-1].append(word)
+        chosen = max(runs, key=lambda run: sum(word.lower() not in _EDGE_WORDS for word in run))[:4]
         while len(chosen) > 1 and chosen[0].lower() in _EDGE_WORDS:
             chosen = chosen[1:]
         while len(chosen) > 1 and chosen[-1].lower() in _EDGE_WORDS:

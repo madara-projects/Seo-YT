@@ -11,9 +11,10 @@ category presets shown as keyword research.
 import unittest
 from unittest.mock import patch
 
-from win_engine.analysis.creator_brief import build_creator_brief
+from win_engine.analysis.creator_brief import build_creator_brief, creator_topic
 from win_engine.analysis.generation_quality import evaluate_package_quality
-from win_engine.analysis.package_builder import build_title_thumbnail_packages, title_gate_status
+from win_engine.analysis.package_builder import build_title_thumbnail_packages, is_filler_phrase, title_gate_status
+from win_engine.analysis.topic_lock import force_hashtags, normalize_hashtag, source_lead_phrase
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.generation.quality_refinement import refine_package
 from win_engine.generation.seo_generator import generate_seo_suggestions
@@ -88,6 +89,56 @@ def _run(research, writer_output, *, available=True, repaired=None, source="gemi
             "language": "english", "region": "global", "creator_brief": brief,
         })
     return response, refinement_call
+
+
+HINDI_EDITING = (
+    "मोबाइल वीडियो एडिटिंग कैसे करें: इस ट्यूटोरियल में CapCut ऐप से वीडियो एडिटिंग सीखें। पहले CapCut खोलें, "
+    "फिर अपना वीडियो इम्पोर्ट करें, क्लिप काटें, टेक्स्ट और म्यूजिक जोड़ें और 1080p में एक्सपोर्ट करें।"
+)
+HINDI_EDITING_PACKAGE = {
+    "title": "मोबाइल वीडियो एडिटिंग कैसे करें | CapCut Tutorial",
+    "variants": ["मोबाइल वीडियो एडिटिंग कैसे करें | CapCut Tutorial", "CapCut से वीडियो एडिटिंग सीखें"],
+    "description": "इस ट्यूटोरियल में CapCut ऐप से मोबाइल वीडियो एडिटिंग सीखें: क्लिप काटें, टेक्स्ट और म्यूजिक जोड़ें "
+                   "और 1080p में एक्सपोर्ट करें।",
+    "tags": ["मोबाइल वीडियो एडिटिंग", "वीडियो एडिटिंग", "capcut tutorial"],
+    "hashtags": ["#वीडियोएडिटिंग", "#CapCut"],
+}
+HINDI_STORY = (
+    "यह भी गुजर जाएगा। एक राजा ने फकीर से पूछा कि दुख में क्या करूं। फकीर ने एक अंगूठी दी जिस पर लिखा था: "
+    "यह भी गुजर जाएगा। राजा ने सुख और दुख दोनों में यह बात याद रखी।"
+)
+HINDI_STORY_PACKAGE = {
+    "title": "यह भी गुजर जाएगा | राजा और फकीर की कहानी",
+    "variants": ["यह भी गुजर जाएगा | राजा और फकीर की कहानी", "राजा और फकीर की अंगूठी की कहानी"],
+    "description": "एक राजा और फकीर की कहानी: यह भी गुजर जाएगा। सुख और दुख दोनों में यह बात याद रखें।",
+    "tags": ["यह भी गुजर जाएगा", "यह भी गुजर जाएगा कहानी", "राजा और फकीर की कहानी"],
+    "hashtags": ["#यहभीगुजरजाएगा", "#कहानी"],
+}
+UPSC_NOTES = "सबसे पहले NCERT की किताबें पढ़ें, फिर रोज अखबार पढ़ें और नोट्स बनाएं।"
+HINDI_GREETING = f"नमस्ते दोस्तों! आज हम बात करेंगे UPSC की तैयारी के बारे में। {UPSC_NOTES}"
+UPSC_PACKAGE = {
+    "title": "UPSC की तैयारी कैसे करें | NCERT से शुरुआत",
+    "variants": ["UPSC की तैयारी कैसे करें | NCERT से शुरुआत", "UPSC तैयारी: NCERT और अखबार"],
+    "description": f"UPSC की तैयारी के लिए {UPSC_NOTES}",
+    "tags": ["upsc की तैयारी", "ncert books", "upsc preparation"],
+    "hashtags": ["#UPSC", "#NCERT"],
+}
+
+
+def _run_hindi(script, writer=None, *, video_format=""):
+    """A Hindi run; without a writer package Gemini is off and the local fallback ships."""
+
+    brief = build_creator_brief(script=script, language="hindi", video_format=video_format)
+    research = {"history_store": HistoryStore(":memory:"), "youtube_results": [], "keyword_signals": [],
+                "entity_signals": [], "top_opportunities": [], "upload_timing": {}, "thumbnail_intelligence": {}}
+    with patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source",
+               return_value=({"hindi": writer}, "gemini" if writer else "fallback")), \
+         patch("win_engine.generation.strategy_engine.last_generation_diagnostics", return_value={}), \
+         patch.object(gemini_client, "is_available", return_value=writer is not None), \
+         patch("win_engine.generation.quality_refinement.generate_one", return_value=None):
+        return generate_seo_suggestions(script, research, context={
+            "language": "hindi", "region": "india", "creator_brief": brief,
+        })
 
 
 class RescoredFinalTitleTests(unittest.TestCase):
@@ -378,6 +429,86 @@ class YouTubeSafeCopyTests(unittest.TestCase):
         self.assertFalse([title for title in titles if "<" in title or ">" in title])
         self.assertTrue(response["title"].endswith("‹3"))
         self.assertEqual(store.history_run(response["history_run_id"])["title"], response["title"])
+
+
+class IndicSubjectTests(unittest.TestCase):
+    """"This" or "video" inside a Hindi or Tamil subject is the subject, not narration about the video."""
+
+    def test_this_or_video_inside_a_subject_is_not_narration(self):
+        for phrase in ("मोबाइल वीडियो एडिटिंग", "वीडियो एडिटिंग", "#वीडियोएडिटिंग", "यह भी गुजर जाएगा",
+                       "இந்த காதல்", "इस दुनिया में"):
+            with self.subTest(phrase=phrase):
+                self.assertFalse(is_filler_phrase(phrase))
+        for phrase in ("इस वीडियो में", "यह वीडियो", "இந்த வீடியோவில் வீட்டிலேயே", "வீடியோவில் வீட்டிலேயே சுலபமாக",
+                       "#இந்த", "#வீடியோவில்", "#वीडियो", "this video", "walking you through"):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(is_filler_phrase(phrase))
+
+    def test_a_hindi_subject_keeps_its_tags_hashtags_and_thumbnail(self):
+        editing = _run_hindi(HINDI_EDITING, HINDI_EDITING_PACKAGE, video_format="tutorial")
+        for tag in ("मोबाइल वीडियो एडिटिंग", "वीडियो एडिटिंग"):
+            self.assertIn(tag, editing["tags"])
+        self.assertIn("#वीडियोएडिटिंग", editing["hashtags"])
+        story = _run_hindi(HINDI_STORY, HINDI_STORY_PACKAGE, video_format="storytelling")
+        self.assertIn("यह भी गुजर जाएगा", story["tags"])
+        self.assertEqual(story["title_thumbnail_packages"][0]["thumbnail_text"], "यह भी गुजर जाएगा")
+
+    def test_thumbnail_text_never_joins_words_the_title_keeps_apart(self):
+        expected = {
+            "यह भी गुजर जाएगा | राजा और फकीर की कहानी": "यह भी गुजर जाएगा",
+            "मोबाइल वीडियो एडिटिंग कैसे करें": "मोबाइल वीडियो एडिटिंग कैसे",
+            "நீ இல்லாத இந்த இரவு மிகவும் நீளமாக இருக்கிறது": "நீ இல்லாத இந்த இரவு",
+            # Narration in the middle is left out, not closed over.
+            "चिकन बिरयानी इस वीडियो में आसान तरीका": "चिकन बिरयानी",
+        }
+        for title, text in expected.items():
+            with self.subTest(title=title):
+                [package] = build_title_thumbnail_packages([{"title": title}], {}, validated=True)
+                self.assertEqual(package["thumbnail_text"], text)
+
+    def test_a_hindi_greeting_is_not_the_topic(self):
+        self.assertEqual(source_lead_phrase(HINDI_GREETING), "upsc की तैयारी")
+        self.assertEqual(creator_topic(build_creator_brief(script=HINDI_GREETING, language="hindi")), "upsc की तैयारी")
+        fallback = _run_hindi(HINDI_GREETING)
+        self.assertNotIn("नमस्ते", fallback["title"])
+        self.assertTrue(fallback["hashtags"])
+        self.assertEqual(fallback["content_graph_strategy"]["hub_topic"], "upsc की तैयारी")
+        # The writer's title is scored against the subject, as it is without a greeting.
+        greeted = _run_hindi(HINDI_GREETING, UPSC_PACKAGE)
+        plain = _run_hindi(f"UPSC की तैयारी। {UPSC_NOTES}", UPSC_PACKAGE)
+        self.assertEqual(greeted["ctr_prediction"]["title_quality_score"],
+                         plain["ctr_prediction"]["title_quality_score"])
+
+    def test_hindi_openers_are_dropped_and_other_openings_are_unchanged(self):
+        expected = {
+            "नमस्कार दोस्तों, आज के इस वीडियो में हम जानेंगे कि UPSC की तैयारी कैसे करें।": "upsc की तैयारी कैसे करें",
+            "हेलो दोस्तों। आज हम UPSC की तैयारी के बारे में बात करेंगे।": "upsc की तैयारी",
+            "दोस्तों, इस वीडियो में मोबाइल वीडियो एडिटिंग सीखें।": "मोबाइल वीडियो एडिटिंग सीखें",
+            # "Friends" or "namaste" as the subject stays.
+            "दोस्तों के साथ गोवा ट्रिप। पहला दिन बीच पर।": "दोस्तों के साथ गोवा ट्रिप",
+            "नमस्ते का महत्व। भारत में लोग हाथ जोड़कर मिलते हैं।": "नमस्ते का महत्व",
+            "Hey guys, welcome back! In this video I show you how to fix a flat tyre.": "how to fix a flat tyre",
+            "Hello everyone, let's talk about budget travel in Munnar.": "budget travel in munnar",
+            "வணக்கம்! இந்த வீடியோவில் செட்டிநாடு சிக்கன் பிரியாணி செய்வது எப்படி என்று பார்க்கலாம்.":
+                "செட்டிநாடு சிக்கன் பிரியாணி செய்வது எப்படி என்று பார்க்கலாம்",
+        }
+        for script, topic in expected.items():
+            with self.subTest(script=script):
+                self.assertEqual(source_lead_phrase(script), topic)
+
+    def test_hashtags_carry_no_invisible_joiners(self):
+        zwj, zwnj = "‍", "‌"
+        expected = {
+            f"#प्यार{zwj}": "#प्यार",
+            f"#{zwnj}दिल": "#दिल",
+            f"#क्{zwj}षमा": "#क्षमा",
+            f"#சிக்கன்{zwnj} பிரியாணி": "#சிக்கன்பிரியாணி",
+            f"#love{zwj}": "#love",
+        }
+        for raw, tag in expected.items():
+            with self.subTest(raw=ascii(raw)):
+                self.assertEqual(normalize_hashtag(raw), tag)
+        self.assertEqual(force_hashtags([f"#प्यार{zwj}", f"#दिल{zwnj}"], "", "quotes"), ["#प्यार", "#दिल"])
 
 
 if __name__ == "__main__":

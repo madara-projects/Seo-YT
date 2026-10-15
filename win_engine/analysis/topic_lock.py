@@ -7,6 +7,7 @@ tag and hashtag clean-up, and the policy-risk wording check on generated text.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from functools import lru_cache
 from typing import Iterable, List
@@ -341,6 +342,23 @@ def extract_main_topic(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Source lead phrase — a contiguous, grammatical span of the creator's words
 # ---------------------------------------------------------------------------
+# Hindi openers: "नमस्ते दोस्तों" ("hello friends"), "आपका स्वागत है" ("welcome"),
+# "आज के इस वीडियो में" ("in today's video"), "आज हम बात करेंगे" ("today we'll talk").
+# A bare greeting or "दोस्तों" counts only before punctuation or the intro's next
+# words, so "दोस्तों के साथ गोवा ट्रिप" ("a Goa trip with friends") keeps its subject.
+_HI_GREETING = r"(?:नमस्ते|नमस्कार|हेलो|हैलो|हाय)"
+_HI_FRIENDS = r"(?:दोस्तो[ंँ]?|मित्रो[ंँ]?|साथियो[ंँ]?|फ्रेंड्स)"
+_HI_INTRO_NEXT = r"(?=(?:आज|इस|मैं|हम|आप|आपका|स्वागत|वेलकम|चलिए|चलो|आइए)(?:\s|$))"
+_HI_YOU = r"(?:आप\s+(?:सभी|सब)\s+का|आपका)"
+_HI_CHANNEL = r"(?:हमारे|मेरे|इस)\s+(?:यूट्यूब\s+)?चैनल\s+(?:में|पर)"
+_HI_WE = r"(?:आज\s+)?(?:हम|मैं)\s+(?:आपको\s+|आपसे\s+|आप\s+(?:सभी|सब|लोगों)\s+(?:को|से)\s+)?"
+_HI_ABOUT = r"\s+के\s+(?:बारे|विषय)\s+में"
+_HI_TALK = r"(?:बात\s+)?(?:कर|बता|दिखा|सिखा|जान|देख|सीख|समझ)"
+# "X के बारे में (बात करेंगे)" ends a clause whose subject is X ("about X").
+_HI_ABOUT_TAIL_RE = re.compile(
+    rf"{_HI_ABOUT}(?:\s+{_HI_TALK}\S*(?:\s+(?:वाले|वाला)\S*)?(?:\s+(?:हैं|है|हू[ंँ]))?)?$"
+)
+
 # Spoken openers that carry no topic. Stripped repeatedly from the start.
 _LEAD_IN_PATTERNS = (
     re.compile(r"^(?:hi|hey|hello|vanakkam)(?:\s+(?:guys|everyone|friends|all|there|makkale|nanbargale))?[\s,!.:-]+", re.IGNORECASE),
@@ -357,6 +375,20 @@ _LEAD_IN_PATTERNS = (
     re.compile(r"^(?:indha|intha|inda)\s+(?:video|vdo)\s*(?:la|le|la\s+naama|la\s+nama)?[\s,]+", re.IGNORECASE),
     re.compile(r"^இந்த\s+(?:வீடியோவில்|வீடியோவுல|வீடியோ\s*ல|காணொளியில்)[\s,]*"),
     re.compile(r"^(?:வணக்கம்|ஹாய்)[^\s]*[\s,!.]*"),
+    re.compile(rf"^{_HI_GREETING}\s+(?:{_HI_FRIENDS}|(?:आप\s+)?(?:सभी|सब)\s*को)[\s,!.:।-]+"),
+    re.compile(rf"^(?:{_HI_GREETING}|{_HI_FRIENDS})(?:\s*[,!.:।-]+\s*|\s+{_HI_INTRO_NEXT})"),
+    re.compile(rf"^(?:{_HI_CHANNEL}\s+)?(?:{_HI_YOU}\s+)?(?:फिर\s+से\s+)?स्वागत\s+है(?:\s+{_HI_YOU})?"
+               rf"(?:\s+{_HI_CHANNEL})?[\s,!.:।-]*"),
+    re.compile(r"^(?:आज\s+(?:के|की)\s+(?:इस\s+)?|इस\s+)(?:वीडियो|विडियो)\s+(?:में|मे)[\s,:-]*"),
+    re.compile(
+        rf"^{_HI_WE}(?:बात\s+कर(?:े[ंँ]गे|ू[ंँ]गा|ने\s+वाले\s+हैं)|(?:बता|दिखा|सिखा)(?:ए[ंँ]गे|ऊ[ंँ]गा|ने\s+वाले\s+हैं)"
+        r"|(?:जान|देख|सीख|समझ)े[ंँ]गे)(?:\s+कि)?[\s,:-]+"
+    ),
+    # "आज हम UPSC के बारे में बात करेंगे": the subject sits before "about".
+    re.compile(rf"^{_HI_WE}(?=[^।.!?\n]*{_HI_ABOUT}\s+{_HI_TALK})"),
+    re.compile(r"^(?:चलिए|चलो|आइए|आइये)\s+(?:आज\s+)?(?:बात\s+करते|जानते|देखते|सीखते|समझते|शुरू\s+करते)\s+हैं"
+               r"(?:\s+कि)?[\s,!.:।-]+"),
+    re.compile(rf"^तो[\s,]+(?={_HI_FRIENDS}[\s,!.।]|{_HI_INTRO_NEXT})"),
 )
 _LEADING_DETERMINERS = {"a", "an", "the", "this", "my", "our"}
 _TRAILING_FUNCTION_WORDS = {
@@ -398,7 +430,7 @@ def source_lead_phrase(text: str, max_words: int = 12) -> str:
         (part.strip() for part in re.split(r"[.!?\n:;|।॥]+|\s[-–—]\s", body) if part.strip()),
         "",
     )
-    words = _SPAN_WORD_RE.findall(clause)
+    words = _SPAN_WORD_RE.findall(_HI_ABOUT_TAIL_RE.sub("", clause))
     while words and words[0].casefold() in _LEADING_DETERMINERS:
         words = words[1:]
     words = words[:max_words]
@@ -506,15 +538,21 @@ _HASHTAG_STOPWORDS = {
 }
 # Placeholders that must never reach an upload.
 _PLACEHOLDER_TOPICS = {"deep quote", "this topic", "the video topic", "video topic", "aesthetic quote"}
+
+
 def _hashtag_pieces(text: str) -> list[str]:
     """Runs of letters, digits and combining marks of any script.
 
     Tamil and Hindi vowel signs are marks, which Python's \\w does not match;
-    the danda (।) is punctuation and ends a piece.
+    the danda (।) is punctuation and ends a piece. Zero-width joiners and other
+    invisible format characters are dropped: "#प्यार" + U+200D is not the
+    hashtag viewers type.
     """
 
     pieces, current = [], ""
     for char in text:
+        if unicodedata.category(char) == "Cf":
+            continue
         if char != "_" and is_word_character(char):
             current += char
         elif current:
