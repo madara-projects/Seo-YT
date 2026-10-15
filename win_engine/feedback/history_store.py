@@ -1054,6 +1054,8 @@ class HistoryStore:
             connection.execute("DELETE FROM published_video_links")
             connection.execute("DELETE FROM video_performance_snapshots")
             connection.execute("DELETE FROM package_experiments")
+            # Kept edits from sync conflicts are full package copies, so they go too.
+            connection.execute("DELETE FROM cloud_sync_conflicts")
 
     # --- Stage A: Published Video Linking Methods ---
 

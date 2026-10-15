@@ -202,8 +202,13 @@ def _language_instruction(language: str) -> str:
     return _LANGUAGE_INSTRUCTIONS.get(key, _LANGUAGE_INSTRUCTIONS["english"])
 
 
-def _niche_header(category: Optional[str]) -> str:
-    return _NICHE_GUIDANCE.get((category or "general").lower(), _NICHE_GUIDANCE["general"])
+def _niche_header(category: Optional[str], *, short: bool = True) -> str:
+    key = (category or "general").lower()
+    if key == "quotes" and not short:
+        # A long-form quotes video follows the long-form description rule, not a Short's.
+        return (_NICHE_GUIDANCE["quotes"].replace("Niche: QUOTE SHORT.", "Niche: QUOTES.")
+                .replace("Keep the description concise and faithful", "Keep the description faithful"))
+    return _NICHE_GUIDANCE.get(key, _NICHE_GUIDANCE["general"])
 
 
 def _fmt_views(value: Any) -> str:
@@ -525,7 +530,7 @@ def _build_user_prompt(
 {_build_creator_brief_block(creator_brief)}
 {_build_channel_learning_block(channel_learning)}
 {competitor_block}
-{_niche_header(category)}
+{_niche_header(category, short=is_short_content(script, creator_brief))}
 Target language: {language}
 Target region: {region}
 Audience type: {audience_type}

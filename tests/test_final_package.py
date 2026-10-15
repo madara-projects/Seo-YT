@@ -496,6 +496,35 @@ class IndicSubjectTests(unittest.TestCase):
             with self.subTest(script=script):
                 self.assertEqual(source_lead_phrase(script), topic)
 
+    def test_a_tamil_greeting_or_hindi_about_to_tell_is_not_the_topic(self):
+        biryani = "செட்டிநாடு சிக்கன் பிரியாணி செய்வது எப்படி என்று பார்க்கலாம்"
+        expected = {
+            f"வணக்கம் நண்பர்களே! இந்த வீடியோவில் {biryani}.": biryani,
+            f"வணக்கம் நண்பர்களே {biryani}.": biryani,
+            f"அனைவருக்கும் வணக்கம். {biryani}.": biryani,
+            "दोस्तों, आज मैं आपको बताने वाला हूं iPhone 16 के बारे में।": "iphone 16",
+            "आज मैं आपको बताने वाली हूँ घर पर पनीर बनाने का तरीका।": "घर पर पनीर बनाने का तरीका",
+            # "Friends' Day" names the subject.
+            "நண்பர்கள் தினம் வாழ்த்துக்கள்.": "நண்பர்கள் தினம் வாழ்த்துக்கள்",
+        }
+        for script, topic in expected.items():
+            with self.subTest(script=script):
+                self.assertEqual(source_lead_phrase(script), topic)
+        brief = build_creator_brief(script=f"வணக்கம் நண்பர்களே! {biryani}.", language="tamil")
+        self.assertEqual(creator_topic(brief), biryani)
+
+    def test_a_tie_between_subject_words_has_one_answer(self):
+        from win_engine.analysis import topic_lock
+
+        # "masala" and "recipe" are equally long; set order differs per process.
+        answers = set()
+        for reverse in (False, True):
+            keywords = {category: sorted(terms, reverse=reverse)
+                        for category, terms in topic_lock.CATEGORY_KEYWORDS.items()}
+            with patch.object(topic_lock, "CATEGORY_KEYWORDS", keywords):
+                answers.add(topic_lock.extract_main_topic("Masala Tea Recipe"))
+        self.assertEqual(answers, {"masala"})
+
     def test_hashtags_carry_no_invisible_joiners(self):
         zwj, zwnj = "‍", "‌"
         expected = {

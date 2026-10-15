@@ -1672,3 +1672,23 @@ def test_an_action_that_says_she_with_nobody_described_names_a_lone_woman_in_eve
         assert sections(shot)["Subject"] == "A lone woman, seen from behind."
         assert fp.subject_gap(shot["prompt"]) == ""
     assert any("a lone woman named as the subject" in note for note in plan["checks"]["adjustments"])
+
+
+def test_four_false_hits_are_left_alone():
+    # Light a person stands in is not a change of light; the light's own verb still is.
+    steady = "A woman in warm evening light turns to the sea."
+    assert fp._drop_light_shifts(steady) == (steady, [])
+    assert fp._drop_light_shifts("A woman walks on as the light turns to gold.")[1]
+    # Waves shattering on rocks are the sea; a vase shattering is still a symbol.
+    assert fp.symbolic_props("Waves shatter against the rocks as spray rises.") == []
+    assert "something shattering" in fp.symbolic_props("A glass vase shatters on the floor.")
+    # A pan or a crane is a camera move only as the camera's.
+    for text in ("She lifts a frying pan from the stove.", "A paper crane hangs above the bed."):
+        assert not fp._CAMERA_MOVE_RE.search(text), text
+    for text in ("Wide shot with a slow pan to the left.", "A crane shot rising over the field.", "The camera pans across the bay."):
+        assert fp._CAMERA_MOVE_RE.search(text), text
+    # Far windows reflect no face; a window the subject touches can.
+    assert fp._keep_out("Narrow brick houses with dark windows line the far bank.") == fp.KEEP_OUT_SENTENCE
+    assert fp._NO_REFLECTION_SENTENCE in fp._keep_out("She rests one palm on the cold window glass.")
+    patched, added = fp.patch_prompt(SUNRISE_WALK.replace("an empty seawall", "an empty street of houses with dark windows"), part=1, audio="wind")
+    assert "no reflection of a face in the glass" not in added

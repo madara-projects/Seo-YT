@@ -231,6 +231,17 @@ class ReportTests(HistoryStoreTestCase):
 
 
 class WriteIntegrityTests(HistoryStoreTestCase):
+    def test_a_reset_also_clears_kept_sync_conflict_copies(self):
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO cloud_sync_conflicts (sync_uuid, local_revision, local_content_hash, remote_revision,"
+                " remote_content_hash, winner, detected_at, local_payload_json) VALUES (?, 1, 'a', 2, 'b', 'remote', ?, ?)",
+                ("uuid-1", "2026-10-15T00:00:00+00:00", '{"title": "kept edit"}'),
+            )
+        self.store.reset_database()
+        with self.store._connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM cloud_sync_conflicts").fetchone()[0], 0)
+
     def test_a_metadata_merge_holds_the_write_lock_from_its_read(self):
         run = self.run_id()
         link_id = self.link(run, "mergevideo1")

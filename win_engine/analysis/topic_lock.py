@@ -246,9 +246,13 @@ def _whole_word_in(term: str, lowered: str) -> bool:
     Python's ``\\b`` treats Tamil vowel signs as non-word characters, so Tamil
     terms match as a prefix of a Tamil word instead.
     """
+    return _term_match(term, lowered) is not None
+
+
+def _term_match(term: str, lowered: str) -> re.Match[str] | None:
     if _TAMIL_CHAR_RE.search(term):
-        return re.search(r"(?<![஀-௿])" + re.escape(term), lowered) is not None
-    return re.search(r"\b" + re.escape(term) + r"\b", lowered) is not None
+        return re.search(r"(?<![஀-௿])" + re.escape(term), lowered)
+    return re.search(r"\b" + re.escape(term) + r"\b", lowered)
 
 
 def category_scores(text: str) -> dict[str, float]:
@@ -319,14 +323,15 @@ def extract_main_topic(text: str) -> str:
 
     lowered = (clean_text or text).lower()
 
-    matches = [
-        term
+    found = {
+        term: match.start()
         for terms in CATEGORY_KEYWORDS.values()
         for term in terms
-        if _whole_word_in(term, lowered) and len(term) > 3
-    ]
-    if matches:
-        return max(matches, key=len)
+        if len(term) > 3 and (match := _term_match(term, lowered))
+    }
+    if found:
+        # Set order changes between processes: longest, then earliest, then alphabetical.
+        return min(found, key=lambda term: (-len(term), found[term], term))
 
     words = [w for w in re.findall(r"[A-Za-z]{4,}", lowered) if w not in _STOPWORDS and w not in {"background", "visuals", "screen", "vertical", "format"}]
     if not words:
@@ -354,9 +359,11 @@ _HI_CHANNEL = r"(?:हमारे|मेरे|इस)\s+(?:यूट्यू�
 _HI_WE = r"(?:आज\s+)?(?:हम|मैं)\s+(?:आपको\s+|आपसे\s+|आप\s+(?:सभी|सब|लोगों)\s+(?:को|से)\s+)?"
 _HI_ABOUT = r"\s+के\s+(?:बारे|विषय)\s+में"
 _HI_TALK = r"(?:बात\s+)?(?:कर|बता|दिखा|सिखा|जान|देख|सीख|समझ)"
+# "बताने वाले हैं" / "बताने वाला (वाली) हूं": "am / are about to tell".
+_HI_ABOUT_TO = r"ने\s+(?:वाले\s+हैं|वाल[ाी]\s+हू[ंँ])"
 # "X के बारे में (बात करेंगे)" ends a clause whose subject is X ("about X").
 _HI_ABOUT_TAIL_RE = re.compile(
-    rf"{_HI_ABOUT}(?:\s+{_HI_TALK}\S*(?:\s+(?:वाले|वाला)\S*)?(?:\s+(?:हैं|है|हू[ंँ]))?)?$"
+    rf"{_HI_ABOUT}(?:\s+{_HI_TALK}\S*(?:\s+वाल[ाीे]\S*)?(?:\s+(?:हैं|है|हू[ंँ]))?)?$"
 )
 
 # Spoken openers that carry no topic. Stripped repeatedly from the start.
@@ -375,13 +382,16 @@ _LEAD_IN_PATTERNS = (
     re.compile(r"^(?:indha|intha|inda)\s+(?:video|vdo)\s*(?:la|le|la\s+naama|la\s+nama)?[\s,]+", re.IGNORECASE),
     re.compile(r"^இந்த\s+(?:வீடியோவில்|வீடியோவுல|வீடியோ\s*ல|காணொளியில்)[\s,]*"),
     re.compile(r"^(?:வணக்கம்|ஹாய்)[^\s]*[\s,!.]*"),
+    # "வணக்கம் நண்பர்களே" ("hello friends"), "அனைவருக்கும் வணக்கம்" ("hello everyone").
+    re.compile(r"^(?:நண்பர்களே|தோழர்களே|தோழிகளே|மக்களே)[\s,!.]*"),
+    re.compile(r"^(?:நண்பர்கள்\s+)?(?:அனைவருக்கும்|எல்லாருக்கும்|எல்லோருக்கும்)\s+(?:என்\s+)?வணக்கம்[^\s]*[\s,!.]*"),
     re.compile(rf"^{_HI_GREETING}\s+(?:{_HI_FRIENDS}|(?:आप\s+)?(?:सभी|सब)\s*को)[\s,!.:।-]+"),
     re.compile(rf"^(?:{_HI_GREETING}|{_HI_FRIENDS})(?:\s*[,!.:।-]+\s*|\s+{_HI_INTRO_NEXT})"),
     re.compile(rf"^(?:{_HI_CHANNEL}\s+)?(?:{_HI_YOU}\s+)?(?:फिर\s+से\s+)?स्वागत\s+है(?:\s+{_HI_YOU})?"
                rf"(?:\s+{_HI_CHANNEL})?[\s,!.:।-]*"),
     re.compile(r"^(?:आज\s+(?:के|की)\s+(?:इस\s+)?|इस\s+)(?:वीडियो|विडियो)\s+(?:में|मे)[\s,:-]*"),
     re.compile(
-        rf"^{_HI_WE}(?:बात\s+कर(?:े[ंँ]गे|ू[ंँ]गा|ने\s+वाले\s+हैं)|(?:बता|दिखा|सिखा)(?:ए[ंँ]गे|ऊ[ंँ]गा|ने\s+वाले\s+हैं)"
+        rf"^{_HI_WE}(?:बात\s+कर(?:े[ंँ]गे|ू[ंँ]गा|{_HI_ABOUT_TO})|(?:बता|दिखा|सिखा)(?:ए[ंँ]गे|ऊ[ंँ]गा|{_HI_ABOUT_TO})"
         r"|(?:जान|देख|सीख|समझ)े[ंँ]गे)(?:\s+कि)?[\s,:-]+"
     ),
     # "आज हम UPSC के बारे में बात करेंगे": the subject sits before "about".

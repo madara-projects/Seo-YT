@@ -166,6 +166,20 @@ class PromptHygieneTests(unittest.TestCase):
     def test_system_prompt_sentences_do_not_run_together(self):
         self.assertNotRegex(seo_writer._SYSTEM_PROMPT, r"[a-z][.!?][A-Z]")
 
+    def test_quotes_niche_keeps_long_form_to_the_long_form_description_rule(self):
+        script = "Ten quotes about patience, each read slowly with a minute of commentary on what it asks of us."
+        long_form = seo_writer._build_user_prompt(script, "", "english", "global", "general", category="quotes")
+        self.assertIn("120-220 words", long_form)
+        self.assertIn("Niche: QUOTES.", long_form)
+        self.assertNotIn("Keep the description concise", long_form)
+        short = seo_writer._build_user_prompt(
+            script, "", "english", "global", "general", category="quotes",
+            creator_brief={"video_format": "youtube_shorts"},
+        )
+        self.assertNotIn("120-220 words", short)
+        self.assertIn("Niche: QUOTE SHORT. ", short)
+        self.assertIn("Keep the description concise", short)
+
     def test_quote_short_rules_do_not_reach_other_cases(self):
         # One short paragraph is a quote Short's description, not long-form's 120-220
         # words; a feeling hashtag such as #healing must be carried by the quote.

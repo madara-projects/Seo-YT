@@ -120,8 +120,11 @@ _AUDIO_LINE_RE = re.compile(
 # "Drift" and "glide" name a camera move only as the camera's ("a slow drift",
 # "the camera glides"): "mist drifting over the tracks" is the scene moving.
 _CAMERA_MOVE_RE = re.compile(
-    r"\b(?:push-?in|pull-?back|dolly|tilt(?:s|ing)?|pan(?:s|ning)?|tracking|crane|handheld|hand-held|locked-off|"
+    r"\b(?:push-?in|pull-?back|dolly|tilt(?:s|ing)?|panning|tracking|craning|handheld|hand-held|locked-off|"
     r"zoom(?:s|ing)?|orbit(?:s|ing)?)\b"
+    # A pan or a crane only as the camera's: not a frying pan or a paper crane.
+    r"|\bcrane (?:shot|move|up|down)\b|\bpans? (?:slowly )?(?:left|right|across|up|down)\b"
+    r"|\b(?:slow|gentle|subtle|steady|smooth|sideways|lateral|horizontal|upward|downward|whip)\s+(?:\w+\s+)?(?:pan|crane)\b"
     r"|\b(?:slow|gentle|subtle|steady|smooth)\s+(?:\w+\s+){0,2}(?:drift|glide)\b"
     r"|\b(?:camera|shot|view|frame|lens)\b(?:\s+\w+){0,3}?\s+(?:drifts?|drifting|glides?|gliding|moves?|moving|"
     r"follows?|following|holds?|rises?|rising|pushes|pulls|tracks?|tracking|creeps?|arcs?|orbits?|cranes?|pans?|"
@@ -129,7 +132,7 @@ _CAMERA_MOVE_RE = re.compile(
     # A move named as a noun ("a sideways glide", "one slow arc"): a live prompt with
     # "a sideways glide" was given a second move, a push-in.
     r"|\b(?:a|an|one|slow|gentle|subtle|steady|smooth|sideways|lateral|forward|backward|upward|downward)\s+"
-    r"(?:\w+\s+){0,2}?(?:glide|drift|track|push|arc|orbit|crane|dolly|pan|tilt)\b(?!\s+of\b)"
+    r"(?:\w+\s+){0,2}?(?:glide|drift|track|push|arc|orbit|dolly|tilt)\b(?!\s+of\b)"
     r"|\bstatic (?:shot|camera)\b",
     re.IGNORECASE,
 )
@@ -1272,7 +1275,7 @@ def _sentence(text: Any) -> str:
 
 def _keep_out(picture: str) -> str:
     # A window in the picture can reflect the face the prompt keeps out of the frame.
-    return f"{KEEP_OUT_SENTENCE} {_NO_REFLECTION_SENTENCE}" if _GLASS_RE.search(picture) else KEEP_OUT_SENTENCE
+    return f"{KEEP_OUT_SENTENCE} {_NO_REFLECTION_SENTENCE}" if _FACING_GLASS_RE.search(picture) else KEEP_OUT_SENTENCE
 
 
 def _scene_sections(scene: dict[str, str]) -> list[tuple[str, str]]:
@@ -2257,12 +2260,20 @@ _LIGHT_SHIFT_RE = re.compile(
 
 
 _IN_MATCH_NEGATION_RE = re.compile(r"\b(?:no|not|never|nor|without)\b|n't\b", re.IGNORECASE)
+# "A woman in warm evening light turns to the sea": the light is where she is, and the verb is hers.
+_GOVERNED_LIGHT_RE = re.compile(
+    r"\b(?:in|under|beneath|through|against|with|by|amid)\s+(?:(?:the|a|an)\s+)?"
+    r"(?:(?!(?:the|a|an|while|as|and|when|then|until|before|after|but|or|where)\b)[\w'-]+\s+){0,3}$",
+    re.IGNORECASE,
+)
 
 
 def _asked_change(text: str, match: re.Match[str]) -> bool:
-    """A light change the text asks for: "the light never fades into dusk" rules one out."""
+    """A light change the text asks for: "the light never fades into dusk" rules one out, and so does light a verb follows."""
 
-    return not _negated(text, match.start()) and not _IN_MATCH_NEGATION_RE.search(match.group(0))
+    clause = re.split(r"[.;,]", text[:match.start()])[-1]
+    return (not _negated(text, match.start()) and not _IN_MATCH_NEGATION_RE.search(match.group(0))
+            and not _GOVERNED_LIGHT_RE.search(clause))
 
 
 def _drop_light_shifts(sentence: str) -> tuple[str, list[str]]:
@@ -2426,7 +2437,9 @@ _SYMBOL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
                                              rf"|\b{_WRAP_VERB}\s+(?:the|an?|its)\s+(?:\w+\s+){{0,2}}?{_KEEPSAKE}\s+"
                                              rf"(?:in|with)\s+(?:\w+\s+){{0,2}}?{_WRAPPING}\b"
                                              rf"|\bwound (?:tightly )?a?round (?:the|an?|its)\s+(?:\w+\s+){{0,2}}?{_KEEPSAKE}\b"),
-        ("something shattering", r"\bshatter(?:s|ed|ing)?\b|\b(?:cracked|cracking|broken|shattered|breaking) mirrors?\b"
+        # Waves shattering on rocks are the sea, not a symbol.
+        ("something shattering", r"(?<!\bwaves )(?<!\bwave )(?<!\bwater )(?<!\bspray )(?<!\bsurf )(?<!\bfoam )"
+                                 r"\bshatter(?:s|ed|ing)?\b|\b(?:cracked|cracking|broken|shattered|breaking) mirrors?\b"
                                  r"|\bmirrors?\s+(?:\w+\s+)?(?:cracks?|cracking|shatters?|breaks?|breaking)\b"),
         ("something melting", r"\bmelt(?:s|ing|ed)?\b[^.;,]{0,25}\b(?:heart|clock|watch|mask|statue|wax)\b"
                               r"|\b(?:heart|clock|watch|mask|statue|wax)\w*\s+(?:slowly\s+)?melt(?:s|ing)?\b"),
@@ -3143,6 +3156,11 @@ _DANGER_RE = re.compile(
 )
 _STATIC_WORD_RE = re.compile(r"\b(?:static|locked[\s-]off)\s+(?=(?:\w+\s+)?(?:shot|camera|frame|framing)\b)", re.IGNORECASE)
 _GLASS_RE = re.compile(r"\b(?:windows?|windowsill|windowpanes?|glass|mirrors?)\b", re.IGNORECASE)
+# Glass the camera looks at (a window, a mirror, a glass door) can reflect a face; lit windows of far houses cannot.
+_FACING_GLASS_RE = re.compile(
+    r"\bwindow(?:sill|pane)?s?\b(?<!\bwindows)|\bmirrors?\b|\bglass\b(?!\s+(?:jars?|bottles?|vases?|cups?|bowls?|of)\b)",
+    re.IGNORECASE,
+)
 _NO_REFLECTION_RE = re.compile(r"\b(?:no|without)\b[^.;]{0,40}\breflect\w*", re.IGNORECASE)
 # A window facing the camera can show the face the prompt keeps out of the frame.
 _NO_REFLECTION_SENTENCE = "No reflection of a face in the glass."
@@ -3343,7 +3361,7 @@ def patch_prompt(
         sentences.insert(0, _CONTINUITY_SENTENCE)
         added.append("continuity opener")
     picture = " ".join(sentence for sentence in sentences if not _boilerplate(sentence))
-    if _GLASS_RE.search(picture) and not _NO_REFLECTION_RE.search(" ".join(sentences)):
+    if _FACING_GLASS_RE.search(picture) and not _NO_REFLECTION_RE.search(" ".join(sentences)):
         index = next((index + 1 for index, sentence in enumerate(sentences) if _excludes(sentence)), len(sentences))
         sentences.insert(index, _NO_REFLECTION_SENTENCE)
         added.append("no reflection of a face in the glass")

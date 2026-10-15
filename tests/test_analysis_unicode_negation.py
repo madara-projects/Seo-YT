@@ -9,7 +9,7 @@ from win_engine.analysis.generation_quality import feeling_hashtag
 from win_engine.analysis.idea_workspace import build_idea_evidence
 from win_engine.analysis.intent_classifier import classify_intent
 from win_engine.analysis.language_engine import build_language_strategy
-from win_engine.analysis.pacing_engine import analyze_script_pacing
+from win_engine.analysis.pacing_engine import _count_words, analyze_script_pacing
 from win_engine.analysis.retention_assistant import analyze_retention_assistant
 from win_engine.analysis.source_cues import affirmed_feeling_words, is_negator, is_short_video, quote_title
 from win_engine.analysis.strategy_layer import build_upload_timing
@@ -91,6 +91,13 @@ class IndicPacingTests(unittest.TestCase):
             with self.subTest(word=word):
                 self.assertEqual(analyze_script_pacing(f"No {word} here.", video_format="tutorial")["pattern_interrupts"], 0)
 
+    def test_ly_and_mistaking_forms_count_as_whole_words(self):
+        terms = ["first", "surprising", "secret", "mistake"]
+        self.assertEqual(_count_words("firstly surprisingly secretly mistaking mistaken", terms), 5)
+        self.assertEqual(_count_words("only lonely know snow button", ["on", "now", "but"]), 0)
+        pacing = analyze_script_pacing("Firstly, I was mistaken. Surprisingly, mistaking it was easy.", video_format="tutorial")
+        self.assertEqual(pacing["hook_density"], "medium")
+
 
 class PublishedHashtagTests(unittest.TestCase):
     def test_tamil_and_hindi_hashtags_are_read_whole(self):
@@ -170,7 +177,10 @@ class ReelCueTests(unittest.TestCase):
         for script in ("My new fishing reel review: drag, gear ratio and line capacity",
                        "Season highlight reel from our football club", "Restoring an old film reel from 1962",
                        "Best fishing reels under 100 dollars", "Our season highlights reel",
-                       "A highlight-reel save from our keeper"):
+                       "A highlight-reel save from our keeper", "Best spinning reel for bass",
+                       "My demo reel for casting agents", "Watch my show reel", "My showreel for 2026",
+                       "Our sizzle reel for the new season", "How to reel in a big catfish",
+                       "Reel them in with a strong opening", "I was reeling after the news"):
             with self.subTest(script=script):
                 self.assertFalse(is_short_video(script, {}))
 
@@ -182,7 +192,8 @@ class ReelCueTests(unittest.TestCase):
 
     def test_a_single_reel_as_the_format_is_a_short(self):
         for script in ("Make a reel on this quote", "reel: The quietest people usually have the loudest minds.",
-                       "Soft piano for this reel", "My next reel is about city lights at night"):
+                       "Soft piano for this reel", "My next reel is about city lights at night",
+                       "Make a reel in Canva for this line"):
             with self.subTest(script=script):
                 self.assertTrue(is_short_video(script, {}))
         for video_format in ("quote_reel", "ig_reel", "reel_video"):

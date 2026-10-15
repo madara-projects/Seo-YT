@@ -244,7 +244,9 @@ def build_keyword_research(
         "search_demand_available": bool(demand_summary["suggestions"]),
         "search_demand": demand_summary,
         "subject_terms": sorted(subjects),
-        "primary_topic": _normalize(sem.get("primary_topic")),
+        "primary_topic": "" if any(
+            item["keyword"] == _normalize(sem.get("primary_topic")) and item.get("unconfirmed_interpretation") for item in scored
+        ) else _normalize(sem.get("primary_topic")),
         "limitations": [
             "The YouTube Data API exposes sampled matching results, not keyword search volume.",
             "A returned result supports phrase relevance only when the required meaningful terms appear in its public metadata.",
@@ -560,7 +562,15 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
     if not _semantic_support(text, content_terms) and not (creator_visual and _visual_score(text, visual_terms)):
         return None
     source_support_score, source_support = _source_support(text, source_terms)
-    if semantic_evidence:
+    # A one-word reading that shares no word with the creator's text ("daters" for
+    # "Be with someone") is Gemini's alone until results or a search suggestion
+    # confirm it. Phrased meanings ("protecting your energy") keep their support.
+    unconfirmed = bool(
+        semantic_evidence and semantic_evidence.get("relationship") != "direct" and not source_support_score
+        and len(text.split()) == 1
+        and not _evidence_count(text, results) and candidate.get("demand_rank") is None
+    )
+    if semantic_evidence and not unconfirmed:
         source_support_score = max(source_support_score, 85)
         source_support = (
             f"validated {semantic_evidence.get('relationship', 'semantic')} interpretation of creator phrase: "
@@ -620,7 +630,7 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
         "intent_score": intent_score, "specificity_score": specificity,
         "diversity_score": None, "keyword_relevance_score": total, "evidence_count": evidence_count,
         "semantic_confirmed": semantic_confirmation,
-        "semantic_evidence": semantic_evidence or None,
+        "semantic_evidence": semantic_evidence or None, "unconfirmed_interpretation": unconfirmed,
         "cluster": str(opportunity.get("cluster") or _family(text)),
         "intent": str(opportunity.get("intent") or _intent_label(classification)),
         "selection_reason": _reason(classification, evidence_count, query_support, source_classification),

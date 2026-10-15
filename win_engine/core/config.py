@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # long it is. A page of 25 costs what a page of 5 did and leaves the length
     # and relevance filters something to keep.
     youtube_max_results: int = Field(default=25, ge=1, le=50)
-    youtube_max_research_queries: int = 5
+    youtube_max_research_queries: int = Field(default=5, ge=1, le=10)
     # Daily quota of each key's Google Cloud project (and the OAuth client's),
     # copied from Cloud Console: YouTube does not report what is left. search.list
     # has its own bucket of calls; every other method draws units (1 per read)

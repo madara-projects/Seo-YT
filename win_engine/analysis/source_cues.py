@@ -30,12 +30,15 @@ _FORMAT_ALIASES = {
 }
 # The platform's own words for the format. A bare "short" is not one: "short
 # ribs", "in short" and "a short guide" describe long videos. A reel is one
-# unless it names a thing: a "fishing reel", "highlight reel" or "film reel".
+# unless it names a thing ("fishing reel", "demo reel") or is the verb: "reel
+# in the fish" and "reel them in", though "a reel in Canva" is the format.
 _SHORT_CUE_RE = re.compile(
     r"(?<![\w#])#(?:shorts?|reels?)\b|\b(?:youtube|yt)[\s_-]*shorts?\b|\bshort[\s_-]?form\b|"
     r"\b(?:instagram|insta|ig|facebook|fb)[\s_-]*reels?\b|"
-    r"(?<!fishing[\s-])(?<!highlight[\s-])(?<!highlights[\s-])(?<!film[\s-])"
-    r"(?:\breels?\b|\breels?[\s_-]+(?:videos?|format)\b)|"
+    r"\b(?:an?|the|this|that|my|your|our|their|his|her|new|next)\s+reels?\b|"
+    r"(?<!fishing[\s-])(?<!spinning[\s-])(?<!highlight[\s-])(?<!highlights[\s-])(?<!film[\s-])"
+    r"(?<!demo[\s-])(?<!show[\s-])(?<!sizzle[\s-])"
+    r"(?:\breels?\b(?!\s+(?:(?:them|it|him|her|you|us|me)\s+)?in\b)|\breels?[\s_-]+(?:videos?|format)\b)|"
     r"\bquote[\s_-]+(?:shorts?|reels?)\b",
     re.IGNORECASE,
 )

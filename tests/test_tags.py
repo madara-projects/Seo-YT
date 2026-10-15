@@ -291,6 +291,21 @@ class BriefBoilerplateTests(unittest.TestCase):
                 _footage_roots(script, brief)
                 self.assertLess(time.perf_counter() - start, 1.0)
 
+    def test_a_paraphrase_sharing_no_word_with_the_quote_is_not_the_topic(self):
+        # A live run shipped "daters" as its only subject tag on Gemini's word alone.
+        quote = "Be with someone who makes you feel safe, not someone who makes you guess."
+        semantic = {"primary_topic": "daters", "concept_evidence_validated": True, "concept_evidence": [
+            {"concept": "daters", "source_phrase": "Be with someone", "relationship": "paraphrase"}]}
+        brief = build_creator_brief(script=quote, exact_quote=quote)
+        research = build_keyword_research(script=quote, semantic=semantic, youtube_results=[], research_queries=[],
+                                          entity_signals=[], creator_brief=brief)
+        self.assertEqual(research["primary_topic"], "")
+        row = next((row for row in research["candidates"] if row["keyword"] == "daters"), None)
+        self.assertLess(row["source_support_score"] if row else 0, 85)
+        tags, _ = select_final_tags(research, generated_tags=["daters"], title="Feel safe", script=quote,
+                                    creator_brief=brief, is_short=True)
+        self.assertNotIn("daters", tags)
+
     def test_evidence_may_quote_the_target_audience_the_creator_typed(self):
         script = "Five budgeting habits that keep your rent paid every month."
         semantic = {"primary_topic": "budgeting habits", "secondary_topics": ["student budgeting"],
