@@ -700,5 +700,93 @@ class GateReviewRegressionTests(unittest.TestCase):
         self.assertIn("generic_template", self.codes(gate))
 
 
+class YouTubeSafeQuoteTests(unittest.TestCase):
+    """YouTube rejects "<" and ">", so the copy carries "‹" and "›"; the gate still reads the exact quote."""
+
+    QUOTE = "Self-respect > attention. Always."
+    WRITTEN = {
+        "title": QUOTE,
+        "variants": [QUOTE, "Choose self-respect over attention, always", "Your self-respect is worth more than attention"],
+        "description": f"“{QUOTE}”\n\nKnow your worth.",
+        "tags": ["self respect quotes", "self respect"], "hashtags": ["#selfrespect"],
+    }
+
+    def generate(self, writer_output, *, ai_short: bool = False) -> dict:
+        from win_engine.feedback.history_store import HistoryStore
+        from win_engine.generation import ai_shorts
+        from win_engine.generation.seo_generator import generate_seo_suggestions
+        from win_engine.llm import gemini_client
+
+        store = HistoryStore(":memory:")
+        if ai_short:
+            # The AI Shorts page's own brief and research, without its network tag check.
+            script = self.QUOTE
+            brief = ai_shorts.creator_brief_for_quote(self.QUOTE, {}, language="english", region="global")
+            research = ai_shorts.lean_research(store, brief)
+        else:
+            script = f"the quote is- {self.QUOTE} the video is- rain on a window at night"
+            brief = build_creator_brief(script=script, video_format="youtube_shorts", exact_quote=self.QUOTE)
+            research = {"history_store": store, "youtube_results": [], "entity_signals": [], "top_opportunities": [],
+                        "upload_timing": {}, "thumbnail_intelligence": {}, "keyword_signals": []}
+        with patch("win_engine.generation.strategy_engine.write_multilang_packages_with_source",
+                   return_value=({"english": writer_output}, "gemini" if writer_output else "fallback")), \
+             patch("win_engine.generation.strategy_engine.last_generation_diagnostics", return_value={}), \
+             patch.object(gemini_client, "is_available", return_value=False):
+            return generate_seo_suggestions(script, research, context={
+                "language": "english", "region": "global", "creator_brief": brief,
+            })
+
+    def test_a_youtube_safe_description_and_title_keep_the_exact_quote(self):
+        from win_engine.generation.seo_generator import format_upload_ready_description
+
+        for quote in ("Peace > drama.", "I <3 you more than words can say", self.QUOTE):
+            with self.subTest(quote=quote):
+                description = format_upload_ready_description(
+                    f"“{quote}”\n\nKnow what you are worth.", ["#shorts", "#quotes"], category="quotes")
+                title = quote.replace("<", "‹").replace(">", "›")
+                self.assertFalse({"<", ">"} & set(description))
+                gate = evaluate_package_quality(
+                    {"title": title, "variants": [title], "description": description,
+                     "tags": ["self respect"], "hashtags": ["#shorts", "#quotes"]},
+                    script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"},
+                )
+                self.assertNotIn("quote_fidelity", {item["code"] for item in gate["issues"]})
+                self.assertTrue(gate["passed"], gate["issues"])
+                self.assertEqual([row["title"] for row in gate["accepted_candidates"]], [title])
+        # "‹" stands for "<" only: a changed quote still fails.
+        gate = evaluate_package_quality(
+            {"title": "Peace over drama, every time", "variants": [], "description": "“Peace ‹ drama.”",
+             "tags": [], "hashtags": []},
+            script="Peace > drama.", creator_brief={"exact_quote": "Peace > drama.", "video_format": "youtube_shorts"},
+        )
+        self.assertIn("quote_fidelity", {item["code"] for item in gate["issues"]})
+
+    def test_creator_and_ai_shorts_packages_ship_safe_copy_that_passes(self):
+        for name, output, ai_short in (("creator", self.WRITTEN, False), ("creator fallback", None, False),
+                                       ("ai shorts", self.WRITTEN, True)):
+            with self.subTest(path=name):
+                response = self.generate(output, ai_short=ai_short)
+                titles = [response["title"], *response["title_variants"]]
+                copy = [*titles, response["description"], *(
+                    text for package in response["multilang"].values()
+                    for text in (package["title"], *package["variants"], package["description"])
+                )]
+                self.assertEqual([text for text in copy if "<" in text or ">" in text], [])
+                self.assertIn("Self-respect › attention. Always.", response["description"])
+                gate = response["generation_quality"]
+                self.assertNotIn("quote_fidelity", {item["code"] for item in gate["issues"]})
+                self.assertTrue(gate["passed"], gate["issues"])
+                self.assertIn(gate["verdict"], {"GREEN", "YELLOW"})
+                # Refinement scored the same package as passing, before and after.
+                refinement = response["generation_trace"]["quality_refinement"]
+                self.assertNotEqual(refinement["before"]["verdict"], "RED")
+                self.assertNotEqual(refinement["after"]["verdict"], "RED")
+                # The title carrying the quote is delivered safe, and the gate still passes it.
+                quoted = next((title for title in titles if "Self-respect › attention" in title), None)
+                self.assertIsNotNone(quoted, titles)
+                row = next(row for row in response["title_thumbnail_packages"] if row["title"] == quoted)
+                self.assertEqual(row["quality_gate"]["status"], "pass")
+
+
 if __name__ == "__main__":
     unittest.main()

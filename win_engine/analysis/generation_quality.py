@@ -285,8 +285,9 @@ _KEYWORD_QUOTES_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 # Curly and straight marks are one character to a reader: a title typed with
-# "it's" copies a quote written with "it’s".
-_STRAIGHT_MARKS = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"'})
+# "it's" copies a quote written with "it’s". So are "‹" and "›", which
+# YouTube-safe copy writes for "<" and ">".
+_STRAIGHT_MARKS = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "‹": "<", "›": ">"})
 
 
 def _fold_marks(text: Any) -> str:

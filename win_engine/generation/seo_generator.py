@@ -328,8 +328,9 @@ def generate_seo_suggestions(
     # Each final title is scored and judged here: writer-stage scores belonged
     # to titles refinement may have replaced (a new title showed 0), and every
     # package was labelled approved even when the final gate rejected it.
+    # Keyed like the delivered titles, which were made YouTube-safe.
     writer_variants = {
-        str(item.get("title") or "").casefold(): item
+        _youtube_safe(str(item.get("title") or "")).casefold(): item
         for item in (seo_package.get("title_variants") or []) if isinstance(item, dict)
     }
     final_variants_data = []
