@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os, sqlite3, tempfile, unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,7 +14,8 @@ from win_engine.feedback.intelligence_store import IntelligenceStore, duration_s
 from win_engine.feedback.migrations import CURRENT_SCHEMA_VERSION, prepare_database
 from win_engine.ingestion.youtube_client import YouTubeClient
 
-NOW="2026-08-22T00:00:00+00:00"
+# Demand counts "recent" against the real clock, so the sample must stay recent.
+NOW=(datetime.now(timezone.utc)-timedelta(days=1)).replace(microsecond=0).isoformat()
 def video(i,views=100,channel="UC-peer",duration="PT30S",title=None):
     return {"video_id":f"vid{i:08d}","title":title or f"Topic video {i}","channel_id":channel,"channel_title":f"Channel {channel}","published_at":NOW,"duration":duration,"view_count":views,"like_count":10,"comment_count":2,"default_language":"en"}
 

@@ -2,7 +2,7 @@
 
 import unittest
 from datetime import date, datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import requests
 from pydantic import ValidationError
@@ -67,7 +67,7 @@ class KeyTransportTests(_ClientTestCase):
         self.assertNotIn("secret-key", prepared.url)
 
     def test_html_error_body_is_not_repeated_in_the_warning(self):
-        self._get(*[_response(502, text="<html>" + "x" * 5000 + "</html>")] * 3)  # a 502 is retried twice
+        self._get(*[_response(502, text="<html>" + "x" * 5000 + "</html>")] * 2)  # a search's 502 is retried once
         client = YouTubeClient(["key"], timeout_seconds=5)
 
         with patch.object(youtube_client.time, "sleep"):
@@ -86,6 +86,34 @@ class KeyTransportTests(_ClientTestCase):
         self.assertEqual(get.call_count, 2)
         sleep.assert_called_once()
         self.assertIsNone(client.runtime_state()["warning"])
+
+
+class ServerErrorRetryTests(_ClientTestCase):
+    def _send(self, url, *responses):
+        get = self._get(*responses)
+        client = YouTubeClient(["key"], timeout_seconds=5)
+        with patch.object(youtube_client.time, "sleep") as sleep, patch.object(client._ledger, "record") as record:
+            payload = client._request_json(url, {})
+        return payload, get.call_count, sleep.call_count, record.call_args_list
+
+    def test_a_failing_search_is_retried_once_and_each_attempt_counted_once(self):
+        # Each attempt is one of the day's 100 searches, failed or not; two retries made one search cost three.
+        error = _response(503, {"error": {"code": 503, "errors": [{"reason": "backendError"}]}})
+
+        payload, sent, sleeps, recorded = self._send(SEARCH, error, error, error)
+
+        self.assertEqual((payload, sent, sleeps), ({}, 2, 1))
+        self.assertEqual(recorded, [call("key1", "search.list")] * 2)
+
+    def test_a_failing_one_unit_lookup_keeps_two_retries(self):
+        for url, method in ((VIDEOS, "videos.list"), (CHANNELS, "channels.list")):
+            with self.subTest(method=method):
+                payload, sent, sleeps, recorded = self._send(
+                    url, _response(500, text="<html></html>"), _response(503, text="<html></html>"),
+                    _response(200, {"items": []}))
+
+                self.assertEqual((payload, sent, sleeps), ({"items": []}, 3, 2))
+                self.assertEqual(recorded, [call("key1", method)] * 3)
 
 
 class KeyRotationTests(_ClientTestCase):

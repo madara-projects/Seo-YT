@@ -6,13 +6,24 @@ a gaming PC" on "how" and borrowed its outlier result.
 """
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from win_engine.analysis.demand_explorer import analyze_demand
 
 
 def _watch(title, status="possible_outlier"):
     return {"id": 1, "video_id": "watched", "title": title, "outlier": {"status": status}}
+
+
+def _label(count, page_size, *, channels=None, recent=None):
+    """The label for ``count`` engaged results over ``channels`` channels; ``recent`` are new, the rest a year old."""
+    now = datetime.now(timezone.utc)
+    channels, recent = channels or count, count if recent is None else recent
+    rows = [{"video_id": str(i), "channel_id": f"c{i % channels}", "view_count": 100, "like_count": 5,
+             "comment_count": 1, "published_at": (now if i < recent else now - timedelta(days=400)).isoformat()}
+            for i in range(count)]
+    research = {"youtube_results": rows, "research_diagnostics": {"page_size": page_size}}
+    return analyze_demand("camera", research, [], {})[0]
 
 
 def _matches(topic, title):
@@ -41,19 +52,25 @@ class DemandWatchlistMatchTests(unittest.TestCase):
 
 
 class DemandScaleTests(unittest.TestCase):
-    def test_thresholds_follow_the_page_size(self):
-        # Set for pages of 5 results; at 25 almost any topic read as strong interest.
-        now = datetime.now(timezone.utc).isoformat()
+    def test_page_size_five_keeps_the_original_counts(self):
+        self.assertEqual(_label(8, 5, channels=4, recent=3), "strong_observed_interest")
+        self.assertEqual(_label(5, 5, channels=3, recent=2), "active_topic")
+        self.assertEqual(_label(3, 5, channels=2, recent=0), "emerging_signal")
+        self.assertEqual(_label(2, 5), "insufficient_evidence")
 
-        def research(count, page_size):
-            rows = [{"video_id": str(i), "channel_id": f"c{i}", "published_at": now, "view_count": 100,
-                     "like_count": 5, "comment_count": 1} for i in range(count)]
-            return {"youtube_results": rows, "research_diagnostics": {"page_size": page_size}}
+    def test_an_under_filled_page_is_judged_on_the_results_it_returned(self):
+        # The bars grew with the page size asked for: a niche topic with 25 of 50 results
+        # read as "too sparse", while the same results were strong at a page of 5.
+        for page_size in (5, 25, 50):
+            with self.subTest(page_size=page_size):
+                self.assertEqual(_label(25, page_size, recent=13), "strong_observed_interest")
+                self.assertEqual(_label(8, page_size, channels=4, recent=3), "strong_observed_interest")
 
-        self.assertEqual(analyze_demand("camera", research(8, 5), [], {})[0], "strong_observed_interest")
-        self.assertEqual(analyze_demand("camera", research(8, 25), [], {})[0], "insufficient_evidence")
-        self.assertEqual(analyze_demand("camera", research(40, 25), [], {})[0], "strong_observed_interest")
-        self.assertEqual(analyze_demand("camera", research(8, 1), [], {})[0], "strong_observed_interest")
+    def test_a_full_page_of_fifty_needs_the_same_shares_as_eight_results(self):
+        self.assertEqual(_label(50, 50), "strong_observed_interest")
+        self.assertEqual(_label(50, 50, channels=20, recent=13), "active_topic")
+        # 10 channels and 5 recent uploads met the counts set for 8 results; of 50 they are weak, not sparse.
+        self.assertEqual(_label(50, 50, channels=10, recent=5), "emerging_signal")
 
     def test_research_only_detail_is_not_saved_with_the_evidence(self):
         # The evidence is stored and cloud-synced; competitor tags and full descriptions only made it grow.

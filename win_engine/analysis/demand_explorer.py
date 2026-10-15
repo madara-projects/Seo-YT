@@ -48,11 +48,13 @@ def analyze_demand(topic:str,research:dict[str,Any],watch_videos:list[dict[str,A
     if channel_count>=2: reasons.append(f"Coverage was observed across {channel_count} independent channels.")
     if views: reasons.append(f"Median captured public views across {len(views)} result(s): {median(views):.0f}.")
     if outliers: reasons.append(f"{outliers} matching saved watchlist video(s) have an observational possible-outlier result.")
-    # Set for pages of 5 results; at 25 or 50 almost any topic met them. Never looser than that.
-    scale=max(1.0,(optional_number((research.get('research_diagnostics') or {}).get('page_size')) or 5)/5)
-    if count>=8*scale and channel_count>=4*scale and recent>=3*scale and (outliers>=1 or len(engagements)>=5*scale): classification='strong_observed_interest'
-    elif count>=5*scale and channel_count>=3*scale and recent>=2*scale and views: classification='active_topic'
-    elif count>=3*scale and (recent>=1*scale or channel_count>=2*scale): classification='emerging_signal'
+    # The counts suit about 8 results; at a page of 25 or 50 almost any topic met them. A larger
+    # sample needs the same shares of the results observed (half from distinct channels, 3 in 8
+    # recent), never less. Emerging keeps its counts, so "insufficient" still means sparse.
+    scale=max(1.0,count/8)
+    if count>=8 and channel_count>=4*scale and recent>=3*scale and (outliers>=1 or len(engagements)>=5*scale): classification='strong_observed_interest'
+    elif count>=5 and channel_count>=3*scale and recent>=2*scale and views: classification='active_topic'
+    elif count>=3 and (recent>=1 or channel_count>=2): classification='emerging_signal'
     else: classification='insufficient_evidence'; reasons.append("The observed sample is too sparse for an interest classification.")
     personal_allowed=bool(personal.get('learning_allowed'))
     evidence={

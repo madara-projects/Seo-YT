@@ -19,13 +19,13 @@ const CLASSIFICATIONS: Record<string, ClassificationLabel> = {
     label: "Strong observed interest",
     tone: "info",
     meaning:
-      "8 or more sampled results from at least 4 channels, 3 or more published in the last 90 days, plus outlier or engagement evidence.",
+      "8 or more sampled results from at least 4 channels, 3 or more published in the last 90 days, plus outlier or engagement evidence. Above 8 results the same shares apply: channels for half the results, 3 in 8 recent.",
   },
   active_topic: {
     label: "Active topic",
     tone: "info",
     meaning:
-      "5 or more sampled results from at least 3 channels, 2 or more published in the last 90 days, with view data.",
+      "5 or more sampled results from at least 3 channels, 2 or more published in the last 90 days, with view data. Above 8 results the same shares apply: 3 in 8 channels, 1 in 4 recent.",
   },
   emerging_signal: {
     label: "Emerging signal",

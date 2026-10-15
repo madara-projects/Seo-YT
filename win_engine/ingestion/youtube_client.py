@@ -95,6 +95,8 @@ class YouTubeClient:
         "accessNotConfigured", "keyInvalid", "keyExpired", "ipRefererBlocked", "SERVICE_DISABLED",
     }
     _RATE_LIMIT_RETRIES = 2
+    # Each search attempt is one of the day's 100 searches, failed or not.
+    _SEARCH_SERVER_ERROR_RETRIES = 1
     _RATE_LIMIT_BACKOFF_SECONDS = 1.0
     _MAX_REASON_LENGTH = 120
 
@@ -446,6 +448,7 @@ class YouTubeClient:
 
         A research run fires several searches back to back; without a retry a
         momentary "rateLimitExceeded" silently dropped that query's evidence.
+        A search gets one retry for a server error, the 1-unit lookups two.
         The key travels in a header: in the URL, requests copied it into the
         text of every exception.
 
@@ -463,7 +466,10 @@ class YouTubeClient:
                 self._ledger.record(source, method)
                 raise
             self._ledger.record(source, method)
-            if response.status_code in {403, 429, *self._SERVER_ERRORS} and attempt < self._RATE_LIMIT_RETRIES:
+            server_error = response.status_code in self._SERVER_ERRORS
+            retries = (self._SEARCH_SERVER_ERROR_RETRIES if server_error and method == "search.list"
+                       else self._RATE_LIMIT_RETRIES)
+            if response.status_code in {403, 429, *self._SERVER_ERRORS} and attempt < retries:
                 if response.status_code != 403 or self._BURST_LIMIT_REASONS & set(self._error_reasons(response)):
                     time.sleep(self._RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1))
                     continue
