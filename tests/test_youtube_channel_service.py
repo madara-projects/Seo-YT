@@ -284,15 +284,22 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
         self.store = HistoryStore(self.db_path)
         self.service._save_connection("refresh", "UC-owner", "Owner")
 
-    def link(self, video_id: str, published_at: str, channel: str = "UC-owner") -> dict:
+    def link(
+        self, video_id: str, published_at: str, channel: str | None = "UC-owner", *, youtube_published_at: str | None = None
+    ) -> dict:
         with self.store._connect() as connection:
             run_id = int(connection.execute(
                 "INSERT INTO analysis_runs (query, created_at, title) VALUES ('q', ?, 't')", (published_at,)
             ).lastrowid)
-        link_id = self.store.link_published_video(
-            run_id, video_id, published_at, ownership_state="verified", ownership_verified=True,
-            verified_channel_id=channel, ownership_verified_at=published_at,
-        )
+        # No channel: linked before one was connected, so unverified.
+        owner = {"ownership_state": "verified", "ownership_verified": True, "verified_channel_id": channel,
+                 "ownership_verified_at": published_at} if channel else {}
+        link_id = self.store.link_published_video(run_id, video_id, published_at, **owner)
+        if youtube_published_at:
+            # The link route merges YouTube's record of the video as it links it.
+            self.store.update_linked_video_metadata(
+                link_id, {"published_at": youtube_published_at, "metadata_source": "youtube_data_api"}
+            )
         return self.store.published_video_link(link_id) or {}
 
     def youtube(self, channel_id: str | None, published_at: str | None = None) -> MagicMock:
@@ -340,8 +347,8 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
         self.assertEqual(self.store.snapshot_window_state("windowvid10", "24h")["status"], "pending")
 
     def test_the_real_publish_time_replaces_an_upload_time_until_a_window_completes(self):
-        # Linked while scheduled: the link holds the upload time, YouTube the publish time.
-        link = self.link("windowvid11", "2026-09-01T00:00:00+00:00")
+        # Linked while scheduled: the link holds the upload time YouTube reported then.
+        link = self.link("windowvid11", "2026-09-01T00:00:00+00:00", youtube_published_at="2026-09-01T00:00:00Z")
         with (
             patch.object(youtube_channel, "datetime", _FrozenDatetime),
             patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
@@ -357,16 +364,34 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
                          [("2026-09-10", "2026-09-11"), ("2026-09-10", "2026-09-17")])
 
         # Once a window is measured, the time it was measured from stays.
-        completed = self.link("windowvid12", "2026-09-01T00:00:00+00:00")
+        completed = self.link("windowvid12", "2026-09-01T00:00:00+00:00", youtube_published_at="2026-09-01T00:00:00Z")
         self.store.record_performance_snapshot("windowvid12", 24, views=5, snapshot_window="24h")
         self.store.update_linked_video_metadata(
             completed["id"], {"published_at": "2026-09-10T15:00:00Z", "metadata_source": "youtube_data_api"}
         )
         self.assertEqual(self.store.published_video_link(completed["id"])["published_at"], "2026-09-01T00:00:00+00:00")
         # A source without a date (oEmbed) changes nothing.
-        oembed = self.link("windowvid13", "2026-09-01T00:00:00+00:00")
+        oembed = self.link("windowvid13", "2026-09-01T00:00:00+00:00", youtube_published_at="2026-09-01T00:00:00Z")
         self.store.update_linked_video_metadata(oembed["id"], {"published_at": None, "metadata_source": "oembed"})
         self.assertEqual(self.store.published_video_link(oembed["id"])["published_at"], "2026-09-01T00:00:00+00:00")
+
+    def test_a_publication_time_the_client_gave_stays(self):
+        # Linked before the channel was connected, at the client's time; YouTube's
+        # public record, merged as it linked, says 10 September.
+        link = self.link("clienttime1", "2026-09-12T09:00:00+00:00", channel=None,
+                         youtube_published_at="2026-09-10T15:00:00Z")
+        with (
+            patch.object(youtube_channel, "datetime", _FrozenDatetime),
+            patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
+            patch(BUILD, side_effect=[self.youtube("UC-owner", "2026-09-10T15:00:00Z"), MagicMock()]),
+            patch.object(self.service, "_query", return_value={"views": 12}) as query,
+            patch.object(self.service, "_traffic_sources", return_value=None),
+        ):
+            self.service.refresh_linked_video_performance(link, collect_current=False)
+        self.assertEqual(self.store.published_video_link(link["id"])["published_at"], "2026-09-12T09:00:00+00:00")
+        # Its windows are measured from that time.
+        self.assertEqual(sorted((call.args[1].isoformat(), call.args[2].isoformat()) for call in query.call_args_list),
+                         [("2026-09-12", "2026-09-13"), ("2026-09-12", "2026-09-19")])
 
     def test_a_video_gone_from_the_channel_is_no_longer_collected(self):
         link = self.link("windowvid03", "2026-08-01T00:00:00+00:00")

@@ -1318,14 +1318,19 @@ class HistoryStore:
             if not row:
                 return False
             complete = metadata.get("metadata_source") == "youtube_data_api"
-            merged = {**_json_value(row[0]), **{key: value for key, value in metadata.items() if complete or value is not None}}
-            # A video linked while private or scheduled holds its upload time; its
-            # windows start at the real publish time, unless one is already measured.
+            previous = _json_value(row[0])
+            merged = {**previous, **{key: value for key, value in metadata.items() if complete or value is not None}}
+            # A link holding the time YouTube last reported (the upload time, if linked while
+            # private or scheduled) takes YouTube's new time until a window is measured.
+            # Any other time is the client's own and stays.
             published_at = row[1]
+            stored = _parse_datetime_safe(str(row[1] or ""))
             youtube_published = _parse_datetime_safe(str(metadata.get("published_at") or "")) if complete else None
             if (
                 youtube_published
-                and youtube_published != _parse_datetime_safe(str(row[1] or ""))
+                and stored
+                and youtube_published != stored
+                and stored == _parse_datetime_safe(str(previous.get("published_at") or ""))
                 and not connection.execute(
                     """SELECT 1 FROM video_performance_snapshots WHERE youtube_video_id = ?
                        AND snapshot_window IN ('24h', '7d', '28d') AND snapshot_status = 'complete' LIMIT 1""",

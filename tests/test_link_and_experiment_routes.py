@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -30,13 +31,40 @@ class LinkAndExperimentRouteTests(unittest.TestCase):
     def run_id(self, query: str) -> int:
         return self.store.record_analysis_run(query, "browse", "emotion", query.title(), 7.0, "LOW", "WORKABLE", 50, {})
 
-    def link_through_the_route(self, run_id: int, video_id: str) -> dict:
+    @contextmanager
+    def public_youtube(self, video_id: str):
         with (
             patch.object(routes, "get_settings", return_value=self.settings),
             patch.object(routes.YouTubeChannelService, "status", return_value={"connected": False}),
             patch.object(routes.YouTubeChannelService, "verify_public_video", return_value={**PUBLIC_METADATA, "video_id": video_id}),
         ):
-            return routes.link_published_video(run_id, LinkVideoRequest(youtube_video_id=video_id))
+            yield
+
+    def link_through_the_route(self, run_id: int, video_id: str, published_at: str | None = None) -> dict:
+        with self.public_youtube(video_id):
+            return routes.link_published_video(run_id, LinkVideoRequest(youtube_video_id=video_id, published_at=published_at))
+
+    def test_a_publication_time_the_client_gives_is_kept(self):
+        # Unverified, so the route stores the client's time; YouTube's public record says 1 August.
+        result = self.link_through_the_route(self.run_id("package"), "clienttime1", "2026-08-03T10:00:00+05:30")
+        self.assertEqual(result["published_at"], "2026-08-03T04:30:00+00:00")
+        with self.public_youtube("clienttime1"):
+            routes.refresh_published_video(result["link_id"])
+        self.assertEqual(self.store.published_video_link(result["link_id"])["published_at"], "2026-08-03T04:30:00+00:00")
+
+    def test_a_video_linked_while_scheduled_takes_its_publish_time_once_public(self):
+        # Scheduled: the owner's record holds the upload time, and no time was given.
+        owned = {**PUBLIC_METADATA, "video_id": "scheduled01", "channel_id": "UC-owner", "ownership_verified": True}
+        with (
+            patch.object(routes, "get_settings", return_value=self.settings),
+            patch.object(routes.YouTubeChannelService, "status", return_value={"connected": True}),
+            patch.object(routes.YouTubeChannelService, "verify_owned_video", return_value=owned),
+            patch.object(routes.YouTubeChannelService, "refresh_linked_video_performance", return_value={}),
+        ):
+            link_id = routes.link_published_video(self.run_id("package"), LinkVideoRequest(youtube_video_id="scheduled01"))["link_id"]
+        # Public now: a refresh brings YouTube's publish time.
+        self.store.update_linked_video_metadata(link_id, {**owned, "published_at": "2026-08-05T12:00:00Z"})
+        self.assertEqual(self.store.published_video_link(link_id)["published_at"], "2026-08-05T12:00:00+00:00")
 
     def test_linking_a_video_of_another_package_says_where_it_moved_from(self):
         first, second = self.run_id("first package"), self.run_id("second package")
