@@ -309,7 +309,7 @@ def test_an_unnamed_subject_is_repaired_and_named_locally_when_the_repair_fails_
     prompt = plan["shots"][0]["prompt"]
     assert plan["generation_source"] == "gemini" and plan["checks"]["passed"] is True
     assert "A lone figure, seen from behind, small in the lower third of the frame. In the middle, the wind ripples their jacket" in prompt
-    assert any("a lone figure was named" in warning for warning in plan["checks"]["warnings"])
+    assert any("a lone figure was named" in note for note in plan["checks"]["adjustments"])
 
 
 def test_trimming_keeps_the_sentence_that_names_the_subject():
@@ -317,7 +317,7 @@ def test_trimming_keeps_the_sentence_that_names_the_subject():
         "Wide shot, slow push-in on a 35mm lens, vertical 9:16 portrait composition, one continuous 8-second shot. "
         "Cinematic natural light at cold dusk over an empty concrete pier above grey water. "
         "A lone figure in a dark coat, seen from behind, walks slowly toward the end of the pier. "
-        + "The old boards are dark with spray and scattered with small pools that hold the pale sky. " * 6
+        + "The old boards are dark with spray and scattered with small pools that hold the pale sky. " * 8
         + "In the middle, the wind ripples their jacket as they keep walking. "
         "The upper-middle of the frame stays calm and uncluttered for text overlay. " + CLOSING
     )
@@ -336,7 +336,7 @@ def test_a_hopeful_quote_at_night_costs_the_repair_and_the_sunrise_take_is_kept(
                               quote=HOPEFUL, director=True)
     assert len(answers.prompts) == 3  # director, writer, repair: never a fourth
     assert "the quote's tone is hopeful" in answers.prompts[1]
-    assert "a hopeful quote needs sunrise or early golden hour" in answers.prompts[2] and "night" in answers.prompts[2]
+    assert f"a hopeful quote needs {fp._TONE_LIGHT['hopeful']}" in answers.prompts[2] and "night" in answers.prompts[2]
     assert "at sunrise in warm golden light" in plan["shots"][0]["prompt"]
     assert plan["checks"]["passed"] is True
     assert not any("hopeful quote needs" in warning for warning in plan["checks"]["warnings"])
@@ -412,7 +412,7 @@ def test_a_missing_shot_size_camera_move_and_light_are_named_locally():
     patched, added = fp.patch_prompt(bare, part=1, audio="wind", tone="hopeful")
     assert added == ["shot size", "camera move", "light and style sentence"]
     assert patched.startswith("Wide shot on a 35mm lens with a slow tracking move, vertical 9:16")
-    assert "Cinematic natural light, sunrise or early golden hour" in patched
+    assert f"Cinematic natural light, {fp._TONE_LIGHT['hopeful']}" in patched
     assert fp.check_prompt(patched, PROUD, 1) == ([], [])
     extension, added = fp.patch_prompt(
         "Continuing the same scene: same location. The figure keeps walking as a gull passes overhead. " + CLOSING,
@@ -479,7 +479,8 @@ def test_length_alone_never_costs_a_gemini_call_and_no_op_trims_are_not_reported
     assert plan["generation_source"] == "gemini" and plan["checks"]["passed"] is True
     # The ceiling is met by trimming, protected beats losing their last clause if need be.
     assert fp.word_count(plan["shots"][0]["prompt"]) <= fp.MAX_PROMPT_WORDS
-    assert not any(re.search(r"trimmed from (\d+) to \1 words", warning) for warning in plan["checks"]["warnings"])
+    notes = [*plan["checks"]["warnings"], *plan["checks"]["adjustments"]]
+    assert not any(re.search(r"trimmed from (\d+) to \1 words", note) for note in notes)
 
 
 def test_the_planner_never_makes_a_fourth_call():
@@ -1469,3 +1470,205 @@ def test_pain_that_is_over_keeps_the_directors_tone_in_the_plan(quote, meaning, 
     assert plan["quote_understanding"]["tone"] == tone
     assert "no peaceful warm landscape" not in answers.prompts[1]
     assert not any("its meaning is pain" in warning for warning in plan["checks"]["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# One description of the shot, assembled into every part
+# ---------------------------------------------------------------------------
+
+FUTURE = "Your future needs you. Your past doesn't."
+SCENE_BIBLE = {
+    "subject": "a woman in her late twenties with a slim build and a low dark-brown ponytail, seen from behind",
+    "wardrobe": "a loose cream cotton sweater, faded indigo jeans and white canvas sneakers",
+    "setting": "an empty two-lane country road of worn grey asphalt between low stone walls and pale grass, flat fields "
+               "running to soft hills",
+    "light": "early morning just after sunrise, the low sun behind the camera, warm soft light, long shadows ahead and a "
+             "clear pale-blue sky",
+    "camera": "wide eye-level tracking shot from chest height on a 35mm lens, gliding forward behind her at her pace, "
+              "keeping the same distance",
+    "composition": "she stays small in the lower third; the upper half of the frame is open pale sky",
+    "style": "photorealistic and cinematic, natural colour grade in cream, sage and pale blue",
+    "sound": "soft footsteps on asphalt, a light breeze in the grass, distant birdsong",
+}
+ACTIONS = {
+    1: "She jogs steadily away from the camera along the middle of the road, arms swinging low and loose, her ponytail "
+       "bouncing with each stride; a light breeze ripples the grass along the verge",
+    2: "She keeps jogging at the same easy pace as the road bends gently to the left, stride and arm swing unchanged; "
+       "two small birds cross far ahead over the fields",
+}
+# The creator's live Part 1, as a writer might have put it into the fields.
+RUNNER_BIBLE = {
+    "subject": "a lone runner",
+    "wardrobe": "a dark blue windbreaker",
+    "setting": "an empty hillside",
+    "light": "cold blue pre-dawn light or a warm golden glow from the low horizon",
+    "camera": "a wide eye-level tracking shot filmed with a 35mm lens, vertical 9:16 portrait composition, one "
+              "continuous 8-second shot",
+    "composition": "the upper-middle of the frame stays calm, darker and in soft focus",
+    "style": "cinematic",
+    "sound": "Ambient noise: wind and footsteps. No dialogue, no narration, no music.",
+}
+RUNNER_ACTION = (
+    "The figure moves into the frame against the asphalt path, then the first warm golden glow from the low horizon "
+    "catches their shoulders, and finally they continue forward into the distance"
+)
+
+
+def described(bible: dict | None = None, actions: dict | None = None, **extra) -> str:
+    shots = [
+        {"part": part, "title": f"Road {part}", "action": action,
+         "continuity": None if part == 1 else "Same runner, road and light; the road bends."}
+        for part, action in (ACTIONS if actions is None else actions).items()
+    ]
+    return json.dumps({
+        "mood": {"feeling": "quiet resolve", "keywords": ["future"], "pace": "steady"},
+        "scene_bible": SCENE_BIBLE if bible is None else bible, "shots": shots,
+        "overlay_lines": [["Your future needs you."], ["Your past doesn't."]], **extra,
+    })
+
+
+def sections(shot: dict) -> dict[str, str]:
+    return {section["label"]: section["text"] for section in shot["sections"]}
+
+
+def test_a_described_shot_is_assembled_and_part_two_repeats_it_word_for_word():
+    plan, answers = plan_with(described(), quote=FUTURE, parts=2)
+    assert len(answers.prompts) == 1 and plan["generation_source"] == "gemini" and plan["checks"]["passed"] is True
+    first, second = plan["shots"]
+    assert [section["label"] for section in first["sections"]] == [
+        "Subject", "Action", "Setting", "Light", "Shot", "Frame", "Look", "Sound", "Keep out"]
+    # Extend starts from Part 1's last second: continue, then Part 1's words, then the action carrying on.
+    assert [section["label"] for section in second["sections"]] == [
+        "Continue", "Subject", "Setting", "Light", "Shot", "Frame", "Look", "Action", "Sound", "Keep out"]
+    shared = {label: text for label, text in sections(first).items() if label != "Action"}
+    assert {label: text for label, text in sections(second).items() if label not in ("Continue", "Action")} == shared
+    assert second["prompt"].startswith(fp.CONTINUE_SENTENCE)
+    for shot in plan["shots"]:
+        assert shot["prompt"] == " ".join(section["text"] for section in shot["sections"])
+        assert fp.MIN_PROMPT_WORDS <= fp.word_count(shot["prompt"]) <= fp.MAX_PROMPT_WORDS
+        assert shot["prompt"].endswith(fp.KEEP_OUT_SENTENCE) and shot["prompt"].count("Ambient noise:") == 1
+        assert not any(key.startswith("_") for key in shot)
+    assert sections(first)["Subject"] == (
+        "A woman in her late twenties with a slim build and a low dark-brown ponytail, seen from behind, wearing a "
+        "loose cream cotton sweater, faded indigo jeans and white canvas sneakers.")
+    assert sections(first)["Light"].endswith("The light stays constant throughout.")
+    assert sections(first)["Shot"].endswith(fp._FORMAT_SENTENCE)
+    assert sections(second)["Action"].startswith("She keeps jogging at the same easy pace as the road bends")
+    assert plan["audio"]["description"].startswith("soft footsteps on asphalt")
+    assert plan["negative_prompt"] == fp.NEGATIVE_PROMPT  # the plan's own field is unchanged
+    # Nothing needed fixing, and nothing for the creator to look at.
+    assert plan["checks"]["adjustments"] == [] and plan["checks"]["warnings"] == []
+
+
+def test_the_creators_vague_runner_is_fixed_where_it_can_be_and_sent_back_where_it_cannot():
+    vague = described(RUNNER_BIBLE, {1: RUNNER_ACTION})
+    plan, answers = plan_with(vague, described(actions={1: ACTIONS[1]}), quote=DISCIPLINE, parts=1)
+    # A vague subject, a thin place and a thin light cost the one repair call; the concrete description is kept.
+    assert len(answers.prompts) == 2
+    repair = answers.prompts[1]
+    assert "Scene: the subject is vague ('A lone runner, seen from behind')" in repair
+    assert "Scene: the setting is thin ('An empty hillside')" in repair and "Scene: the light is thin" in repair
+    assert "A woman in her late twenties" in plan["shots"][0]["prompt"] and plan["checks"]["passed"] is True
+    # The same vague reply twice: every fix that needs no model is made, and what still lacks detail is a warning.
+    plan, _ = plan_with(vague, vague, quote=DISCIPLINE, parts=1)
+    shot = plan["shots"][0]
+    parts = sections(shot)
+    assert plan["generation_source"] == "gemini" and plan["checks"]["passed"] is True
+    assert parts["Light"] == "Cold blue pre-dawn light. The light stays constant throughout."
+    assert parts["Subject"] == "A lone runner, seen from behind, wearing a dark blue windbreaker."
+    assert parts["Action"] == ("The figure moves through the frame against the asphalt path, and finally they continue "
+                               "forward into the distance.")
+    assert "9:16 portrait composition" not in parts["Shot"] and parts["Shot"].count("9:16") == 1
+    assert parts["Sound"] == f"Ambient noise: wind and footsteps. {fp.NO_VOICE_SENTENCE}"
+    assert parts["Look"] == "Photorealistic, cinematic."
+    assert "golden glow" not in shot["prompt"] and "into the frame" not in shot["prompt"]
+    adjustments = " | ".join(plan["checks"]["adjustments"])
+    assert "Shared scene: " in adjustments and "one light instead of a choice of two" in adjustments
+    assert "the subject seen from behind" in adjustments and "Part 1: one light for the whole clip" in adjustments
+    warnings = plan["checks"]["warnings"]
+    assert any(warning.startswith("Scene: the subject is vague") for warning in warnings)
+    assert not any(" added " in warning or "one light" in warning for warning in warnings)
+
+
+def test_a_part_two_repaired_alone_is_put_back_on_part_ones_description():
+    leaky = described(actions={1: ACTIONS[1], 2: "She keeps jogging because your future needs you, stride unchanged"})
+    moved = {**SCENE_BIBLE, "setting": "a narrow gravel track along a quiet river, willows on the far bank and low "
+                                        "hills beyond the water"}
+    plan, answers = plan_with(leaky, described(moved), quote=FUTURE, parts=2)
+    assert len(answers.prompts) == 2 and "repeats the quote's words" in answers.prompts[1]
+    first, second = plan["shots"]
+    # Part 1 was kept from the first reply, so the repaired Part 2 is assembled on Part 1's description, not its own.
+    assert "gravel track" not in second["prompt"]
+    assert {label: text for label, text in sections(second).items() if label not in ("Continue", "Action")} == \
+        {label: text for label, text in sections(first).items() if label != "Action"}
+    assert sections(second)["Action"].startswith("She keeps jogging at the same easy pace")
+    assert plan["checks"]["passed"] is True
+
+
+def test_a_copied_part_two_is_rebuilt_on_part_ones_description():
+    copied = described(actions={1: ACTIONS[1], 2: ACTIONS[1]})
+    plan, answers = plan_with(copied, copied, quote=FUTURE, parts=2)
+    assert len(answers.prompts) == 2 and "repeats Part 1's action" in answers.prompts[1]
+    first, second = plan["shots"]
+    assert sections(second)["Action"].startswith("The same movement carries on unbroken")
+    assert {label: text for label, text in sections(second).items() if label not in ("Continue", "Action")} == \
+        {label: text for label, text in sections(first).items() if label != "Action"}
+    assert any("rebuilt from Part 1's scene" in warning for warning in plan["checks"]["warnings"])
+    assert plan["checks"]["passed"] is True
+
+
+def test_a_part_two_that_runs_off_to_another_place_costs_the_repair():
+    beach = described(actions={1: ACTIONS[1], 2: "She runs down onto an empty beach as small waves roll up the sand"})
+    plan, answers = plan_with(beach, described(), quote=FUTURE, parts=2)
+    assert len(answers.prompts) == 2 and "Part 2: moves to a different place from Part 1" in answers.prompts[1]
+    assert "beach" not in plan["shots"][1]["prompt"]
+
+
+def test_the_safety_checks_read_the_shared_description():
+    # A sad quote's subject at a height, and a face, are found in the fields as they are in a whole prompt.
+    rooftop = {**SCENE_BIBLE, "setting": "the edge of a high concrete rooftop at night above wet city streets and "
+                                        "distant lights"}
+    plan, answers = plan_with(described(rooftop, {1: ACTIONS[1]}), described(actions={1: ACTIONS[1]}), parts=1)
+    assert "a sad quote is set at a height" in answers.prompts[1] and "rooftop" not in plan["shots"][0]["prompt"]
+    facing = {**SCENE_BIBLE, "subject": "a woman in her late twenties with a slim build, smiling at the camera"}
+    plan, _ = plan_with(described(facing, {1: ACTIONS[1]}), described(facing, {1: ACTIONS[1]}), quote=FUTURE, parts=1)
+    assert plan["generation_source"] == "fallback" and "smiling" not in plan["shots"][0]["prompt"]
+
+
+def test_a_description_that_left_fields_out_gets_the_tones_light_and_a_calm_upper_half():
+    sparse = {key: value for key, value in SCENE_BIBLE.items() if key not in ("light", "composition", "camera")}
+    road = director_reply(scene="A woman jogs along an empty country road at sunrise.", opening="She jogs on.",
+                          middle="The grass moves in the breeze.", ending="She keeps jogging.")
+    plan, answers = plan_with(road, described(sparse, {1: ACTIONS[1]}), quote=HOPEFUL, parts=1, director=True)
+    assert len(answers.prompts) == 2  # filled in locally, no repair call
+    parts = sections(plan["shots"][0])
+    assert parts["Light"].startswith(fp._sentence(fp.tone_light("hopeful", HOPEFUL))[:-1])
+    assert parts["Frame"] == fp._sentence(fp._DEFAULT_COMPOSITION)
+    assert parts["Shot"].startswith("Wide shot at eye level on a 35mm lens, a slow tracking move")
+    adjustments = " | ".join(plan["checks"]["adjustments"])
+    for fix in ("the tone's light", "a calm upper half of the frame", "a shot size", "a lens", "one camera move"):
+        assert fix in adjustments, fix
+
+
+def test_every_tone_light_is_one_steady_light():
+    for tone in fp.TONES:
+        for wording in (fp._TONE_LIGHT[tone], *fp._LIGHT_VARIANTS.get(tone, ())):
+            assert fp.light_states(wording) == "", (tone, wording)
+            assert not fp._LIGHT_SHIFT_RE.search(wording) and fp._drop_light_growth(wording)[1] == [], wording
+            assert " or " not in f" {wording} " and ";" not in wording, wording
+    assert fp.light_states("night or blue dusk, cool tones") == "night or blue dusk"
+    assert fp.light_states("pre-dawn blue light over a sunset sky") == "pre-dawn, sunset"
+    assert fp.light_states("dusk after sunset, soft rose light") == ""
+    assert fp._one_light("warm lamp light or late afternoon sun, soft focus") == ("warm lamp light, soft focus", True)
+    assert "storm clouds" in fp.imagery_light("After every storm the sky clears.")
+    assert not fp._LIGHT_SHIFT_RE.search(fp.imagery_light("After every storm the sky clears."))
+
+
+def test_an_action_that_says_she_with_nobody_described_names_a_lone_woman_in_every_part():
+    nobody = {**SCENE_BIBLE, "subject": "", "wardrobe": ""}
+    plan, answers = plan_with(described(nobody), described(nobody), quote=FUTURE, parts=2)
+    assert plan["generation_source"] == "gemini" and plan["checks"]["passed"] is True
+    for shot in plan["shots"]:
+        assert sections(shot)["Subject"] == "A lone woman, seen from behind."
+        assert fp.subject_gap(shot["prompt"]) == ""
+    assert any("a lone woman named as the subject" in note for note in plan["checks"]["adjustments"])

@@ -96,6 +96,27 @@ class AiShortsStoreTests(unittest.TestCase):
         self.assertEqual(len(self.store.plans(-5)), 1)
         self.assertEqual(len(self.store.plans(10 ** 9)), 3)
 
+    def test_a_plan_saved_before_adjustments_reads_its_automatic_fixes_apart(self):
+        warnings = [
+            "Part 1: added a calm upper-middle, audio line, no dialogue, narration or music",
+            "Part 1 repeats a recent scene on this channel (a hill); regenerate for a different one.",
+            "Part 2: trimmed from 201 to 180 words",
+        ]
+        plan_id = self.store.save_plan(analysis_run_id=self._run(), quote="q", language="english", parts=2,
+                                       plan={**PLAN, "checks": {"passed": True, "issues": [], "warnings": warnings}},
+                                       package={})
+        checks = self.store.plan(plan_id)["checks"]
+        self.assertEqual(checks["warnings"], [warnings[1]])
+        self.assertEqual(checks["adjustments"], [warnings[0], warnings[2]])
+        # A plan made since keeps its own split, and damaged checks are left alone.
+        newer = {"passed": True, "issues": [], "warnings": [], "adjustments": ["Shared scene: a lens"]}
+        plan_id = self.store.save_plan(analysis_run_id=self._run("Newer"), quote="q", language="english", parts=1,
+                                       plan={**PLAN, "checks": newer}, package={})
+        self.assertEqual(self.store.plan(plan_id)["checks"], newer)
+        plan_id = self.store.save_plan(analysis_run_id=self._run("Odd"), quote="q", language="english", parts=1,
+                                       plan={**PLAN, "checks": "unreadable"}, package={})
+        self.assertEqual(self.store.plan(plan_id)["checks"], "unreadable")
+
     def test_unicode_quotes_round_trip(self):
         run_id, plan_id = self._saved(quote=HINDI, title="चुप")
         listed = self.store.plans()[0]

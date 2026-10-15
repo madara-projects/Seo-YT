@@ -158,9 +158,11 @@ class GenerateTests(AiShortsTestCase):
         self.assertIsInstance(body["id"], int)
         self.assertIsInstance(body["analysis_run_id"], int)
         datetime.fromisoformat(body["created_at"])
-        for key in PLANNER_KEYS:
+        for key in PLANNER_KEYS - {"checks"}:
             with self.subTest(key=key):
                 self.assertEqual(body[key], plan[key])
+        # The checks always carry the planner's own fixes apart from the warnings, here none.
+        self.assertEqual(body["checks"], {**plan["checks"], "adjustments": []})
 
         package = body["package"]
         for key in ("title", "title_variants", "description", "tags", "hashtags", "title_thumbnail_packages",
@@ -368,6 +370,24 @@ class ReadAndDeleteTests(AiShortsTestCase):
         self.assertEqual(plan["flow_steps"], flow_steps(body["parts"]))
         self.assertEqual(plan["cautions"], cautions(body["parts"]))
         self.assertEqual(plan["shots"], body["shots"])
+
+    def test_a_plan_saved_before_adjustments_shows_its_automatic_fixes_apart_from_its_warnings(self):
+        # Older plans listed the planner's own fixes among the warnings, so the page showed them as problems.
+        body = self.generate()
+        legacy = [
+            "Gemini gave no usable plan (gemini_timeout); the scene library wrote it.",
+            "Part 1: added a calm upper-middle, audio line, no dialogue, narration or music",
+            "Part 2: trimmed from 195 to 178 words",
+            "Part 2: the prompt referred to a person it never named; a lone figure was named.",
+        ]
+        with self.store._connect() as connection:
+            stored = json.loads(connection.execute(
+                "SELECT plan_json FROM ai_short_plans WHERE id = ?", (body["id"],)).fetchone()[0])
+            stored["checks"] = {"passed": True, "issues": [], "warnings": legacy}
+            connection.execute("UPDATE ai_short_plans SET plan_json = ? WHERE id = ?", (json.dumps(stored), body["id"]))
+
+        checks = self.client.get(f"/api/ai-shorts/plans/{body['id']}").json()["checks"]
+        self.assertEqual(checks, {"passed": True, "issues": [], "warnings": legacy[:1], "adjustments": legacy[1:]})
 
     def test_deleting_a_plan_deletes_its_run_and_queues_the_cloud_tombstone(self):
         body = self.generate()

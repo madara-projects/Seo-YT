@@ -14,6 +14,7 @@ path so the run's cloud tombstone is queued like any other deletion.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,6 +22,10 @@ from win_engine.feedback.history_store import HistoryStore
 
 SOURCE_PAGE = "ai_shorts"
 _LIST_LIMIT = 100
+# Fixes the planner made by itself, which plans saved before checks had "adjustments" listed among the warnings.
+_ADJUSTMENT_RE = re.compile(
+    r"^Part \d+: (?:added |trimmed from \d+ to \d+ words$)|^Part \d+: .*a lone figure was named\.$",
+)
 
 
 class AiShortsStore:
@@ -111,11 +116,14 @@ class AiShortsStore:
         if not row:
             return None
         package = _plan_json(row[4])
+        stored = _plan_json(row[3])
+        if isinstance(stored.get("checks"), dict):
+            stored["checks"] = _with_adjustments(stored["checks"])
         return {
             "id": int(row[0]),
             "analysis_run_id": int(row[1]),
             "created_at": row[2],
-            **_plan_json(row[3]),
+            **stored,
             "package": package,
         }
 
@@ -161,6 +169,19 @@ class AiShortsStore:
             if scene and scene[:300] not in scenes:
                 scenes.append(scene[:300])
         return scenes
+
+
+def _with_adjustments(checks: dict[str, Any]) -> dict[str, Any]:
+    """The checks with the planner's own fixes under ``adjustments`` and only what the creator should look at in ``warnings``."""
+    warnings = checks["warnings"] if isinstance(checks.get("warnings"), list) else []
+    adjustments = checks["adjustments"] if isinstance(checks.get("adjustments"), list) else []
+    moved = [item for item in warnings if isinstance(item, str) and _ADJUSTMENT_RE.search(item)]
+    result = {**checks, "adjustments": list(dict.fromkeys(
+        item for item in [*adjustments, *moved] if isinstance(item, str)
+    ))}
+    if moved:
+        result["warnings"] = [item for item in warnings if item not in moved]
+    return result
 
 
 def _plan_json(value: Any) -> dict[str, Any]:
