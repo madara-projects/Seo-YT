@@ -5,15 +5,19 @@ dropped accents and non-Tamil scripts, the junk-tag check that rejected every
 non-ASCII tag and hashtag, and a sparse-tag warning read from a missing key.
 """
 
+import time
 import unittest
 
+from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.analysis.generation_quality import evaluate_package_quality
 from win_engine.analysis.keyword_research import (
     _atomic_concepts,
+    _footage_roots,
     _is_generic,
     _normalize,
     _tokens,
     _typed_similarity,
+    _voices_pain,
     build_keyword_research,
     demand_seed_phrases,
     select_final_tags,
@@ -157,6 +161,28 @@ class QuoteToneTests(unittest.TestCase):
         _, research = self.research(self.PAINFUL)
         self.assertIn("sad love quotes", research["search_demand"]["grounded_suggestions"])
 
+    def test_a_mood_the_creator_voiced_keeps_its_sad_tags(self):
+        # Read as English and from the quote alone, these lost the sad tags their creators asked for.
+        for script, tag in (('Sad love quote in Hindi: "तुम्हारे बिना मैं अधूरा हूँ"', "sad love quotes"),
+                            ("நீ இல்லாத வாழ்க்கை வலிக்கிறது, என் இதயம் உடைந்தது", "tamil sad quotes"),
+                            ('"I am heartbroken, I still love you"', "sad love quotes"),
+                            ('"Grief is the price we pay for love"', "sad love quotes"),
+                            ('"You left me when I needed your love the most"', "sad love quotes")):
+            with self.subTest(script=script):
+                brief = build_creator_brief(script=script, video_format="youtube_shorts")
+                research = build_keyword_research(
+                    script=script, semantic={"primary_topic": tag}, youtube_results=[], research_queries=[],
+                    entity_signals=[], creator_brief=brief,
+                )
+                tags, _ = select_final_tags(research, generated_tags=[], title="t", script=script,
+                                            creator_brief=brief, is_short=True)
+                self.assertIn(tag, tags)
+        for quote in (self.HOPEFUL, "You never fail until you stop trying."):
+            with self.subTest(quote=quote):
+                self.assertFalse(_voices_pain(quote, {"exact_quote": quote}))
+        notes = f"the quote is- {self.HOPEFUL} sad piano in the background"
+        self.assertFalse(_voices_pain(notes, {"exact_quote": self.HOPEFUL, "content": notes}))
+
     def test_uplifting_mood_words_alone_are_generic(self):
         for phrase in ("motivational quotes", "inspirational quotes", "motivational inspirational quotes"):
             with self.subTest(phrase=phrase):
@@ -202,6 +228,84 @@ class BriefBoilerplateTests(unittest.TestCase):
         rejected = {row["keyword"]: row["reason"] for row in evidence["rejected_candidates"]}
         self.assertEqual(rejected.get("car front window"), "footage_not_topic")
         self.assertNotEqual(rejected.get("heart forever"), "footage_not_topic")  # quote words still count
+        # The description runs on past its commas.
+        content = ("the quote is- You don't give up overnight on someone. and the background of the video is rain "
+                   "weather ,someone taking cup of tea and curtains ae there, windowis off so rain drops are visible")
+        brief = build_creator_brief(script=content)
+        _, evidence = select_final_tags({}, generated_tags=["weather someone taking", "someone taking cup"], title="Enough",
+                                        script=content, creator_brief=brief, is_short=True)
+        rejected = {row["keyword"]: row["reason"] for row in evidence["rejected_candidates"]}
+        self.assertEqual(rejected.get("weather someone taking"), "footage_not_topic")
+        self.assertEqual(rejected.get("someone taking cup"), "footage_not_topic")
+
+    def test_common_words_of_the_app_brief_still_make_tags(self):
+        # A tutorial's blank intent becomes "Explain the described process truthfully and
+        # clearly."; its "process" refused "pan card application process" as app text.
+        script = ("How to apply for a PAN card online step by step. Fill Form 49A on the NSDL site, "
+                  "upload your documents and pay the fee.")
+        brief = build_creator_brief(script=script)
+        research = build_keyword_research(
+            script=script, semantic={"primary_topic": "pan card application process"}, youtube_results=[],
+            research_queries=[], entity_signals=[], creator_brief=brief,
+        )
+        tags, evidence = select_final_tags(research, generated_tags=["described process"], title="PAN card online",
+                                           script=script, creator_brief=brief)
+        self.assertIn("pan card application process", tags)
+        rejected = {row["keyword"]: row["reason"] for row in evidence["rejected_candidates"]}
+        self.assertEqual(rejected.get("described process"), "app_brief_text")
+        # The quote intent's "events" is as common.
+        quote = "Some days change everything you believed about yourself."
+        semantic = {"primary_topic": "life changing events", "concept_evidence_validated": True, "concept_evidence": [
+            {"concept": "life changing events", "source_phrase": "Some days change everything", "relationship": "paraphrase"}]}
+        research = build_keyword_research(
+            script=quote, semantic=semantic, youtube_results=[], research_queries=[], entity_signals=[],
+            creator_brief=build_creator_brief(script=quote, exact_quote=quote),
+        )
+        self.assertIn("life changing events", {row["keyword"] for row in research["candidates"]})
+
+    def test_the_creators_words_beside_the_footage_are_not_footage(self):
+        useful = ("the quote is- Some people only love you when you are useful to them. background is a rainy window "
+                  "at night, self worth quotes, deep realization quotes, shorts, yt")
+        father = 'A video about missing my father with rain in the background. Quote: "I wish you were here"'
+        for script, own, shipped, footage in (
+            (useful, ["self worth quotes", "deep realization quotes"], "self worth quotes", "rainy window"),
+            (father, ["father quotes", "missing father quotes", "missing dad quotes"], "missing father quotes", "rain"),
+        ):
+            with self.subTest(script=script):
+                brief = build_creator_brief(script=script)
+                tags, evidence = select_final_tags({}, generated_tags=[*own, footage], title="t", script=script,
+                                                   creator_brief=brief, is_short=True)
+                rejected = {row["keyword"]: row["reason"] for row in evidence["rejected_candidates"]}
+                self.assertIn(shipped, tags)
+                for tag in own:
+                    self.assertNotEqual(rejected.get(tag), "footage_not_topic", tag)
+                self.assertEqual(rejected.get(footage), "footage_not_topic")
+
+    def test_long_unpunctuated_scripts_are_read_quickly(self):
+        # Matching a footage clause backtracked over every stretch without a full stop: minutes at 12,000 characters.
+        for script in (("the quote is- " + "some words without any full stop " * 400)[:12000],
+                       ("तुम मेरे साथ हो। " * 800)[:12000]):
+            with self.subTest(script=script[:20]):
+                brief = {"exact_quote": "Some people stay", "content": script, "video_format": "Short"}
+                start = time.perf_counter()
+                _footage_roots(script, brief)
+                self.assertLess(time.perf_counter() - start, 1.0)
+
+    def test_evidence_may_quote_the_target_audience_the_creator_typed(self):
+        script = "Five budgeting habits that keep your rent paid every month."
+        semantic = {"primary_topic": "budgeting habits", "secondary_topics": ["student budgeting"],
+                    "concept_evidence_validated": True, "concept_evidence": [
+                        {"concept": "student budgeting", "source_phrase": "college students", "relationship": "paraphrase"}]}
+        for source, cited in (("creator_supplied", True), ("inferred", False)):
+            with self.subTest(source=source):
+                brief = {"content": script, "target_audience": "college students living away from home",
+                         "field_provenance": {"target_audience": {"source": source}}}
+                research = build_keyword_research(
+                    script=script, semantic=semantic, youtube_results=[], research_queries=[], entity_signals=[],
+                    creator_brief=brief,
+                )
+                row = next(row for row in research["candidates"] if row["keyword"] == "student budgeting")
+                self.assertEqual(bool(row["semantic_evidence"]), cited)
 
 
 class SparseTagWarningTests(unittest.TestCase):

@@ -112,6 +112,10 @@ def build_keyword_research(
     query_rows = [item for item in research_queries if isinstance(item, dict)]
     content_terms = _content_terms(sem, script, brief)
     source_terms = _source_terms(script, brief)
+    # Semantic evidence may also quote the target audience the creator typed.
+    cited_terms = source_terms | (
+        set(_tokens(brief.get("target_audience"))) if _brief_field_is_creator_supplied(brief, "target_audience") else set()
+    )
     entity_rows = list(entity_signals)
     reflective = bool(quote) or source_requires_noninstructional_framing(script, brief)
     subjects = subject_terms(
@@ -195,7 +199,7 @@ def build_keyword_research(
     for candidate in candidates.values():
         skip = _production_note(candidate["keyword"], subject_text) or _uses_app_brief_text(candidate["keyword"], app_roots)
         entry = None if skip else _score(
-            candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms,
+            candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms, cited_terms,
         )
         if entry and not (non_instructional and has_unsupported_instructional_framing(entry.get("keyword"))):
             _annotate_demand(entry, demand_index, subjects)
@@ -538,14 +542,14 @@ def _add(
             entry["classification"] = classification
 
 
-def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: list[dict[str, Any]], quote: str, content_terms: set[str], source_terms: set[str], visual_terms: set[str]) -> dict[str, Any] | None:
+def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: list[dict[str, Any]], quote: str, content_terms: set[str], source_terms: set[str], visual_terms: set[str], cited_terms: set[str]) -> dict[str, Any] | None:
     text = str(candidate["keyword"])
     classification = str(candidate.get("classification") or "generic")
     opportunity = candidate.get("opportunity") if isinstance(candidate.get("opportunity"), dict) else {}
     semantic_evidence = candidate.get("semantic_evidence") if isinstance(candidate.get("semantic_evidence"), dict) else {}
     # The cited phrase must be the creator's words; one leaning on app-written
     # brief text ("loved preserve") proves nothing.
-    if semantic_evidence and _source_support(str(semantic_evidence.get("source_phrase") or ""), source_terms)[0] < 100:
+    if semantic_evidence and _source_support(str(semantic_evidence.get("source_phrase") or ""), cited_terms)[0] < 100:
         semantic_evidence = {}
     semantic_confirmation = bool(opportunity.get("semantic_confirmed")) and int(opportunity.get("script_relevance_score") or 0) >= 70
     # Gemini confirmation may score and describe an opportunity, but it cannot
@@ -1005,6 +1009,10 @@ def _declared_context_terms(script: str, brief: dict[str, Any]) -> set[str]:
 
 def _source_terms(script: str, brief: dict[str, Any]) -> set[str]:
     """Use only creator supplied material to prove a research-derived tag."""
+    return {token for value in _creator_texts(script, brief) for token in _tokens(value)} | _declared_context_terms(script, brief)
+
+
+def _creator_texts(script: str, brief: dict[str, Any]) -> list[Any]:
     values = [script]
     values.extend(brief.get(field) for field in (
         "content", "exact_quote", "on_screen_text", "topic", "factual_claims", "visual_requirements",
@@ -1012,43 +1020,111 @@ def _source_terms(script: str, brief: dict[str, Any]) -> set[str]:
     # The app fills these when the creator leaves them empty ("Preserve and package
     # the exact emotional idea..."); that text gave "loved preserve" full support.
     values.extend(brief.get(field) for field in _APP_FILLED_FIELDS if _brief_field_is_creator_supplied(brief, field))
-    return {token for value in values for token in _tokens(value)} | _declared_context_terms(script, brief)
+    return values
 
 
 _APP_FILLED_FIELDS = ("viewer_promise", "unique_angle", "creator_intent", "content_constraints")
+# Words of the app's inferred intents ("Preserve and package the exact emotional
+# idea without inventing events.", "Explain the described process truthfully and
+# clearly.") that no tag needs. Their common words ("process", "idea") are not refused.
+_APP_BRIEF_WORDS = {"preserve", "package", "invent", "truthfully", "describe"}
 
 
-def _app_brief_roots(script: str, brief: dict[str, Any]) -> set[str]:
-    """Roots of words only the app's own brief text uses ("preserve", "package"), never the creator."""
+def _app_brief_roots(script: str, brief: dict[str, Any]) -> set[Any]:
+    """The app's own brief wording the creator never used: its distinctive roots and its word pairs ("emotional idea")."""
 
-    written = {
-        token for field in _APP_FILLED_FIELDS if not _brief_field_is_creator_supplied(brief, field)
-        for token in _tokens(brief.get(field))
-    }
-    return {_term_root(token) for token in written} - {_term_root(token) for token in _source_terms(script, brief)}
+    written = " ".join(
+        str(brief.get(field) or "") for field in _APP_FILLED_FIELDS if not _brief_field_is_creator_supplied(brief, field)
+    )
+    if not written.strip():
+        return set()
+    words = {_term_root(token) for token in _tokens(written)} & _APP_BRIEF_WORDS
+    creator_pairs = {pair for value in _creator_texts(script, brief) for pair in _word_pairs(value)}
+    return (words - {_term_root(token) for token in _source_terms(script, brief)}) | (_word_pairs(written) - creator_pairs)
 
 
-def _uses_app_brief_text(text: Any, app_roots: set[str]) -> bool:
-    return bool(app_roots) and any(_term_root(token) in app_roots for token in _tokens(text))
+def _word_pairs(value: Any) -> set[tuple[str, str]]:
+    roots = [_term_root(word) for word in _normalize(value).split() if word not in _TYPED_FILLER]
+    return set(zip(roots, roots[1:]))
+
+
+def _uses_app_brief_text(text: Any, app_roots: set[Any]) -> bool:
+    return bool(app_roots) and (
+        any(_term_root(token) in app_roots for token in _tokens(text)) or bool(_word_pairs(text) & app_roots)
+    )
 
 
 # A quote Short's footage ("the video is of road, recorded from the car front
-# window") is presentation; it shipped as the tag "car front window".
-_FOOTAGE_CLAUSE_RE = re.compile(
-    r"[^.\n?!]*\b(?:the\s+video\s+is|video\s+is\s+of|background\s+is|in\s+(?:the\s+)?background|recorded\s+from|footage)\b[^.\n?!]*",
+# window") is presentation; it shipped as the tag "car front window". It is read
+# sentence by sentence, without the whole-line scan that took minutes on 12,000
+# unpunctuated characters.
+_SENTENCE_RE = re.compile(r"[^.?!;\n।॥]+")
+_FOOTAGE_CUE_RE = re.compile(
+    r"\b(?:(?P<intro>the\s+video\s+is|video\s+is\s+of|background\s+is|recorded\s+from|footage)|in\s+(?:the\s+)?background)\b",
     re.IGNORECASE,
 )
+# "missing my father with rain in the background" is footage of rain.
+_FOOTAGE_JOIN_RE = re.compile(r",|\b(?:with|and|while|but|about|as|of|over)\b", re.IGNORECASE)
+# Keywords pasted after the footage (", self worth quotes, shorts, yt") are not footage.
+_PASTED_KEYWORD_RE = re.compile(r"#|\b(?:quotes?|shorts?|yt|youtube|viral|trending|fyp|reels?)\b", re.IGNORECASE)
+
+
+def _footage_spans(text: str) -> list[tuple[int, int]]:
+    """Where the text describes footage: after "the video is", or just before "in the background"."""
+
+    spans: list[tuple[int, int]] = []
+    for sentence in _SENTENCE_RE.finditer(text):
+        pos, end = sentence.span()
+        while cue := _FOOTAGE_CUE_RE.search(text, pos, end):
+            if not cue.group("intro"):
+                joins = [join.end() for join in _FOOTAGE_JOIN_RE.finditer(text, pos, cue.start())]
+                lead = joins[-1] if joins else pos
+                if text[lead:cue.start()].strip():
+                    spans.append((lead, cue.end()))
+                    pos = cue.end()
+                    continue
+            pos = _footage_end(text, cue.end(), end)
+            spans.append((cue.start(), pos))
+    return spans
+
+
+def _footage_end(text: str, start: int, end: int) -> int:
+    # A description runs on past commas ("rain weather ,someone taking cup of tea").
+    comma = text.find(",", start, end)
+    while comma >= 0:
+        following = text.find(",", comma + 1, end)
+        if _PASTED_KEYWORD_RE.search(text, comma + 1, following if following >= 0 else end):
+            return comma
+        comma = following
+    return end
+
+
+def _footage_text(script: str, brief: dict[str, Any]) -> tuple[list[str], str]:
+    """The footage a quote Short's creator described, and the rest of their text."""
+
+    visual = str(brief.get("visual_requirements") or "")
+    words = _normalize(visual).split()
+    # A visual note read out of the script ("Background: rainy road") is footage there too.
+    note = re.compile(r"\W+".join(map(re.escape, words)), re.IGNORECASE) if words else None
+    footage, rest = [visual], []
+    for text in dict.fromkeys(str(value or "") for value in (script, brief.get("content"))):
+        spans = [*_footage_spans(text), *(match.span() for match in (note.finditer(text) if note else ()))]
+        chars = list(text)
+        for start, end in spans:
+            footage.append(text[start:end])
+            chars[start:end] = " " * (end - start)
+        rest.append("".join(chars))
+    return footage, "\n".join(rest)
 
 
 def _footage_roots(script: str, brief: dict[str, Any]) -> set[str]:
-    """Roots of words only a quote Short's footage description uses, never its quote or topic."""
+    """Roots of words only a quote Short's footage description uses, never its quote, topic or other lines."""
 
     quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "")
     if not quote or not is_short_content(script, brief):
         return set()
-    footage = [str(brief.get("visual_requirements") or ""),
-               *_FOOTAGE_CLAUSE_RE.findall(f"{script}\n{brief.get('content') or ''}")]
-    kept = {_term_root(token) for token in [*_tokens(f"{quote} {brief.get('topic') or ''}"), *_FUNCTION_WORDS]}
+    footage, rest = _footage_text(script, brief)
+    kept = {_term_root(token) for token in [*_tokens(f"{quote} {brief.get('topic') or ''} {rest}"), *_FUNCTION_WORDS]}
     return {_term_root(token) for text in footage for token in _tokens(text)} - kept
 
 
@@ -1547,12 +1623,19 @@ _QUOTE_THEMES = {
 }
 
 
+_PAIN_WORDS = (
+    r"pain(?:ful)?|hurts?|hurting|cry(?:ing)?|cried|cries|tears?|broken|heartbroken|lonely|alone|"
+    r"miss(?:ed|es|ing)?|sad(?:ness)?|heartbreak(?:ing)?|regrets?|lost|grief|griev(?:e|es|ed|ing)|"
+    r"betray(?:al|ed|s)?|cheat(?:ed|ing)|breakup|loneliness|left\s+me|(?:you|he|she|they)\s+left"
+)
+_PAIN_WORDS_RE = re.compile(rf"\b(?:{_PAIN_WORDS})\b", re.IGNORECASE)
 _PAINFUL_QUOTE_RE = re.compile(
-    r"\b(?:pain(?:ful)?|hurts?|hurting|cry(?:ing)?|tears?|broken|lonely|alone|miss(?:ing)?|sad(?:ness)?|"
-    r"heartbreak|regrets?|lost|betray(?:al|ed|s)?|cheat(?:ed|ing)|breakup|loneliness)\b"
+    rf"\b(?:{_PAIN_WORDS})\b"
     # "Never give up" is encouragement; "you never loved me", "they would have
-    # never told you" and "never again" are loss. "You never know" is an idiom.
-    r"|\b(?:i|you|he|she|they|we|it)(?:['’](?:ll|d|ve)|\s+(?:will|would|could|can|did|have|had)){0,2}\s+never\b(?!\s+know\b)"
+    # never told you" and "never again" are loss. "You never know" is an idiom,
+    # and "you never fail until you stop trying" encouragement again.
+    r"|\b(?:i|you|he|she|they|we|it)(?:['’](?:ll|d|ve)|\s+(?:will|would|could|can|did|have|had)){0,2}\s+never\b"
+    r"(?!\s+(?:knows?|fails?|loses?|quits?|gives?\s+up)\b)"
     r"|\bnever\s+again\b",
     re.IGNORECASE,
 )
@@ -1562,10 +1645,24 @@ _SAD_WORDS = {"sad"}
 
 
 def _voices_pain(script: str, brief: dict[str, Any]) -> bool:
-    """Whether the quote (else the script) voices pain; production notes ("sad piano") are not the quote."""
+    """Whether the quote (else the script) voices pain, or is in words this English check cannot read.
+
+    The creator's own word for the mood ("Sad love quote in Hindi: ...") counts
+    too, but not a production note ("sad piano in the background").
+    """
 
     quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or "")
-    return bool(_PAINFUL_QUOTE_RE.search(quote or f"{script} {brief.get('content') or ''}"))
+    text = quote or f"{script} {brief.get('content') or ''}"
+    if _PAINFUL_QUOTE_RE.search(text) or not _reads_as_english(text, brief):
+        return True
+    return bool(quote) and bool(_PAIN_WORDS_RE.search(f"{_footage_text(script, brief)[1]} {brief.get('topic') or ''}"))
+
+
+def _reads_as_english(text: str, brief: dict[str, Any]) -> bool:
+    language = str(brief.get("language") or brief.get("video_language") or "english").casefold()
+    return language.startswith("en") and not any(
+        char.isalpha() and not char.isascii() and not unicodedata.name(char, "").startswith("LATIN") for char in text
+    )
 
 
 def _unvoiced_mood(text: Any, painful: bool) -> bool:
