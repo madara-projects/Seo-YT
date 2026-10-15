@@ -175,6 +175,33 @@ class PromptHygieneTests(unittest.TestCase):
 
 
 class QuoteDescriptionTests(unittest.TestCase):
+    @staticmethod
+    def _sanitized(quote: str, description: str) -> str:
+        package = {"title": quote, "variants": [quote], "description": description, "tags": [], "hashtags": []}
+        return seo_writer._sanitize_generated_package(package, quote, {"exact_quote": quote})["description"]
+
+    def test_commentary_that_holds_a_short_quote_sentence_is_kept(self):
+        # Main kept this line; matching each quote sentence by its words alone dropped it.
+        quote = "Let it go. Some people are only meant to teach you, not stay."
+        commentary = "Sometimes you have to let it go to grow."
+        self.assertEqual(self._sanitized(quote, commentary), f"“{quote}”\n\n{commentary}")
+
+    def test_only_a_copy_of_a_short_quote_is_dropped_not_commentary_with_its_words(self):
+        for quote, copy, commentary in (
+            ("Let it go.", "let it go!", "Sometimes you have to let it go to grow."),
+            ("Keep going.", "Keep going!", "When it gets hard, keep going anyway."),
+            ("Let it go. Some people are only meant to teach you, not stay.",
+             "Let it go! Some people are only meant to teach you not stay.", "Sometimes you have to let it go to grow."),
+        ):
+            with self.subTest(quote=quote):
+                self.assertEqual(self._sanitized(quote, f"{copy} {commentary}"), f"“{quote}”\n\n{commentary}")
+
+    def test_a_copy_with_two_words_swapped_is_still_the_quote(self):
+        quote = "There is nothing more painful in this world than to be in love with something that never can be."
+        copy = quote.replace("never can be", "can never be")
+        self.assertEqual(self._sanitized(quote, f"{copy} Impossible love leaves the deepest ache."),
+                         f"“{quote}”\n\nImpossible love leaves the deepest ache.")
+
     def test_a_two_sentence_quote_the_model_copied_inexactly_appears_once(self):
         quote = "I didn’t lose you. You lost someone who truly loved you."
         package = {

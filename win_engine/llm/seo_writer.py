@@ -12,6 +12,7 @@ import json
 import logging
 import re
 from contextvars import ContextVar
+from difflib import SequenceMatcher
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Union
 
@@ -36,6 +37,7 @@ from win_engine.analysis.keyword_research import (
     tag_length,
 )
 from win_engine.analysis.source_cues import source_quote
+from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.topic_lock import normalize_hashtag, restore_source_casing, source_casing_map
 from win_engine.llm import gemini_client
 
@@ -722,24 +724,28 @@ def _sanitize_generated_package(
         elif re.sub(r"\s+", " ", quote).strip() not in re.sub(r"\s+", " ", description).strip():
             paragraphs = [item.strip() for item in re.split(r"\n\s*\n", description) if item.strip()]
 
-            def words(value: str) -> set[str]:
+            def words(value: str) -> list[str]:
                 # "didn’t" and "didn't" are one word.
-                return {word.strip("'") for word in re.findall(r"[\w']+", value.replace("’", "'").casefold(), re.UNICODE)} - {""}
+                return unicode_words(value.replace("’", "'"), min_length=1)
 
-            quote_words = words(quote)
-            # A copied sentence of a two-sentence quote holds only part of the whole quote's words.
-            quote_parts = [quote_words, *(part for part in map(words, re.split(r"(?<=[.!?])\s+|\n+", quote)) if len(part) >= 3)]
+            # The model may copy the whole quote or one of its sentences.
+            quote_parts = [part for part in map(words, [quote, *re.split(r"(?<=[.!?])\s+|\n+", quote)]) if part]
 
             def echoes_quote(sentence: str) -> bool:
+                # A near word-for-word copy, not commentary that holds the quote's words ("let it go to grow").
                 found = words(sentence)
-                return any(len(part & found) >= 0.8 * len(part) for part in quote_parts)
+                return any(
+                    min(len(found), len(part)) >= 0.8 * max(len(found), len(part))
+                    and SequenceMatcher(None, part, found).ratio() >= 0.8
+                    for part in quote_parts
+                )
 
             if paragraphs:
                 # Replace only the sentences that paraphrase the quote. Replacing
                 # the whole first paragraph threw away every line of commentary
                 # the model wrote after the quote in that same paragraph.
                 sentences = re.split(r"(?<=[.!?”\"])\s+", paragraphs[0])
-                rest = [sentence for sentence in sentences if not quote_words or not echoes_quote(sentence)]
+                rest = [sentence for sentence in sentences if not echoes_quote(sentence)]
                 paragraphs = [f'“{quote}”', *([" ".join(rest)] if rest else []), *paragraphs[1:]]
             else:
                 paragraphs = [f'“{quote}”']
