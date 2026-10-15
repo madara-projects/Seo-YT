@@ -86,16 +86,22 @@ test.describe("AI Shorts", () => {
       { quote: QUOTE, language: "english", parts: 2, mood_hint: "", region: "global" },
     ]);
 
+    // The prompts open first: a card per part, the prompt as labelled rows, that part's words on screen.
+    await expect(page.getByRole("tab", { name: "Prompts" })).toHaveAttribute("aria-selected", "true");
     const prompts = page.getByTestId("shot-prompt");
     await expect(prompts).toHaveCount(2);
     await expect(prompts.nth(0)).toContainText("A dim kitchen at night");
     await expect(prompts.nth(1)).toContainText("The phone screen lights up face-down");
-    await expect(page.getByRole("heading", { name: "Part 2 · 8 s · Extend from Part 1" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Part 2 · 8–16 s · Extend Part 1" })).toBeVisible();
+    await expect(page.getByTestId("shot-overlay").first()).toContainText("from the very first frame");
+    await expect(page.getByTestId("shot-adjustments").first()).toContainText("Adjusted automatically");
+    await page.screenshot({ path: "screenshots/ai-shorts-results.png", fullPage: true });
+
+    await page.getByRole("tab", { name: /^Make it in Flow/ }).click();
     await expect(page.getByTestId("flow-guide")).toContainText("Open Google Flow and start a new project.");
-    await expect(page.getByTestId("text-overlay")).toContainText("from the very first frame");
+    await page.getByRole("tab", { name: "Upload package" }).click();
     await expect(page.getByTestId("shorts-package")).toContainText(AI_SHORTS_PLAN.package!.title!);
     await expect(page.getByRole("button", { name: "Copy upload package" })).toBeEnabled();
-    await page.screenshot({ path: "screenshots/ai-shorts-results.png", fullPage: true });
 
     expect(errors).toEqual([]);
   });
@@ -139,6 +145,14 @@ test.describe("AI Shorts", () => {
 
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: `screenshots/ai-shorts-${name}.png`, fullPage: true });
+
+      // Every tab fits too: on a phone the tab strip scrolls, not the page.
+      for (const label of ["Upload package", "Make it in Flow", "Scene notes"]) {
+        const tab = page.getByRole("tab", { name: new RegExp(`^${label}`) });
+        await tab.click();
+        await expect(tab).toHaveAttribute("aria-selected", "true");
+        await expectNoHorizontalOverflow(page);
+      }
     });
   }
 

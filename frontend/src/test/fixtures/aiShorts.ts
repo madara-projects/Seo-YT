@@ -29,6 +29,14 @@ export const AI_SHORTS_PLAN: AiShortsPlan = {
       title: "The table, before",
       prompt:
         "Cinematic vertical 9:16 video, 8 seconds. A dim kitchen at night, a phone lying face-down on a wooden table. Slow push-in from across the room. Sodium-orange street light through rain-streaked blinds, deep navy shadows. Shallow depth of field, 35mm, slight film grain. No people, no text, no captions. Quiet, still, held breath.",
+      sections: [
+        { label: "Shot", text: "Cinematic vertical 9:16 video, 8 seconds. Slow push-in from across the room." },
+        { label: "Subject", text: "A phone lying face-down on a wooden table." },
+        { label: "Setting", text: "A dim kitchen at night." },
+        { label: "Light", text: "Sodium-orange street light through rain-streaked blinds, deep navy shadows." },
+        { label: "Look", text: "Shallow depth of field, 35mm, slight film grain. Quiet, still, held breath." },
+        { label: "Keep out", text: "No people, no text, no captions." },
+      ],
       flow_mode: "text_to_video",
       continuity: null,
     },
@@ -38,6 +46,15 @@ export const AI_SHORTS_PLAN: AiShortsPlan = {
       title: "The screen lights once",
       prompt:
         "Continue the same shot, 8 seconds. The phone screen lights up face-down, a cold white glow spilling across the wood grain for two seconds, then fades to black. The camera keeps its slow push-in and settles. Same kitchen, same rain light, same grain. No people, no text, no captions.",
+      sections: [
+        { label: "Shot", text: "Continue the same shot, 8 seconds. The camera keeps its slow push-in and settles." },
+        {
+          label: "Action",
+          text: "The phone screen lights up face-down, a cold white glow spilling across the wood grain for two seconds, then fades to black.",
+        },
+        { label: "Setting", text: "Same kitchen, same rain light, same grain." },
+        { label: "Keep out", text: "No people, no text, no captions." },
+      ],
       flow_mode: "extend",
       continuity: "Same table, same framing and light as Part 1; the camera is still moving in when the screen glows.",
     },
@@ -67,6 +84,7 @@ export const AI_SHORTS_PLAN: AiShortsPlan = {
     passed: true,
     issues: [],
     warnings: ["Part 2 continues a face-down phone; an Extend may re-light the screen earlier than written."],
+    adjustments: ["Part 1: added a calm upper-middle, audio line"],
   },
   generation_source: "gemini",
   provider: { name: "gemini", model: "gemini-2.5-flash" },
@@ -104,6 +122,26 @@ export const AI_SHORTS_FALLBACK_PLAN: AiShortsPlan = {
     ...AI_SHORTS_PLAN.package,
     generation_source: "fallback",
     generation_quality: { verdict: "YELLOW", warnings: ["Built-in template; review the title before you upload."], issues: [] },
+  },
+};
+
+/**
+ * The same plan as saved before prompts had sections and fixes had their own
+ * list: the planner's fixes sit among the warnings ("Part 1: added …").
+ */
+export const AI_SHORTS_LEGACY_PLAN: AiShortsPlan = {
+  ...AI_SHORTS_PLAN,
+  id: 33,
+  analysis_run_id: 4203,
+  shots: AI_SHORTS_PLAN.shots.map(({ sections: _sections, ...shot }) => shot),
+  checks: {
+    passed: true,
+    issues: [],
+    warnings: [
+      "Part 1: added a calm upper-middle, audio line, no dialogue, narration or music",
+      "Part 2: trimmed from 131 to 118 words",
+      "Part 2: prompt names no camera move",
+    ],
   },
 };
 

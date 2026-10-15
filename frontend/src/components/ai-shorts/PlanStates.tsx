@@ -28,7 +28,7 @@ function SectionSkeleton({ lines }: { lines: number }) {
 export function PlanSkeleton({ mode, elapsed = 0 }: { mode: "writing" | "loading"; elapsed?: number }) {
   const writing = mode === "writing";
   return (
-    <div className="space-y-5" data-testid="plan-skeleton">
+    <div className="space-y-4" data-testid="plan-skeleton">
       <div role="status" aria-live="polite" className="relative overflow-hidden rounded-2xl border-gradient p-5 shadow-card">
         <div className="flex items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3.5">
@@ -56,15 +56,14 @@ export function PlanSkeleton({ mode, elapsed = 0 }: { mode: "writing" | "loading
           </div>
         ) : null}
       </div>
-      <SectionSkeleton lines={2} />
-      <SectionSkeleton lines={4} />
-      <SectionSkeleton lines={4} />
-      <SectionSkeleton lines={5} />
-      <div className="grid gap-5 2xl:grid-cols-2">
-        <SectionSkeleton lines={3} />
-        <SectionSkeleton lines={3} />
+      {/* The plan's tabs, then the Prompts tab's part cards. */}
+      <div className="flex gap-1.5 overflow-hidden" aria-hidden="true">
+        {["w-24", "w-32", "w-32", "w-28"].map((width, index) => (
+          <Skeleton key={index} className={cn("h-8 shrink-0 rounded-lg", width)} />
+        ))}
       </div>
-      <SectionSkeleton lines={4} />
+      <SectionSkeleton lines={6} />
+      <SectionSkeleton lines={6} />
     </div>
   );
 }

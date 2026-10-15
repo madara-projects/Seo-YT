@@ -6,7 +6,7 @@ import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { PageHeader } from "@/components/common/PageHeader";
 import { ErrorState } from "@/components/common/States";
 import { PlanEmpty, PlanSkeleton } from "@/components/ai-shorts/PlanStates";
-import { PlanResults } from "@/components/ai-shorts/PlanResults";
+import { PlanView } from "@/components/ai-shorts/PlanView";
 import { QuoteForm } from "@/components/ai-shorts/QuoteForm";
 import { RecentPlans } from "@/components/ai-shorts/RecentPlans";
 import {
@@ -94,7 +94,7 @@ export default function AiShortsPage() {
 
   const handleSubmit = () => submit(values);
 
-  /** The same quote again, after a built-in template draft, for Gemini: the draft's own request, not the form's. */
+  /** The same quote again (a template draft for Gemini, or another take): the plan's own request, not the form's. */
   const regenerate = (draft: AiShortsPlan) =>
     submit({ quote: draft.quote, moodHint: draft.mood_hint ?? "", parts: draft.parts, language: draft.language });
 
@@ -174,7 +174,7 @@ export default function AiShortsPage() {
                     onRetry={() => void detail.refetch()}
                   />
                 ) : plan ? (
-                  <PlanResults key={plan.id} plan={plan} onRetry={() => regenerate(plan)} retrying={isPending} />
+                  <PlanView key={plan.id} plan={plan} onRetry={() => regenerate(plan)} retrying={isPending} context="page" />
                 ) : null
               ) : failure ? null : (
                 <PlanEmpty />

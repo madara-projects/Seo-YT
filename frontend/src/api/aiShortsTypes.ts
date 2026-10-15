@@ -19,12 +19,20 @@ export interface AiShortsMood {
   pace?: string;
 }
 
+/** One labelled piece of a prompt: "Shot", "Subject", "Action", "Setting", "Light", "Look", "Sound", "Keep out". */
+export interface AiShortsPromptSection {
+  label: string;
+  text: string;
+}
+
 /** One 8-second part: the prompt pasted into Flow for it. */
 export interface AiShortsShot {
   part: number;
   seconds: number;
   title?: string;
   prompt: string;
+  /** The same prompt split into labelled pieces, for reading; absent on older plans. `prompt` is what is pasted. */
+  sections?: AiShortsPromptSection[] | null;
   /** "text_to_video" starts the video; "extend" continues the previous part's clip. */
   flow_mode?: FlowMode | string;
   /** What must carry over from the previous part, for an extend. */
@@ -48,6 +56,11 @@ export interface AiShortsChecks {
   passed?: boolean;
   issues?: string[];
   warnings?: string[];
+  /**
+   * Fixes the planner made itself ("Part 1: added a calm upper-middle"): done,
+   * nothing to check. Absent on older plans, which listed them among the warnings.
+   */
+  adjustments?: string[];
 }
 
 /** Items the quality gate reports; the backend sends strings or small objects. */

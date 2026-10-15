@@ -74,6 +74,8 @@ async function generate(user: ReturnType<typeof userEvent.setup>) {
 }
 
 beforeEach(() => {
+  // The plan view remembers its last tab; every test starts on the prompts.
+  localStorage.clear();
   plans = [...AI_SHORTS_PLAN_SUMMARIES];
   deleted = new Set();
   generateResponse = () => json(AI_SHORTS_PLAN);
@@ -157,8 +159,13 @@ describe("AI Shorts form", () => {
   });
 });
 
+/** Opens one of the plan's tabs: Prompts, Upload package, Make it in Flow or Scene notes. */
+async function openTab(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(await screen.findByRole("tab", { name: new RegExp(`^${name}`) }));
+}
+
 describe("AI Shorts results", () => {
-  it("writes both prompts, the Flow steps and the package, and copies the first prompt", async () => {
+  it("opens on the prompts with each part's words on screen, and keeps the steps, notes and package a tab away", async () => {
     const user = setupUser();
     renderPage();
     await generate(user);
@@ -167,44 +174,64 @@ describe("AI Shorts results", () => {
     expect(within(header).getByText(`“${QUOTE}”`)).toBeInTheDocument();
     expect(within(header).getByText("2 parts · 16 s")).toBeInTheDocument();
     expect(within(header).getByText("Written with Gemini")).toBeInTheDocument();
-    expect(within(header).getByText("Passed with 1 warning")).toBeInTheDocument();
+    // One status; the warning behind it is a click away, and the planner's own fix is not one.
+    await user.click(within(header).getByRole("button", { name: "1 thing to check" }));
     expect(within(header).getByText(AI_SHORTS_PLAN.checks!.warnings![0]!)).toBeInTheDocument();
+    expect(header).not.toHaveTextContent(/added a calm upper-middle/);
     expect(within(header).getByRole("link", { name: "Open in History" })).toHaveAttribute("href", "/history?run=4201");
     // The new plan is in the URL, so it can be linked to and survives a reload.
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/ai-shorts?plan=31"));
 
-    const prompts = screen.getAllByTestId("shot-prompt");
-    expect(prompts).toHaveLength(2);
-    expect(prompts[0]).toHaveTextContent(AI_SHORTS_PLAN.shots[0]!.prompt);
-    expect(prompts[1]).toHaveTextContent(AI_SHORTS_PLAN.shots[1]!.prompt);
-    expect(screen.getByRole("heading", { name: "Part 1 · 8 s · Text to Video" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Part 2 · 8 s · Extend from Part 1" })).toBeInTheDocument();
-    expect(screen.getByText(/Same table, same framing and light as Part 1/)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Prompts" })).toHaveAttribute("aria-selected", "true");
+    const cards = screen.getAllByTestId("shot-card");
+    expect(cards).toHaveLength(2);
+    expect(within(cards[0]!).getByRole("heading", { name: "Part 1 · 0–8 s · Text to video" })).toBeInTheDocument();
+    expect(within(cards[1]!).getByRole("heading", { name: "Part 2 · 8–16 s · Extend Part 1" })).toBeInTheDocument();
+    expect(within(cards[0]!).getByTestId("shot-prompt")).toHaveTextContent("A dim kitchen at night.");
+    expect(within(cards[1]!).getByTestId("shot-prompt")).toHaveTextContent("The phone screen lights up face-down");
+    expect(within(cards[1]!).getByText(/Same table, same framing and light as Part 1/)).toBeInTheDocument();
+    expect(within(cards[1]!).getByTestId("shot-overlay")).toHaveTextContent("they would have never told you.");
+    // The rule a Short is judged by sits with the first part: the first line is there from the first frame.
+    expect(within(cards[0]!).getByRole("note", { name: "First-frame rule" })).toHaveTextContent(
+      /on screen from the very first frame, large and high-contrast\. No typing animation and no fade-in/,
+    );
+    expect(within(cards[0]!).getByTestId("shot-adjustments")).toHaveTextContent(
+      "Adjusted automatically: added a calm upper-middle, audio line",
+    );
 
+    await user.click(screen.getByRole("button", { name: "Copy prompt for Part 1" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(AI_SHORTS_PLAN.shots[0]!.prompt));
+    // The name stays stable for assistive tech; the visible text confirms the copy.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copy prompt for Part 1" })).toHaveTextContent("Copied"));
+
+    await openTab(user, "Make it in Flow");
     const guide = screen.getByTestId("flow-guide");
     expect(within(guide).getByText(AI_SHORTS_PLAN.flow_steps![0]!)).toBeInTheDocument();
     expect(within(guide).getByText(AI_SHORTS_PLAN.cautions![1]!)).toBeInTheDocument();
     expect(within(guide).getByText("0 / 6 done")).toBeInTheDocument();
 
-    expect(within(screen.getByTestId("mood-audio")).getByText(AI_SHORTS_PLAN.mood!.visual_metaphor!)).toBeInTheDocument();
-    const overlay = screen.getByTestId("text-overlay");
-    expect(within(overlay).getByText("they would have never told you.")).toBeInTheDocument();
-    // The rule a Short is judged by sits above the plan: the first line is there from the first frame.
-    expect(within(overlay).getByRole("note", { name: "First-frame rule" })).toHaveTextContent(
-      /on screen from the very first frame, large and high-contrast\. No typing animation and no fade-in/,
-    );
+    await openTab(user, "Scene notes");
+    expect(within(screen.getByTestId("scene-notes")).getByText(AI_SHORTS_PLAN.mood!.visual_metaphor!)).toBeInTheDocument();
 
+    await openTab(user, "Upload package");
     const pkg = screen.getByTestId("shorts-package");
     expect(within(pkg).getByText(AI_SHORTS_PLAN.package!.title!)).toBeInTheDocument();
     expect(within(pkg).getByText("Passed quality check")).toBeInTheDocument();
     expect(within(pkg).getAllByTestId("title-option")).toHaveLength(3);
     expect(within(pkg).getByText("#betrayal")).toBeInTheDocument();
     expect(within(pkg).getByRole("button", { name: "Copy upload package" })).toBeEnabled();
+  });
 
-    await user.click(screen.getByRole("button", { name: "Copy prompt for Part 1" }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(AI_SHORTS_PLAN.shots[0]!.prompt));
-    // The name stays stable for assistive tech; the visible text confirms the copy.
-    await waitFor(() => expect(screen.getByRole("button", { name: "Copy prompt for Part 1" })).toHaveTextContent("Copied"));
+  it("writes the same quote again from the plan's own request", async () => {
+    const user = setupUser();
+    renderPage("/ai-shorts?plan=31");
+    const header = await screen.findByRole("region", { name: "This AI Short" });
+    await user.type(screen.getByLabelText(/Mood or scene wish/), "a sunlit meadow");
+
+    await user.click(within(header).getByRole("button", { name: "Write again" }));
+
+    await waitFor(() => expect(generateBodies()).toHaveLength(1));
+    expect(generateBodies()[0]).toEqual({ quote: QUOTE, language: "english", parts: 2, mood_hint: "", region: "global" });
   });
 
   it("says the package makes no YouTube Data API research but checks tags against search suggestions", async () => {
@@ -212,6 +239,7 @@ describe("AI Shorts results", () => {
     renderPage();
     await generate(user);
 
+    await openTab(user, "Upload package");
     const pkg = await screen.findByTestId("shorts-package");
     expect(within(pkg).getByText(/makes no YouTube Data API research/)).toBeInTheDocument();
     expect(within(pkg).getByText(/checked against YouTube.s free search suggestions/)).toBeInTheDocument();
@@ -235,7 +263,8 @@ describe("AI Shorts results", () => {
     renderPage();
     await generate(user);
 
-    const mood = await screen.findByTestId("mood-audio");
+    await openTab(user, "Scene notes");
+    const mood = screen.getByTestId("scene-notes");
     expect(within(mood).getByText(direction.quote_meaning)).toBeInTheDocument();
     expect(within(mood).getByText(direction.emotion)).toBeInTheDocument();
     expect(within(mood).getByText("numb")).toBeInTheDocument();
@@ -255,7 +284,8 @@ describe("AI Shorts results", () => {
     renderPage();
     await generate(user);
 
-    const mood = await screen.findByTestId("mood-audio");
+    await openTab(user, "Scene notes");
+    const mood = screen.getByTestId("scene-notes");
     expect(within(mood).getByText(understanding.quote_meaning)).toBeInTheDocument();
     expect(within(mood).getByText("guarded numbness")).toBeInTheDocument();
     expect(within(mood).getByText("emotional numbness")).toBeInTheDocument();
@@ -274,7 +304,8 @@ describe("AI Shorts results", () => {
     renderPage();
     await generate(user);
 
-    const mood = await screen.findByTestId("mood-audio");
+    await openTab(user, "Scene notes");
+    const mood = screen.getByTestId("scene-notes");
     expect(within(mood).getByText("Old meaning.")).toBeInTheDocument();
     expect(within(mood).queryByText("Tone")).not.toBeInTheDocument();
     expect(within(mood).queryByText("How viewers search for it")).not.toBeInTheDocument();
@@ -289,9 +320,10 @@ describe("AI Shorts results", () => {
     await user.click(screen.getByRole("button", { name: "Copy all prompts" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const [all] = writeText.mock.calls[0] as [string];
-    expect(all).toContain("PART 1 · 8 S · TEXT TO VIDEO\n");
-    expect(all).toContain("PART 2 · 8 S · EXTEND FROM PART 1\n");
+    expect(all).toContain("PART 1 · 0–8 S · TEXT TO VIDEO\n");
+    expect(all).toContain("PART 2 · 8–16 S · EXTEND PART 1\n");
 
+    await openTab(user, "Upload package");
     await user.click(screen.getByRole("button", { name: "Copy upload package" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
     const [bundle] = writeText.mock.calls[1] as [string];
@@ -315,7 +347,8 @@ describe("AI Shorts results", () => {
     const user = setupUser();
     renderPage();
     await generate(user);
-    const pkg = await screen.findByTestId("shorts-package");
+    await openTab(user, "Upload package");
+    const pkg = screen.getByTestId("shorts-package");
 
     // What is shown is what is copied: the count on screen is the count pasted.
     expect(within(pkg).getByText("Video tags").nextElementSibling).toHaveTextContent("4");
@@ -339,7 +372,8 @@ describe("AI Shorts results", () => {
     const user = setupUser();
     renderPage();
     await generate(user);
-    const guide = await screen.findByTestId("flow-guide");
+    await openTab(user, "Make it in Flow");
+    const guide = screen.getByTestId("flow-guide");
 
     await user.click(within(guide).getByRole("checkbox", { name: /Step 1:/ }));
     await user.click(within(guide).getByRole("checkbox", { name: /Step 3:/ }));
@@ -358,6 +392,7 @@ describe("AI Shorts results", () => {
     const header = await screen.findByRole("region", { name: "This AI Short" });
     expect(within(header).getByText("Draft: built-in template")).toBeInTheDocument();
     expect(within(header).getByText(/Gemini was unavailable/)).toBeInTheDocument();
+    await openTab(user, "Upload package");
     expect(within(screen.getByTestId("shorts-package")).getByText("Quality check: review warnings")).toBeInTheDocument();
 
     generateResponse = () => json(AI_SHORTS_PLAN);
