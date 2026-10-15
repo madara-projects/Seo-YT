@@ -32,7 +32,6 @@ from win_engine.analysis.generation_quality import (
     has_unsupported_instructional_framing,
     quote_title_issues,
     title_body,
-    title_emojis,
     title_fluency_issues,
     title_similarity,
 )
@@ -40,7 +39,7 @@ from win_engine.analysis.keyword_research import (
     natural_tag_phrase,
     synchronize_tag_evidence,
 )
-from win_engine.analysis.source_cues import is_negator
+from win_engine.analysis.source_cues import denied_before
 from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
 from win_engine.ingestion.search_suggest import demand_rank, normalize_phrase, suggestion_index
 
@@ -114,10 +113,8 @@ _WORTH = (r"\b(?:only love you when|useful to them|use(?:d)? (?:me|you)|your wor
 _RESPECT = (r"\b(?:stop explaining|explain(?:ing)? yourself|self[- ]?respect)\b|\bmisunderst\w*|"
             r"\b(?:doesn'?t|don'?t|does not|do not) value\b|\bvalue (?:you|your)\b")
 _MOTIVATION = r"\bdisciplin\w*|\bproud\b|\btrying\b|\bkeep going\b|\bgive up\b|\bwork(?:ing)? hard\b"
-# A quote that sets its past against its future ("Your future needs you. Your
-# past doesn't.") is about moving on; matched at the start, so no negator precedes it.
-_MOVING_ON = (r"\bbetter without\b|\b(?:moved|moving|move) on\b|\blet(?:ting)? go\b|"
-              r"^(?=[\s\S]*\bpast\b)(?=[\s\S]*\bfuture\b)")
+# A quote that sets its past against its future is about moving on too (see _says).
+_MOVING_ON = r"\bbetter without\b|\b(?:moved|moving|move) on\b|\blet(?:ting)? go\b"
 _MISSING = r"\bmiss(?:ing)? (?:you|someone|him|her|them)\b"
 _LOVE = r"\bhome\b.*\bperson\b|\bperson\b.*\bhome\b|\bmy person\b|\bin love\b|\bi love you\b|\bsoulmate\b"
 # The hashtag of the quote's own theme, before the tone's, when it fits the
@@ -351,12 +348,8 @@ def _clean_line(value: Any, limit: int = 300) -> str:
 def _affirmed(pattern: str, text: str) -> bool:
     """True when a match of ``pattern`` is not denied by a negator just before it."""
     for match in re.finditer(pattern, text, re.IGNORECASE):
-        # A negation stays in its sentence ("It's not over. Love ..."), and "no
-        # one" is a subject like "nobody" ("No one hurts you like ...").
-        before = unicode_words(re.split(r"[.!?;\n]", text[:match.start()])[-1], min_length=1)[-3:]
         # The pattern may carry its own negation ("pretend that you don't have").
-        if not any(is_negator(word) and not (word == "no" and before[index + 1:index + 2] == ["one"])
-                   for index, word in enumerate(before)):
+        if not denied_before(text[:match.start()], window=3):
             return True
     return False
 
@@ -387,6 +380,18 @@ def clean_theme(value: Any) -> str:
     return phrase
 
 
+def _says(pattern: str, text: str) -> bool:
+    """``_affirmed``, but moving on is also a past set against a future: "Your future needs you. Your past doesn't."
+
+    Each word must be affirmed where it stands ("no future" is not), and a
+    quote that denies moving on ("I can't let go of the past") is not one.
+    """
+    if _affirmed(pattern, text):
+        return True
+    return (_MOVING_ON in pattern and not re.search(_MOVING_ON, text, re.IGNORECASE)
+            and _affirmed(r"\bpast\b", text) and _affirmed(r"\bfuture\b", text))
+
+
 def _local_themes(quote: str, tone: str) -> list[str]:
     text = normalize_unicode(quote).replace("’", "'").casefold()
     themes: list[str] = []
@@ -394,7 +399,7 @@ def _local_themes(quote: str, tone: str) -> list[str]:
         if not _fits(tone, tones):
             continue
         about_heartbreak = pattern == _HEARTBREAK and tone in _PAIN_TONES and re.search(pattern, text)
-        if about_heartbreak or _affirmed(pattern, text):
+        if about_heartbreak or _says(pattern, text):
             themes.extend(phrases)
     themes = list(dict.fromkeys(theme for theme in (clean_theme(item) for item in themes) if theme))
     # The tone's broad searches fill the list up to five candidates: enough for
@@ -574,7 +579,8 @@ def understanding_of(brief: dict[str, Any] | None, quote: str = "") -> dict[str,
 
 
 def _base(emoji: str) -> str:
-    return re.sub(r"[︎️‍]", "", emoji)
+    """The emoji as the quality gate counts it: each cluster's first code point ("❤️‍🩹" is "❤", "💪🏽" is "💪")."""
+    return "".join(cluster[0] for cluster in _emoji_clusters(emoji))
 
 
 # One visible emoji, whole: its variation selector, skin tone and ZWJ-joined
@@ -589,6 +595,11 @@ def _emoji_clusters(text: Any) -> list[str]:
     return _EMOJI_CLUSTER_RE.findall(normalize_unicode(text))
 
 
+def emoji_bases(text: Any) -> list[str]:
+    """Each visible emoji in the text as the quality gate counts it."""
+    return [cluster[0] for cluster in _emoji_clusters(text)]
+
+
 def repeated_emoji(recent_titles: Iterable[str]) -> str:
     """The emoji the quality gate would reject as a template: the one its three compared recent titles all end with.
 
@@ -597,7 +608,7 @@ def repeated_emoji(recent_titles: Iterable[str]) -> str:
     """
     recent = [str(item) for item in recent_titles or [] if str(item or "").strip()]
     # The gate reads "❤️‍🩹" as "❤", one emoji (generation_quality._visible_emojis).
-    signatures = ["".join(cluster[0] for cluster in _emoji_clusters(title)) for title in recent[-3:]]
+    signatures = [_base(title) for title in recent[-3:]]
     if len(signatures) == 3 and signatures[0] and all(item == signatures[0] for item in signatures):
         return signatures[0]
     return ""
@@ -614,7 +625,7 @@ def emoji_candidates(reading: dict[str, Any], quote: str) -> list[str]:
     # The reading names the theme when the quote's words don't ("self respect quotes").
     themes = " ".join([*(reading.get("planner_themes") or []), str(reading.get("planner_hashtag") or "")]).casefold()
     theme = next((emojis for pattern, emojis, tones in _THEME_EMOJIS
-                  if _fits(tone, tones) and (_affirmed(pattern, text) or re.search(pattern, themes))), ())
+                  if _fits(tone, tones) and (_says(pattern, text) or re.search(pattern, themes))), ())
     # A specific emoji leads a generic one: 👑 for self-respect before ✨.
     found = [emoji for emoji in planner if _base(emoji) not in _GENERIC_EMOJIS]
     found.extend(emoji for emoji in theme if _emoji_fits_tone(emoji, tone))
@@ -773,7 +784,7 @@ def order_titles(
     for title in ordered:
         result = style_title(title, quote, brief, recent, used=used)
         styled.append(result)
-        used.extend(title_emojis(result))
+        used.extend(_emoji_clusters(result))
     return list(dict.fromkeys(styled))
 
 
@@ -878,7 +889,7 @@ def ai_short_hashtags(brief: dict[str, Any] | None, quote: str) -> list[str]:
     tone = str(reading.get("tone") or "")
     text = normalize_unicode(quote).replace("’", "'").casefold()
     theme_tag = next(
-        (tag for pattern, tag, tones in _THEME_HASHTAGS if _fits(tone, tones) and _affirmed(pattern, text)), "",
+        (tag for pattern, tag, tones in _THEME_HASHTAGS if _fits(tone, tones) and _says(pattern, text)), "",
     )
     heartbreak = "#heartbreak" if tone in _PAIN_TONES and re.search(_HEARTBREAK, text) else ""
     feeling = (_accepted_planner_hashtag(reading) or theme_tag or heartbreak

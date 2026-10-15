@@ -1401,3 +1401,71 @@ def test_the_director_and_the_writer_are_offered_the_same_framing():
                            quote=HOPEFUL, director=True)
     writer_pick = re.search(r"for this video prefer ([^\n]+)\n", answers.prompts[1]).group(1)
     assert writer_pick in answers.prompts[0] and "no person at all" not in writer_pick
+
+
+# The light's own verb changes the light; a person's verb later in the clause, or "light" the adjective, does not.
+LIT_SUBJECTS = (
+    "A woman in a pale green sweater, seen from behind, cycles slowly along a coastal road in the soft morning light "
+    "as she climbs the gentle hill.",
+    "A fisherman walks along the shore in the first light of dawn as waves break around his feet.",
+    "In the warm light a woman in a red scarf climbs the stone steps.",
+    "A girl in a light summer dress climbs a grassy hill.",
+    "Under the light of the lamp she climbs the stairs.",
+    "The boat rocks on light swells as the fisherman pulls his net.",
+    "A light swell rocks the fishing boat beside the pier.",
+)
+
+
+def test_only_the_lights_own_verb_is_a_change_of_light():
+    for steady in LIT_SUBJECTS:
+        assert fp._drop_light_growth(steady) == (steady, []), steady
+    for grows in ("the warm golden light from the low horizon widens across the sky", "the morning light grows",
+                  "the glow that slowly widens over the bay", "the light begins to brighten over the hills",
+                  "the first light of dawn touches the water", "the first rays of sun break through the clouds",
+                  "a shaft of light creeps across the sand", "the sun's rays climb the sea wall"):
+        sentence = f"A lone figure walks along the shore while {grows}."
+        assert fp._drop_light_growth(sentence)[0] == "A lone figure walks along the shore.", grows
+    # The subject's sentence stays, so the next one's "her" still has someone to refer to.
+    prompt = SUNRISE_WALK.replace(
+        "A lone figure in a dark coat, seen from behind and small in the lower third, walks slowly along an empty "
+        "seawall at sunrise in warm golden light.",
+        "In the warm light a woman in a red scarf climbs the stone steps of an empty seawall. Her scarf lifts in the wind.",
+    )
+    patched, added = fp.patch_prompt(prompt, part=1, audio="wind")
+    assert "In the warm light a woman in a red scarf climbs the stone steps" in patched
+    assert "one light for the whole clip" not in added and fp.check_prompt(patched, HOPEFUL, 1)[0] == []
+    plan, _ = plan_with(director_reply(opening=LIT_SUBJECTS[1]), writer_reply(SUNRISE_WALK), quote=HOPEFUL, director=True)
+    assert plan["creative_direction"]["opening"] == LIT_SUBJECTS[1]
+
+
+def test_a_busy_upper_sky_does_not_keep_the_quote_area_calm():
+    for busy in ("A lone figure in a dark coat walks under a stormy upper sky full of birds.",
+                 "A lone figure walks under a dark upper sky full of wheeling gulls.",
+                 "Flocks of gulls wheel across a dark upper sky.",
+                 "A busy, cluttered upper sky with plain white gulls everywhere.",
+                 "A soft top background full of bright neon signs."):
+        assert not fp._UPPER_AREA_RE.search(busy), busy
+    for calm in ("Under a calm, dark upper sky kept in soft focus, a figure walks.",
+                 "The upper sky stays calm and uncluttered.", "A figure walks under a soft, hazy upper sky."):
+        assert fp._UPPER_AREA_RE.search(calm), calm
+    stormy = SUNRISE_WALK.replace(", seen from behind and small in the lower third,", ", seen from behind,").replace(
+        " Cinematic natural light; the upper-middle stays calm, uncluttered and in soft focus for text added later.",
+        " Cinematic natural light, their dark coat lifting under a stormy upper sky full of wheeling birds.",
+    )
+    assert any("upper-middle of the frame clear" in warning for warning in fp.check_prompt(stormy, HOPEFUL, 1)[1])
+    patched, added = fp.patch_prompt(stormy, part=1, audio="wind")
+    assert "a calm upper-middle" in added
+    assert "The upper-middle of the frame stays calm, darker and in soft focus." in patched
+
+
+@pytest.mark.parametrize("quote, meaning, tone", [
+    ("Peace came slowly.", "She made it through the heartbreak and found calm.", "calm"),
+    ("Love carries you.", "Love that carries you through the pain.", "romantic"),
+    ("Love carries you.", "Their love has not only hurt but healed them.", "romantic"),
+])
+def test_pain_that_is_over_keeps_the_directors_tone_in_the_plan(quote, meaning, tone):
+    plan, answers = plan_with(love_reply(meaning, tone=tone), writer_reply(SUNRISE_WALK), writer_reply(SUNRISE_WALK),
+                              quote=quote, director=True)
+    assert plan["quote_understanding"]["tone"] == tone
+    assert "no peaceful warm landscape" not in answers.prompts[1]
+    assert not any("its meaning is pain" in warning for warning in plan["checks"]["warnings"])

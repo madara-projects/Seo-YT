@@ -81,8 +81,9 @@ _FACE_ALLOWED_RE = re.compile(
     # "faces" as a verb: a figure faces the window, faces toward the sea. Facing
     # the camera or the lens is a face request and is left for the check below.
     r"|\bfaces\s+(?!the (?:camera|lens|viewer)\b)(?:the|a|an|its|his|her|their|away|toward|towards|into|out|down|up)\b"
-    # "turns her back to the camera" is a figure seen from behind.
-    r"|\bbacks?\s+(?:turned\s+)?(?:to|toward|towards) the (?:camera|lens|viewer)\b"
+    # "Turns her back to the camera" is a figure seen from behind; "turns back toward the camera" is not.
+    r"|(?:\b(?:her|his|their|its|our|your|my|with|\w+['’]s)\s+|(?:^|[,;(—–]\s*))"
+    r"backs?\s+(?:turned\s+)?(?:to|toward|towards) the (?:camera|lens|viewer)\b"
     r"|\bfaceless\b",
     re.IGNORECASE,
 )
@@ -1535,7 +1536,9 @@ _PAIN_RE = re.compile(
 # Pain that is over ("after the heartbreak", "healed") belongs to a healing or hopeful quote.
 _OVERCOME_RE = re.compile(
     r"\b(?:after|past|healed|heal(?:s|ing)?|overcome|overcame|recover\w*|survived|moved on|no longer|"
-    r"behind (?:me|you|us|them))\b",
+    r"behind (?:me|you|us|them))\b"
+    # "Made it through the heartbreak" is over; "going through it" is not.
+    r"|(?<!\bgoes )(?<!\bgoing )\bthrough\b",
     re.IGNORECASE,
 )
 _LOVE_RE = re.compile(r"\b(?:lov\w*|heart\w*|relationship\w*|romance|romantic|lover\w*)\b", re.IGNORECASE)
@@ -1545,12 +1548,42 @@ _PERSON_TONES = frozenset({"heartbroken", "sad", "lonely", "numb", "angry", "anx
 _PAIN_TONES = frozenset({"heartbroken", "sad", "lonely", "numb", "bittersweet", "angry", "anxious"})
 
 
+# A later clause saying the pain ended ("It hurt, but she healed"); "after all these years" ends nothing.
+_ENDED_RE = re.compile(
+    r"\b(?:healed|heal(?:s|ing)?|overcome|overcame|recover\w*|survived|moved on|no longer|behind (?:me|you|us|them)|"
+    r"let(?:s|ting)? go|gr(?:ew|ows?|own|owing) stronger|f(?:ound|inds?|inding) peace)\b"
+    r"|(?<!\bgoes )(?<!\bgoing )\bthrough\b",
+    re.IGNORECASE,
+)
+
+
+def _ended_later(clauses: list[str], separators: list[str], index: int) -> bool:
+    """Whether a later clause of the same sentence ends the pain; "although she healed" only concedes."""
+
+    for clause, separator in zip(clauses[index + 1:], separators[index + 1:]):
+        if separator in (".", "!", "?"):
+            return False
+        concedes = separator.casefold() == "although" or re.match(
+            r"\s*(?:even\s+)?(?:though|if|while|whereas)\b", clause, re.IGNORECASE,
+        )
+        if not concedes and _ENDED_RE.search(clause):
+            return True
+    return False
+
+
 def _current_pain(text: str) -> bool:
-    for clause in re.split(r"[.;,!?]|\b(?:but|yet|however|although)\b", text, flags=re.IGNORECASE):
-        overcome = bool(_OVERCOME_RE.search(clause))
+    # "Not only hurt but healed" is one clause: its "but" adds, it does not contrast.
+    text = re.sub(r"\bnot only\b([^.;,!?]*?)\bbut(?:\s+also)?\b", r"\1 and", text, flags=re.IGNORECASE)
+    parts = re.split(r"([.;,!?]|\b(?:but|yet|however|although)\b)", text, flags=re.IGNORECASE)
+    clauses, separators = parts[0::2], ["", *parts[1::2]]
+    for index, clause in enumerate(clauses):
+        ended = _ended_later(clauses, separators, index)
         for match in _PAIN_RE.finditer(clause):
             if re.match(r"[- ]free\b", clause[match.end():], re.IGNORECASE):
                 continue
+            # "Pain cuts through her" is the pain moving, not pain come through.
+            after = re.sub(r"^(\s+(?:\w+\s+)?)through\b", r"\1", clause[match.end():], flags=re.IGNORECASE)
+            overcome = ended or bool(_OVERCOME_RE.search(f"{clause[:match.start()]} {after}"))
             before = re.sub(r"\bnot only\b", "", clause[:match.start()], flags=re.IGNORECASE)
             # "It still hurts after all these years": pain that goes on is current, whatever else is over.
             if overcome and not re.search(r"\bstill\s+(?:\w+\s+)?$", before, re.IGNORECASE):
@@ -1782,9 +1815,11 @@ _LIGHT_SHIFT_RE = re.compile(
     r"|\btransitioning from\b"
     r"|\b(?:sun|sunrise)\b[^.;,]{0,25}\b(?:clears|rises above|breaks over|climbs above) the horizon\b"
     # The light itself growing or dying: "warm golden light widens across the sky", "the sky slowly darkens".
+    # Not the light shaping the scene: "the low sun deepens the shadows".
     r"|\b(?:light|sunlight|glow|sky|sun|dusk|dawn|twilight)\s+(?:\w+ly\s+)?(?:(?:brightens?|brightening|darkens?|"
-    r"darkening)(?!\s+(?:the|a|an|her|his|their|its)\b)|dims|dimming|intensif(?:ies|ying)|deepens?|deepening|fades?|"
-    r"fading|grows?\s+(?:brighter|darker|warmer|cooler|dimmer|stronger|deeper)|growing\s+(?:brighter|darker|warmer|"
+    r"darkening|dims|dimming|intensif(?:ies|ying)|deepens?|deepening|fades?|fading)"
+    r"(?!\s+(?:the|a|an|her|his|their|its)\b)"
+    r"|grows?\s+(?:brighter|darker|warmer|cooler|dimmer|stronger|deeper)|growing\s+(?:brighter|darker|warmer|"
     r"cooler|dimmer|stronger|deeper))\b"
     r"|\b(?:light|sunlight|glow)\s+(?:\w+ly\s+)?(?:widens?|widening)\b",
     re.IGNORECASE,
@@ -2537,23 +2572,48 @@ def _plain_prompt_text(prompt: str) -> str:
 
 
 # Where the quote goes: the subject's "lower third" alone says nothing about it.
+_BUSY_SKY = (
+    r"(?:busy|crowded|cluttered|full|filled|teeming|swarming|thick|alive|stormy|storm|lightning|turbulent|churning|"
+    r"swirling|fireworks|flocks?|birds?|gulls?|seagulls?|kites?|neon|signs?)"
+)
+# The rest of a clause, with nothing busy in it.
+_QUIET = rf"(?:(?!\b{_BUSY_SKY}\b)[^.;,])*"
 _UPPER_AREA_RE = re.compile(
     r"\bupper[\s-]middle\b|\bupper (?:half|third|part|portion|area|frame)\b|\btop (?:half|third|of the frame)\b"
     r"|\bnegative space\b|\bheadroom\b"
-    # "Under a calm, dark upper sky kept in soft focus" already keeps it; a second layout sentence only repeats it.
-    r"|\b(?:calm|dark|darker|soft|plain|empty|uncluttered|low-detail)\b[^.;]{0,30}\b(?:upper|top) (?:sky|background)\b"
-    r"|\b(?:upper|top) (?:sky|background)\b[^.;]{0,40}\b(?:calm|darker|soft focus|uncluttered|low-detail|empty|plain)\b",
+    # "Under a calm, dark upper sky kept in soft focus" already keeps it, when the calm words are the sky's own and
+    # nothing in its clause is busy: not "a dark coat under a stormy upper sky full of birds".
+    rf"|(?:^|(?<=[.;,])){_QUIET}?\b(?:calm|dark|darker|soft|plain|empty|uncluttered|low-detail)"
+    r"(?:(?:,\s*|\s+and\s+|\s+)(?:calm|dark|darker|soft|plain|empty|uncluttered|low-detail|pale|hazy|misty|muted|"
+    rf"clear|grey|gray|blue|deep|dim|quiet))*\s+(?:upper|top) (?:sky|background)\b{_QUIET}(?=[.;,]|$)"
+    rf"|(?:^|(?<=[.;,])){_QUIET}?\b(?:upper|top) (?:sky|background),?(?:\s+(?:that|which))?"
+    r"(?:\s+(?:is|stays|remains|kept|left|held))?(?:\s+\w+ly)?\s+(?:in\s+)?"
+    rf"(?:calm|darker|soft focus|uncluttered|low-detail|empty|plain)\b{_QUIET}(?=[.;,]|$)",
     re.IGNORECASE,
 )
 # The light arriving or growing is a change of light too: "the first warm golden glow catches their
-# shoulders", "the golden light widens across the sky". "A light mist" is not the light.
+# shoulders". The verb must be the light's own, not a later subject's ("in the soft light as she climbs"),
+# and "light" the adjective is not the light ("a light summer dress", "a light swell").
+_LIGHT_LEAD = (
+    r"(?:(?!(?:on|in|into|over|under|across|along|through|with|at|by|from|to|toward|towards|near|and|or|as|while|"
+    r"when|then|until|before|after|but|where|that|which|who|the|a|an|its|their|his|her|she|he|they|it|we)\b)"
+    r"[\w'’-]+\s+){0,3}?"
+)
+_LIGHT_NOUN = (
+    r"(?:light|glow|sunlight|daylight|sun)\b(?!-|\s+(?:widen|grow|brighten|intensify|strengthen|bloom|creep|climb|"
+    r"swell|catch|touch|reach|hit|land|fall|break|appear|arrive|spill)\b)"
+)
+_LIGHT_GAP = (
+    r"(?:\s+(?:that|which))?(?:\s+\w+ly)?(?:\s+(?:from|of|over|on|across|above|behind|beyond|along|near|at|in|around)"
+    r"(?:\s+(?!(?:as|while|when|and|or|but|then|until|before|after|where|who|which|that|she|he|they|it|we|you|i)\b)"
+    r"[\w'’-]+){1,3})?(?:\s+\w+ly)?"
+    r"(?:\s+(?:is|are|keeps?|begins? to|starts? to|continues? to|seems? to))?(?:\s+\w+ly)?\s+"
+)
 _LIGHT_GROWTH_RE = re.compile(
-    r"\b(?:the|a|its|their)\s+(?:[\w-]+\s+){0,3}?(?:light|glow|sunlight|daylight|rays|sun)\b(?!-)"
-    r"(?!\s+(?:mist|breeze|wind|rain|drizzle|snow|fog|haze|jacket|coat|sweater|shirt|dress|scarf|fabric|layer|blue|"
-    r"grey|gray|green|pink|brown|beige|poles?|posts?|trails?))[^.;,]{0,40}?\b(?:widens?|widening|grows?|growing|"
+    rf"\b(?:the|a|its|their)\s+{_LIGHT_LEAD}(?:{_LIGHT_NOUN}|rays\b){_LIGHT_GAP}(?:widens?|widening|grows?|growing|"
     r"brightens?|brightening|intensif(?:y|ies|ying)|strengthens?|strengthening|blooms?|blooming|creeps?|creeping|"
     r"climbs?|climbing|swells?|swelling)\b"
-    r"|\bthe first (?:[\w-]+\s+){0,3}?(?:light|glow|rays?|sunlight|sun)\b[^.;,]{0,60}?\b(?:catch(?:es|ing)?|"
+    rf"|\bthe first {_LIGHT_LEAD}(?:{_LIGHT_NOUN}|rays?\b){_LIGHT_GAP}(?:catch(?:es|ing)?|"
     r"touch(?:es|ing)?|reach(?:es|ing)?|hits?|hitting|lands? on|falls? on|breaks?|breaking|appears?|appearing|"
     r"arrives?|arriving|spills?|spilling)\b"
     r"|\bthe sun (?:\w+ly\s+)?(?:rises|is rising|climbs|comes up|sets|is setting|goes down|dips)\b",

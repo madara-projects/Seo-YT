@@ -922,6 +922,13 @@ def test_light_that_grows_or_dies_within_the_clip_is_a_light_shift():
         assert not fp._LIGHT_SHIFT_RE.search(steady), steady
 
 
+def test_light_that_shapes_the_scene_is_no_light_shift_and_keeps_the_subject():
+    for steady in ("The low sun deepens the shadows of a woman walking along the shore.",
+                   "The soft glow fades the edges of the frame around a woman reading.",
+                   "Warm light intensifies the reds of the leaves as a man rakes the path."):
+        assert fp._drop_light_shifts(steady) == (steady, []), steady
+
+
 def test_a_face_said_to_be_hidden_is_not_a_face_request():
     for hidden in ("her face is hidden by her hood", "his face stays in shadow", "the face is not visible",
                    "her face remains turned away", "their faces are kept out of the frame",
@@ -960,6 +967,42 @@ def test_pain_that_still_goes_on_is_current_whatever_else_is_over():
                     "Even after the breakup the love is still painful."):
         assert fp.pain_tone("I still love you.", {"tone": "romantic", "quote_meaning": meaning}) == "heartbroken", meaning
     assert fp.pain_tone("Love again.", {"tone": "romantic", "quote_meaning": "After the heartbreak I am still healing."}) is None
+
+
+def test_pain_come_through_or_healed_after_not_only_is_over():
+    for meaning, tone in (("She made it through the heartbreak and found calm.", "calm"),
+                          ("Love that carries you through the pain.", "romantic"),
+                          ("Their love has not only hurt but healed them.", "romantic"),
+                          ("The pain she has been through made her love gentler.", "romantic")):
+        assert fp.pain_tone("I love you.", {"tone": tone, "quote_meaning": meaning}) is None, meaning
+    # Going through it, or pain cutting through someone, is pain still being lived.
+    for meaning in ("She is still going through heartbreak.", "Love that goes through pain every day.",
+                    "Love not only hurts, it breaks you.", "Heartbreak cuts through her like a knife.",
+                    "It hurts through every season of their love."):
+        assert fp.pain_tone("I love you.", {"tone": "romantic", "quote_meaning": meaning}) == "heartbroken", meaning
+
+
+def test_pain_a_later_clause_says_ended_is_over():
+    for meaning in ("It hurt, but she healed.", "It hurt, yet I healed.", "It broke me, but I recovered.",
+                    "Love hurt so much, but she let go and found peace.", "The heartbreak hurt; however, she grew stronger."):
+        assert fp.pain_tone("I love you.", {"tone": "romantic", "quote_meaning": meaning}) is None, meaning
+    for meaning in ("It still hurts after all these years.", "I healed, but it still hurts.",
+                    "It still hurts, but I am healing.", "It hurts, although she has moved on.",
+                    "It hurt. She healed, but the love was gone."):
+        assert fp.pain_tone("I love you.", {"tone": "romantic", "quote_meaning": meaning}) == "heartbroken", meaning
+
+
+def test_turning_back_toward_the_camera_still_asks_for_a_face():
+    for turn in ("then turns back toward the camera", "gazing back toward the lens", "and smiles back toward the camera",
+                 "turning back towards the lens"):
+        text = f"A woman in a red scarf walks slowly along the pier, {turn}."
+        assert fp.face_requested(text) is True, turn
+        patched, _ = fp.patch_prompt(gemini_prompt(body=SCENE + text + " "), part=1, audio="wind")
+        assert "Part 1: prompt asks for a face" in fp.check_prompt(patched, QUOTE, 1)[0], turn
+    # "Back" the noun: their back is to the camera, a figure seen from behind.
+    for back in ("her back to the camera", "with their backs turned toward the lens", "back to the camera",
+                 "the cyclist's back to the camera"):
+        assert fp.face_requested(f"A woman in a red scarf walks slowly along the pier, {back}.") is False, back
 
 
 def test_the_audio_line_does_not_decide_the_motion_line():

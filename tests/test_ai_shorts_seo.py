@@ -933,16 +933,94 @@ class EmojiClusterAndNegationTests(unittest.TestCase):
         kept = seo._planner_emojis([self.MENDING, self.PRAYING, chr(0x1F494) * 2], "")
         self.assertEqual(kept, [self.MENDING, self.PRAYING])
 
+    def test_recent_title_emojis_are_read_as_the_gate_reads_them(self):
+        # ❤️‍🔥 led a recent title as "❤"; its 🔥 part was never shown on its own.
+        fire = chr(0x2764) + chr(0xFE0F) + chr(0x200D) + chr(0x1F525)
+        self.assertEqual(seo.emoji_bases(f"Still burning {fire} #shorts"), [chr(0x2764)])
+        self.assertEqual(seo.emoji_bases(f"Stand up {self.PRAYING} and grow 🌱"), [chr(0x1F64F), "🌱"])
+
     def test_repeated_emoji_reads_a_zwj_emoji_as_the_gate_does(self):
         recent = [f"Healing slowly {self.MENDING} #shorts", f"Still healing {self.MENDING} #shorts",
                   f"Healing again {self.MENDING} #shorts"]
         self.assertEqual(seo.repeated_emoji(recent), chr(0x2764))
+
+    FIRE = chr(0x2764) + chr(0xFE0F) + chr(0x200D) + chr(0x1F525)
+    ARM = chr(0x1F4AA) + chr(0x1F3FD)
+
+    def test_a_joined_emoji_follows_the_tone_rules_of_its_base(self):
+        # A heartbroken or sad reading refuses ❤️ and 💪, so it refuses ❤️‍🔥 and 💪🏽 too.
+        for tone in ("heartbroken", "sad"):
+            with self.subTest(tone=tone):
+                direction = {"tone": tone, "emojis": [self.FIRE, self.ARM]}
+                reading = seo.quote_understanding(TIRED, {"creative_direction": direction})
+                self.assertEqual(reading["planner_emojis"], [])
+                title = seo.style_title("A title", TIRED, {"ai_shorts": reading})
+                self.assertFalse({chr(0x2764), chr(0x1F4AA)} & set(title_emojis(title)), title)
+
+    def test_a_joined_emoji_is_its_base_for_repeats(self):
+        reading = seo.quote_understanding(HEALED, {"creative_direction": {"tone": "healing", "emojis": [self.MENDING]}})
+        brief = {"exact_quote": HEALED, "ai_shorts": reading}
+        self.assertTrue(seo.style_title(HEALED, HEALED, brief).endswith(f"{self.MENDING} #shorts"))
+        # The gate reads ❤️‍🩹 as ❤, so after three of them it rejects the next.
+        recent = [f"Healing slowly {self.MENDING} #shorts", f"Still healing {self.MENDING} #shorts",
+                  f"Healing again {self.MENDING} #shorts"]
+        # Also as prepare_tags passes them: the template to avoid, and the last titles' emojis.
+        avoid = {"ai_shorts": {**reading, "avoid_emojis": [seo.repeated_emoji(recent)]}}
+        last = {"ai_shorts": {**reading, "recent_emojis": title_emojis(recent[0])}}
+        for styled in (seo.style_title(HEALED, HEALED, brief, recent), seo.style_title(HEALED, HEALED, avoid),
+                       seo.style_title(HEALED, HEALED, last)):
+            self.assertNotIn(chr(0x2764), title_emojis(styled), styled)
+        # One package's titles do not all share it either.
+        titles = seo.order_titles([HEALED, "Healing that arrives without warning"], HEALED, brief)
+        self.assertEqual(len({title_emojis(title)[0] for title in titles}), len(titles), titles)
+        # Its joined part was never shown, so the rotation does not skip it: 🔥 can follow ❤️‍🔥.
+        direction = {"tone": "empowering", "emojis": [self.FIRE]}
+        reading = seo.quote_understanding(DISCIPLINE, {"creative_direction": direction})
+        titles = seo.order_titles([DISCIPLINE, "Discipline means showing up anyway",
+                                   "Doing it even when you don't feel like it"], DISCIPLINE, {"ai_shorts": reading})
+        self.assertEqual([seo._emoji_clusters(title)[0] for title in titles],
+                         seo.emoji_candidates(reading, DISCIPLINE)[:len(titles)])
+
+    def test_healing_quotes_in_a_row_with_a_joined_planner_emoji_stay_acceptable(self):
+        # From the fourth run on, every title repeated the gate's ❤ template: RED, no_acceptable_title.
+        quotes = (HEALED, "Healing is not linear, and that is okay.", "Some days healing looks like rest.",
+                  "You are allowed to heal at your own pace.", "I am still healing, and I am still here.")
+        packages = []
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(gemini_client, "is_available", return_value=False), \
+                patch.object(seo, "suggest_client", return_value=FakeSuggest()):
+            store = HistoryStore(str(Path(folder) / "joined.db"))
+            for quote in quotes:
+                plan = _plan(quote, {"tone": "healing", "emojis": [self.MENDING]})
+                with patch.object(ai_shorts, "_plan_flow_shots", return_value=plan):
+                    packages.append(ai_shorts.generate_ai_short(store, quote=quote, parts=1)["package"])
+        self.assertTrue(packages[0]["title"].endswith(f"{self.MENDING} #shorts"))
+        for package in packages:
+            self.assertIn(package["generation_quality"]["verdict"], {"GREEN", "YELLOW"}, package["title"])
 
     def test_a_negation_stays_in_its_sentence_and_no_one_is_a_subject(self):
         self.assertTrue(seo._affirmed(r"\blove\b", "it's not over. love will find you again"))
         self.assertTrue(seo._affirmed(r"\bhurts?\b", "no one hurts you like the ones you trust"))
         self.assertFalse(seo._affirmed(r"\blove\b", "i do not love you anymore"))
         self.assertFalse(seo._affirmed(r"\bhurts?\b", "it no longer hurts"))
+
+    def test_a_quote_that_denies_moving_on_or_its_future_is_not_moving_on(self):
+        for quote in ("I can't let go of the past, and I see no future without you.",
+                      "I'm not moving on, the past is my only future.",
+                      "I live in my past because I have no future."):
+            with self.subTest(quote=quote):
+                local = seo.quote_understanding(quote, {})
+                self.assertEqual(seo.ai_short_hashtags(None, quote)[-1], "#deepquotes")
+                self.assertNotIn("moving on quotes", local["search_themes"])
+                self.assertFalse({"🌱", "🌿"} & set(seo.emoji_candidates(local, quote)))
+                heartbroken = seo.quote_understanding(quote, {"creative_direction": {"tone": "heartbroken"}})
+                self.assertEqual(seo.ai_short_hashtags({"ai_shorts": heartbroken}, quote)[-1], "#heartbreak")
+                self.assertNotIn("moving on quotes", heartbroken["search_themes"])
+        # A past set against a future still reads as moving on.
+        local = seo.quote_understanding(FUTURE, {})
+        self.assertEqual(seo.ai_short_hashtags(None, FUTURE)[-1], "#movingon")
+        self.assertIn("moving on quotes", local["search_themes"])
+        self.assertEqual(seo.emoji_candidates(local, FUTURE)[0], "🌱")
 
 
 if __name__ == "__main__":

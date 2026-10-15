@@ -29,11 +29,10 @@ import time
 from typing import Any
 
 from win_engine.analysis.creator_brief import build_creator_brief
-from win_engine.analysis.generation_quality import title_emojis
 from win_engine.analysis.research_insights import build_research_decision
 from win_engine.feedback.ai_shorts_store import AiShortsStore
 from win_engine.feedback.history_store import HistoryStore
-from win_engine.generation.ai_shorts_seo import quote_understanding, repeated_emoji, verify_subject_tags
+from win_engine.generation.ai_shorts_seo import emoji_bases, quote_understanding, repeated_emoji, verify_subject_tags
 from win_engine.generation.seo_generator import generate_seo_suggestions
 from win_engine.generation.strategy_engine import _titles_of_other_videos as titles_of_other_videos
 from win_engine.llm import gemini_client
@@ -147,7 +146,7 @@ def prepare_tags(
         # fits: 🌅 led four of sixteen in a row.
         recent_emojis = [
             emoji for row in AiShortsStore(history).plans(RECENT_EMOJI_TITLES)
-            for emoji in title_emojis(str(row.get("package_title") or ""))
+            for emoji in emoji_bases(str(row.get("package_title") or ""))
         ]
     except Exception as exc:  # History is read for styling only; never worth the package
         logger.warning("Recent titles could not be read for the AI Shorts emoji: %s", type(exc).__name__)
