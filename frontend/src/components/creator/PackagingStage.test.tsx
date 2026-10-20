@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PackagingStage } from "./PackagingStage";
 import { BREAKDOWN } from "@/test/fixtures/opportunity";
@@ -58,5 +58,58 @@ describe("PackagingStage opportunity score", () => {
     expect(card.getByText("No input confidence")).toBeInTheDocument();
     await userEvent.click(card.getByRole("button", { name: /why this score/i }));
     expect(card.getByText("No competitor results were available.")).toBeInTheDocument();
+  });
+});
+
+function renderWithQuality(generation_quality: AnalyzeResponse["generation_quality"]) {
+  const data = { generation_quality } as AnalyzeResponse;
+  return render(
+    <PackagingStage data={data} options={[OPTION]} chosen={null} selectionStatus="unrecorded" onSelect={() => undefined} />,
+  );
+}
+
+describe("PackagingStage quality verdict", () => {
+  it("shows a RED verdict with its reasons above the copy controls, which stay but are marked", () => {
+    renderWithQuality({
+      status: "fail",
+      passed: false,
+      verdict: "RED",
+      issues: [
+        { code: "no_acceptable_title", field: "titles", severity: "error", message: "No title candidate passed the local quality gate." },
+      ],
+      warnings: [],
+    });
+    const banner = within(screen.getByRole("alert", { name: "Package quality verdict" }));
+    expect(banner.getByText("Failed quality check")).toBeInTheDocument();
+    expect(banner.getByText(/not ready to upload/)).toBeInTheDocument();
+    expect(banner.getByText("No title candidate passed the local quality gate.")).toBeInTheDocument();
+
+    const card = within(screen.getByTestId("package-card"));
+    expect(card.getByText("Not upload-ready")).toBeInTheDocument();
+    expect(card.getByText(/fix the notes above before copying/)).toBeInTheDocument();
+    expect(card.getByRole("button", { name: /copy all/i })).toBeInTheDocument();
+  });
+
+  it("shows a YELLOW verdict's warnings, which the per-title status does not carry", () => {
+    renderWithQuality({
+      status: "pass",
+      passed: true,
+      verdict: "YELLOW",
+      issues: [],
+      warnings: ["Only 2 materially distinct title alternative(s) passed; the result was not padded."],
+    });
+    const banner = within(screen.getByRole("status", { name: "Package quality verdict" }));
+    expect(banner.getByText("Quality check: review warnings")).toBeInTheDocument();
+    expect(banner.getByText(/Only 2 materially distinct title alternative/)).toBeInTheDocument();
+    expect(screen.queryByText("Not upload-ready")).not.toBeInTheDocument();
+  });
+
+  it("never reads a missing verdict as a pass, and treats a failed status without one as RED", () => {
+    const { unmount } = renderWithQuality(undefined);
+    expect(screen.getByRole("status", { name: "Package quality verdict" })).toHaveTextContent("Quality not checked");
+    unmount();
+
+    renderWithQuality({ status: "fail", passed: false, issues: ["Description is empty."] });
+    expect(screen.getByRole("alert", { name: "Package quality verdict" })).toHaveTextContent("Failed quality check");
   });
 });

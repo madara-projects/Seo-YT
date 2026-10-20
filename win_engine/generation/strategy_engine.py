@@ -432,6 +432,8 @@ def build_seo_package(
     learning_summary = history_store.learning_summary()
     internal_scorecard = history_store.internal_scorecard()
 
+    # Recorded before refinement and the final gate; generate_seo_suggestions
+    # removes this run again when the package stage fails after this point.
     history_run_id = history_store.record_analysis_run(
         query=script,
         intent=intent,

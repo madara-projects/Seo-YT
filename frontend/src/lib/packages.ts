@@ -49,15 +49,26 @@ function selectedLanguagePackage(
   };
 }
 
+/**
+ * A finite score from a number or a numeric string; null for anything else.
+ * `Number(null)` is 0, so a missing score must never go through `Number()`
+ * first: an unscored title would then read as "0 / 10".
+ */
+function finiteScore(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
 /** Title-quality score, or null when the backend did not score this title. */
 export function titleScore(data: AnalyzeResponse, title: string): number | null {
-  const scored = asArray<{ title?: string; score?: number }>(data.title_optimization?.scored_variants);
+  const scored = asArray<{ title?: string; score?: number | null }>(data.title_optimization?.scored_variants);
   const match = scored.find((item) => normalizeTitle(item?.title) === normalizeTitle(title));
-  if (match && Number.isFinite(Number(match.score))) return Number(match.score);
+  const matched = finiteScore(match?.score);
+  if (matched !== null) return matched;
 
   if (normalizeTitle(data.title) === normalizeTitle(title)) {
-    const value = data.ctr_prediction?.title_quality_score;
-    if (Number.isFinite(Number(value))) return Number(value);
+    return finiteScore(data.ctr_prediction?.title_quality_score);
   }
   return null;
 }

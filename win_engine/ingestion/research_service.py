@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Any
+from typing import Any, Iterator
 
 from win_engine.analysis.entity_extractor import extract_entity_signals
 from win_engine.analysis.generation_quality import is_short_content
@@ -58,6 +60,34 @@ _WRITER_RESERVE_WARNING = (
     "Semantic research stopped before a usable Gemini answer: this request's remaining calls were left to the "
     "writer, so the searches came from the brief's own words."
 )
+# One YouTube search in flight per cache key in this process. Routes build a
+# service per request, so the registry lives here: each entry is the key's own
+# lock and how many requests hold or wait for it, dropped with the last one.
+_FLIGHTS: dict[str, tuple[threading.Lock, int]] = {}
+_FLIGHTS_LOCK = threading.Lock()
+
+
+@contextmanager
+def _single_flight(key: str) -> Iterator[None]:
+    """Hold ``key``'s own lock for the block; the registry lock is held only to find it.
+
+    Two identical requests that miss the cache at once used to each pay for
+    the same search. The second now waits for the first and reads its answer.
+    """
+
+    with _FLIGHTS_LOCK:
+        lock, holders = _FLIGHTS.get(key) or (threading.Lock(), 0)
+        _FLIGHTS[key] = (lock, holders + 1)
+    try:
+        with lock:
+            yield
+    finally:
+        with _FLIGHTS_LOCK:
+            lock, holders = _FLIGHTS[key]
+            if holders > 1:
+                _FLIGHTS[key] = (lock, holders - 1)
+            else:
+                del _FLIGHTS[key]
 
 
 def _search_duration(short_form: bool, creator_brief: dict[str, Any] | None) -> str | None:
@@ -368,34 +398,41 @@ class ResearchService:
             # query's own policy sets how long it is kept.
             answer_key, page_key = f"yt:{digest}", f"yt:page:{digest}"
             ttl_seconds = self._select_cache_policy(query)[1]
-            entry = self._cache.get(answer_key)  # {"rows": [...]}, an empty answer included
-            page = None if entry else self._cache.get(page_key)
-            if entry:
-                results, status = entry["rows"], "success"
-            else:
-                # A page kept after a failed statistics lookup costs only the
-                # two 1-unit lookups again, not another search.
-                results = (
-                    self._youtube.attach_statistics(page["rows"]) if page
-                    else self._youtube.search_videos(query, max_results, video_duration=video_duration, **locale) or []
-                )
-                attempt["warning"] = self._youtube.runtime_state().get("warning")
-                # A key rotation's note is no failure: the next key answered, an empty page included.
-                failed = bool(attempt["warning"]) and not str(attempt["warning"]).endswith("switched to next key.")
-                complete = [row for row in results if row.get("captured_at")]
-                status = (
-                    "failed" if failed and not results
-                    else "partial" if len(complete) < len(results)
-                    else "success"
-                )
-                # Rows whose statistics lookup failed stay out of the answer, where
-                # their gaps would pass for real numbers for days; their search
-                # page is kept on its own. An empty answer is cached so the query
-                # is not paid for again.
-                if status != "failed" and (complete or not results):
-                    self._cache.set(answer_key, {"rows": complete}, ttl_seconds=ttl_seconds)
-                elif results and not page:
-                    self._cache.set(page_key, {"rows": results}, ttl_seconds=ttl_seconds)
+            # The lookup and its caching run one request at a time per key, so
+            # a second identical request waits for the first's answer.
+            with _single_flight(digest):
+                entry = self._cache.get(answer_key)  # {"rows": [...]}, an empty answer included
+                page = None if entry else self._cache.get(page_key)
+                if entry:
+                    results, status = entry["rows"], "success"
+                else:
+                    # A page kept after a failed statistics lookup costs only the
+                    # two 1-unit lookups again, not another search.
+                    results = (
+                        self._youtube.attach_statistics(page["rows"]) if page
+                        else self._youtube.search_videos(
+                            query, max_results, video_duration=video_duration, **locale,
+                        ) or []
+                    )
+                    attempt["warning"] = self._youtube.runtime_state().get("warning")
+                    # A key rotation's note is no failure: the next key answered, an empty page included.
+                    failed = bool(attempt["warning"]) and not str(attempt["warning"]).endswith("switched to next key.")
+                    complete = [row for row in results if row.get("captured_at")]
+                    status = (
+                        "failed" if failed and not results
+                        else "partial" if len(complete) < len(results)
+                        else "success"
+                    )
+                    # Only a complete answer is cached as one, an empty answer
+                    # included so the query is not paid for again. A partial page
+                    # used to be cached as its complete rows alone, so the next run
+                    # reported success and never asked for the missing statistics.
+                    # Its page is kept instead: the next run repeats only the
+                    # 1-unit statistics lookups and stays partial until they answer.
+                    if status == "success":
+                        self._cache.set(answer_key, {"rows": results}, ttl_seconds=ttl_seconds)
+                    elif results and not page:
+                        self._cache.set(page_key, {"rows": results}, ttl_seconds=ttl_seconds)
             attempt.update({
                 "cache": "hit" if entry else "search_page" if page else "miss",
                 "result_count": len(results),
@@ -433,8 +470,8 @@ class ResearchService:
                 "of any length for long form unless its stated length sits well inside YouTube's medium or long band, "
                 "plus one videos.list and one channels.list call of 1 unit each for the page's statistics. "
                 "Queries without a searchable word are skipped. Results with complete statistics are cached "
-                "in Redis when configured, otherwise in this process's memory. A search whose statistics lookup "
-                "failed is kept, so a later run repeats only the 1-unit statistics lookups."
+                "in Redis when configured, otherwise in this process's memory. A search with any result short of "
+                "its statistics is kept as a page, so a later run repeats only the 1-unit statistics lookups."
             ),
         }
 

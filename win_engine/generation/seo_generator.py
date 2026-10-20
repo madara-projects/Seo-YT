@@ -109,7 +109,33 @@ def generate_seo_suggestions(
     research: dict[str, object],
     context: dict[str, Any] | None = None,
 ) -> Dict[str, object]:
-    """Generate first-pass SEO suggestions from local research signals."""
+    """Generate first-pass SEO suggestions from local research signals.
+
+    The writer stage records its run before refinement and the final gate
+    have judged the package, so a failure after that point left an
+    intermediate package in History (a forced refinement failure left one
+    saved run). A run recorded by a stage that then fails is removed again,
+    as the AI Shorts stage already does for its own runs.
+    """
+    history_store = research.get("history_store")
+    if not isinstance(history_store, HistoryStore):
+        raise ValueError("History store missing from research payload.")
+    with history_store.recording_runs() as recorded:
+        try:
+            return _generate_seo_suggestions(script, research, context)
+        except Exception:
+            if recorded:
+                logger.exception("The package stage failed; its History runs %s are removed.", recorded)
+                history_store.delete_analysis_runs(recorded)
+            raise
+
+
+def _generate_seo_suggestions(
+    script: str,
+    research: dict[str, object],
+    context: dict[str, Any] | None = None,
+) -> Dict[str, object]:
+    """The package stage proper; generate_seo_suggestions removes its History run when it fails."""
 
     # The creator's words reach analysis, the prompts and History as written.
     # Rewriting risky phrases here turned "never install a mod apk" into
@@ -257,13 +283,13 @@ def generate_seo_suggestions(
     # scoped creator preference before final validation and History persistence.
     # Only the AI Shorts page sets this title style; every Creator package skips both branches.
     ai_short = short_form and str((creator_brief or {}).get("title_style") or "").startswith("ai_shorts:")
+    from win_engine.generation import ai_shorts_seo
+
     if ai_short:
         # The AI Shorts package follows the quote's reading: titles end with an
         # emoji of its tone (the whole quote leads when it fits), the tags are
         # the theme phrases viewers search, and the hashtags name its feeling.
         # The final gate below judges all of it, so its verdict is current.
-        from win_engine.generation import ai_shorts_seo
-
         recent = channel_learning.get("recent_titles") or []
         ordered_titles = ai_shorts_seo.order_titles(
             [locked_title, *locked_variants], short_quote, creator_brief, recent)
@@ -312,8 +338,11 @@ def generate_seo_suggestions(
         # without enough specific subject tags is not GREEN, and its exact-quote
         # title may run to about 90 characters (see ai_shorts_seo.finalize_gate).
         final_gate = ai_shorts_seo.finalize_gate(final_gate, locked_title, locked_tags, short_quote)
-        # The writer stage's trace recorded its own tags, before the AI Shorts tag step.
-        ai_shorts_seo.sync_trace(trace, locked_tags, keyword_research)
+    # The writer stage's trace recorded its own tags. Refinement, the risk
+    # filter and the final gate trim them afterwards (a Creator run delivered
+    # five tags beside seven in its trace) and the AI Shorts tag step replaces
+    # them, so every path rewrites the trace to the tags this package delivers.
+    ai_shorts_seo.sync_trace(trace, locked_tags, keyword_research)
     # The writer stage records its own verdict under this key; the package the
     # creator receives is the one judged here, after tag selection and refinement.
     trace["writer_quality_verdict"] = trace.get("final_quality_verdict")

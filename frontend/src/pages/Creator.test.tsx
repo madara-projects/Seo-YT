@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import CreatorPage from "./Creator";
 import { mutationKeys } from "@/hooks/queryKeys";
+import { resetSaveQueues } from "@/lib/saveQueue";
 import { creatorFormDefaults, type CreatorFormValues } from "@/schemas/creator";
 import type { AnalyzeResponse } from "@/api/types";
 
@@ -98,6 +99,8 @@ async function renderResults(route = "/creator", result: AnalyzeResponse = RESUL
 
 beforeEach(() => {
   localStorage.clear();
+  // The save queue outlives the page, as it does in the app; each test starts it afresh.
+  resetSaveQueues();
   pendingSaves = [];
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
@@ -423,6 +426,31 @@ describe("Creator results", () => {
     expect(await screen.findByText("Selection saved")).toBeInTheDocument();
     expect(screen.getByTestId("select-package-b")).toHaveTextContent(/^Selected$/);
     expect(screen.getByTestId("select-package-a")).toHaveTextContent(/^Select$/);
+  });
+
+  it("keeps the save order when the creator leaves mid-save and chooses again on return", async () => {
+    const user = userEvent.setup();
+    const client = await clientWithResult(RESULT);
+    const first = renderWith(client, "/creator?tab=compare");
+
+    await user.click(await screen.findByTestId("select-package-a"));
+    await waitFor(() => expect(saves()).toHaveLength(1));
+    // Leaves the page with the save still in flight, then comes back.
+    first.unmount();
+    renderWith(client, "/creator?tab=compare");
+
+    await user.click(await screen.findByTestId("select-package-b"));
+    // The newer choice waits for the older request rather than racing it.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(saves()).toHaveLength(1);
+    pendingSaves.shift()!();
+
+    await waitFor(() => expect(saves()).toHaveLength(2));
+    expect(saves().map((body) => body.package_id)).toEqual(["package-a", "package-b"]);
+    pendingSaves.shift()!();
+
+    expect(await screen.findByText("Selection saved")).toBeInTheDocument();
+    expect(screen.getByTestId("select-package-b")).toHaveTextContent(/^Selected$/);
   });
 
   it("shows how the tags were chosen under Research and insights", async () => {

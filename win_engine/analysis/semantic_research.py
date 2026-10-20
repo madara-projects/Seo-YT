@@ -339,10 +339,19 @@ def _validated_concept_evidence(
         phrase_is_present = bool(phrase and phrase.casefold() in source_folded)
         phrase_overlap = len(phrase_tokens & source_tokens) / max(len(phrase_tokens), 1)
         key = concept.casefold()
+        concept_tokens = _ground_tokens(concept) or set(unicode_words(concept, min_length=1))
         if (
             not concept or key in seen or relationship not in _EVIDENCE_RELATIONSHIPS
             or not phrase_tokens or (not phrase_is_present and phrase_overlap < 0.85)
             or _introduces_unsupported_context(concept, source)
+            # A citation that exists proves the creator's phrase, not the
+            # reading of it: "cryptocurrency investing" cited "Small steps
+            # every day build lasting strength" as its metaphor. The concept's
+            # own words must share a root with the creator's, unless it is a
+            # direct reading or paraphrase of one phrase within the source.
+            or not _reading_is_grounded(
+                concept_tokens, source_tokens or set(unicode_words(source, min_length=1)), relationship, phrase_tokens
+            )
         ):
             continue
         phrase_folded = phrase.casefold()
@@ -362,6 +371,66 @@ def _introduces_unsupported_context(concept: str, source: str) -> bool:
     source_words = set(unicode_words(source, min_length=1))
     concept_words = set(unicode_words(concept, min_length=1))
     return bool((concept_words & _SOURCE_ONLY_CONTEXT_TERMS) - source_words)
+
+
+def _word_root(word: str) -> str:
+    """Small deterministic inflection bridge ("changing" -> "chang", "steps" -> "step"); not synonyms."""
+
+    word = str(word or "").casefold()
+    if len(word) > 5 and word.endswith("ing"):
+        word = word[:-3]
+        if len(word) > 2 and word[-1:] == word[-2:-1]:
+            word = word[:-1]
+    elif len(word) > 4 and word.endswith("ied"):
+        word = word[:-3] + "y"
+    elif len(word) > 4 and word.endswith("ed"):
+        word = word[:-1] if word[-2:-1] == "e" else word[:-2]
+    elif len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    return word
+
+
+def _reading_is_grounded(
+    concept_tokens: set[str], source_tokens: set[str], relationship: str, phrase_tokens: set[str]
+) -> bool:
+    """Whether a concept is the creator's own, not a reading laid over the source.
+
+    A concept that shares a root with the source is grounded. Otherwise only a
+    reading of one phrase *within* the source passes ("nostalgia" for "wish I
+    could go back", "knowing your worth" for "slipped through the hands"): that
+    bridge is what semantic research exists for. A reading that cites the whole
+    source as a metaphor for something else ("cryptocurrency investing" for
+    "Small steps every day build lasting strength") does not: a citation of
+    everything anchors nothing in particular.
+    """
+
+    if _shares_source_root(concept_tokens, source_tokens):
+        return True
+    return relationship in _EVIDENCE_RELATIONSHIPS and bool(phrase_tokens) and phrase_tokens < source_tokens
+
+
+def _shares_source_root(words: set[str], anchors: set[str]) -> bool:
+    """Whether any of the words, or an inflection of one, is a creator word.
+
+    "changing" (chang) meets "change"; "investing" meets nothing in a quote
+    about small steps, however well its citation reads. A Tamil source is
+    met by sound, as in _grounded.
+    """
+
+    if not words or not anchors:
+        return False
+    anchor_roots = {_word_root(anchor) for anchor in anchors}
+    for root in {_word_root(word) for word in words}:
+        if root in anchor_roots:
+            return True
+        if len(root) >= 5 and any(
+            len(anchor) >= 5 and (anchor.startswith(root) or root.startswith(anchor)) for anchor in anchor_roots
+        ):
+            return True
+    if any(has_tamil(anchor) for anchor in anchors):
+        keys = phonetic_keys(anchors)
+        return any(phonetic_match(word, keys) for word in words)
+    return False
 
 
 def _ground_tokens(value: str) -> set[str]:

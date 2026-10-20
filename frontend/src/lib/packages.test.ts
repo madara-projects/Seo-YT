@@ -158,6 +158,27 @@ describe("titleScore", () => {
   it("returns null rather than zero when unscored", () => {
     expect(titleScore(baseResponse(), "Unknown title")).toBeNull();
   });
+
+  it("returns null, not 0, when the backend sent a null score", () => {
+    const nullVariant = baseResponse({
+      title_optimization: { scored_variants: [{ title: "Primary title", score: null }] },
+    });
+    expect(titleScore(nullVariant, "Primary title")).toBeNull();
+
+    const nullCtr = baseResponse({ ctr_prediction: { title_quality_score: null } });
+    expect(titleScore(nullCtr, "Primary title")).toBeNull();
+    expect(buildPackageOptions(nullCtr)[0]?.titleQualityScore).toBeNull();
+  });
+
+  it("keeps a real zero and a numeric string", () => {
+    const zero = baseResponse({ ctr_prediction: { title_quality_score: 0 } });
+    expect(titleScore(zero, "Primary title")).toBe(0);
+
+    const text = baseResponse({
+      title_optimization: { scored_variants: [{ title: "Primary title", score: "6.5" as unknown as number }] },
+    });
+    expect(titleScore(text, "Primary title")).toBe(6.5);
+  });
 });
 
 describe("copyValue", () => {

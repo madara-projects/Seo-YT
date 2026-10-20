@@ -571,11 +571,28 @@ def _score(candidate: dict[str, Any], results: list[dict[str, Any]], queries: li
         and not _evidence_count(text, results) and candidate.get("demand_rank") is None
     )
     if semantic_evidence and not unconfirmed:
-        source_support_score = max(source_support_score, 85)
-        source_support = (
-            f"validated {semantic_evidence.get('relationship', 'semantic')} interpretation of creator phrase: "
-            f"{semantic_evidence.get('source_phrase', '')}"
-        )[:300]
+        # The same rule as semantic_research._reading_is_grounded: a reading of
+        # one phrase within the source ("nostalgia" for "wish I could go back")
+        # is grounded without a shared word; one that cites the whole source
+        # as a metaphor for something else is not.
+        cited = set(_tokens(semantic_evidence.get("source_phrase")))
+        # Measured against the quote itself when there is one: the brief adds
+        # words around a quote, so a citation of the whole quote would otherwise
+        # look like a sub-span of the source.
+        whole = set(_tokens(quote)) or set(source_terms)
+        grounded = _shares_source_root(text, source_terms) or (bool(cited) and cited < whole)
+        if grounded:
+            source_support_score = max(source_support_score, 85)
+            source_support = (
+                f"validated {semantic_evidence.get('relationship', 'semantic')} interpretation of creator phrase: "
+                f"{semantic_evidence.get('source_phrase', '')}"
+            )[:300]
+        else:
+            # The citation proves the creator's phrase exists, not that this
+            # reading of it is theirs: "cryptocurrency investing" cited a quote
+            # about small steps as its metaphor and shipped with 85 support.
+            source_support_score = min(source_support_score, 40)
+            source_support = "interpretation shares no word with the creator source"
     if "research_discovery" in (candidate.get("sources") or []) and source_support_score < 70:
         return None
     content_relevance = max(
@@ -1170,11 +1187,55 @@ def _source_support(text: str, source_terms: set[str]) -> tuple[int, str]:
     ratio = len(matched) / len(words)
     if ratio >= 1.0:
         return 100, "direct creator-source support"
+    # A product phrase names one variant. "samsung galaxy s24 ultra" shared
+    # three words with a Galaxy S24 source and passed; the qualifier the
+    # source never mentions makes it a different product, so a phrase with a
+    # model token gets no partial credit.
+    if any(_model_token(word, matched - {word}) for word in words):
+        return min(int(round(ratio * 100)), 40), "unsupported product qualifier"
     # Support is the share of the phrase the creator's source contains. Word
     # lists written for particular test scripts ("feeling forgotten" for
     # "erased", "know your worth", tcp/udp, keyboards) granted support to any
     # source that shared one word with them.
     return int(round(ratio * 100)), "partial creator-source overlap"
+
+
+def _model_token(word: str, other_matched: set[str]) -> bool:
+    """A model-number token: "s24", "rtx4070", or a multi-digit number beside a supported word ("iphone 15").
+
+    A one-digit count ("5 habits") is a list, not a product.
+    """
+
+    if not any(char.isdigit() for char in word):
+        return False
+    if any(char.isalpha() for char in word):
+        return True
+    return len(word) >= 2 and bool(other_matched)
+
+
+def _shares_source_root(text: str, source_terms: set[str]) -> bool:
+    """Whether any meaningful word of the phrase, or an inflection of one, is a creator word.
+
+    "changing" (chang) meets "change"; "investing" meets nothing in a quote
+    about small steps, however well its citation reads.
+    """
+
+    words = _tokens(text)
+    if not words or not source_terms:
+        return False
+    source_roots = {_term_root(term) for term in source_terms}
+    for word in words:
+        root = _term_root(word)
+        if word in source_terms or root in source_roots:
+            return True
+        if len(root) >= 5 and any(
+            len(source) >= 5 and (source.startswith(root) or root.startswith(source)) for source in source_roots
+        ):
+            return True
+        if len(word) >= 7 and any(_same_long_stem(word, source) for source in source_terms if len(source) >= 7):
+            return True
+    keys = _cross_script_keys(source_terms)
+    return bool(keys) and any(_sounds_grounded(word, keys) for word in words)
 
 
 def _result_relevant(row: dict[str, Any], content_terms: set[str]) -> bool:

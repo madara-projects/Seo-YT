@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useMutationState, type MutationStatus } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
@@ -24,6 +24,7 @@ import { mutationKeys } from "@/hooks/queryKeys";
 import { useUrlState } from "@/hooks/useUrlState";
 import { apiErrorMessage, apiRequestId, formatApiError } from "@/api/client";
 import { buildPackageOptions, researchHasEvidence } from "@/lib/packages";
+import { queueSave } from "@/lib/saveQueue";
 import {
   RESULT_TABS,
   STAGE_TO_TAB,
@@ -176,6 +177,13 @@ export default function CreatorPage() {
   const checklist =
     checks && chosen && checks.run === runKey && checks.optionId === chosen.id ? checks.state : freshChecklist();
 
+  // Switching packages starts the checklist afresh, as the Publish tab says:
+  // the answers are forgotten, not kept for a return to the earlier package.
+  const chosenId = chosen?.id ?? null;
+  useEffect(() => {
+    setChecks((prior) => (prior && (prior.run !== runKey || prior.optionId !== chosenId) ? null : prior));
+  }, [runKey, chosenId]);
+
   const researchStatus: ResearchStatus = isPending
     ? "loading"
     : failure
@@ -192,18 +200,16 @@ export default function CreatorPage() {
     analyze.mutate(values);
   });
 
-  // Saves run one after another, so the last click is also the last write;
-  // only the newest click reports its outcome.
-  const saveChain = useRef<Promise<unknown>>(Promise.resolve());
-  const saveSeq = useRef(0);
-
+  // Saves run one after another per saved run, so the last click is also the
+  // last write; only the newest click reports its outcome. The queue lives
+  // outside this component: leaving the page mid-save and choosing again on
+  // return must not let the older request land last.
   const handleSelect = useCallback(
     (optionId: string) => {
       const option = options.find((item) => item.id === optionId);
       // A title-only alternative has no server package to record.
       if (!option?.packageId || runKey === null) return;
       const packageId = option.packageId;
-      const seq = ++saveSeq.current;
 
       if (!runId) {
         setChoice({ run: runKey, optionId, status: "error" });
@@ -212,16 +218,13 @@ export default function CreatorPage() {
       }
 
       setChoice({ run: runKey, optionId, status: "saving" });
-      const save = saveChain.current
-        .catch(() => undefined)
-        .then(() => saveSelection({ runId, packageId }));
-      saveChain.current = save;
-      save.then(
+      const save = queueSave(runId, () => saveSelection({ runId, packageId }));
+      save.result.then(
         () => {
-          if (seq === saveSeq.current) setChoice({ run: runKey, optionId, status: "saved" });
+          if (save.isLatest()) setChoice({ run: runKey, optionId, status: "saved" });
         },
         (error: unknown) => {
-          if (seq !== saveSeq.current) return;
+          if (!save.isLatest()) return;
           setChoice({ run: runKey, optionId, status: "error" });
           toast.error(formatApiError(error, "Package selection could not be saved."));
         },

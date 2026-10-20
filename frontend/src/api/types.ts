@@ -97,7 +97,7 @@ export interface ThumbnailIntelligence {
 }
 
 export interface TitleOptimization {
-  scored_variants?: { title?: string; score?: number }[];
+  scored_variants?: { title?: string; score?: number | null }[];
 }
 
 export interface UploadTiming {
@@ -212,6 +212,9 @@ export interface GenerationQuality {
   status?: string;
   passed?: boolean;
   repairable?: boolean;
+  /** The whole package's verdict: RED is not upload-ready, YELLOW is usable with notes. */
+  verdict?: "GREEN" | "YELLOW" | "RED" | string;
+  /** Strings or `{code, field, severity, message}` notes; an issue fails the package, a warning does not. */
   issues?: unknown[];
   warnings?: unknown[];
   accepted_candidates?: { title?: string; mechanism?: string; source?: string }[];

@@ -68,6 +68,26 @@ def analyze_opportunity_gaps(
                             "recommended_action": "Re-run research when YouTube results are available before making a go/no-go call."}
         viability_verdict = {"status": "unknown", "proceed": True,
                              "summary": "Viability could not be judged without public YouTube results."}
+    elif not competition.get("measured", True):
+        # Five titles with no counts and six keyword gaps read as "45 / WORKABLE"
+        # beside an UNDERSERVED competition. The warnings said the statistics
+        # were missing; the headline did not.
+        unverified = (
+            f"Channel size was unavailable for {competition.get('unknown_channel_size_count')} of the "
+            f"{len(youtube_results)} sampled result(s), so competition could not be measured and the "
+            "opportunity score is unverified."
+        )
+        breakdown = opportunity_score["breakdown"]
+        opportunity_score = {**opportunity_score, "label": "UNVERIFIED", "confidence": "LOW", "measured": False,
+                             "reason": unverified,
+                             "breakdown": {**breakdown, "confidence": "low",
+                                           "confidence_reason": f"{unverified} {breakdown['confidence_reason']}",
+                                           "warnings": [unverified, *breakdown["warnings"]]}}
+        idea_kill_switch = {**idea_kill_switch, "proceed": True, "status": "insufficient_evidence",
+                            "reason": unverified + " This is not a verdict on the idea.", "confidence": "none",
+                            "recommended_action": "Re-run research when channel and view counts are available before making a go/no-go call."}
+        viability_verdict = {"status": "unknown", "proceed": True,
+                             "summary": "Viability could not be judged: most sampled results had no channel statistics."}
 
     return {
         "keyword_gaps": keyword_gaps,
@@ -167,6 +187,7 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
             "score": 0,
             "label": "UNKNOWN",
             "reason": "No competitor data available.",
+            "measured": False,
         }
 
     sample = len(youtube_results)
@@ -201,7 +222,18 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
         score -= 5
     score = max(score, 0)
 
-    if score >= 70:
+    # Channel size is the statistic the meter counts. When more than half the
+    # sample has none, a low score says nothing was counted, not that the pocket
+    # is open: five titles with no counts used to read as UNDERSERVED.
+    measured = unknown_channel_sizes * 2 <= sample
+    if not measured:
+        label = "UNKNOWN"
+        score = 0
+        reason = (
+            f"Channel size was unavailable for {unknown_channel_sizes} of the {sample} sampled result(s), "
+            "so competition could not be measured. This is not a sign of an underserved topic."
+        )
+    elif score >= 70:
         label = "SATURATED"
         reason = "Large channels and repeated title openings suggest heavy competition."
     elif score >= 40:
@@ -210,13 +242,14 @@ def _competition_meter(youtube_results: list[dict[str, Any]], language_context: 
     else:
         label = "UNDERSERVED"
         reason = "There is still room to differentiate packaging and angle."
-    if unknown_channel_sizes:
+    if measured and unknown_channel_sizes:
         reason += f" Channel size was unavailable for {unknown_channel_sizes} result(s), so large channels may be undercounted."
 
     return {
         "score": round(score, 2),
         "label": label,
         "reason": reason,
+        "measured": measured,
         "confidence": "low",
         "evidence_state": "heuristic",
         "basis": (
@@ -323,7 +356,10 @@ def _opportunity_score(
         "score": score,
         "label": label,
         "confidence": breakdown["confidence"].upper(),
-        "reason": "Weighted from current view velocity, competition room, keyword gaps, small-channel breakouts, and research relevance.",
+        "reason": (
+            "Weighted from lifetime average views per day (total views since publication, not current momentum), "
+            "competition room, keyword gaps, small-channel breakouts, and research relevance."
+        ),
         # Every input describes the competitor sample, none the title: one score
         # per run, the same for every package option of that run.
         "scope": OPPORTUNITY_SCORE_SCOPE,

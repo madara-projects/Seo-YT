@@ -38,7 +38,7 @@ def _rounded(value: float | None, digits: int) -> float | None:
 
 
 def _build_opportunity_reasons(
-    views_per_day: float | None,
+    lifetime_views_per_day: float | None,
     views_per_subscriber: float | None,
     engagement_density: float | None,
     subscribers: int | None,
@@ -50,11 +50,20 @@ def _build_opportunity_reasons(
     if missing:
         reasons.append(f"Outlier score unavailable: no usable {' or '.join(missing)} for this video.")
 
-    if views_per_day is not None:
-        if views_per_day >= 1000:
-            reasons.append("Strong daily view velocity suggests current audience pull.")
-        elif views_per_day >= 250:
-            reasons.append("Steady daily view velocity shows the topic is moving.")
+    # Total views divided by days since publication is a lifetime average. It
+    # cannot show whether the video is attracting viewers now; it used to be
+    # described as "current audience pull".
+    if lifetime_views_per_day is not None:
+        if lifetime_views_per_day >= 1000:
+            reasons.append(
+                f"Strong average of {lifetime_views_per_day:,.0f} views per day since publication "
+                "(lifetime, not current)."
+            )
+        elif lifetime_views_per_day >= 250:
+            reasons.append(
+                f"Steady average of {lifetime_views_per_day:,.0f} views per day since publication "
+                "(lifetime, not current)."
+            )
 
     if views_per_subscriber is not None:
         if views_per_subscriber >= 5:
@@ -101,7 +110,8 @@ def score_outliers(youtube_results: List[dict[str, Any]]) -> List[dict[str, Any]
         days_live = _days_since(result.get("published_at"), result.get("captured_at"))
         length = duration_seconds(result.get("duration"))
 
-        views_per_day = views / days_live if views is not None and days_live is not None else None
+        # Lifetime average: total views over days since publication, not current momentum.
+        lifetime_views_per_day = views / days_live if views is not None and days_live is not None else None
         # Zero subscribers gives no ratio at all, rather than one against a single subscriber.
         views_per_subscriber = views / subscribers if views is not None and subscribers else None
         length_normalization = 1.2 if length is not None and 60 <= length <= 1200 else 0.95 if length else 1.0
@@ -122,7 +132,7 @@ def score_outliers(youtube_results: List[dict[str, Any]]) -> List[dict[str, Any]
             recency_multiplier = 2.0 if days_live <= 7 else 1.5 if days_live <= 30 else 1.15
             repeatability_multiplier = 1.25 if subscribers <= 10000 else 1.0
             outlier_score = (
-                views_per_day
+                lifetime_views_per_day
                 * views_per_subscriber
                 * max(engagement_density or 0.0, 0.05)
                 * recency_multiplier
@@ -132,7 +142,11 @@ def score_outliers(youtube_results: List[dict[str, Any]]) -> List[dict[str, Any]
         scored.append(
             {
                 **result,
-                "views_per_day": _rounded(views_per_day, 2),
+                # Older name for lifetime_views_per_day, kept for existing readers
+                # (the gap engine, the frontend and tests); it never measured
+                # current momentum.
+                "views_per_day": _rounded(lifetime_views_per_day, 2),
+                "lifetime_views_per_day": _rounded(lifetime_views_per_day, 2),
                 "views_per_subscriber": _rounded(views_per_subscriber, 2),
                 "engagement_density": _rounded(engagement_density, 4),
                 # Older name for engagement_density, kept for existing readers; it
@@ -145,7 +159,7 @@ def score_outliers(youtube_results: List[dict[str, Any]]) -> List[dict[str, Any]
                 "regional_weight": 1.0,
                 "small_channel_outlier": bool(subscribers and views is not None and subscribers <= 10000 and views >= 100000),
                 "opportunity_reasons": _build_opportunity_reasons(
-                    views_per_day=views_per_day,
+                    lifetime_views_per_day=lifetime_views_per_day,
                     views_per_subscriber=views_per_subscriber,
                     engagement_density=engagement_density,
                     subscribers=subscribers,

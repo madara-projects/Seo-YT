@@ -1557,6 +1557,14 @@ def _final_semantic_quality(
     duration_issues = title_duration_issues(title, source) if title else []
     if fluency_issues or duration_issues:
         title_score = min(title_score, 35.0)
+    # Overlap cannot tell "poor camera" from "excellent camera" either: copy
+    # that reverses a source fact (a negation, a number, a quality) is capped
+    # and reported as a critical issue below.
+    contradictions = factual_contradictions(source, title, description) if source_overlap_supported else []
+    if any(item["field"] == "title" for item in contradictions):
+        title_score = min(title_score, 35.0)
+    if any(item["field"] == "description" for item in contradictions):
+        description_score = min(description_score, 35.0)
     # Search usefulness: the strongest validated search phrase should appear in
     # the title, ideally in its first few words where it is never truncated.
     primary_phrase = primary_search_phrase(tag_evidence)
@@ -1634,6 +1642,7 @@ def _final_semantic_quality(
         ))
     if duration_issues:
         critical.append(_issue(duration_issues[0]["code"], "title", duration_issues[0]["message"]))
+    critical.extend(contradictions)
     if accepted and "title_score" not in not_measured and title_score < 55:
         critical.append(_issue("low_title_usefulness", "title", "Title is too weakly anchored to the supplied source."))
     if placement == "missing":
@@ -2175,3 +2184,254 @@ def _ends_quote_phrase(title: Any, quote: Any) -> bool:
 
 def _has_latin_or_tamil(text: str) -> bool:
     return bool(re.search(r"[A-Za-z\u0B80-\u0BFF]", text))
+
+
+# ---------------------------------------------------------------------------
+# Factual agreement. Word overlap cannot tell "poor camera" from "excellent
+# camera", "six hours" from "twenty hours", or "not supported" from
+# "supported": each pair shares its words. These local checks read the source
+# and the copy for those three contradiction shapes and report each one as a
+# critical issue, so a package that reverses the creator's facts is never GREEN.
+
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+    "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100,
+}
+_TENS_WORDS = {"twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
+# Units a number is read with, each mapped to one spelling.
+_CLAIM_UNITS = {
+    "hour": "hour", "hours": "hour", "hr": "hour", "hrs": "hour",
+    "minute": "minute", "minutes": "minute", "min": "minute", "mins": "minute",
+    "second": "second", "seconds": "second", "sec": "second", "secs": "second",
+    "day": "day", "days": "day", "week": "week", "weeks": "week", "month": "month", "months": "month",
+    "year": "year", "years": "year", "percent": "percent", "%": "percent",
+    "gb": "gb", "mb": "mb", "tb": "tb", "mp": "mp", "mah": "mah", "watt": "watt", "watts": "watt",
+    "km": "km", "kg": "kg", "mm": "mm", "cm": "cm", "inch": "inch", "inches": "inch",
+    "fps": "fps", "hz": "hz", "mbps": "mbps", "gbps": "gbps",
+    "rupee": "rupee", "rupees": "rupee", "rs": "rupee", "dollar": "dollar", "dollars": "dollar",
+    "lakh": "lakh", "lakhs": "lakh", "crore": "crore", "crores": "crore",
+}
+_CONTRACTIONS = {"can't": ["can", "not"], "cannot": ["can", "not"], "won't": ["will", "not"], "ain't": ["is", "not"]}
+# "no X" / "without X" negate the phrase that follows; "not" negates a state
+# ("not supported") or, after do/does/did, a verb ("does not support").
+_PHRASE_NEGATIONS = {"no", "without", "lacks", "lacking", "lack"}
+_NEGATED_VERBS = {
+    "support", "supports", "include", "includes", "work", "works", "charge", "charges", "last", "lasts",
+    "fit", "fits", "come", "comes", "have", "has", "had", "get", "got", "offer", "offers", "feature", "features",
+}
+_NEGATABLE_WORDS = {
+    "available", "possible", "compatible", "waterproof", "free", "cheap", "ready", "safe", "working", "legal",
+    "included", "supported",
+}
+_NEGATION_ADVERBS = {
+    "yet", "even", "fully", "officially", "currently", "really", "very", "quite", "so", "too", "always",
+    "actually", "being", "that", "a", "an", "the", "any",
+}
+_NEGATIVE_QUALITY = {"poor", "bad", "weak", "terrible", "slow", "dim", "worst", "awful", "mediocre", "horrible", "disappointing"}
+_POSITIVE_QUALITY = {"excellent", "great", "good", "strong", "fast", "bright", "best", "amazing", "superb", "outstanding", "fantastic", "brilliant"}
+_CLAIM_SKIP_WORDS = _NOT_MEANINGFUL | _NEGATION_ADVERBS | {
+    "not", "never", "no", "its", "it's", "still", "also", "all", "some", "about", "around", "over", "under",
+    "up", "than", "more", "most", "less", "much", "bit", "little", "lot", "truly", "honestly", "just", "only",
+    "simply", "there", "here", "they", "them", "their", "he", "she", "his", "her", "me", "him", "us", "do",
+}
+_CLAIM_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)?|[^\W\d_]+(?:'[^\W\d_]+)?|%")
+_CLAIM_CLAUSE_RE = re.compile(r"[^.;:!?\n…]+[.;:!?…]?")
+_CLAIM_CONJUNCTION_RE = re.compile(r"\s(?:but|while|whereas|although|though|however)\s|,\s")
+
+
+def _claim_clauses(text: Any) -> list[tuple[list[str], bool]]:
+    """(tokens, is_question) per clause, contractions expanded ("isn't" -> "is", "not")."""
+
+    folded = normalize_unicode(text).replace("’", "'").casefold()
+    clauses: list[tuple[list[str], bool]] = []
+    for match in _CLAIM_CLAUSE_RE.finditer(folded):
+        chunk = match.group(0)
+        question = chunk.rstrip().endswith("?")
+        for part in _CLAIM_CONJUNCTION_RE.split(chunk):
+            tokens: list[str] = []
+            for raw in _CLAIM_TOKEN_RE.findall(part):
+                if raw in _CONTRACTIONS:
+                    tokens.extend(_CONTRACTIONS[raw])
+                elif raw.endswith("n't") and len(raw) > 3:
+                    tokens.extend([raw[:-3], "not"])
+                else:
+                    tokens.append(raw)
+            if tokens:
+                clauses.append((tokens, question))
+    return clauses
+
+
+def _claim_number(token: str) -> float | None:
+    if re.fullmatch(r"\d+(?:[.,]\d+)?", token):
+        return float(token.replace(",", ""))
+    if token in _NUMBER_WORDS:
+        return float(_NUMBER_WORDS[token])
+    return None
+
+
+def _is_claim_content(token: str) -> bool:
+    return (
+        len(token) > 2 and token not in _CLAIM_SKIP_WORDS and token not in _CLAIM_UNITS
+        and token not in _NUMBER_WORDS and token not in _NEGATIVE_QUALITY and token not in _POSITIVE_QUALITY
+        and _claim_number(token) is None
+    )
+
+
+def _numeric_claims(tokens: list[str]) -> list[tuple[str, float]]:
+    """(unit, value) for "six hours", "20 hrs", "6-8 hours" (both ends), "twenty five percent"."""
+
+    claims: list[tuple[str, float]] = []
+    index, count = 0, len(tokens)
+    while index < count:
+        values: list[float] = []
+        while index < count:
+            value = _claim_number(tokens[index])
+            if value is None:
+                if tokens[index] in {"to", "and", "or"} and values and index + 1 < count and _claim_number(tokens[index + 1]) is not None:
+                    index += 1
+                    continue
+                break
+            index += 1
+            if tokens[index - 1] in _TENS_WORDS and index < count and tokens[index] in _NUMBER_WORDS and _NUMBER_WORDS[tokens[index]] < 10:
+                value += _NUMBER_WORDS[tokens[index]]
+                index += 1
+            elif tokens[index - 1] != "hundred" and index < count and tokens[index] == "hundred":
+                value *= 100
+                index += 1
+            values.append(value)
+        if not values:
+            index += 1
+            continue
+        if index < count and tokens[index] in _CLAIM_UNITS:
+            claims.extend((_CLAIM_UNITS[tokens[index]], value) for value in values)
+    return claims
+
+
+def _claim_facts(text: Any) -> dict[str, Any]:
+    """Everything the checks compare: numbers per unit, negated and asserted terms and phrases, quality per noun."""
+
+    numbers: dict[str, set[float]] = {}
+    negated: dict[str, str] = {}
+    asserted: dict[str, str] = {}
+    negated_phrases: dict[tuple[str, str], str] = {}
+    asserted_phrases: dict[tuple[str, str], str] = {}
+    quality: dict[str, dict[str, tuple[str, str]]] = {}
+    for tokens, question in _claim_clauses(text):
+        for unit, value in _numeric_claims(tokens):
+            numbers.setdefault(unit, set()).add(value)
+        negation_span: set[int] = set()
+        for index, token in enumerate(tokens):
+            if token in {"not", "never"} or token in _PHRASE_NEGATIONS:
+                negation_span.update(range(index, min(index + 4, len(tokens))))
+        if not question:
+            for index, token in enumerate(tokens):
+                following = tokens[index + 1:index + 5]
+                for stop in ("and", "or", "but", "so"):
+                    if stop in following:
+                        following = following[:following.index(stop)]
+                if token == "not":
+                    candidates = [item for item in tokens[index + 1:index + 3] if item not in _NEGATION_ADVERBS]
+                    candidate = candidates[0] if candidates else ""
+                    auxiliary = tokens[index - 1] if index else ""
+                    if candidate in _NEGATED_VERBS or candidate in _NEGATABLE_WORDS or (
+                        auxiliary not in {"do", "does", "did"} and len(candidate) > 4
+                        and candidate.endswith(("ed", "able", "ible")) and _is_claim_content(candidate)
+                    ):
+                        negated.setdefault(_quality_root(candidate), candidate)
+                    if candidate in _NEGATED_VERBS:
+                        following = [item for item in following if item != candidate]
+                    else:
+                        following = []
+                elif token == "never":
+                    candidates = [item for item in tokens[index + 1:index + 3] if item not in _NEGATION_ADVERBS]
+                    if candidates and (candidates[0] in _NEGATED_VERBS or candidates[0] in _NEGATABLE_WORDS):
+                        negated.setdefault(_quality_root(candidates[0]), candidates[0])
+                    following = []
+                elif token not in _PHRASE_NEGATIONS:
+                    continue
+                content = [item for item in following if _is_claim_content(item)]
+                if len(content) >= 2:
+                    negated_phrases.setdefault((_quality_root(content[0]), _quality_root(content[1])), " ".join(content[:2]))
+            # Quality adjectives attached to a noun: "excellent camera" (after)
+            # or "the camera is poor" (before, within three words).
+            for index, token in enumerate(tokens):
+                polarity = "positive" if token in _POSITIVE_QUALITY else "negative" if token in _NEGATIVE_QUALITY else ""
+                if not polarity or any(item in {"not", "never", "no"} for item in tokens[max(0, index - 2):index]):
+                    continue
+                after = tokens[index + 1:index + 3]
+                if after and _is_claim_content(after[0]):
+                    nouns = [item for item in after if _is_claim_content(item)]
+                else:
+                    nouns = [item for item in tokens[max(0, index - 3):index] if _is_claim_content(item)]
+                for noun in nouns:
+                    quality.setdefault(_quality_root(noun), {}).setdefault(polarity, (token, noun))
+        content_positions = [(index, token) for index, token in enumerate(tokens) if _is_claim_content(token)]
+        for position, (index, token) in enumerate(content_positions):
+            if index in negation_span:
+                continue
+            asserted.setdefault(_quality_root(token), token)
+            # A phrase in a negated clause ("wireless charging is not
+            # supported") is its subject, not a claim that it exists.
+            if not negation_span and position + 1 < len(content_positions):
+                next_index, next_token = content_positions[position + 1]
+                if next_index - index <= 2:
+                    asserted_phrases.setdefault((_quality_root(token), _quality_root(next_token)), f"{token} {next_token}")
+    return {
+        "numbers": numbers, "negated": negated, "asserted": asserted,
+        "negated_phrases": negated_phrases, "asserted_phrases": asserted_phrases, "quality": quality,
+    }
+
+
+def _format_claim_number(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:g}"
+
+
+def factual_contradictions(source: str, title: str, description: str) -> list[dict[str, Any]]:
+    """Issues where the title or description states a fact the source denies.
+
+    Three deterministic, local checks: a number with a unit the source gives a
+    different value for ("twenty hours" against "six hours"); a term or phrase
+    the source negates that the copy asserts, or the reverse ("supported"
+    against "not supported", "wireless charging" against "no wireless
+    charging"); and a quality adjective on a noun the source describes with
+    the opposite polarity ("excellent camera" against "the camera is poor").
+    A fact the source states both ways is left alone.
+    """
+
+    source_facts = _claim_facts(source)
+    issues: list[dict[str, Any]] = []
+    for field, text in (("title", title), ("description", description)):
+        if not normalize_unicode(text):
+            continue
+        copy = _claim_facts(text)
+        messages: list[str] = []
+        for unit, values in copy["numbers"].items():
+            known = source_facts["numbers"].get(unit) or set()
+            for value in sorted(values):
+                if known and value not in known:
+                    stated = ", ".join(f"{_format_claim_number(item)} {unit}" for item in sorted(known))
+                    messages.append(f'The {field} says "{_format_claim_number(value)} {unit}" where the source says "{stated}".')
+        for root, word in copy["asserted"].items():
+            if root in source_facts["negated"] and root not in source_facts["asserted"]:
+                messages.append(f'The {field} asserts "{word}" where the source says "not {source_facts["negated"][root]}".')
+        for pair, phrase in copy["asserted_phrases"].items():
+            if pair in source_facts["negated_phrases"] and pair not in source_facts["asserted_phrases"]:
+                messages.append(f'The {field} claims "{phrase}" where the source says "no {source_facts["negated_phrases"][pair]}".')
+        for root, word in copy["negated"].items():
+            if word in _NEGATED_VERBS or word in _NEGATABLE_WORDS:
+                if root in source_facts["asserted"] and root not in source_facts["negated"]:
+                    messages.append(f'The {field} says "not {word}" where the source says "{source_facts["asserted"][root]}".')
+        for pair, phrase in copy["negated_phrases"].items():
+            if pair in source_facts["asserted_phrases"] and pair not in source_facts["negated_phrases"]:
+                messages.append(f'The {field} says "no {phrase}" where the source says "{source_facts["asserted_phrases"][pair]}".')
+        for root, polarities in copy["quality"].items():
+            stated = source_facts["quality"].get(root) or {}
+            for polarity, (adjective, noun) in polarities.items():
+                opposite = "negative" if polarity == "positive" else "positive"
+                if opposite in stated and polarity not in stated:
+                    messages.append(f'The {field} calls the {noun} "{adjective}" where the source calls it "{stated[opposite][0]}".')
+        for message in dict.fromkeys(messages):
+            issues.append(_issue("factual_contradiction", field, message))
+    return issues

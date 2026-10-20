@@ -24,12 +24,75 @@ import { parseOpportunityBreakdown } from "@/lib/opportunityFormat";
 import { asObject, cn, displayValue } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
 import { opportunityText, titleScoreText } from "@/lib/dashboardFormat";
+import { qualityNotes, verdictChip } from "@/lib/aiShortsFormat";
 import { copyValue } from "@/lib/packages";
 import { ThumbnailMock } from "./ThumbnailMock";
-import type { AnalyzeResponse, PackageOption, SelectionStatus } from "@/api/types";
+import type { AnalyzeResponse, GenerationQuality, PackageOption, SelectionStatus } from "@/api/types";
 
 /** A common guideline, not a YouTube rule: long titles are cut off on phones. */
 const TITLE_TRUNCATION_GUIDE = 70;
+
+/** The whole package's verdict, read from the quality gate; an older payload with no verdict but a failed status is RED. */
+function packageVerdict(quality: GenerationQuality | undefined): string {
+  const verdict = String(quality?.verdict ?? "").toUpperCase();
+  if (verdict) return verdict;
+  return quality?.status === "fail" || quality?.passed === false ? "RED" : "";
+}
+
+const VERDICT_BOX: Partial<Record<string, string>> = {
+  RED: "border-tone-bad-border bg-tone-bad-bg",
+  YELLOW: "border-tone-warn-border bg-tone-warn-bg",
+};
+
+const VERDICT_TEXT: Partial<Record<string, string>> = {
+  GREEN: "The local quality gate found no problems with the title, description and tags. A heuristic, not a measure of reach.",
+  YELLOW: "Usable, with notes to read before you upload.",
+  RED: "This package is not ready to upload: fix the notes below before copying anything into YouTube Studio.",
+};
+
+/**
+ * The quality gate's verdict on the whole package: the one place that says
+ * whether what follows is safe to upload. The per-title status on Compare is
+ * not this verdict. No verdict never reads as a pass.
+ */
+function PackageVerdict({ quality }: { quality: GenerationQuality | undefined }) {
+  const verdict = packageVerdict(quality);
+  const chip = verdictChip(verdict);
+  const issues = qualityNotes(quality?.issues);
+  const warnings = qualityNotes(quality?.warnings);
+  const failed = verdict === "RED";
+
+  return (
+    <section
+      role={failed ? "alert" : "status"}
+      aria-label="Package quality verdict"
+      data-testid="package-verdict"
+      data-verdict={verdict || "none"}
+      className={cn("rounded-2xl border p-3.5 shadow-card sm:p-4", VERDICT_BOX[verdict] ?? "border-border bg-card")}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <EvidenceChip tone={chip.tone}>{chip.label}</EvidenceChip>
+        <p className="text-[0.8125rem] font-medium text-foreground">
+          {VERDICT_TEXT[verdict] ?? "No quality check ran on this package, so nothing below is confirmed."}
+        </p>
+      </div>
+      {issues.length || warnings.length ? (
+        <ul className="mt-2.5 space-y-1 text-[0.8125rem] leading-relaxed text-muted-foreground">
+          {issues.map((text) => (
+            <li key={`issue-${text}`}>
+              <strong className="font-semibold text-tone-bad">Issue:</strong> {text}
+            </li>
+          ))}
+          {warnings.map((text) => (
+            <li key={`warning-${text}`}>
+              <strong className="font-semibold text-foreground">Warning:</strong> {text}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
 
 function TagList({ items, emptyLabel }: { items: string[]; emptyLabel: string }) {
   if (!items.length) return <p className="text-[0.8125rem] text-muted-foreground">{emptyLabel}</p>;
@@ -246,8 +309,12 @@ export function PackagingStage({
       ? `${timing.today_time} ${timing.today_timezone || timingZone}`
       : "Unavailable";
 
+  const failedGate = packageVerdict(data.generation_quality) === "RED";
+
   return (
     <div className="space-y-5">
+      <PackageVerdict quality={data.generation_quality} />
+
       <PackageSwitcher
         options={options}
         preview={preview}
@@ -267,9 +334,15 @@ export function PackagingStage({
           <Panel
             icon={Clapperboard}
             title={`${preview.label}${preview.id === chosen?.id ? " · in use" : ""}`}
-            description="Copy each field into YouTube Studio, or copy the whole bundle at once."
+            description={
+              failedGate
+                ? "Failed the quality check: fix the notes above before copying any of this into YouTube Studio."
+                : "Copy each field into YouTube Studio, or copy the whole bundle at once."
+            }
             aside={
               <>
+                {/* The copy controls stay, but a failed package is marked as such next to them. */}
+                {failedGate ? <EvidenceChip tone="bad">Not upload-ready</EvidenceChip> : null}
                 {/* Written by Gemini or the local fallback: generated text either way. */}
                 <EvidenceChip tone="warn">{preview.source}</EvidenceChip>
                 <CopyButton value={copyValue(preview, "upload-package")} label="Copy all" variant="soft" />
