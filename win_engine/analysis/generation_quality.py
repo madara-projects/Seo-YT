@@ -566,6 +566,11 @@ def quote_title_issues(title: Any, quote: Any, *, index: int | None = None) -> l
 
     issues: list[dict[str, Any]] = []
     body = title_body(title)
+    love_heals = r"\blove\s+(?:(?:can|will|may)\s+)?heals?\b"
+    if (re.search(love_heals, body, re.I) and re.search(r"\b(?:hurt|cut|scar)\b", str(quote), re.I)
+            and not re.search(love_heals, str(quote), re.I)):
+        issues.append(_issue("unsupported_causal_claim", "title",
+            "Healing from hurt in love does not establish that love causes the healing.", index=index))
     if title_cuts_quote(body, quote):
         issues.append(_issue(
             "quote_title_cut", "title",
@@ -824,7 +829,12 @@ _FEELING_HASHTAGS = (
 def feeling_hashtag(quote: Any) -> str:
     """The established hashtag for the first feeling a quote names and does not deny ("Don't cry"), or ""."""
 
-    for word in affirmed_feeling_words(quote):
+    feeling_words = list(affirmed_feeling_words(quote))
+    # An explicit broken heart is more specific than a preceding memory verb.
+    # Keep the existing negation check: a heart that is not broken is different.
+    if "broken" in feeling_words and re.search(r"\bbroken\s+heart\b", str(quote), re.IGNORECASE):
+        return "#heartbreak"
+    for word in feeling_words:
         root = _quality_root(word)
         for prefix, hashtag in _FEELING_HASHTAGS:
             # The word as written too: "missing" has the root "mis".
@@ -1000,12 +1010,6 @@ def evaluate_package_quality(
             reasons.append(_issue("excessive_title_emojis", "title", "Use no more than two relevant emojis in a title.", index=index))
         if any(left == right for left, right in pairwise(emojis)):
             reasons.append(_issue("repeated_title_emoji", "title", "The title repeats the same emoji in sequence.", index=index))
-        if emoji_recommended and not emojis:
-            warnings.append(_issue(
-                "missing_contextual_title_emoji", "title",
-                "An emoji matching the quote's feeling is optional; it is not required for a source-faithful title.",
-                severity="warning", index=index,
-            ))
         if exact_quote and is_short:
             reasons.extend(quote_title_issues(title, exact_quote, index=index))
         signature = "".join(emojis)
@@ -1082,6 +1086,10 @@ def evaluate_package_quality(
         ))
         # The quote's own words ("listen to your heart") claim no narration.
         own_copy = normalized_description.replace(exact_quote_text, " ") if exact_quote_text else normalized_description
+        if exact_quote and re.search(r"\b(?:permanent(?:ly)?|forever|irreversible|never coming back)\b", own_copy, re.I) and not re.search(
+            r"\b(?:permanent(?:ly)?|forever|irreversible|never coming back)\b", source, re.I
+        ):
+            issues.append(_issue("unsupported_permanence", "description", "Description adds a permanent outcome that the creator's quote does not establish."))
         if normalize_unicode(brief.get("voice_over")).casefold() == "none" and re.search(
             r"\b(?:listen to|hear (?:me|the)|voice[- ]?over|narrat(?:e|ed|ion))\b", own_copy, re.IGNORECASE
         ):

@@ -314,7 +314,7 @@ class ResearchPlanTests(unittest.TestCase):
         self.assertNotIn("exhaustion", text)
         allowed = {"i", "can't", "get", "enough", "of", "you", "quotes", "about"}
         for item in queries:
-            self.assertLessEqual(set(item["query"].casefold().split()), allowed, item)
+            self.assertLessEqual(set(item["query"].strip('"').casefold().split()), allowed, item)
 
     def test_the_genuine_in_genuinely_is_not_being_misunderstood(self):
         quote = "My mentor genuinely believed in me long before I believed in myself"

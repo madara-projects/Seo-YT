@@ -17,6 +17,7 @@ from win_engine.analysis.generation_quality import (
     source_requires_noninstructional_framing,
 )
 from win_engine.analysis.search_opportunities import UNSUPPORTED_ADJACENT_CONTEXT
+from win_engine.analysis.source_relevance import source_matches, broad_mood_only
 from win_engine.analysis.text_tokens import (
     JOINERS,
     is_word_character,
@@ -191,17 +192,20 @@ def build_keyword_research(
     # rank must be known before a candidate is scored.
     for candidate in candidates.values():
         candidate["demand_rank"] = _validated_demand_rank(str(candidate.get("keyword") or ""), demand_index, subjects)
+        candidate["ambiguous_predictions"] = _ambiguous_predictions(candidate["keyword"], search_demand or {}, source_terms)
 
     scored: list[dict[str, Any]] = []
     rejected_before_selection = 0
     subject_text = _subject_text(script, brief)
     app_roots = _app_brief_roots(script, brief) | _footage_roots(script, brief)
     for candidate in candidates.values():
-        skip = _production_note(candidate["keyword"], subject_text) or _uses_app_brief_text(candidate["keyword"], app_roots)
+        skip = candidate.get("ambiguous_predictions") or _production_note(candidate["keyword"], subject_text) or _uses_app_brief_text(candidate["keyword"], app_roots)
         entry = None if skip else _score(
             candidate, result_rows, query_rows, quote, content_terms, source_terms, visual_terms, cited_terms,
         )
-        if entry and not (non_instructional and has_unsupported_instructional_framing(entry.get("keyword"))):
+        if entry and not (non_instructional and (has_unsupported_instructional_framing(entry.get("keyword")) or _quote_advice_query(entry.get("keyword"), quote))):
+            if non_instructional:
+                entry["intent"] = "emotional_relatable"
             _annotate_demand(entry, demand_index, subjects)
             scored.append(entry)
         else:
@@ -232,8 +236,8 @@ def build_keyword_research(
         "grounded_suggestions": grounded_suggestions,
         "validated_keywords": demand_validated,
         "explanation": (
-            "Phrases marked as validated appear in YouTube's own search suggestions, so real viewers type "
-            "them. Suggestion rank reflects relative popularity for that prefix; it is not search volume."
+            "Phrases marked as validated appear in YouTube search predictions. Their position is an "
+            "observed suggestion order, not measured popularity, search volume, or evidence of ranking potential."
         ),
     }
     return {
@@ -311,6 +315,25 @@ def select_final_tags(
     unresearched = not research.get("candidates") and not research.get("search_demand")
     for item in indexed.values():
         entry = dict(item)
+        keyword = str(entry.get("keyword") or "")
+        if non_instructional and _ambiguous_predictions(keyword, research.get("search_demand") or {}, source_terms):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": keyword, "reason": "ambiguous_search_predictions", "source": entry.get("source")})
+            continue
+        if quote and non_instructional and keyword in {"mind quotes", "heart quotes", "life quotes", "people quotes"}:
+            rejected_count += 1
+            rejected_candidates.append({"keyword": keyword, "reason": "broad_quote_topic", "source": entry.get("source")})
+            continue
+        if quote and non_instructional:
+            entry["intent"] = "emotional_relatable"
+        if quote and non_instructional and _quote_advice_query(keyword, quote):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": keyword, "reason": "advice_intent_for_quote_only_content", "source": entry.get("source")})
+            continue
+        if quote and non_instructional and broad_mood_only(keyword) and not source_matches(keyword, quote):
+            rejected_count += 1
+            rejected_candidates.append({"keyword": keyword, "reason": "broad_mood_not_named_in_quote", "source": entry.get("source")})
+            continue
         if _unvoiced_mood(entry.get("keyword"), painful):
             rejected_count += 1
             rejected_candidates.append({"keyword": entry.get("keyword"), "reason": "mood_not_in_source", "source": entry.get("source")})
@@ -386,6 +409,19 @@ def select_final_tags(
         # first; a high-scoring interpretation such as "trust violation" had
         # been taking the slots of "betrayal quotes".
         eligible.sort(key=lambda item: not item.get("demand_validated"))
+    if quote and non_instructional:
+        # Descriptive modifiers are not distinct subjects: deep hurt quotes
+        # and hurt quotes should not occupy two slots, even if predicted.
+        distinct = []
+        seen_subjects = set()
+        for item in sorted(eligible, key=lambda entry: not bool(re.search(r"\bquotes?\b", entry["keyword"]))):
+            subject = frozenset(_term_root(word) for word in unicode_words(item["keyword"])
+                if word not in {"quote", "quotes", "sayings", "deep", "sad", "emotional", "the", "and", "of", "about"})
+            if subject in seen_subjects:
+                continue
+            seen_subjects.add(subject)
+            distinct.append(item)
+        eligible = distinct
     primary_codes ={token for token in _tokens(research.get("primary_topic")) if _MODEL_CODE_RE.fullmatch(token)}
     # A phrase YouTube was asked about and has no completions for is one
     # nobody types ("vlookup sumif if formula chatgpt").
@@ -1349,6 +1385,8 @@ def _fragmented(text: str) -> bool:
     # The words as typed, grammar words included: "is- older get more realise
     # how rare have" and "screen why" were lifted from a creator's notes.
     typed = folded.split()
+    if typed[-1] in {"this", "that", "it", "them"} and re.match(r"^(?:going to|remember(?:ing)?|you|i|we)\b", folded):
+        return True
     if any(word.startswith("-") or word.endswith("-") for word in typed):
         return True
     if typed[0] in _FRAGMENT_STARTS or typed[-1] in _FRAGMENT_ENDINGS:
@@ -1941,6 +1979,36 @@ def _validated_demand_rank(
     return demand_rank(keyword, index)
 
 
+def _ambiguous_predictions(keyword: str, demand: dict[str, Any], source_terms: set[str]) -> bool:
+    """Do not treat predictions dominated by foreign subjects as confirmation.
+
+    Applies to broad single-subject phrases; qualified phrases keep their
+    disambiguating context. Prediction presence alone never proves meaning.
+    """
+    neutral = {"quote", "quotes", "in", "for", "and", "of", "the", "a", "on", "about", "with",
+        "english", "tamil", "telugu", "hindi", "malayalam", "kannada", "bengali", "marathi", "urdu",
+        "status", "whatsapp", "shorts", "video", "videos", "sayings", "him", "her", "husband", "wife",
+        "friend", "friends", "friendship", "relationship", "relationships", "deep", "sad", "emotional"}
+    base = set(unicode_words(keyword)) - neutral
+    if len(base) != 1:
+        return False
+    predictions = (demand.get("suggestions") or {}).get(_normalize(keyword), [])
+    expansions = [str(p) for p in predictions if _normalize(p) != _normalize(keyword)]
+    if len(expansions) < 2:
+        return False
+    supported = {_term_root(w) for w in source_terms | base | neutral}
+    foreign = sum(bool({_term_root(w) for w in unicode_words(p)} - supported) for p in expansions)
+    return foreign / len(expansions) > 0.5
+
+
+def _quote_advice_query(value: Any, quote: str) -> bool:
+    """A prediction about a problem is not evidence a quote answers it."""
+    text = _normalize(value)
+    if not quote or text in _normalize(quote) or re.search(r"\b(?:quotes?|sayings?|poetry|poems?)\b", text):
+        return False
+    return bool(re.match(r"^(?:why|how|ways to|tips for)\b", text))
+
+
 def _annotate_demand(
     entry: dict[str, Any], index: dict[str, dict[str, Any]], subjects: set[str] | None = None,
 ) -> None:
@@ -1959,7 +2027,7 @@ def _annotate_demand(
     entry["demand_rank"] = rank
     entry["search_demand"] = "youtube_search_suggestion"
     entry["keyword_relevance_score"] = min(100, int(entry.get("keyword_relevance_score") or 0) + boost)
-    note = f"; typed by real viewers (YouTube search suggestion, rank {rank + 1})"
+    note = f"; observed YouTube search prediction (position {rank + 1}; not measured volume)"
     entry["reason"] = f"{entry.get('reason') or ''}{note}".lstrip("; ")
     entry["selection_reason"] = entry["reason"]
 

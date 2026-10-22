@@ -444,7 +444,7 @@ class Phase4QualityTests(unittest.TestCase):
         rejected = {reason["code"] for item in gate["rejected_candidates"] for reason in item["issues"]}
         self.assertNotIn("missing_shorts_title_hashtag", rejected)
         self.assertIn("Did I Deserve More Than the Bare Minimum?", [item["title"] for item in gate["accepted_candidates"]])
-        self.assertIn("missing_contextual_title_emoji", {item["code"] for item in gate["warnings"]})
+        self.assertNotIn("missing_contextual_title_emoji", {item["code"] for item in gate["warnings"]})
 
         duplicated = valid_package("Did I Deserve More? 💔 #shorts #Shorts")
         gate = evaluate_package_quality(duplicated, script="A rainy quote Short")

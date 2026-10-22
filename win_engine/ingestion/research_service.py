@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 import threading
 from contextlib import contextmanager
@@ -12,7 +13,9 @@ from win_engine.analysis.entity_extractor import extract_entity_signals
 from win_engine.analysis.generation_quality import is_short_content
 from win_engine.analysis.keyword_extractor import extract_keyword_signals
 from win_engine.analysis.research_insights import build_research_decision
-from win_engine.analysis.semantic_research import analyze_script_semantics, refine_research_semantics
+from win_engine.analysis.semantic_research import analyze_script_semantics, refine_research_semantics, quote_is_the_content, usable_research_topic
+from win_engine.analysis.source_relevance import quote_result_support, semantic_subject, subject_terms
+from win_engine.analysis.quote_research_screen import screen_quote_results
 from win_engine.analysis.keyword_research import build_keyword_research, demand_seed_phrases
 from win_engine.analysis.numbers import optional_number
 from win_engine.analysis.search_opportunities import discover_search_opportunities
@@ -186,7 +189,7 @@ class ResearchService:
         run_started = datetime.now(timezone.utc)
         # Without a semantic analysis the planner works from the creator brief,
         # as it does whenever Gemini is unavailable.
-        semantic_analysis = {} if results_only else analyze_script_semantics(script, creator_brief)
+        semantic_analysis = {} if results_only else self._cached_semantics(script, creator_brief)
         short_form = is_short_content(script, creator_brief)
         max_searches = self._settings.youtube_max_research_queries
         if short_form:
@@ -211,7 +214,9 @@ class ResearchService:
 
         youtube_results, query_diagnostics = self._search_research_queries(research_queries, **search)
         attempts = list(query_diagnostics["query_attempts"])
-        youtube_results = self._filter_relevant_results(youtube_results, creator_brief)
+        source_brief = {"content": script, **(creator_brief or {})}
+        quote_mode = quote_is_the_content(script, source_brief)
+        youtube_results = self._filter_relevant_results(youtube_results, source_brief, primary_subject=semantic_subject(semantic_analysis))
         query_diagnostics["youtube_results_relevant"] = len(youtube_results)
 
         scored_results = score_outliers(youtube_results)
@@ -230,7 +235,7 @@ class ResearchService:
         research_text = brief_research_text(script, creator_brief)
         keyword_signals = extract_keyword_signals(research_text, scored_results)
         entity_signals = extract_entity_signals(research_text, scored_results)
-        search_opportunities = discover_search_opportunities(
+        search_opportunities = {} if quote_mode else discover_search_opportunities(
             script=script,
             semantic=semantic_analysis,
             youtube_results=scored_results,
@@ -280,7 +285,7 @@ class ResearchService:
                 for row in extra_results:
                     key = str(row.get("video_id"))
                     merged[key] = self._merge_rows(merged[key], row) if key in merged else row
-                scored_results = score_outliers(self._filter_relevant_results(list(merged.values()), creator_brief))
+                scored_results = score_outliers(self._filter_relevant_results(list(merged.values()), source_brief, primary_subject=semantic_subject(semantic_analysis)))
                 # Counted over the results the gap analysis compares them with.
                 keyword_signals = extract_keyword_signals(research_text, scored_results)
                 entity_signals = extract_entity_signals(research_text, scored_results)
@@ -296,6 +301,25 @@ class ResearchService:
                     youtube_results=scored_results, research_queries=research_queries, entity_signals=entity_signals,
                     creator_brief=creator_brief, search_opportunities=search_opportunities,
                     query_diagnostics=query_diagnostics)
+        if quote_mode:
+            quote_text = str(source_brief.get("exact_quote") or source_brief.get("on_screen_text") or script)
+            material = json.dumps([quote_text, [{k: row.get(k) for k in ("video_id", "title", "description")} for row in scored_results]], sort_keys=True)
+            screen_key = "quote-source-screen-v2:" + sha256(material.encode()).hexdigest()
+            cached_screen = self._cache.get(screen_key)
+            if isinstance(cached_screen, dict) and cached_screen.get("status") == "screened":
+                scored_results, screen_status = cached_screen["rows"], "screened"
+            else:
+                scored_results, screen_status = screen_quote_results(quote_text, scored_results)
+                if screen_status == "screened":
+                    self._cache.set(screen_key, {"rows": scored_results, "status": screen_status}, ttl_seconds=86400)
+            query_diagnostics["source_alignment_screen"] = screen_status
+            query_diagnostics["youtube_results_relevant"] = len(scored_results)
+            top_opportunities = _ranked(scored_results)[:3]
+            keyword_signals = extract_keyword_signals(research_text, scored_results)
+            entity_signals = extract_entity_signals(research_text, scored_results)
+            keyword_research = build_keyword_research(script=script, semantic=semantic_analysis,
+                youtube_results=scored_results, research_queries=research_queries, entity_signals=entity_signals,
+                creator_brief=creator_brief, search_opportunities={}, query_diagnostics=query_diagnostics)
         self._record_fresh_snapshots(scored_results, run_started)
         # Demand pass: check the strongest source-grounded concepts against
         # what viewers actually type, then rebuild the research with that
@@ -315,6 +339,13 @@ class ResearchService:
                 "status": search_demand.get("status"),
                 "queries": search_demand.get("queries") or [],
             }
+        if quote_mode:
+            # Raw sliding word pairs are not search concepts ("hurt it's",
+            # "cut will"). Show the source-grounded candidate pool instead.
+            keyword_signals = [{"keyword": row["keyword"], "mentions": int(row.get("evidence_count") or 0),
+                "strength": "observed" if row.get("evidence_count") else "source-only",
+                "provenance": "source_grounded_candidate"}
+                for row in (keyword_research.get("candidates") or [])[:10]]
         owned_performance = self._history.owned_performance_summary()
         upload_timing = build_upload_timing(
             scored_results,
@@ -329,12 +360,16 @@ class ResearchService:
         thumbnail_intelligence = analyze_thumbnails(scored_results)
         runtime_state = self._youtube.runtime_state()
         research_warnings = _research_warnings(attempts, research_queries, self._settings)
+        if research_queries and not scored_results:
+            research_warnings.append("No sampled videos passed source relevance checks; this package has no comparable public-result evidence.")
+        if quote_mode and query_diagnostics.get("source_alignment_screen") in {"unavailable", "invalid_response"}:
+            research_warnings.append("Quote source-alignment screening was unavailable; unverified public results were excluded from the evidence.")
         if semantic_analysis.get("fallback_reason") == "gemini_writer_reserve":
             research_warnings.append(_WRITER_RESERVE_WARNING)
 
         logger.info(
             "Research gathered: youtube=%s",
-            len(youtube_results),
+            len(scored_results),
         )
 
         return {
@@ -506,9 +541,25 @@ class ResearchService:
             if len(word) >= 3 and word not in _GENERIC_QUERY_TERMS and any(char.isalpha() for char in word)
         }
 
+    def _cached_semantics(self, script: str, brief: dict[str, Any] | None) -> dict[str, Any]:
+        material = json.dumps([script, brief or {}, self._settings.gemini_model], sort_keys=True, ensure_ascii=False)
+        key = "source-semantics-v5:" + sha256(material.encode()).hexdigest()
+        with _single_flight(key):
+            cached = self._cache.get(key)
+            if (isinstance(cached, dict) and cached.get("source") == "gemini"
+                and cached.get("concept_evidence_validated") is True
+                and usable_research_topic(cached.get("primary_topic"))):
+                return {**cached, "cache_status": "hit"}
+            result = analyze_script_semantics(script, brief)
+            if (result.get("source") == "gemini" and result.get("concept_evidence_validated") is True
+                and usable_research_topic(result.get("primary_topic"))):
+                self._cache.set(key, result, ttl_seconds=86400)
+            return result
+
     @staticmethod
     def _filter_relevant_results(
         results: list[dict[str, object]], creator_brief: dict[str, Any] | None = None,
+        *, primary_subject: str = "",
     ) -> list[dict[str, object]]:
         """Keep only results with a meaningful lexical anchor from their query.
 
@@ -518,13 +569,23 @@ class ResearchService:
         """
 
         short_requested = bool(creator_brief) and is_short_content("", creator_brief)
+        brief = creator_brief or {}
+        source = str(brief.get("content") or "")
+        quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or source)
+        quote_only = quote_is_the_content(source, brief)
         relevant: list[dict[str, object]] = []
         for result in results:
+            source_anchors: set[str] = set()
+            if quote_only:
+                supported, source_anchors = quote_result_support(str(result.get("title") or ""), quote, primary_subject)
+                if not supported:
+                    continue
             if short_requested and is_short_duration(duration_seconds(result.get("duration"))) is False:
                 continue
             public_words = set(_words(
                 " ".join(str(result.get(field) or "") for field in ("title", "description", "channel_title"))
             ))
+            public_roots = subject_terms(" ".join(public_words))
             # A Tamil word and its Latin spelling meet only through their sound.
             # The bridge stays between scripts: inside one script it would pair
             # unrelated words that share consonants, such as "chicken" and "skin".
@@ -543,6 +604,7 @@ class ResearchService:
                 overlap = {
                     token for token in query_tokens
                     if token in public_words
+                    or bool(subject_terms(token) & public_roots)
                     or phonetic_match(token, latin_keys if has_tamil(token) else tamil_keys)
                 }
                 required_matches = (
@@ -569,6 +631,8 @@ class ResearchService:
                     "research_query_match_ratio": round(len(overlap) / len(query_tokens), 3),
                     "research_evidence_scope": "sampled_results_not_search_volume",
                     "format_match": "short" if short_requested else "unspecified",
+                    "source_relevance_basis": "quote_or_validated_primary_title_anchor" if quote_only else "query_lexical_overlap",
+                    "source_relevance_terms": sorted(source_anchors),
                 })
         return relevant
 

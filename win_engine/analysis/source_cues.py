@@ -18,6 +18,17 @@ from win_engine.analysis.text_tokens import normalize_unicode, unicode_words
 # YouTube accepts Shorts of up to three minutes.
 SHORTS_MAX_SECONDS = 180
 
+
+def normalize_voice_over(value: str) -> str:
+    """Canonical audio choices; unknown values cannot silently bypass checks."""
+    key = value.strip().casefold()
+    aliases = {"no": "none", "false": "none", "off": "none", "silent": "none",
+               "no voice-over": "none", "yes": "present", "true": "present", "on": "present"}
+    key = aliases.get(key, key)
+    if key not in {"", "present", "none", "unknown"}:
+        raise ValueError("Voice-over must be present, none, or unknown.")
+    return key
+
 # Stored format spellings (history_store.FORMAT_VALUES) that decide the question.
 # "quote" is a Short there too; "other" says nothing about length.
 _SHORT_FORMATS = frozenset({"youtube_shorts", "quote"})

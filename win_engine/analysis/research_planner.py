@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 from win_engine.analysis.semantic_research import quote_is_the_content, usable_research_topic
+from win_engine.analysis.source_relevance import source_matches, semantic_subject
 from win_engine.analysis.generation_quality import (
     has_unsupported_instructional_framing,
     is_short_content,
@@ -87,6 +88,9 @@ def plan_research_queries(
     # Only a video whose content is the quote is searched as a quote video;
     # a talking head that cites one is searched for its subject.
     quote_video = quote_is_the_content(script, brief)
+    exact_quote = str(brief.get("exact_quote") or brief.get("on_screen_text") or script).strip()
+    if quote_video and 10 <= len(exact_quote) <= 180:
+        candidates.append(("exact_quote", exact_quote))
     quote_search = _quote_search_variant(topic) if quote_video else ""
     if quote_search and quote_search.casefold() != topic.casefold():
         candidates.append(("quote_search", quote_search))
@@ -108,12 +112,24 @@ def plan_research_queries(
     queries: list[dict[str, str]] = []
     seen: set[str] = set()
     for query_type, query in candidates:
+        if query_type == "exact_quote":
+            # Preserve the complete quote as one bounded retrieval strategy;
+            # source-style prose is intentionally not a reusable tag candidate.
+            literal = '"' + query.replace('"', '') + '"'
+            if literal.casefold() not in seen:
+                seen.add(literal.casefold())
+                queries.append({"type": query_type, "query": literal})
+            if len(queries) >= max(1, max_queries):
+                break
+            continue
         cleaned = _short(query, 8)
         if not usable_research_topic(cleaned):
             continue
         if _low_value_query(cleaned):
             continue
         if _visual_only_query(cleaned, script, brief):
+            continue
+        if quote_video and not source_matches(cleaned, str(brief.get("exact_quote") or brief.get("on_screen_text") or script)) and not source_matches(cleaned, semantic_subject(semantic)):
             continue
         if source_requires_noninstructional_framing(script, brief) and has_unsupported_instructional_framing(cleaned):
             continue

@@ -19,6 +19,7 @@ from typing import Any, Mapping, Optional, Union
 from win_engine.analysis.generation_quality import (
     apply_quality_gate,
     evaluate_package_quality,
+    has_unsupported_instructional_framing,
     is_short_content,
     is_silent_quote_only_short,
     narrates_process,
@@ -37,6 +38,7 @@ from win_engine.analysis.keyword_research import (
     tag_length,
 )
 from win_engine.analysis.source_cues import source_quote
+from win_engine.analysis.source_relevance import source_matches
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.analysis.topic_lock import normalize_hashtag, restore_source_casing, source_casing_map
 from win_engine.llm import gemini_client
@@ -104,11 +106,14 @@ _SYSTEM_PROMPT = (
     "You are an expert YouTube SEO strategist. You analyze the user's video script, quote, or idea "
     "to write high-CTR title variants, descriptions, tags, and hashtags. "
     "Output ONLY valid JSON with keys: \"title\", \"variants\" (array of 5 strings), "
-    "\"description\", \"tags\" (array of up to 12 contextual strings), and \"hashtags\" (array of up to 3 strings). "
+    "\"description\", \"description_context\" (one contextual sentence for quote Shorts, empty otherwise), "
+    "\"description_context_source_phrase\" (the exact source phrase supporting that sentence), "
+    "\"tags\" (array of up to 12 contextual strings), and \"hashtags\" (array of up to 3 strings). "
     "Every title must be an exact, upload-ready value rather than a stem or template. "
     "For reflective quote Shorts, use concise natural titles and one short complementary description paragraph. "
     "Avoid inflated claims such as 'changes everything', generic analysis language such as 'this video explores', "
-    "and repeating the same meaning in multiple paragraphs. Preserve the quote and its conditional meaning. "
+    "and repeating the same meaning in multiple paragraphs. Preserve the quote, its conditional meaning, "
+    "causes and actors: a wound from love healing does not establish that love heals the wound. "
 )
 
 
@@ -332,8 +337,8 @@ def _build_search_demand_block(creator_brief: Optional[dict[str, Any]]) -> str:
         "first sentence, and use the ones that describe this exact video as tags."
     )
     return (
-        "\nSearch phrases real viewers type on YouTube (from YouTube's own search suggestions, most "
-        "popular first; this is demand evidence, not search volume):\n"
+        "\nObserved YouTube search predictions (suggestion order is not measured popularity, "
+        "search volume, or ranking potential):\n"
         + "\n".join(f"- {phrase}" for phrase in phrases)
         + usage
         + " A phrase is only usable if every word in it is true of this video. These are lowercase search "
@@ -435,6 +440,20 @@ def _build_user_prompt(
     silent_quote_rule = ""
     if quote and is_silent_quote_only_short(script, creator_brief):
         silent_quote_rule = (
+            "- Description: reproduce the exact quote, then add one brief sentence naming its specific "
+            "theme or contrast in natural language, followed by relevant hashtags. Prefer useful context such as "
+            "A quote about wanting to forget while a broken heart holds on to memories. "
+            "Use that example only if it matches the source. Do not invent advice, assumed backstory, "
+            "permanent outcomes, generic encouragement or keyword lists. Name the source's concrete subjects "
+            "in that sentence so its context is clear; use the quote alone only if no faithful context can be written. "
+            "Tags should be natural subject-plus-format phrases "
+            "describing this quote, not why/how advice queries. Preserve the preferred yt and shorts tags. "
+            "Prefer source-specific hashtags over generic moods; never invent a theme for variety.\n"
+            "- Also return description_context as a separate JSON string containing that one contextual sentence "
+            "in the requested language. This field must not contain the quote or hashtags. Name its particular "
+            "contrast (for example healing versus lasting scars when the quote explicitly contains both), "
+            "rather than generic encouragement. Return description_context_source_phrase as the exact words "
+            "from the source that support this interpretation. Use an empty string only when no faithful context is possible.\n"
             "- This is a silent quote-only Short. Research may expand semantic vocabulary, but it must never claim "
             "the video teaches, explains, demonstrates, answers questions, gives advice, practical tips, coping steps, "
             "or a guide unless that content is explicitly in the creator source. Keep the description reflective and faithful.\n"
@@ -446,6 +465,9 @@ def _build_user_prompt(
             "a reflective quote as an explainer with openings such as 'Understanding...' or 'Exploring the...'.\n"
             "- In the description, reproduce the exact quote once, then describe only its supported reflection. Never call "
             "the quote a lesson and never say the Short teaches, explains, helps viewers cope, or provides healing.\n"
+            "- Do not turn a possible future feeling into a guaranteed or permanent outcome. Do not add permanent "
+            "separation, forever, or never coming back unless the creator actually states it. If another reflective "
+            "line would add an assumption, use the exact quote alone.\n"
         )
     non_instructional_rule = ""
     if source_requires_noninstructional_framing(script, creator_brief):
@@ -609,6 +631,8 @@ def _validate(pkg: dict[str, Any], *, short: bool = False) -> Optional[dict[str,
         "description": description,
         "tags": tags[:12],
         "hashtags": hashtags[:3],
+        "description_context": text(pkg.get("description_context")),
+        "description_context_source_phrase": text(pkg.get("description_context_source_phrase")),
     }
 
 
@@ -659,6 +683,7 @@ _PHRASE_REPLACEMENTS = {
 }
 
 _UNSUPPORTED_QUOTE_CLAIMS = (
+    (r"\b(?:abandon(?:ed|ment)?|betray(?:ed|al)?|cheat(?:ed|ing)?)\b", r"\b(?:abandon\w*|betray\w*|cheat\w*)\b"),
     (r"\bthey (?:left|walked away|came back|cheated|lied)\b", r"\b(?:left|walked away|came back|cheated|lied)\b"),
     (r"\byou (?:stayed|accepted)\b", r"\b(?:stayed|accepted)\b"),
     (r"\bstaying in\b", r"\bstay(?:ed|ing)?\b"),
@@ -755,6 +780,44 @@ def _sanitize_generated_package(
             else:
                 paragraphs = [f'“{quote}”']
             description = "\n\n".join(paragraphs)
+    if quote and is_silent_quote_only_short(script, creator_brief):
+        # Keep one concise contextual sentence, never a second story. The
+        # quality gate still checks the final description for unsupported claims.
+        remainder = description.replace(quote, "").strip(' \n\r\t“”"')
+        explicit_context = str(cleaned.pop("description_context", "") or "").strip()
+        context_anchor = str(cleaned.pop("description_context_source_phrase", "") or "").strip()
+        anchored_context = len(context_anchor) >= 5 and context_anchor.casefold() in quote.casefold()
+        if explicit_context:
+            remainder = explicit_context + "\n" + remainder
+        context_source = quote
+        if re.search(r"\bremember\w*\b", quote, re.I):
+            context_source += " memory memories"
+        context_sentence = ""
+        context_rejections = []
+        for sentence in re.split(r"(?<=[.!?])\s+|\n+", remainder):
+            sentence = sentence.strip(' \t“”"')
+            if not sentence or sentence.startswith("#"):
+                continue
+            if sentence.casefold() in quote.casefold():
+                context_rejections.append("quote_repetition")
+                continue
+            if (sentence and "#" not in sentence
+                    and len(unicode_words(sentence, min_length=1)) <= 30
+                    and (source_matches(sentence, context_source) or (anchored_context and sentence in explicit_context))
+                    and not _has_unsupported_quote_claim(sentence, quote)
+                    and not has_unsupported_instructional_framing(sentence, quote)
+                    and not narrates_process(sentence)
+                    and not (re.search(r"\b(?:permanent(?:ly)?|irreversible|never coming back)\b", sentence, re.I)
+                             and not re.search(r"\b(?:always|forever|permanent\w*|irreversible)\b", quote, re.I))):
+                context_sentence = sentence
+                break
+            context_rejections.append("unsupported_or_unusable_context")
+        description = quote
+        if context_sentence:
+            description += "\n\n" + context_sentence
+        cleaned["_description_context_diagnostic"] = {"status": "retained" if context_sentence else "omitted",
+            "reason": "source_grounded_sentence" if context_sentence else "no_usable_context_returned",
+            "source_anchor_validated": bool(anchored_context), "rejections": context_rejections}
     # The model sometimes narrates its own rules to the viewer ("without adding
     # external stories"); cut those clauses before anything is judged or shown.
     description = strip_process_narration(description) or description
@@ -870,6 +933,9 @@ def generate_one(
         _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})
         return None
     sanitized = _sanitize_generated_package(validated, script, creator_brief)
+    context_diagnostic = sanitized.pop("_description_context_diagnostic", None)
+    if context_diagnostic:
+        provider_trace["description_context"] = context_diagnostic
     cleaned = _prefer_fresh_titles(sanitized, channel_learning)
     cleaned["_provider_trace"] = provider_trace
     _LAST_LANGUAGE_DIAGNOSTICS.set({language: provider_trace})

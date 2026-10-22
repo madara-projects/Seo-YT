@@ -41,6 +41,10 @@ export function useAnalyze() {
       void queryClient.invalidateQueries({ queryKey: historyKeys.all });
       void queryClient.invalidateQueries({ queryKey: systemKeys.settings });
 
+      // The Creator result header already exposes status and warnings.
+      // Avoid a duplicate floating toast covering mobile package controls.
+      if (window.location.pathname === "/creator") return;
+
       const review = { label: "Review", onClick: () => navigate("/creator") };
       const warnings = asArray<string>(data.research_warnings);
       if (data.generation_source === "fallback") {

@@ -5,9 +5,10 @@ import { EvidenceChip, SourceLegend } from "@/components/common/EvidenceChip";
 import { Panel } from "@/components/common/Panel";
 import { EmptyState } from "@/components/common/States";
 import { StudioTestPanel } from "@/components/learning/StudioTestPanel";
-import { asArray, asObject, formatNumber } from "@/lib/utils";
+import { asArray, asObject } from "@/lib/utils";
 import { opportunityText, titleScoreText } from "@/lib/dashboardFormat";
 import { copyValue } from "@/lib/packages";
+import { researchEvidence } from "@/lib/researchEvidence";
 import type { AnalyzeResponse, PackageOption, SelectionStatus } from "@/api/types";
 
 /** `selected` is the creator's explicit choice; before one is made there is no decision to show. */
@@ -47,9 +48,7 @@ export function DecisionStage({
 
   const publicCount = asArray(data.youtube_results).length;
   const opportunity = asObject(asObject(data.opportunity_gap_analysis).opportunity_score);
-  const publicSentence = publicCount
-    ? `${formatNumber(publicCount)} public YouTube result${publicCount === 1 ? " was" : "s were"} returned as context.`
-    : "No public YouTube result was returned.";
+  const publicSentence = researchEvidence(data).summary;
 
   return (
     <div className="space-y-5">

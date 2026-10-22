@@ -275,6 +275,9 @@ export function copyValue(option: PackageOption | null, field: CopyField): strin
 
 /** Does the payload carry any research evidence at all? */
 export function researchHasEvidence(data: AnalyzeResponse | null | undefined): boolean {
+  // Retrieval diagnostics are useful even when no video survived screening.
+  const retrieved = asObject(asObject(data?.keyword_research).diagnostics).youtube_results_unique;
+  if (typeof retrieved === "number" && Number.isFinite(retrieved) && retrieved >= 0) return true;
   if (!data || typeof data !== "object") return false;
   return Boolean(
     asArray(data.research_queries).length ||

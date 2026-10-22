@@ -36,7 +36,8 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         )
         tags, evidence = select_final_tags(research, generated_tags=[], title="A Friend Sets Boundaries #shorts", script=quote, creator_brief={"exact_quote": quote, "video_format": "youtube_shorts"})
         self.assertNotIn("why am i setting boundaries", tags)
-        self.assertIn("unsupported_perspective_shift", {item["reason"] for item in evidence["rejected_candidates"]})
+        # Quote-only advice queries are now excluded before tag selection.
+        self.assertNotIn("why am i setting boundaries", {item["keyword"] for item in research["candidates"]})
 
     def test_query_plan_does_not_spend_quota_on_analyst_labels(self):
         queries = plan_research_queries(
@@ -272,7 +273,7 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         self.assertNotIn("emotional exhaustion", text)
         creator_words = set(re.findall(r"[a-z']+", f"{quote} reach".casefold())) | {"quotes", "about"}
         for item in queries:
-            self.assertLessEqual(set(item["query"].casefold().split()), creator_words, item)
+            self.assertLessEqual(set(re.findall(r"[a-z']+", item["query"].casefold())), creator_words, item)
 
     @patch("win_engine.analysis.semantic_research.gemini_client.is_available", return_value=False)
     def test_rarity_quote_gets_no_invented_profile_or_queries(self, _available):
@@ -294,7 +295,7 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
         query_text = " | ".join(item["query"] for item in queries)
         self.assertNotIn("knowing your worth quotes", query_text)
         self.assertNotIn("being valued for who you are", query_text)
-        self.assertEqual(queries, [])
+        self.assertEqual(queries, [{"type": "exact_quote", "query": '"' + quote + '"'}])
 
     def test_rarity_quote_semantic_tags_survive_without_copying_quote(self):
         quote = "You deserve somebody who knows how hard it is to find somebody like you"
@@ -324,7 +325,7 @@ class Phase2DKeywordResearchTests(unittest.TestCase):
             title="You're Rarer Than You Realize ✨ #shorts", script=quote, creator_brief=brief,
         )
         self.assertGreaterEqual(len(tags), 3)
-        self.assertIn("know your worth", tags)
+        self.assertTrue({"know your worth", "knowing your worth quotes"} & set(tags))
         self.assertTrue(any(tag.startswith("being valued") for tag in tags))
         self.assertNotIn(quote.casefold(), tags)
 

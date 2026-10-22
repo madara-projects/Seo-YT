@@ -48,7 +48,11 @@ def build_research_decision(
         topic = str(brief.get("topic") or "the supplied topic").strip()
         recommended_angle = f"Lead with {unique_angle or topic} for {audience}." if audience else f"Lead with {unique_angle or topic}."
     reason = f"Use {proof} to deliver {promise}, without copying competitor wording or adding an unsupported story."
-    avoid = [f"Do not copy the dominant {dominant} title structure."] if titles else ["Research data is unavailable; keep the promise specific and evidence-based."]
+    avoid = []
+    if not titles:
+        avoid.append("Research data is unavailable; keep the promise specific and evidence-based.")
+    elif dominant not in {"other", "no clear pattern"}:
+        avoid.append(f"Do not copy the dominant {dominant} title structure.")
     if repeated_patterns:
         avoid.append("Avoid repeated competitor patterns: " + ", ".join(item["pattern"] for item in repeated_patterns) + ".")
 
@@ -63,6 +67,8 @@ def build_research_decision(
         else "medium" if len(youtube_results) >= 5 and average_relevance >= 55 and multi_term_evidence >= 2
         else "low"
     )
+    if quote and confidence == "high":
+        confidence = "medium"
 
     return {
         "recommended_angle": recommended_angle,
@@ -77,7 +83,7 @@ def build_research_decision(
         "average_relevance_score": round(average_relevance, 1),
         "evidence_scope": "sampled_youtube_results_not_search_volume",
         "search_volume_available": False,
-        "confidence_note": "Confidence describes relevance within the sampled API results, not keyword demand or guaranteed reach.",
+        "confidence_note": "Confidence describes source/query matching and any model screening of sampled results. These are heuristic checks, not verified semantic equivalence, keyword demand or guaranteed reach.",
     }
 
 

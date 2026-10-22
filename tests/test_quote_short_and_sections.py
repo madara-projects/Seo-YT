@@ -179,7 +179,7 @@ class PackagingSectionTests(unittest.TestCase):
             )
         }
         self.assertEqual(texts["The heavy weight of impossible love 🌧️ #shorts"], "IMPOSSIBLE LOVE")
-        self.assertEqual(texts["Sad love quotes about an impossible connection 💔 #shorts"], "SAD LOVE QUOTES")
+        self.assertNotIn("QUOTES", texts["Sad love quotes about an impossible connection 💔 #shorts"])
         self.assertEqual(texts["Love quotes for when it can never be 🌧️ #shorts"], "LOVE QUOTES")
         fallback = texts["The pain of being in love with what cannot be 🥀 #shorts"]
         self.assertFalse(fallback.split()[-1].lower() in {"cannot", "it", "when", "being", "in"}, fallback)
@@ -235,7 +235,7 @@ class PackagingSectionTests(unittest.TestCase):
         tags, _ = select_final_tags(research, generated_tags=[], title="When you find out #shorts", script=betrayal,
                                     creator_brief={"exact_quote": betrayal, "video_format": "Short"}, is_short=True)
         self.assertIn("betrayal quotes", tags)
-        self.assertIn("sad betrayal quotes", tags)
+        self.assertNotIn("sad betrayal quotes", tags)
 
     def test_weak_interpretation_is_pruned_when_searches_cover_the_package(self):
         from win_engine.generation.quality_refinement import refine_package

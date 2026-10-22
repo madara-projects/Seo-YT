@@ -79,6 +79,7 @@ export interface TopOpportunity {
 }
 
 export interface KeywordSignal {
+  provenance?: string;
   keyword?: string;
   mentions?: number;
   strength?: number | string;

@@ -16,6 +16,7 @@ const RESULT = {
   generation_source: "gemini",
   history_run_id: 9001,
   research_warnings: ["Only 2 public results matched the topic; research was limited."],
+  keyword_research: { diagnostics: { youtube_results_unique: 150 } },
   title_variants: ["The words I never said"],
   title_thumbnail_packages: [
     { package_id: "package-a", title: "Why silence hurts more than words", quality_status: "approved", misleading_risk: "low" },
@@ -38,6 +39,17 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Creator", () => {
+  test("explains filtered research without a toast covering package controls", async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS.mobile);
+    await mockAnalyze(page, []);
+    await page.goto("/creator");
+    await page.getByLabel("Script").fill("A quote about memories.");
+    await page.getByRole("button", { name: "Generate package" }).click();
+    await expect(page.getByTestId("package-card")).toBeVisible();
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+    await page.getByRole("tab", { name: "Research and insights" }).click();
+    await expect(page.getByTestId("research-accounting")).toContainText("150 unique videos retrieved; 0 passed relevance checks.");
+  });
   test("generates a long tutorial and opens the results on the Package tab", async ({ page }) => {
     const errors = collectErrors(page);
     const bodies: unknown[] = [];

@@ -73,7 +73,19 @@ def analyze_script_semantics(script: str, creator_brief: dict[str, Any] | None =
                 "Do not claim search volume or performance.\n\n"
                 "For a quote, prefer the concrete meaning as the primary topic (for example letting go of the wrong person) "
                 "over broad advice categories. Use at most 3 secondary topics and 4 search phrases. "
-                "Keep reflective quotes emotional_relatable; do not label them tutorials or tips.\n"
+                "Keep reflective quotes emotional_relatable; do not label them tutorials or tips. "
+                "For quote-only content, supply natural subject-plus-format search phrases, such as "
+                "broken heart quotes when a broken heart is explicit, or mind vs heart quotes when that contrast is explicit. "
+                "Avoid why/how problem-solving questions and awkward strings such as mind vs heart moving on. "
+                "Do not invent a subject just to add the word quotes.\n"
+                "Prefer qualified themes over ambiguous one-word topics (emotional scars quotes rather than "
+                "scar quotes for an emotional-scar metaphor). Avoid near-duplicate deep/sad/emotional variants "
+                "of the same subject; supply distinct source-supported concepts.\n"
+                "Preserve who feels what about whom and the direction of any regret, loss, or affection. "
+                "For a quote, prefer a concrete phrase with an original content-word anchor over a one-word mood "
+                "such as guilt, sadness, or heartbreak. Do not broaden a specific interpersonal situation into "
+                "bereavement, general emotional pain, or advice. Every search phrase needs a content-word anchor "
+                "from the quote; omit phrases that cannot retain one.\n"
                 f"Creator source:\n{prompt_source[:8000]}"
             ),
             system="You are a careful semantic research analyst. Return compact valid JSON only.",
@@ -189,7 +201,7 @@ def usable_research_topic(value: Any) -> bool:
     if text.casefold() in {"emotional_relatable", "informational", "problem_solving", "how_to",
         "explanation", "comparison", "curiosity", "story_experience", "current_event", "entertainment"}:
         return False
-    if re.match(r"(?i)^(?:sometimes\b|i\b|we\b|you\s+(?:will|never|can|could|should)|this\s+is\b)", text):
+    if re.match(r"(?i)^(?:sometimes\b|one day\b|going to\b|i\b|we\b|you[’'](?:re|ll)\b|you\s+(?:are|will|never|can|could|should)|this\s+is\b)", text):
         return False
     if re.search(r"(?i)\b(?:if|but|because|and|of|to|with|the|a|an)$", text):
         return False

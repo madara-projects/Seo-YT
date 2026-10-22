@@ -124,6 +124,34 @@ def _connection_lost(exc: BaseException) -> bool:
     return isinstance(exc, err.OperationalError) and bool(exc.args) and exc.args[0] in _CONNECTION_LOST_CODES
 
 
+def safe_cloud_error(exc: BaseException) -> dict[str, Any]:
+    """Useful driver diagnostics without host names, account names or secrets."""
+    code = exc.args[0] if exc.args and type(exc.args[0]) is int else None
+    detail = str(exc).casefold()  # inspected locally, never returned or logged
+    category = "configuration" if isinstance(exc, CloudSyncConfigError) else "unknown"
+    if any(marker in detail for marker in ("certificate", "ssl", "tls")):
+        category = "tls"
+    elif code == 1045:
+        category = "authentication"
+    elif code in {1044, 1142}:
+        category = "permission"
+    elif code == 1049:
+        category = "database"
+    elif "timed out" in detail or "timeout" in detail:
+        category = "timeout"
+    elif code in _CONNECTION_LOST_CODES:
+        category = "connection"
+    messages = {
+        "tls": "Cloud TLS verification failed; check the CA certificate and server identity.",
+        "authentication": "Cloud authentication failed; check the configured credentials.",
+        "permission": "Cloud database access was refused; check the account permissions.",
+        "database": "The configured cloud database is unavailable.",
+        "timeout": "Cloud connection timed out; saved local packages will retry automatically.",
+        "connection": "Cloud connection was interrupted or unavailable; saved local packages will retry automatically.",
+    }
+    return {"category": category, "code": code,
+            "message": str(exc) if isinstance(exc, CloudSyncConfigError) else messages.get(category, type(exc).__name__)}
+
 @contextmanager
 def _savepoint(connection, name: str) -> Iterator[None]:
     """Undo only this block when it fails; the enclosing transaction goes on."""
@@ -275,22 +303,29 @@ class CloudSyncService:
         if not self._lock.acquire(blocking=blocking):
             return {"state": "running", "counts": self._status["last_counts"]}
         counts = {"queued": 0, "pushed": 0, "pulled": 0, "failed": 0, "conflicts": 0, "skipped": 0}
-        self._status.update({"state": "running", "running": True, "last_started_at": _now(), "last_error": None})
+        self._status.update({"state": "running", "running": True, "last_started_at": _now(), "last_error": None,
+                             "last_error_category": None, "last_error_code": None, "last_error_stage": None})
+        stage = "local_staging"
         try:
             # The database is prepared (migrated) before this thread touches it;
             # until it can be, the run fails like an outage and backs off.
             HistoryStore(self.settings.database_path)
             counts["queued"] = self._stage_local_packages()
+            stage = "connect"
             remote = self._remote_connection()
             try:
                 if not self._remote_schema_ready:
+                    stage = "schema"
                     self._ensure_remote_schema(remote)
                     self._remote_schema_ready = True
+                stage = "push"
                 counts["pushed"] = self._push(remote)
                 counts["failed"] += self._last_push_failures
+                stage = "pull"
                 counts["pulled"] = self._pull(remote, since=self._pull_since())
                 counts["conflicts"] = self._last_pull_conflicts
                 counts["skipped"] = self._last_pull_skipped
+                stage = "count"
                 with remote.cursor() as cursor:
                     cursor.execute("SELECT COUNT(*) FROM seo_yt_synced_packages WHERE deleted_at IS NULL")
                     self._status["remote_packages"] = int(cursor.fetchone()[0])
@@ -310,9 +345,12 @@ class CloudSyncService:
             # Error details from database drivers can contain endpoint or
             # account information, so for those only the class name is kept. A
             # local configuration problem describes itself in a safe message.
-            reason = str(exc) if isinstance(exc, CloudSyncConfigError) else type(exc).__name__
-            self._status.update({"state": "offline/pending", "last_error": reason})
-            logger.warning("Cloud package sync remains pending: %s", reason)
+            diagnostic = safe_cloud_error(exc)
+            reason = diagnostic["message"]
+            self._status.update({"state": "offline/pending", "last_error": reason,
+                                 "last_error_category": diagnostic["category"], "last_error_code": diagnostic["code"],
+                                 "last_error_stage": stage})
+            logger.warning("Cloud package sync remains pending at %s (%s, code=%s): %s", stage, diagnostic["category"], diagnostic["code"], reason)
             try:
                 if not isinstance(exc, DatabaseUnavailable):
                     self._mark_all_pending_failures(type(exc).__name__)
@@ -467,11 +505,19 @@ class CloudSyncService:
     def _remote_connection(self):
         import pymysql
         ca = _validated_ca_path(self.settings.cloud_sync_ssl_ca_path)
-        return pymysql.connect(host=self.settings.cloud_sync_host, port=self.settings.cloud_sync_port,
-            user=self.settings.cloud_sync_user, password=self.settings.cloud_sync_password,
-            database=self.settings.cloud_sync_database, charset="utf8mb4", autocommit=False,
-            connect_timeout=10, read_timeout=20, write_timeout=20,
-            ssl={"ca": str(ca), "check_hostname": True})
+        for attempt in range(2):
+            try:
+                return pymysql.connect(host=self.settings.cloud_sync_host, port=self.settings.cloud_sync_port,
+                    user=self.settings.cloud_sync_user, password=self.settings.cloud_sync_password,
+                    database=self.settings.cloud_sync_database, charset="utf8mb4", autocommit=False,
+                    connect_timeout=10, read_timeout=20, write_timeout=20,
+                    ssl={"ca": str(ca), "check_hostname": True})
+            except pymysql.err.OperationalError as exc:
+                # Connection setup has performed no writes and is safe to retry.
+                # Do not retry certificate, credential or permission failures.
+                if attempt or safe_cloud_error(exc)["category"] not in {"connection", "timeout"}:
+                    raise
+                time.sleep(0.5)
 
     def _mark_all_pending_failures(self, error_type: str) -> None:
         """Persist a retry marker without storing cloud connection details."""

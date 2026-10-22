@@ -45,7 +45,7 @@ const VERDICT_BOX: Partial<Record<string, string>> = {
 };
 
 const VERDICT_TEXT: Partial<Record<string, string>> = {
-  GREEN: "The local quality gate found no problems with the title, description and tags. A heuristic, not a measure of reach.",
+  GREEN: "Passed source and formatting checks. This does not establish search demand or reach. The separate title-writing score evaluates wording, not these pass/fail checks.",
   YELLOW: "Usable, with notes to read before you upload.",
   RED: "This package is not ready to upload: fix the notes below before copying anything into YouTube Studio.",
 };
@@ -401,7 +401,9 @@ export function PackagingStage({
             </div>
           </Panel>
 
-          <div className="grid gap-5 sm:grid-cols-2 2xl:grid-cols-4">
+          <details className="rounded-2xl border border-border bg-card p-4">
+          <summary className="cursor-pointer text-sm font-medium">Optional package scores and creative guidance</summary>
+          <div className="mt-4 grid gap-5 sm:grid-cols-2 2xl:grid-cols-4">
             <StatCard
               label="Opportunity score"
               icon={Target}
@@ -415,16 +417,16 @@ export function PackagingStage({
               caption={
                 opportunityMeasured
                   ? "Local heuristic for this run's research, the same for every option. Not a prediction of views."
-                  : "Not measured: no competitor results were returned to score against."
+                  : "Not measured: no comparable results passed the relevance checks."
               }
               tone={opportunityMeasured ? "warn" : "neutral"}
               toneLabel={opportunityMeasured ? "Heuristic" : "Unavailable"}
             />
             <StatCard
-              label={`${preview.label} title quality`}
+              label={`${preview.label} title-writing score`}
               icon={Type}
               value={titleScoreText(preview.titleQualityScore)}
-              caption="Local title-quality heuristic, not measured CTR."
+              caption="Wording heuristic on a 0–10 scale, separate from source/format checks. Not measured CTR or search demand."
               tone="warn"
               toneLabel="Heuristic"
             />
@@ -442,6 +444,7 @@ export function PackagingStage({
             </Panel>
 
           </div>
+          </details>
         </div>
 
         <div className="space-y-5">
@@ -467,7 +470,7 @@ export function PackagingStage({
           >
             <div className="space-y-2.5">
               <Inset>
-                <p className="text-xs text-muted-foreground">Best recurring window</p>
+                <p className="text-xs text-muted-foreground">Suggested starting window</p>
                 <p className="mt-1 text-[0.8125rem] font-medium text-foreground">
                   {displayValue(timing.recommended_day)} · {recurringWindow}
                 </p>

@@ -177,7 +177,11 @@ def build_title_thumbnail_packages(
         style = _title_style(title)
         # Labelled by what the title does; the variant's own label is positional.
         package_intent = package_intent_for_title(title, brief)
-        thumbnail_text = _thumbnail_text(title, focus_phrases, used=used_texts)
+        quote_only = bool(brief.get("exact_quote") or brief.get("on_screen_text"))
+        # A category label such as SCAR QUOTES says little about this quote.
+        # Use its validated title words, retaining negation and the contrast.
+        thumbnail_focus = [phrase for phrase in (focus_phrases or []) if not re.search(r"\bquotes?\b", phrase, re.I)] if quote_only else focus_phrases
+        thumbnail_text = _thumbnail_text(title, thumbnail_focus, used=used_texts)
         used_texts.add(thumbnail_text)
         packages.append(
             {

@@ -74,6 +74,7 @@ browser-artifacts/
 screenshots/
 artifacts/
 runtime/artifacts/
+runtime/creator-*audit-*/
 runtime/secrets/
 ms-playwright/
 

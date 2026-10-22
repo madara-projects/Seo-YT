@@ -64,7 +64,7 @@ def analyze_retention_assistant(
     if not source:
         return _unavailable_result(retention_learning)
 
-    words = unicode_words(source)
+    words = unicode_words(source, min_length=1)
     opening = _opening_text(source)
     package_list = [item for item in (packages or []) if isinstance(item, dict)]
 
@@ -194,7 +194,7 @@ def _analyze_hook(
         risks.append(_risk("quote_context_delay", "high", "opening", f"Approximately {quote_prefix_words} words appear before the exact quote.", source[:quote_position], "Reveal the exact quote earlier and move optional context after it."))
     if not promise_supported:
         risks.append(_risk("unsupported_opening_promise", "high", "opening", "The package or promise uses guaranteed-performance language that the supplied source does not support.", promise or packages[0].get("title", ""), "Remove the guarantee and describe only what the finished video actually contains."))
-    if len(unicode_words(opening)) > 45:
+    if len(unicode_words(opening, min_length=1)) > 45:
         risks.append(_risk("excessive_opening_exposition", "medium", "opening", "The first meaningful block contains more than 45 words before a clear break.", opening, "Split the opening and move background explanation after the first payoff."))
 
     return {"summary": {
@@ -215,7 +215,7 @@ def _analyze_first_frame(
             "status": "unavailable", "reason": "No on-screen text or first-visual description was supplied.",
             "score": None, "provenance": "unavailable",
         }, "risks": []}
-    text_words = len(unicode_words(on_screen_text))
+    text_words = len(unicode_words(on_screen_text, min_length=1))
     reading_seconds = _reading_seconds(text_words) if text_words else None
     risks: list[dict[str, Any]] = []
     if text_words > 25:
@@ -249,7 +249,7 @@ def _analyze_pacing(
     transition_count = len(_TRANSITIONS.findall(source))
     repeated = _repeated_sentences(source)
     payoff_match = _PAYOFF_MARKERS.search(source)
-    payoff_word = len(unicode_words(source[:payoff_match.start()])) if payoff_match else None
+    payoff_word = len(unicode_words(source[:payoff_match.start()], min_length=1)) if payoff_match else None
     risks: list[dict[str, Any]] = []
     density = None
     if duration:
@@ -304,7 +304,7 @@ def _content_words_before(source: str, exact_quote: str) -> int:
             continue
         content_lines.append(line)
     cleaned_prefix = " ".join(content_lines).strip()
-    return len(unicode_words(cleaned_prefix))
+    return len(unicode_words(cleaned_prefix, min_length=1))
 
 
 def _analyze_quote(
@@ -330,7 +330,7 @@ def _analyze_quote(
         risks.append(_risk("voice_over_visual_contradiction", "high", "opening", "The brief says no voice-over, but the supplied content describes narration or listening.", positive_voice_marker.group(0), "Confirm the finished audio plan and remove the contradictory instruction."))
     if not exact_quote:
         return {"summary": {"status": "not_applicable", "reason": "No exact quote was supplied or detected.", "provenance": "unavailable"}, "risks": risks}
-    word_count = len(unicode_words(exact_quote))
+    word_count = len(unicode_words(exact_quote, min_length=1))
     reading_seconds = _reading_seconds(word_count)
     prefix_words = _content_words_before(source, exact_quote)
     if word_count > 24:

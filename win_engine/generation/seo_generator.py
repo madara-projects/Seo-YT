@@ -570,6 +570,9 @@ def _generate_seo_suggestions(
         generation_trace=seo_package.get("generation_trace") or {},
         retention_assistant=retention_assistant,
     ).model_dump()
+    from win_engine.llm.gemini_client import request_diagnostics
+    response["generation_trace"]["request_provider_diagnostics"] = request_diagnostics()
+    response["generation_trace"]["provider_counter_scope"] = "package_writer"
     history_store = research_payload.get("history_store")
     history_run_id = seo_package.get("history_run_id")
     if isinstance(history_store, HistoryStore) and isinstance(history_run_id, int):

@@ -156,13 +156,14 @@ class Phase5HistoryLearningTests(unittest.TestCase):
     def setUp(self):
         self.store = HistoryStore(":memory:")
 
-    def _add_video(self, index: int, retention: float, *, select: bool = False):
+    def _add_video(self, index: int, retention: float, *, select: bool = False, clarity: str = "clear"):
         script = "Battery result shown immediately. Then the test details follow."
         brief = build_creator_brief(script=script, video_format="youtube_shorts", language="english")
         assistant = analyze_retention_assistant(
             script, creator_brief=brief,
             packages=[{"package_id": "package-a", "title": "Battery Result After 30 Days"}],
         )
+        assistant["opening"]["clarity"] = clarity
         run_id = self.store.record_analysis_run(
             script, "SEARCH", "Experiment", "Battery Result After 30 Days", 8.0,
             "low", "WORKABLE", 60.0,
@@ -224,6 +225,15 @@ class Phase5HistoryLearningTests(unittest.TestCase):
         )
         result = self.store.retention_learning_summary(format_filter="youtube_shorts", language_filter="english")
         self.assertEqual(result["sample_size"], 0)
+
+    def test_small_subgroup_is_not_promoted_by_larger_cohort(self):
+        for index in range(1, 9):
+            self._add_video(index, 65 + index, clarity="clear" if index <= 5 else "unclear")
+        result = self.store.retention_learning_summary(format_filter="youtube_shorts", language_filter="english")
+        assert result["sample_size"] == 8
+        assert all(row["sample_size"] >= 5 for row in result["patterns"])
+        assert not any(row["value"] == "subject_needs_review" for row in result["patterns"])
+        assert all(row["confidence_label"] for row in result["patterns"])
 
 
 if __name__ == "__main__":

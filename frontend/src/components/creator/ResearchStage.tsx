@@ -16,6 +16,7 @@ import { EmptyState, ErrorState, UnavailableNote } from "@/components/common/Sta
 import { VideoThumb } from "@/components/common/VideoThumb";
 import { asArray, asObject, displayValue, formatNumber, UNAVAILABLE } from "@/lib/utils";
 import { shortDate } from "@/lib/historyFormat";
+import { researchEvidence } from "@/lib/researchEvidence";
 import type { AnalyzeResponse, ResearchStatus } from "@/api/types";
 import type {
   EntitySignal,
@@ -114,6 +115,7 @@ export function ResearchStage({
   const patterns = asArray<RepeatedTitlePattern>(decision.repeated_title_patterns);
   const winners = asArray<SmallChannelWinner>(decision.small_channel_winners);
   const avoid = asArray<string>(decision.avoid);
+  const evidence = researchEvidence(data);
 
   const generationSource =
     data.generation_source === "gemini"
@@ -127,11 +129,13 @@ export function ResearchStage({
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Summary icon={Youtube} label="Public results" value={results.length} />
+        <Summary icon={Youtube} label="Results passing relevance checks" value={results.length} />
         <Summary icon={Search} label="Queries run" value={queries.length} />
         <Summary icon={Hash} label="Keyword signals" value={keywords.length} />
         <Summary icon={AlertTriangle} label="Warnings" value={warnings.length} />
       </div>
+
+      <p className="text-sm text-muted-foreground" data-testid="research-accounting">{evidence.summary} Retrieval is not evidence of relevance or search volume.</p>
 
       <Panel
         icon={Brain}
@@ -248,7 +252,7 @@ export function ResearchStage({
             </p>
           </>
         ) : (
-          <UnavailableNote>No public YouTube results were returned for this analysis.</UnavailableNote>
+          <UnavailableNote>{evidence.summary} No comparable videos can be used as evidence for this package.</UnavailableNote>
         )}
       </Panel>
 
@@ -301,7 +305,8 @@ export function ResearchStage({
 
         <Panel
           icon={Tags}
-          title="Keyword signals"
+          title="Source-grounded keyword candidates"
+          description="Candidate phrases describe the source. Their presence is not measured search demand."
           aside={<EvidenceChip tone="warn">Local heuristic</EvidenceChip>}
         >
           {keywords.length ? (
@@ -314,7 +319,7 @@ export function ResearchStage({
                 >
                   <p className="text-[0.8125rem] font-medium text-foreground">{displayValue(row.keyword)}</p>
                   <p className="text-[0.6875rem] text-muted-foreground">
-                    Mentions: {displayValue(row.mentions)} · Strength: {displayValue(row.strength)}
+                    {row.provenance === "source_grounded_candidate" ? "Matching retained videos" : "Text mentions"}: {displayValue(row.mentions)} · {displayValue(row.strength)}
                   </p>
                 </li>
               ))}

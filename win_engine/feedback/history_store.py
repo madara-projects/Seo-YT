@@ -581,8 +581,12 @@ class HistoryStore:
             for item in eligible:
                 groups.setdefault(str(item[feature]), []).append(float(item["average_view_percentage"]))
             for value, measurements in groups.items():
+                if len(measurements) < EARLY_SIGNAL_MIN_SAMPLES:
+                    continue
                 patterns.append({
                     "feature": feature, "value": value, "sample_size": len(measurements),
+                    "confidence_label": confidence_payload(len(measurements))["confidence_label"],
+                    "minimum_samples": EARLY_SIGNAL_MIN_SAMPLES,
                     "median_average_viewed_percentage": _median(sorted(measurements)),
                     "observation": (
                         f"In {len(measurements)} eligible creator video(s), {feature.replace('_', ' ')} "

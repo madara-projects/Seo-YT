@@ -272,6 +272,9 @@ describe("tag text for YouTube Studio", () => {
 });
 
 describe("researchHasEvidence", () => {
+  it("shows research accounting when all retrieved videos were filtered", () => {
+    expect(researchHasEvidence(baseResponse({ keyword_research: { diagnostics: { youtube_results_unique: 150 } } } as Partial<AnalyzeResponse>))).toBe(true);
+  });
   it("is false for an empty or missing payload", () => {
     expect(researchHasEvidence(null)).toBe(false);
     expect(researchHasEvidence(baseResponse())).toBe(false);

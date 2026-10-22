@@ -154,6 +154,7 @@ class _RequestBudget:
     def __init__(self, max_calls: int, deadline_seconds: float) -> None:
         self.max_calls = max_calls
         self.calls = 0
+        self.diagnostics: list[dict[str, object]] = []
         self._deadline = time.monotonic() + deadline_seconds
         # Worker threads running in a copy of the request context share this object.
         self._lock = threading.Lock()
@@ -173,6 +174,19 @@ class _RequestBudget:
 
 
 _REQUEST_BUDGET: ContextVar[_RequestBudget | None] = ContextVar("gemini_request_budget", default=None)
+
+
+def request_diagnostics() -> dict[str, object]:
+    """Whole-request provider work, including semantic research and model switches."""
+    budget = _REQUEST_BUDGET.get()
+    if budget is None:
+        return {"scope": "request", "available": False}
+    with budget._lock:
+        stages = [dict(item) for item in budget.diagnostics]
+    return {"scope": "request", "available": True, "logical_calls": len(stages),
+            "provider_attempts": sum(int(item.get("attempts", 0)) for item in stages),
+            "provider_retries": sum(int(item.get("retries", 0)) for item in stages),
+            "stages": stages}
 
 
 @contextmanager
@@ -360,6 +374,29 @@ def generate_with_diagnostics(
     temperature: float = 0.7,
     purpose: str = "package",
 ) -> tuple[str, dict[str, object]]:
+    started = time.monotonic()
+    text, diagnostic = _generate_with_diagnostics(
+        prompt, system, max_tokens=max_tokens, temperature=temperature, purpose=purpose,
+    )
+    # Internal retry limits reset per model; the public counter must not.
+    diagnostic = {**diagnostic, "retries": max(0, int(diagnostic.get("attempts", 0)) - 1),
+                  "purpose": purpose, "elapsed_seconds": round(time.monotonic() - started, 3)}
+    _LAST_DIAGNOSTIC.set(diagnostic)
+    budget = _REQUEST_BUDGET.get()
+    if budget is not None:
+        with budget._lock:
+            budget.diagnostics.append(dict(diagnostic))
+    return text, diagnostic
+
+
+def _generate_with_diagnostics(
+    prompt: str,
+    system: str = "",
+    *,
+    max_tokens: int = 1200,
+    temperature: float = 0.7,
+    purpose: str = "package",
+) -> tuple[str, dict[str, object]]:
     """Return generated text and safe bounded-retry diagnostics.
 
     A 429 is transient until the bounded retry budget is exhausted.  The
@@ -416,7 +453,7 @@ def generate_with_diagnostics(
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
-            "maxOutputTokens": min(max(max_tokens, 256) + thinking_headroom, ceiling),
+            "maxOutputTokens": min(max(max_tokens, 4096 if purpose == "research" else 256) + thinking_headroom, ceiling),
             "responseMimeType": "application/json",
         },
     }

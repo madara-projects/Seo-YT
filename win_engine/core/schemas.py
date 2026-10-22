@@ -61,6 +61,12 @@ class AnalyzeRequest(_Request):
     def normalize_analyze_region(cls, value: str) -> str:
         return normalize_region(value) or "global"
 
+    @field_validator("voice_over")
+    @classmethod
+    def normalize_voice_over(cls, value: str) -> str:
+        from win_engine.analysis.source_cues import normalize_voice_over
+        return normalize_voice_over(value)
+
     @field_validator("script")
     @classmethod
     def script_has_words(cls, value: str) -> str:

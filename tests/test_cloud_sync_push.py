@@ -156,7 +156,9 @@ class CloudPushTests(unittest.TestCase):
         self.assertEqual(result["state"], "offline/pending")
         self.assertEqual(len(remote.pushed), 1)
         status = self.service.status()
-        self.assertEqual(status["last_error"], "OperationalError")
+        self.assertEqual(status["last_error_category"], "connection")
+        self.assertEqual(status["last_error_code"], 2013)
+        self.assertIn("retry automatically", status["last_error"])
         self.assertEqual(status["consecutive_failures"], 1)
 
     def test_packages_that_carry_a_link_are_pushed_first(self):

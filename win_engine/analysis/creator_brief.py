@@ -11,6 +11,7 @@ from win_engine.analysis.source_cues import (
     is_short_video,
     labelled_visual,
     looks_like_standalone_quote,
+    normalize_voice_over,
     source_quote,
     strip_keyword_tail,
 )
@@ -102,7 +103,7 @@ def build_creator_brief(
     extracted_on_screen = on_screen_text.strip() or extracted_quote
     inferred_duration = duration_seconds if duration_seconds is not None else _extract_duration(script_text)
     inferred_visual = visual_requirements.strip() or labelled_visual(script_text)
-    inferred_voice = voice_over.strip().lower()
+    inferred_voice = normalize_voice_over(voice_over)
     if not inferred_voice:
         if (
             re.search(r"\b(?:voice[- ]?over|narration|dialogue|audio)\s*:\s*(?:none|no|absent|false|off|silent|n/a)\b", script_lower)

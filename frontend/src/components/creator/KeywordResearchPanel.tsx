@@ -49,7 +49,7 @@ export function KeywordResearchPanel({ research }: { research: KeywordResearch |
   return (
     <Panel
       icon={Tags}
-      title="Research-backed tag selection"
+      title="Tag selection and evidence"
       description={
         data.confidence === "observed_youtube_relevance"
           ? "Chosen from the script's topics and checked against sampled YouTube results."

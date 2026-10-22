@@ -18,6 +18,7 @@ import { Inset, Panel } from "@/components/common/Panel";
 import { EmptyState, UnavailableNote } from "@/components/common/States";
 import { StatCard } from "@/components/common/StatCard";
 import { humanize } from "@/lib/labels";
+import { researchEvidence } from "@/lib/researchEvidence";
 import { toFiniteNumber } from "@/lib/format";
 import { asArray, asObject, displayValue, formatNumber, UNAVAILABLE } from "@/lib/utils";
 import { PacingPanel } from "./PacingPanel";
@@ -156,9 +157,7 @@ export function AngleStage({
           }
         >
           <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
-            {publicCount
-              ? `${formatNumber(publicCount)} public result${publicCount === 1 ? " was" : "s were"} returned for context. This does not prove why a video performed.`
-              : "No public result was returned for this run."}
+            {researchEvidence(data).summary} This does not prove why a video performed.
           </p>
         </Panel>
       </div>
