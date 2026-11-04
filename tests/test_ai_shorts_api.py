@@ -545,12 +545,12 @@ class SchemaTests(unittest.TestCase):
             connection.close()
 
             result = migrations.prepare_database(str(migrated_path))
-            self.assertEqual((result.old_version, result.new_version), (11, 12))
-            self.assertEqual(migrations.CURRENT_SCHEMA_VERSION, 12)
-            ddl, version, recorded = plan_schema(new_path)
+            self.assertEqual((result.old_version, result.new_version), (11, migrations.CURRENT_SCHEMA_VERSION))
+            ddl, version, _ = plan_schema(new_path)
             self.assertEqual([(kind, name) for kind, name, _ in ddl], [("index", "idx_ai_short_plans_run"), ("table", "ai_short_plans")])
-            self.assertEqual((version, recorded), (12, [(12, migrations._V12_DESCRIPTION)]))
-            self.assertEqual(plan_schema(migrated_path), (ddl, version, recorded))
+            self.assertEqual(version, migrations.CURRENT_SCHEMA_VERSION)
+            # The version 12 step recorded itself on the way to the current version.
+            self.assertEqual(plan_schema(migrated_path), (ddl, version, [(12, migrations._V12_DESCRIPTION)]))
 
 
 if __name__ == "__main__":

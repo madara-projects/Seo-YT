@@ -13,7 +13,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 _BACKUPS_KEPT = 10
 # The pre-migration state is what a backup must preserve, so a migration that
 # is retried in the same process does not copy the whole database again.
@@ -248,6 +248,7 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
     _create_relational_tables(connection)
     _create_v11_additions(connection)
     _create_v12_additions(connection)
+    _create_v13_additions(connection)
     _create_indexes(connection)
     connection.execute(
         """CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -258,7 +259,7 @@ def initialize_current_schema(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
-        (CURRENT_SCHEMA_VERSION, datetime.now(timezone.utc).isoformat(), _V12_DESCRIPTION),
+        (CURRENT_SCHEMA_VERSION, datetime.now(timezone.utc).isoformat(), _V13_DESCRIPTION),
     )
     connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
     connection.commit()
@@ -680,6 +681,51 @@ def _create_v12_additions(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v12_to_v13(connection: sqlite3.Connection) -> None:
+    """Keep, with each performance window, what the video looked like, what it covered and how its traffic breakdown went."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _create_v13_additions(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at, description) VALUES (13, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), _V13_DESCRIPTION),
+        )
+        connection.execute("PRAGMA user_version = 13")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+_V13_DESCRIPTION = "Performance windows keep their uploaded metadata, covered hours and traffic breakdown state"
+
+# Appended to video_performance_snapshots in this order by the v12 step and a
+# new database alike, so both list the snapshot columns the same way.
+_V13_SNAPSHOT_COLUMNS = (
+    # The uploaded title, tags and description seen when the window was
+    # captured, as JSON; null for windows captured before version 13.
+    ("metadata_json", "TEXT"),
+    # Hours from publication to the end of the window's last reported day.
+    # YouTube Analytics reports whole Pacific days, so a "24h" window covers
+    # between 24 and 48 hours depending on the publication hour.
+    ("covered_hours", "REAL"),
+    # The traffic-source breakdown's own outcome, apart from the window's:
+    # ok, empty, refused or failed; null when it was never recorded.
+    ("traffic_status", "TEXT"),
+    ("traffic_attempt_count", "INTEGER DEFAULT 0"),
+    ("traffic_last_attempted_at", "TEXT"),
+    ("traffic_last_failure_reason", "TEXT"),
+)
+
+
+def _create_v13_additions(connection: sqlite3.Connection) -> None:
+    """Version 13's snapshot columns, for the v12 step and a new database alike."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(video_performance_snapshots)")}
+    for name, declaration in _V13_SNAPSHOT_COLUMNS:
+        if name not in columns:
+            connection.execute(f"ALTER TABLE video_performance_snapshots ADD COLUMN {name} {declaration}")
+
+
 # history_store's format spellings as version 10 shipped them. A migration must
 # keep doing what it did then, so it has its own copy.
 _V10_FORMATS = frozenset({
@@ -734,6 +780,7 @@ _MIGRATIONS = (
     _migrate_v9_to_v10,
     _migrate_v10_to_v11,
     _migrate_v11_to_v12,
+    _migrate_v12_to_v13,
 )
 assert len(_MIGRATIONS) == CURRENT_SCHEMA_VERSION
 

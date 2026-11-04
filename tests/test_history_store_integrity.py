@@ -400,7 +400,7 @@ class StartupTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_a_new_database_has_the_same_version_12_schema_as_a_migrated_one(self):
+    def test_a_new_database_has_the_same_current_schema_as_a_migrated_one(self):
         """Every table, column (in order), index and foreign key: from version 11 and from the Phase 1 layout."""
         from test_phase1_migrations import Phase1MigrationTests
 
@@ -408,7 +408,7 @@ class StartupTests(unittest.TestCase):
             new_path = Path(folder) / "new.db"
             migrations.prepare_database(str(new_path))
             fresh = self._schema(new_path)
-            self.assertEqual((fresh["user_version"], fresh["latest_migration"]), (12, (12, migrations._V12_DESCRIPTION)))
+            self.assertEqual((fresh["user_version"], fresh["latest_migration"]), (13, (13, migrations._V13_DESCRIPTION)))
             self.assertTrue({"youtube_quota_usage", "youtube_studio_tests", "ai_short_plans"} <= set(fresh["tables"]))
             self.assertIn("idx_studio_tests_run", fresh["tables"]["youtube_studio_tests"]["indexes"])
             self.assertIn("idx_ai_short_plans_run", fresh["tables"]["ai_short_plans"]["indexes"])
@@ -432,8 +432,25 @@ class StartupTests(unittest.TestCase):
             connection.commit()
             connection.close()
             result = migrations.prepare_database(str(v11_path))
-            self.assertEqual((result.old_version, result.new_version), (11, 12))
+            self.assertEqual((result.old_version, result.new_version), (11, 13))
             self.assertEqual(self._schema(v11_path), fresh)
+
+            # From version 12: the step this release adds appends the snapshot
+            # columns in the order a new database lists them.
+            v12_path = Path(folder) / "v12.db"
+            migrations.prepare_database(str(v12_path))
+            connection = sqlite3.connect(v12_path)
+            for name, _ in reversed(migrations._V13_SNAPSHOT_COLUMNS):
+                connection.execute(f"ALTER TABLE video_performance_snapshots DROP COLUMN {name}")
+            connection.execute("DELETE FROM schema_migrations WHERE version = 13")
+            connection.execute("PRAGMA user_version = 12")
+            connection.commit()
+            connection.close()
+            result = migrations.prepare_database(str(v12_path))
+            self.assertEqual((result.old_version, result.new_version), (12, 13))
+            self.assertEqual(self._schema(v12_path)["tables"], fresh["tables"])
+            snapshot_columns = [column[0] for column in fresh["tables"]["video_performance_snapshots"]["columns"]]
+            self.assertEqual(snapshot_columns[-6:], [name for name, _ in migrations._V13_SNAPSHOT_COLUMNS])
 
             # From version 0, the Phase 1 layout, through every step. A column
             # a step appends (owned_video_snapshots.channel_id) must sit where a
@@ -441,7 +458,7 @@ class StartupTests(unittest.TestCase):
             legacy_path = Path(folder) / "legacy.db"
             Phase1MigrationTests._create_v0_database(legacy_path)
             result = migrations.prepare_database(str(legacy_path), backup_before_migration=False)
-            self.assertEqual((result.old_version, result.new_version), (0, 12))
+            self.assertEqual((result.old_version, result.new_version), (0, 13))
             self.assertEqual(self._schema(legacy_path), fresh)
 
     def test_old_backups_are_pruned(self):

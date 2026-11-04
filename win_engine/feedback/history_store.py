@@ -7,7 +7,7 @@ import sqlite3
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as day_time, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -41,7 +41,8 @@ _SNAPSHOT_COLUMNS = (
     "impressions", "impressions_ctr", "snapshot_window", "captured_at",
     "snapshot_status", "attempt_count", "last_failure_reason",
     "last_attempted_at", "completed_at", "source_start_date", "source_end_date", "youtube_video_id",
-    "traffic_sources_json",
+    "traffic_sources_json", "metadata_json", "covered_hours", "traffic_status", "traffic_attempt_count",
+    "traffic_last_attempted_at", "traffic_last_failure_reason",
 )
 # Everyday names for YouTube Analytics' insightTrafficSourceType values.
 TRAFFIC_SOURCE_ALIASES = {
@@ -1809,6 +1810,8 @@ class HistoryStore:
         for snapshot in snapshots:
             # Null when YouTube refused or had no breakdown, and for every window but a completed one.
             snapshot["traffic_sources"] = _json_value(snapshot.pop("traffic_sources_json")) or None
+            # The uploaded metadata seen when the window was captured; null before version 13.
+            snapshot["uploaded_metadata"] = _json_value(snapshot.pop("metadata_json")) or None
             # Only the scheduled windows are collected again; "current" is replaced on each refresh.
             snapshot["retry_allowed"] = (
                 snapshot.get("snapshot_window") in _SCHEDULED_WINDOWS
@@ -2590,6 +2593,27 @@ def format_filter_values(value: Any) -> frozenset[str] | None:
     if key == "long_form":
         return _LONG_FORM_VALUES
     return frozenset({key} if key else ())
+
+
+def window_covered_hours(published_at: Any, source_end_date: Any) -> float | None:
+    """Hours after publication that a named window's YouTube Analytics range covers.
+
+    Analytics reports whole Pacific days, so a window whose range ends on
+    ``source_end_date`` covers from publication to the Pacific midnight after
+    that day: a "24h" window covers between 24 and 48 hours depending on the
+    hour of publication (one hour more or less across a daylight-saving change).
+    None when either value is missing or unreadable.
+    """
+    try:
+        published = datetime.fromisoformat(str(published_at or "").strip().replace("Z", "+00:00"))
+        last_day = date.fromisoformat(str(source_end_date or "").strip()[:10])
+    except ValueError:
+        return None
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    window_end = datetime.combine(last_day + timedelta(days=1), day_time(), tzinfo=ANALYTICS_ZONE)
+    hours = (window_end - published).total_seconds() / 3600
+    return round(hours, 2) if hours > 0 else None
 
 
 def reportable_window(published_at: datetime, hours: float, now: datetime) -> tuple[date, date] | None:
