@@ -119,6 +119,36 @@ class TrafficBackfillRetryTests(unittest.TestCase):
         _, query_rows = self.refresh(link, force=True, rows=TRAFFIC_ROWS)
         query_rows.assert_not_called()
 
+    def test_the_snapshot_offers_the_retry_only_while_the_breakdown_is_exhausted(self):
+        """History shows "Retry failed windows" from this flag; the window's own metrics are complete."""
+        link = self.exhausted_window("exhaust0006", datetime(2026, 8, 1, tzinfo=timezone.utc))
+        flags = lambda: [
+            (s["snapshot_window"], s["retry_exhausted"], s["traffic_retry_exhausted"])
+            for s in self.store.performance_snapshots("exhaust0006") if s["snapshot_window"] == "24h"
+        ]
+        self.assertEqual(flags(), [("24h", False, True)])
+
+        self.refresh(link, force=True, rows=TRAFFIC_ROWS)
+
+        self.assertEqual(flags(), [("24h", False, False)])
+
+    def test_an_empty_or_refused_breakdown_is_not_offered_a_retry(self):
+        for status in ("empty", "refused"):
+            with self.subTest(status=status):
+                video_id = f"final{status}"
+                self.link(video_id, datetime(2026, 8, 1, tzinfo=timezone.utc))
+                self.store.record_performance_snapshot(
+                    video_id, 24, views=55, snapshot_window="24h",
+                    source_start_date="2026-07-31", source_end_date="2026-08-01",
+                )
+                with self.store._connect() as connection:
+                    connection.execute(
+                        "UPDATE video_performance_snapshots SET traffic_status = ?, traffic_attempt_count = ? WHERE youtube_video_id = ?",
+                        (status, _MAX_TRAFFIC_ATTEMPTS, video_id),
+                    )
+                snapshot = next(s for s in self.store.performance_snapshots(video_id) if s["snapshot_window"] == "24h")
+                self.assertFalse(snapshot["traffic_retry_exhausted"])
+
     def test_a_forced_retry_that_fails_again_stays_capped_for_ordinary_refreshes(self):
         link = self.exhausted_window("exhaust0003", datetime(2026, 8, 1, tzinfo=timezone.utc))
 

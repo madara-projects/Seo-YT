@@ -31,8 +31,9 @@ function linkIdOf(report: LinkedVideoReport): number | null {
 
 /**
  * Collects the video's due windows now, from History rather than only from
- * Audits. "Retry failed windows" appears only when a window has used every
- * attempt; it asks the server to try each such window once more.
+ * Audits. "Retry failed windows" appears only when a window, or a completed
+ * window's traffic breakdown, has used every attempt; it asks the server to
+ * try each such window or breakdown once more.
  */
 export function LinkedVideoRefresh({ report }: { report: LinkedVideoReport }) {
   const linkId = linkIdOf(report);

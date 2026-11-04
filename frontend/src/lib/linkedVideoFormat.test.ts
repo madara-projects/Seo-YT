@@ -148,4 +148,11 @@ describe("hasExhaustedWindows", () => {
     expect(hasExhaustedWindows([{ snapshot_status: "failed", attempt_count: 3 }])).toBe(false);
     expect(hasExhaustedWindows(undefined)).toBe(false);
   });
+
+  it("is true for a completed window whose traffic breakdown the server marks exhausted", () => {
+    expect(
+      hasExhaustedWindows([{ snapshot_status: "complete", retry_exhausted: false, traffic_retry_exhausted: true }]),
+    ).toBe(true);
+    expect(hasExhaustedWindows([{ snapshot_status: "complete", traffic_retry_exhausted: false }])).toBe(false);
+  });
 });

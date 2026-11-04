@@ -268,6 +268,8 @@ export interface LinkedSnapshot {
   retry_allowed?: boolean;
   /** A named window that never completed and has used every attempt; older servers omit it. */
   retry_exhausted?: boolean;
+  /** A completed window whose traffic breakdown failed every attempt; older servers omit it. */
+  traffic_retry_exhausted?: boolean;
 }
 
 /** `POST /api/published-videos/{id}/refresh`: what was collected, and the report rebuilt from it. */

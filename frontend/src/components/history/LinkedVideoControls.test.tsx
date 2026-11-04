@@ -238,6 +238,22 @@ describe("refreshing a linked video from History", () => {
     expect(JSON.parse(String(init.body))).toEqual({ retry_failed_windows: true });
   });
 
+  it("retries a completed window's exhausted traffic breakdown with the retry flag", async () => {
+    const user = userEvent.setup();
+    renderReport({
+      ...REPORT,
+      snapshots: [{
+        snapshot_window: "24h", snapshot_status: "complete", attempt_count: 1,
+        retry_allowed: false, retry_exhausted: false, traffic_retry_exhausted: true,
+      }],
+    });
+    await user.click(screen.getByRole("button", { name: "Retry failed windows" }));
+
+    await waitFor(() => expect(calls("/api/published-videos/4/refresh")).toHaveLength(1));
+    const init = sent("/api/published-videos/4/refresh");
+    expect(JSON.parse(String(init.body))).toEqual({ retry_failed_windows: true });
+  });
+
   it("reports a failed refresh", async () => {
     fetchMock.mockImplementation(async () => json({ error: { message: "YouTube refused the request." } }, 400));
     const user = userEvent.setup();

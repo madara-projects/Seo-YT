@@ -238,9 +238,14 @@ export function uploadedMetadataView(report: LinkedVideoReport): UploadedMetadat
   };
 }
 
-/** Whether a window ran out of attempts, which only "Retry failed windows" collects again. */
+/**
+ * Whether a window, or a completed window's traffic breakdown, ran out of
+ * attempts: only "Retry failed windows" collects either again.
+ */
 export function hasExhaustedWindows(snapshots: readonly LinkedSnapshot[] | null | undefined): boolean {
-  return (snapshots ?? []).some((snapshot) => snapshot?.retry_exhausted === true);
+  return (snapshots ?? []).some(
+    (snapshot) => snapshot?.retry_exhausted === true || snapshot?.traffic_retry_exhausted === true,
+  );
 }
 
 export type LabelDraft = Record<LabelField, string>;

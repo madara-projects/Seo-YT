@@ -2103,6 +2103,16 @@ class HistoryStore:
             snapshot["retry_allowed"] = unfinished and attempts < _MAX_SNAPSHOT_ATTEMPTS
             # Its attempts are used up: only a refresh asked to retry failed windows collects it again.
             snapshot["retry_exhausted"] = unfinished and attempts >= _MAX_SNAPSHOT_ATTEMPTS
+            # The window is complete but its traffic breakdown failed every attempt:
+            # the same explicit retry asks for it once more (due_traffic_backfills
+            # with include_exhausted). An empty breakdown is final and a refusal
+            # waits for a reconnect, so neither is offered a retry that would do nothing.
+            snapshot["traffic_retry_exhausted"] = (
+                snapshot.get("snapshot_window") in _SCHEDULED_WINDOWS
+                and snapshot.get("snapshot_status") == "complete"
+                and snapshot.get("traffic_status") == "failed"
+                and int(snapshot.get("traffic_attempt_count") or 0) >= _MAX_TRAFFIC_ATTEMPTS
+            )
         return snapshots
 
     def completed_evidence_snapshot(
