@@ -114,11 +114,17 @@ class RefreshTests(Base):
             result = self.service.refresh_linked_video_performance(link, collect_current=collect_current, windows=["24h"])
         return result, query_rows
 
-    def legacy_window(self, video_id: str, window: str = "24h", views: int = 55) -> None:
-        """A completed window captured before traffic outcomes were recorded: no breakdown, no status."""
+    def legacy_window(self, video_id: str, window: str = "24h", views: int = 55, *,
+                      source_start_date: str = "2026-07-31", source_end_date: str = "2026-08-01") -> None:
+        """A completed window captured before traffic outcomes were recorded: no breakdown, no status.
+
+        Its range starts on the link's Pacific publish date, as a real window's
+        does; one that starts elsewhere was measured from another publish time
+        and is retired from learning as pre-public history.
+        """
         self.store.record_performance_snapshot(
             video_id, 24, views=views, snapshot_window=window,
-            source_start_date="2026-07-31", source_end_date="2026-08-01",
+            source_start_date=source_start_date, source_end_date=source_end_date,
         )
 
     def test_a_completed_window_keeps_its_traffic_sources(self):
@@ -400,10 +406,16 @@ class RefreshTests(Base):
         self.assertTrue(all(state["views"] == 55 for state in states))
 
     def test_the_collector_counts_the_windows_a_refresh_backfilled(self):
-        published = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        published_at = datetime.now(timezone.utc) - timedelta(days=3)
+        published = published_at.isoformat()
         self.link("collectback", published_at=published)
-        # A completed window of the same link still without a breakdown.
-        self.legacy_window("collectback", "7d")
+        # A completed window of the same link still without a breakdown, its
+        # range starting on the link's Pacific publish date.
+        first_day = published_at.astimezone(youtube_channel._ANALYTICS_ZONE).date()
+        self.legacy_window(
+            "collectback", "7d",
+            source_start_date=first_day.isoformat(), source_end_date=(first_day + timedelta(days=7)).isoformat(),
+        )
         youtube = self.youtube()
         with (
             patch.object(YouTubeChannelService, "status", return_value=CONNECTED),
