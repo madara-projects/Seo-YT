@@ -181,6 +181,9 @@ export interface LinkedVideoReport {
   /** The linked video's id. There is no `youtube_video_id` key here. */
   video_id?: string;
   ownership_verified?: boolean;
+  /** "verified" when the ownership check passed; learning needs it with the flag. */
+  ownership_state?: string;
+  verified_channel_id?: string | null;
   published_at?: string | null;
   /** Public or owned metadata; any field may be null when only partial data exists. */
   youtube?: { title?: string | null; description?: string | null; tags?: string[] | null } | null;
@@ -195,6 +198,10 @@ export interface LinkedVideoReport {
     matching_tags?: string[];
   };
   performance?: LinkedPerformance;
+  /** The labels learning groups videos by; `{}` for a link that predates them. */
+  comparable_metadata?: ComparableMetadata | null;
+  /** Every collection attempt and window for the video, oldest first. */
+  snapshots?: LinkedSnapshot[];
   diagnosis?: {
     /** Compares completed windows only. */
     verdict?: string;
@@ -203,7 +210,65 @@ export interface LinkedVideoReport {
     confidence?: string;
     learning_eligible?: boolean;
     attribution_note?: string;
+    /** The rule generation uses: verified, labelled, and a completed 24-hour window. Older servers omit it. */
+    counts_toward_generation?: boolean;
+    /** Whether enough comparable videos existed for the verdict to compare with their median. */
+    peer_baseline_available?: boolean;
+    /** The window the verdict used ("24h", "7d", "28d"), or "none"/null before any completed. */
+    window?: string | null;
+    /**
+     * How many comparable videos the server counted for the peer baseline, sent
+     * even when too few to compare with. It is 0 or null as well when the server
+     * did not look (no completed window, or a label unknown), so 0 never means
+     * that none exist.
+     */
+    baseline_sample_size?: number | null;
   };
+}
+
+/** The four labels comparable videos must share; "unknown" is the stored placeholder. */
+export interface ComparableLabels {
+  language?: string | null;
+  format?: string | null;
+  duration_bucket?: string | null;
+  topic_category?: string | null;
+}
+
+/** `published_video_comparable_metadata`, with where each label came from. */
+export interface ComparableMetadata extends ComparableLabels {
+  link_id?: number;
+  /** "package", "creator" or "unknown" per label. */
+  sources?: Partial<Record<keyof ComparableLabels, string>>;
+  updated_at?: string | null;
+}
+
+/** `PATCH /api/published-videos/{id}/comparable-metadata`: only the labels sent change; null stores "unknown". */
+export type ComparableMetadataUpdate = Partial<Record<keyof ComparableLabels, string | null>>;
+
+export interface ComparableMetadataResult {
+  status?: string;
+  link_id?: number;
+  comparable_metadata?: ComparableMetadata | null;
+}
+
+/** One row of `video_performance_snapshots`, the parts History reads. */
+export interface LinkedSnapshot {
+  snapshot_window?: string | null;
+  snapshot_status?: string | null;
+  attempt_count?: number | null;
+  /** The window is still collected on the next refresh. */
+  retry_allowed?: boolean;
+  /** A named window that never completed and has used every attempt; older servers omit it. */
+  retry_exhausted?: boolean;
+}
+
+/** `POST /api/published-videos/{id}/refresh`: what was collected, and the report rebuilt from it. */
+export interface LinkedVideoRefreshResult {
+  /** What the refresh did, in the server's words. */
+  message?: string;
+  /** Set when only public counts could be read (no connected channel, or Analytics failed). */
+  oauth_fallback?: boolean;
+  report?: LinkedVideoReport;
 }
 
 export interface HistoryRunDetail {

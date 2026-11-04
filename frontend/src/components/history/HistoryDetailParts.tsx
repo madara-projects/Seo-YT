@@ -26,8 +26,10 @@ import { historyDate } from "@/lib/historyFormat";
 import { windowLabel } from "@/lib/auditFormat";
 import { youtubeWatchUrl } from "@/lib/channelFormat";
 import { cleanHashtags, cleanTags, hashtagsText, tagsText } from "@/lib/packages";
+import { diagnosisBasis } from "@/lib/linkedVideoFormat";
 import type { HistoryRunDetail, LinkedVideoReport, PackageSelection } from "@/api/historyTypes";
 import type { LinkedTrafficEvidence } from "@/api/learningTypes";
+import { LearningLabels, LinkedVideoRefresh } from "./LinkedVideoControls";
 
 /** Older records predate full-package history, so absent fields say so plainly. */
 export const NOT_STORED = "Not stored in this older record.";
@@ -222,6 +224,8 @@ export function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoR
   const matchingTags = asArray<string>(usage.matching_tags);
   const worked = asArray<string>(diagnosis.what_worked);
   const improve = asArray<string>(diagnosis.needs_improvement);
+  // The window and peers behind the verdict; null from a server that sends neither.
+  const basis = diagnosisBasis(diagnosis, report.comparable_metadata);
 
   return (
     <Section
@@ -283,6 +287,7 @@ export function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoR
               ? `${windowLabel(performance.snapshot_window)} · captured ${historyDate(performance.captured_at)}.`
               : "No performance snapshot has been captured yet."}
           </p>
+          <LinkedVideoRefresh report={report} />
         </div>
 
         <div className="space-y-1">
@@ -304,6 +309,11 @@ export function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoR
               </p>
               <EvidenceChip tone="warn">Local heuristic</EvidenceChip>
             </div>
+            {basis ? (
+              <p className="text-xs text-muted-foreground" data-testid="diagnosis-basis">
+                {basis}
+              </p>
+            ) : null}
             {worked.length ? <BulletList items={worked} /> : null}
             {improve.length ? <BulletList items={improve} /> : null}
             <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
@@ -312,6 +322,8 @@ export function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoR
             </p>
           </div>
         ) : null}
+
+        <LearningLabels report={report} />
 
         <LinkedVideoLearning
           evidence={report as LinkedVideoReport & LinkedTrafficEvidence}

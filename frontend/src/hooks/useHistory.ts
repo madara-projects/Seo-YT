@@ -2,16 +2,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/api/client";
 import type {
   CohortLearning,
+  ComparableMetadataResult,
+  ComparableMetadataUpdate,
   HistoryRun,
   HistoryRunDetail,
   HistoryRunsResponse,
   HistorySummary,
+  LinkedVideoRefreshResult,
   LinkVideoResult,
   PublishedVideosResponse,
 } from "@/api/historyTypes";
 import type { DeletionCloudSync } from "@/api/systemTypes";
 import { asArray } from "@/lib/utils";
-import { historyKeys, invalidatePackageViews } from "./queryKeys";
+import { historyKeys, invalidateLinkedVideoViews, invalidatePackageViews, mutationKeys } from "./queryKeys";
 
 /**
  * History and Dashboard data access.
@@ -170,6 +173,44 @@ export function cloudDeletionNote(cloudSync: DeletionCloudSync | undefined, coun
       : "Cloud sync is off; the packages were deleted on this device only.";
   }
   return "Cloud deletion is queued and will retry automatically.";
+}
+
+/**
+ * Collects a linked video's due windows and current counts; spends quota, so
+ * it is never retried. `retryFailedWindows` also tries once more each window
+ * that used up its attempts (completed windows are never touched). Keyed by
+ * the link, so a panel reopened mid-refresh still shows it running.
+ */
+export function useRefreshLinkedVideo(linkId: number | null) {
+  const queryClient = useQueryClient();
+  return useMutation<LinkedVideoRefreshResult, unknown, { retryFailedWindows?: boolean }>({
+    mutationKey: mutationKeys.recordAction("published-video", linkId ?? 0, "refresh"),
+    retry: false,
+    mutationFn: ({ retryFailedWindows }) =>
+      apiRequest<LinkedVideoRefreshResult>(`/api/published-videos/${linkId}/refresh`, {
+        method: "POST",
+        // No body is the plain refresh; the flag is sent only when asked for.
+        ...(retryFailedWindows ? { body: { retry_failed_windows: true } } : {}),
+      }),
+    // A refresh that fails part-way can still have recorded attempts, so the
+    // views reload either way; returning the reload keeps the mutation pending
+    // until the panel shows the new snapshots.
+    onSettled: () => invalidateLinkedVideoViews(queryClient),
+  });
+}
+
+/** The creator's own learning labels; only the labels sent change. */
+export function useUpdateComparableMetadata(linkId: number | null) {
+  const queryClient = useQueryClient();
+  return useMutation<ComparableMetadataResult, unknown, ComparableMetadataUpdate>({
+    mutationKey: mutationKeys.recordAction("published-video", linkId ?? 0, "labels"),
+    mutationFn: (changes) =>
+      apiRequest<ComparableMetadataResult>(`/api/published-videos/${linkId}/comparable-metadata`, {
+        method: "PATCH",
+        body: changes,
+      }),
+    onSuccess: () => invalidateLinkedVideoViews(queryClient),
+  });
 }
 
 export function useLinkVideo() {

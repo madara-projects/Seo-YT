@@ -86,6 +86,25 @@ export const mutationKeys = {
 };
 
 /**
+ * A linked video's evidence changed: a refresh wrote snapshots and metadata, or
+ * its learning labels were edited. History's report, summary, published list,
+ * cohorts and score calibration read them, Audits filter peers by the labels
+ * and experiments read completed windows. The package list itself (paged, and
+ * rate limited) holds none of it, so it is not reloaded.
+ *
+ * Resolves once the open views have reloaded (a failed reload does not reject),
+ * so a mutation that returns it stays pending until its buttons see the new
+ * snapshots rather than re-enabling over the old ones.
+ */
+export function invalidateLinkedVideoViews(queryClient: QueryClient): Promise<unknown> {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: historyKeys.all, predicate: (query) => query.queryKey[1] !== "runs" }),
+    queryClient.invalidateQueries({ queryKey: auditKeys.all }),
+    queryClient.invalidateQueries({ queryKey: experimentKeys.all }),
+  ]);
+}
+
+/**
  * A package was saved, deleted or linked. Deleting cascades to its published
  * link, audits, experiment assignments and AI Shorts plan and returns its idea
  * to "scripted"; linking publishes the idea and creates an audit candidate;
