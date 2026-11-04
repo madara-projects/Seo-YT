@@ -418,6 +418,11 @@ class YouTubeChannelService:
         collector passes the `windows` it planned, so a window still cooling
         down after a failure is not retried early. Refreshes of one video run
         one at a time (_refresh_lock), so the two never query a window twice.
+
+        `force` also tries the windows whose attempts are used up, once each in
+        this refresh: the creator asked to retry failed windows. A window that
+        still finds nothing stays used up and can be retried again later. A
+        completed window is never touched by the retry.
         """
         video_id = str(link.get("youtube_video_id") or "")
         if not video_id:
@@ -538,6 +543,17 @@ class YouTubeChannelService:
             except _UPSTREAM_ERRORS as exc:
                 logger.warning("Linked-video analytics are not ready yet: %s", _describe(exc))
 
+        # The collector never tries a window again sooner than its shortest
+        # cooldown (the base delay, unless the ceiling is set lower), so its tries
+        # always count. A refresh on request can come seconds later, and YouTube
+        # reports whole days: an empty or failed try within that interval of the
+        # window's last recorded try (a counted attempt or an outage's
+        # postponement) is noted without spending another, or a few quick clicks
+        # would use up every window at once.
+        count_interval = min(
+            int(self.settings.snapshot_collector_retry_base_seconds),
+            int(self.settings.snapshot_collector_retry_max_seconds),
+        )
         captured: list[dict[str, Any]] = []
         for label, hours, (start, end) in due:
             try:
@@ -559,6 +575,7 @@ class YouTubeChannelService:
                     age_hours=age_hours,
                     source_start_date=start.isoformat(),
                     source_end_date=end.isoformat(),
+                    count_interval_seconds=count_interval,
                 )
                 continue
             if not data or data.get("views") is None:
@@ -570,6 +587,7 @@ class YouTubeChannelService:
                     age_hours=age_hours,
                     source_start_date=start.isoformat(),
                     source_end_date=end.isoformat(),
+                    count_interval_seconds=count_interval,
                 )
                 continue
             store.record_performance_snapshot(

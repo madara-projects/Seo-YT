@@ -1837,11 +1837,45 @@ class HistoryStore:
         age_hours: float = 0.0,
         source_start_date: str | None = None,
         source_end_date: str | None = None,
+        count_interval_seconds: float = 0,
     ) -> int:
+        """Record an empty or failed try at a named window, spending one of its attempts.
+
+        With `count_interval_seconds`, a try within that long of the window's
+        last recorded try is noted (status, reason and range) without spending
+        another: refreshes on request can come seconds apart, and a burst of them
+        would otherwise use up a window before YouTube has had time to report it.
+        A noted try keeps last_attempted_at, so the interval runs from the last
+        counted attempt or, when later, an outage's postponement, which also
+        sets that time. The first attempt of a window always counts.
+        """
         if snapshot_window not in _SCHEDULED_WINDOWS:
             raise ValueError("Snapshot attempts are supported only for 24h, 7d, and 28d windows.")
         if status not in {"empty_retryable", "failed_retryable"}:
             raise ValueError("Snapshot attempt status is not retryable.")
+        if count_interval_seconds > 0:
+            now = datetime.now(timezone.utc)
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    """SELECT id, snapshot_status, attempt_count, last_attempted_at
+                       FROM video_performance_snapshots
+                       WHERE youtube_video_id = ? AND snapshot_window = ?
+                       ORDER BY captured_at DESC, id DESC LIMIT 1""",
+                    (youtube_video_id, snapshot_window),
+                ).fetchone()
+                last = _parse_datetime_safe(str(existing[3] or "")) if existing else None
+                if (
+                    existing and existing[1] != "complete" and int(existing[2] or 0) > 0 and last
+                    and 0 <= (now - last).total_seconds() < count_interval_seconds
+                ):
+                    connection.execute(
+                        """UPDATE video_performance_snapshots
+                           SET snapshot_status = ?, last_failure_reason = ?, source_start_date = ?, source_end_date = ?
+                           WHERE id = ?""",
+                        (status, failure_reason, source_start_date, source_end_date, int(existing[0])),
+                    )
+                    return int(existing[0])
         return self.record_performance_snapshot(
             youtube_video_id=youtube_video_id,
             age_hours=age_hours,
@@ -1910,6 +1944,7 @@ class HistoryStore:
                 "status": "pending",
                 "attempt_count": 0,
                 "retry_allowed": True,
+                "retry_exhausted": False,
                 "last_failure_reason": None,
             }
         status = str(row[0] or "pending")
@@ -1919,6 +1954,8 @@ class HistoryStore:
             "status": status,
             "attempt_count": attempts,
             "retry_allowed": status != "complete" and attempts < _MAX_SNAPSHOT_ATTEMPTS,
+            # Collected no more on its own; a refresh asked to retry failed windows tries it once more.
+            "retry_exhausted": status != "complete" and attempts >= _MAX_SNAPSHOT_ATTEMPTS,
             "last_failure_reason": row[2],
             "last_attempted_at": row[3],
             "completed_at": row[4],
@@ -2024,11 +2061,13 @@ class HistoryStore:
             # The uploaded metadata seen when the window was captured; null before version 13.
             snapshot["uploaded_metadata"] = _json_value(snapshot.pop("metadata_json")) or None
             # Only the scheduled windows are collected again; "current" is replaced on each refresh.
-            snapshot["retry_allowed"] = (
-                snapshot.get("snapshot_window") in _SCHEDULED_WINDOWS
-                and snapshot.get("snapshot_status") != "complete"
-                and int(snapshot.get("attempt_count") or 0) < _MAX_SNAPSHOT_ATTEMPTS
+            unfinished = (
+                snapshot.get("snapshot_window") in _SCHEDULED_WINDOWS and snapshot.get("snapshot_status") != "complete"
             )
+            attempts = int(snapshot.get("attempt_count") or 0)
+            snapshot["retry_allowed"] = unfinished and attempts < _MAX_SNAPSHOT_ATTEMPTS
+            # Its attempts are used up: only a refresh asked to retry failed windows collects it again.
+            snapshot["retry_exhausted"] = unfinished and attempts >= _MAX_SNAPSHOT_ATTEMPTS
         return snapshots
 
     def completed_evidence_snapshot(
@@ -2723,6 +2762,8 @@ def _settle_named_windows(
     numbers are what a new query would return, so only its covered hours follow
     the new time. Attempts spent on the old time's days, such as empty reports
     while the video was private, say nothing about the new ones and are returned.
+    That too reads the stored range: an unfinished window whose recorded days are
+    not this time's was tried for another time, whichever write moved it.
     """
     anchor = _parse_datetime_safe(str(published_at or ""))
     if not anchor:
@@ -2754,17 +2795,27 @@ def _settle_named_windows(
                 "UPDATE video_performance_snapshots SET covered_hours = ? WHERE id = ? AND covered_hours IS NOT NULL",
                 (window_covered_hours(published_at, end), snapshot_id),
             )
-    if moved:
-        # The old time's failure and range describe days no longer asked for;
-        # the window is pending again until its first attempt from the new time.
-        connection.execute(
-            """UPDATE video_performance_snapshots
-               SET attempt_count = 0, last_attempted_at = NULL, last_failure_reason = NULL,
-                   source_start_date = NULL, source_end_date = NULL
-               WHERE youtube_video_id = ? AND snapshot_window IN ('24h', '7d', '28d')
-                 AND snapshot_status != 'complete'""",
-            (youtube_video_id,),
-        )
+    unfinished = connection.execute(
+        """SELECT id, snapshot_window, source_start_date, source_end_date FROM video_performance_snapshots
+           WHERE youtube_video_id = ? AND snapshot_window IN ('24h', '7d', '28d') AND snapshot_status != 'complete'""",
+        (youtube_video_id,),
+    ).fetchall()
+    for snapshot_id, window, start, end in unfinished:
+        start_day = _parse_date_safe(start)
+        end_day = _parse_date_safe(end)
+        last_day = (anchor + timedelta(hours=dict(SNAPSHOT_WINDOWS)[window])).astimezone(ANALYTICS_ZONE).date()
+        # A range that was not recorded cannot be checked: only a move made here says it was another time's.
+        tried_elsewhere = start_day is not None and end_day is not None and (start_day, end_day) != (first_day, last_day)
+        if moved or tried_elsewhere:
+            # The old time's failure and range describe days no longer asked for;
+            # the window is pending again until its first attempt from the new time.
+            connection.execute(
+                """UPDATE video_performance_snapshots
+                   SET attempt_count = 0, last_attempted_at = NULL, last_failure_reason = NULL,
+                       source_start_date = NULL, source_end_date = NULL
+                   WHERE id = ?""",
+                (snapshot_id,),
+            )
 
 
 def _parse_date_safe(value: Any) -> date | None:

@@ -188,6 +188,14 @@ class LinkVideoRequest(_Request):
         return normalize_region(value) if value else value
 
 
+class RefreshPublishedVideoRequest(_Request):
+    """The optional body of a linked video's refresh; without one it refreshes as before."""
+
+    # Try once more each 24h, 7d and 28d window whose attempts are used up.
+    # A completed window is never touched by the retry.
+    retry_failed_windows: bool = False
+
+
 class UpdatePublishedVideoRequest(_Request):
     selected_title: str | None = Field(default=None, max_length=100)
     selected_thumbnail_package: str | None = Field(default=None, max_length=100)

@@ -22,7 +22,7 @@ from win_engine.analysis.creator_brief import build_creator_brief
 from win_engine.analysis.idea_workspace import build_idea_evidence, evidence_to_research, idea_script
 from win_engine.analysis.demand_explorer import analyze_demand, idea_fingerprint
 from win_engine.core.config import get_settings
-from win_engine.core.schemas import MAX_RECORD_ID, AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest, ExperimentMode, ExperimentStatus, AiShortsGenerateRequest
+from win_engine.core.schemas import MAX_RECORD_ID, AnalyzeRequest, AnalyzeResponse, DeleteHistoryRunsRequest, LinkVideoRequest, RefreshPublishedVideoRequest, UpdatePublishedVideoRequest, ComparableMetadataRequest, RecordExperimentRequest, SelectPackageRequest, CreateIdeaRequest, UpdateIdeaRequest, GenerateIdeaRequest, CreateWatchChannelRequest, CreateWatchVideoRequest, UpdateWatchRequest, DemandResearchRequest, CreateStructuredExperimentRequest, UpdateStructuredExperimentRequest, AssignExperimentVideoRequest, ExperimentMode, ExperimentStatus, AiShortsGenerateRequest
 from win_engine.feedback.ai_shorts_store import AiShortsStore
 from win_engine.feedback.history_store import HistoryStore
 from win_engine.feedback.quota_ledger import quota_status
@@ -963,7 +963,12 @@ def get_published_video_snapshots(link_id: RecordId):
 
 
 @router.post("/api/published-videos/{link_id}/refresh")
-def refresh_published_video(link_id: RecordId):
+def refresh_published_video(link_id: RecordId, payload: RefreshPublishedVideoRequest | None = None):
+    # No body refreshes as before; {"retry_failed_windows": true} also tries
+    # once more the windows whose attempts are used up. The public fallback
+    # (not connected, or OAuth failed) collects no named windows, so the flag
+    # has no effect there; its response says oauth_fallback.
+    retry_failed_windows = bool(payload and payload.retry_failed_windows)
     settings = get_settings()
     store = HistoryStore(settings.database_path)
     link = store.published_video_link(link_id)
@@ -973,7 +978,7 @@ def refresh_published_video(link_id: RecordId):
     try:
         if service.status().get("connected"):
             try:
-                refreshed = service.refresh_linked_video_performance(link)
+                refreshed = service.refresh_linked_video_performance(link, force=retry_failed_windows)
             except ValueError:
                 raise
             except Exception:
@@ -1154,14 +1159,18 @@ def get_published_audit(link_id: RecordId, audit_id: int | None = Query(default=
 
 
 @router.post("/api/audits/{link_id}/refresh", status_code=201)
-def refresh_published_audit(link_id: RecordId):
+def refresh_published_audit(link_id: RecordId, payload: RefreshPublishedVideoRequest | None = None):
+    # The same optional body as a linked video's refresh.
+    retry_failed_windows = bool(payload and payload.retry_failed_windows)
     settings = get_settings()
     history = HistoryStore(settings.database_path)
     link = history.published_video_link(link_id)
     if not link:
         raise HTTPException(status_code=404, detail="Published video link not found.")
     try:
-        video_refresh = YouTubeChannelService(settings).refresh_linked_video_performance(link)
+        video_refresh = YouTubeChannelService(settings).refresh_linked_video_performance(
+            link, force=retry_failed_windows
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     store = AuditExperimentStore(history)
