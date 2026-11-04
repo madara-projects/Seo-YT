@@ -354,7 +354,7 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
             patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
             patch(BUILD, side_effect=[self.youtube("UC-owner", "2026-09-10T15:00:00Z"), MagicMock()]),
             patch.object(self.service, "_query", return_value={"views": 12}) as query,
-            patch.object(self.service, "_traffic_sources", return_value=None),
+            patch.object(self.service, "_traffic_sources", return_value=("empty", None, None)),
         ):
             self.service.refresh_linked_video_performance(link, collect_current=False)
         stored = self.store.published_video_link(link["id"])["published_at"]
@@ -385,7 +385,7 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
             patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
             patch(BUILD, side_effect=[self.youtube("UC-owner", "2026-09-10T15:00:00Z"), MagicMock()]),
             patch.object(self.service, "_query", return_value={"views": 12}) as query,
-            patch.object(self.service, "_traffic_sources", return_value=None),
+            patch.object(self.service, "_traffic_sources", return_value=("empty", None, None)),
         ):
             self.service.refresh_linked_video_performance(link, collect_current=False)
         self.assertEqual(self.store.published_video_link(link["id"])["published_at"], "2026-09-12T09:00:00+00:00")
@@ -496,7 +496,7 @@ class LinkedVideoRefreshTests(ChannelServiceTestCase):
             patch.object(self.service, "_fresh_credentials", return_value=MagicMock()),
             patch(BUILD, side_effect=lambda name, *args, **kwargs: self.youtube("UC-owner") if name == "youtube" else MagicMock()),
             patch.object(self.service, "_query", side_effect=query),
-            patch.object(self.service, "_traffic_sources", return_value=None),
+            patch.object(self.service, "_traffic_sources", return_value=("empty", None, None)),
         ):
             threads = [threading.Thread(target=refresh) for _ in range(2)]
             for thread in threads:

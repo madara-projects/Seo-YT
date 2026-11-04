@@ -54,6 +54,13 @@ _VIDEO_METRICS = (
 )
 # Per window: where the views came from (dimension insightTrafficSourceType).
 _TRAFFIC_METRICS = "views,estimatedMinutesWatched"
+# The failure reason of a breakdown request that met an outage: it spends no
+# attempt, and the rest of a backfill pass waits for the next run.
+_TRAFFIC_OUTAGE = "youtube_unavailable"
+# The same for a grant that could not be renewed in the middle of a pass: not
+# the window's fault, and the next run's credentials check asks for a reconnect.
+_TRAFFIC_AUTHORIZATION = "channel_authorization_failed"
+_TRAFFIC_NOT_COUNTED = frozenset({_TRAFFIC_OUTAGE, _TRAFFIC_AUTHORIZATION})
 # The audience-retention report: one video per query, by elapsedVideoTimeRatio.
 _RETENTION_METRICS = "audienceWatchRatio,relativeRetentionPerformance"
 _ANALYTICS_SCOPE = "https://www.googleapis.com/auth/yt-analytics.readonly"
@@ -111,6 +118,11 @@ class ChannelConnectError(ValueError):
 
 class LinkUnavailable(ValueError):
     """A linked video is gone, private or on another channel: collecting it again cannot help."""
+
+
+def _traffic_counts() -> dict[str, int]:
+    """The outcome counts of a traffic-source backfill pass, all zero."""
+    return {"windows": 0, "ok": 0, "empty": 0, "refused": 0, "failed": 0, "unexpected": 0, "outage": 0}
 
 
 def _describe(exc: BaseException) -> str:
@@ -559,11 +571,24 @@ class YouTubeChannelService:
                 snapshot_status="complete",
                 source_start_date=start.isoformat(),
                 source_end_date=end.isoformat(),
-                traffic_sources=self._traffic_sources(analytics, video_id, label, start, end),
             )
+            # The metrics are saved first, so nothing the breakdown request
+            # meets (a refusal, an outage, a bug) can change or lose them.
+            self._capture_traffic_sources(store, analytics, video_id, label, start, end)
             snapshot = store.completed_evidence_snapshot(video_id, label) or {}
             captured.append(snapshot)
             store.complete_due_experiment_snapshots(video_id, snapshot)
+        # Completed windows whose breakdown failed, was refused before the last
+        # reconnect, or was never recorded (windows captured before version 13)
+        # are asked for again, within their attempts and backoff. Every window
+        # is saved by now, so a problem here is logged and noted, never raised.
+        try:
+            backfill = self._backfill_traffic_sources(
+                store, analytics, self._traffic_backfill_plan(store, connected, video_id=video_id)
+            )
+        except Exception:
+            logger.exception("The traffic-source backfill of a refreshed video hit an unexpected error")
+            backfill = {**_traffic_counts(), "unexpected": 1}
         if collect_current:
             store.record_performance_snapshot(
                 youtube_video_id=video_id,
@@ -583,6 +608,7 @@ class YouTubeChannelService:
             "video_id": video_id,
             "age_hours": round(age_hours, 1),
             "captured": captured,
+            "traffic_backfill": backfill,
             "window_states": [store.snapshot_window_state(video_id, label) for label, _ in _WINDOWS],
             "current": store.current_performance_snapshot(video_id) or {},
             "youtube": metadata,
@@ -640,31 +666,168 @@ class YouTubeChannelService:
         headers = [item.get("name") for item in response.get("columnHeaders", [])]
         return [dict(zip(headers, row, strict=False)) for row in response.get("rows", []) or []]
 
-    def _traffic_sources(self, analytics, video_id: str, label: str, start: date, end: date) -> list[dict[str, Any]] | None:
-        """Views and watch time by traffic source over a completed window, or None.
+    def _traffic_sources(
+        self, analytics, video_id: str, label: str, start: date, end: date
+    ) -> tuple[str, list[dict[str, Any]] | None, str | None]:
+        """Views and watch time by traffic source over a completed window, and how the request went.
 
-        One more Analytics request per completed window. A refusal (a missing
-        scope, a report YouTube does not offer for this video), an outage or
-        no rows leave the breakdown unknown; the window's snapshot is kept.
+        One more Analytics request per window. Returns (status, sources,
+        failure_reason): "ok" with the sources, "empty" when YouTube answered
+        with no rows, "refused" for HTTP 401/403 (a permission, or a report
+        YouTube withholds for this video), and "failed" for anything else,
+        rows that name no source or view count included. A failure whose
+        reason is in _TRAFFIC_NOT_COUNTED was YouTube's, the network's or the
+        grant's; an unexpected error (a bug) is logged with its traceback.
         """
         try:
             rows = self._query_rows(
                 analytics, start, end, _TRAFFIC_METRICS,
                 dimensions="insightTrafficSourceType", filters=f"video=={video_id}", sort="-views",
             )
-        except Exception as exc:
-            logger.warning("Traffic sources for the %s window are unavailable: %s", label, _describe(exc))
+            sources = [
+                {
+                    "source": str(row.get("insightTrafficSourceType") or "").strip().upper(),
+                    "views": _optional_int(row.get("views")),
+                    "watch_time_minutes": _optional_float(row.get("estimatedMinutesWatched")),
+                }
+                for row in rows
+            ]
+        except _UPSTREAM_ERRORS as exc:
+            status = int(getattr(getattr(exc, "resp", None), "status", 0) or 0)
+            if _outage(exc):
+                logger.warning("Traffic sources for the %s window wait for YouTube: %s", label, _describe(exc))
+                return "failed", None, _TRAFFIC_OUTAGE
+            if isinstance(exc, HttpError) and status in {401, 403}:
+                logger.warning("Traffic sources for the %s window were refused: %s", label, _describe(exc))
+                return "refused", None, "analytics_access_refused"
+            logger.warning("Traffic sources for the %s window failed: %s", label, _describe(exc))
+            return "failed", None, "analytics_request_failed"
+        except RefreshError as exc:
+            # The grant could not be renewed mid-pass: no bug, and no refusal of this report.
+            logger.warning("Traffic sources for the %s window wait for the channel's authorization: %s", label, _describe(exc))
+            return "failed", None, _TRAFFIC_AUTHORIZATION
+        except Exception:
+            # Not YouTube's doing: kept apart from a refusal and logged in full.
+            logger.exception("Traffic sources for the %s window hit an unexpected error", label)
+            return "failed", None, "unexpected_error"
+        usable = [item for item in sources if item["source"] and item["views"] is not None and item["views"] >= 0]
+        if usable:
+            return "ok", usable, None
+        if sources:
+            # Rows came back, but none names a source with a view count: the
+            # report's shape changed, which proves nothing about the window, so
+            # the breakdown is asked for again rather than stored as empty.
+            logger.warning("Traffic sources for the %s window came back without a usable row", label)
+            return "failed", None, "analytics_rows_unusable"
+        return "empty", None, None
+
+    def _capture_traffic_sources(
+        self, store, analytics, video_id: str, label: str, start: date, end: date
+    ) -> tuple[str, str | None]:
+        """Ask for one completed window's traffic sources and note the outcome on its row.
+
+        Returns (status, failure_reason) as _traffic_sources does. A try that
+        met an outage or an expired grant is noted without spending an attempt.
+        """
+        try:
+            status, sources, reason = self._traffic_sources(analytics, video_id, label, start, end)
+        except Exception:
+            # _traffic_sources returns its own failures, so anything that still
+            # escapes it, or an answer of another shape, is a bug: logged in
+            # full and noted as one, and the refresh goes on to its next window.
+            logger.exception("Traffic sources for the %s window hit an unexpected error", label)
+            status, sources, reason = "failed", None, "unexpected_error"
+        try:
+            store.record_traffic_breakdown(
+                video_id, label, status=status, sources=sources, failure_reason=reason,
+                count_attempt=reason not in _TRAFFIC_NOT_COUNTED,
+            )
+        except Exception:
+            # The window's metrics are saved; its breakdown stays unrecorded and
+            # is asked for again by the next refresh or collector run.
+            logger.exception("The traffic-source outcome of the %s window could not be saved", label)
+            return "failed", "unexpected_error"
+        return status, reason
+
+    def _connected_since(self, record) -> datetime | None:
+        """When the channel's grant was last saved: its connection or latest reconnection.
+
+        Fernet stamps each encryption with its time, and only a connect saves
+        the refresh token (a channel refresh updates the row's other columns),
+        so the token's stamp tells a reconnect apart from a sync.
+        """
+        try:
+            stamp = Fernet(self.settings.oauth_token_encryption_key.encode()).extract_timestamp(str(record[0]))
+        except (InvalidToken, AttributeError, TypeError, ValueError):
             return None
-        sources = [
-            {
-                "source": str(row.get("insightTrafficSourceType") or "").strip().upper(),
-                "views": _optional_int(row.get("views")),
-                "watch_time_minutes": _optional_float(row.get("estimatedMinutesWatched")),
-            }
-            for row in rows
-        ]
-        sources = [item for item in sources if item["source"] and item["views"] is not None]
-        return sources or None
+        return datetime.fromtimestamp(stamp, timezone.utc)
+
+    def _traffic_backfill_plan(
+        self, store, record, *, video_id: str | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Completed windows to ask again for traffic sources, with the collector's backoff."""
+        return store.due_traffic_backfills(
+            reconnected_at=self._connected_since(record),
+            retry_cooldown_seconds=max(0, int(self.settings.snapshot_collector_retry_base_seconds)),
+            retry_max_seconds=int(self.settings.snapshot_collector_retry_max_seconds),
+            channel_id=str(record[1] or "") or None,
+            youtube_video_id=video_id,
+            limit=limit,
+        )
+
+    def _backfill_traffic_sources(self, store, analytics, plan: list[dict[str, Any]]) -> dict[str, int]:
+        """Ask for each planned window's traffic sources, and count the outcomes.
+
+        An outage or an expired grant ends the pass (`outage` is 1): every
+        other request would meet it too.
+        """
+        counts = _traffic_counts()
+        for item in plan:
+            status, reason = self._capture_traffic_sources(
+                store, analytics, item["youtube_video_id"], item["snapshot_window"],
+                date.fromisoformat(item["source_start_date"]), date.fromisoformat(item["source_end_date"]),
+            )
+            counts["windows"] += 1
+            counts[status] += 1
+            counts["unexpected"] += reason == "unexpected_error"
+            if reason in _TRAFFIC_NOT_COUNTED:
+                counts["outage"] = 1
+                break
+        return counts
+
+    def backfill_traffic_sources(self, *, limit: int) -> dict[str, int]:
+        """The collector's pass over completed windows still missing their traffic sources.
+
+        At most `limit` windows, each within its attempts and backoff
+        (HistoryStore.due_traffic_backfills), and only for videos verified for
+        the connected channel. Each window is asked for under its video's
+        refresh lock, so a manual refresh cannot ask for it at the same time.
+        No YouTube call is made when nothing is due.
+        """
+        counts = _traffic_counts()
+        record = self._connection()
+        if not record or not record[1]:
+            return counts
+        store = self._history_store()
+        plan = self._traffic_backfill_plan(store, record, limit=limit)
+        if not plan:
+            return counts
+        analytics = self._build("youtubeAnalytics", "v2", credentials=self._fresh_credentials())
+        for item in plan:
+            with _refresh_lock(item["youtube_video_id"]):
+                # A manual refresh may have asked for this window since the plan
+                # was made; it is asked again only if it is still due.
+                still_due = [
+                    entry for entry in self._traffic_backfill_plan(store, record, video_id=item["youtube_video_id"])
+                    if entry["snapshot_window"] == item["snapshot_window"]
+                ]
+                done = self._backfill_traffic_sources(store, analytics, still_due)
+            for key in ("windows", "ok", "empty", "refused", "failed", "unexpected"):
+                counts[key] += done[key]
+            if done["outage"]:
+                counts["outage"] = 1
+                break
+        return counts
 
     def probe_retention_curve(self, link: dict[str, Any]) -> dict[str, Any]:
         """Ask YouTube Analytics once for one video's audience-retention curve.

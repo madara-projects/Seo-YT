@@ -35,7 +35,10 @@ class SnapshotCollector:
             "next_run_at": None,
             "last_error": None,
             "last_plan": [],
-            "last_counts": {"links": 0, "windows": 0, "captured": 0, "traffic_sources": 0, "failed": 0},
+            "last_counts": {
+                "links": 0, "windows": 0, "captured": 0, "traffic_sources": 0, "failed": 0,
+                "traffic_backfill": 0, "traffic_failed": 0,
+            },
         }
 
     def start(self) -> None:
@@ -85,11 +88,13 @@ class SnapshotCollector:
             )
             selected = due[: max(1, int(self.settings.snapshot_collector_max_links_per_run))]
             plan = [{"link_id": item["id"], "video_id": item["youtube_video_id"], "windows": item["due_windows"], "age_hours": item["age_hours"]} for item in selected]
-            # Each captured window also asks for its traffic sources; `traffic_sources`
-            # counts the windows that got a breakdown (a refusal leaves it null).
+            # Each captured window also asks for its traffic sources, after its
+            # metrics are saved; `traffic_sources` counts the windows that got a
+            # breakdown in this run, `traffic_backfill` the completed windows
+            # asked again, and `traffic_failed` the requests refused or failed.
             counts = {
                 "links": len(selected), "windows": sum(len(item["due_windows"]) for item in selected),
-                "captured": 0, "traffic_sources": 0, "failed": 0,
+                "captured": 0, "traffic_sources": 0, "failed": 0, "traffic_backfill": 0, "traffic_failed": 0,
             }
             self._status["last_plan"] = plan
             self._status["last_counts"] = counts
@@ -101,18 +106,25 @@ class SnapshotCollector:
             if not channel_status.get("configured") or not channel_id:
                 self._status["state"] = "unconfigured"
                 return {"state": "unconfigured", "planned": plan, "counts": counts}
-            if not selected:
-                self._status["state"] = "healthy/idle"
-                return {"state": "healthy/idle", "planned": [], "counts": counts}
-
+            traffic_errors: list[str] = []
+            stopped = False
             for item in selected:
                 try:
                     result = service.refresh_linked_video_performance(
                         item, force=False, collect_current=False, windows=item["due_windows"]
                     )
                     captured = result.get("captured") or []
+                    # The link's own completed windows that the refresh asked again.
+                    self._add_traffic_backfill(counts, result.get("traffic_backfill") or {}, traffic_errors)
                     counts["captured"] += len(captured)
                     counts["traffic_sources"] += sum(1 for snapshot in captured if snapshot.get("traffic_sources"))
+                    counts["traffic_failed"] += sum(
+                        1 for snapshot in captured if snapshot.get("traffic_status") in {"refused", "failed"}
+                    )
+                    traffic_errors += [
+                        "traffic_sources_unexpected_error" for snapshot in captured
+                        if snapshot.get("traffic_last_failure_reason") == "unexpected_error"
+                    ]
                 except LinkUnavailable:
                     # The link is marked failed and leaves the plan; the others go on.
                     counts["failed"] += 1
@@ -125,6 +137,7 @@ class SnapshotCollector:
                     self._postpone(store, item, "youtube_unavailable")
                     self._status["last_error"] = "quota_exhausted" if exc.status_code == 429 else "youtube_unavailable"
                     logger.warning("snapshot collector stopped: YouTube unavailable (HTTP %s)", exc.status_code)
+                    stopped = True
                     break
                 except (ValueError, RefreshError) as exc:
                     # Not about this link (a revoked grant, an unreadable token):
@@ -132,6 +145,7 @@ class SnapshotCollector:
                     counts["failed"] += 1
                     self._status["last_error"] = type(exc).__name__
                     logger.warning("snapshot collector stopped: %s", type(exc).__name__)
+                    stopped = True
                     break
                 except Exception as exc:
                     # A bug is not the video's fault either. Its link goes behind
@@ -140,7 +154,14 @@ class SnapshotCollector:
                     self._postpone(store, item, "unexpected_error")
                     self._status["last_error"] = type(exc).__name__
                     logger.exception("snapshot collector stopped at link=%s: %s", item["id"], type(exc).__name__)
+                    stopped = True
                     break
+            if not stopped:
+                self._backfill_traffic(service, counts, traffic_errors)
+            # A bug in a breakdown request leaves the windows' metrics alone,
+            # but it is reported here as well as logged, never passed over.
+            if traffic_errors and not self._status.get("last_error"):
+                self._status["last_error"] = traffic_errors[0]
             self._status["last_counts"] = counts
             self._status["state"] = "cooldown" if counts["failed"] else "healthy/idle"
             return {"state": self._status["state"], "planned": plan, "counts": counts}
@@ -151,6 +172,42 @@ class SnapshotCollector:
         finally:
             self._status.update({"running": False, "last_finished_at": datetime.now(timezone.utc).isoformat()})
             self._run_lock.release()
+
+    def _backfill_traffic(self, service: Any, counts: dict[str, Any], errors: list[str]) -> None:
+        """Ask again for the traffic sources of completed windows that lack them.
+
+        Windows captured before traffic outcomes were recorded, and those whose
+        request failed, are taken a few per run, each within its attempts and
+        backoff; a refused one waits for the channel to be connected again. A
+        failure here never touches a window's metrics; it is logged and noted.
+        """
+        from win_engine.integrations.youtube_channel import YouTubeUnavailable
+        # As many windows as the run's links could have captured.
+        limit = max(1, int(self.settings.snapshot_collector_max_links_per_run)) * 3
+        try:
+            done = service.backfill_traffic_sources(limit=limit)
+        except YouTubeUnavailable as exc:
+            errors.append("traffic_sources_youtube_unavailable")
+            logger.warning("snapshot collector traffic-source pass stopped: YouTube unavailable (HTTP %s)", exc.status_code)
+            return
+        except (ValueError, RefreshError) as exc:
+            errors.append(f"traffic_sources_{type(exc).__name__}")
+            logger.warning("snapshot collector traffic-source pass stopped: %s", type(exc).__name__)
+            return
+        except Exception as exc:
+            errors.append("traffic_sources_unexpected_error")
+            logger.exception("snapshot collector traffic-source pass failed: %s", type(exc).__name__)
+            return
+        self._add_traffic_backfill(counts, done, errors)
+
+    @staticmethod
+    def _add_traffic_backfill(counts: dict[str, Any], done: dict[str, Any], errors: list[str]) -> None:
+        """Add one backfill pass's outcomes (YouTubeChannelService counts) to the run's counts."""
+        counts["traffic_backfill"] += int(done.get("windows") or 0)
+        counts["traffic_sources"] += int(done.get("ok") or 0)
+        counts["traffic_failed"] += int(done.get("refused") or 0) + int(done.get("failed") or 0)
+        if done.get("unexpected"):
+            errors.append("traffic_sources_unexpected_error")
 
     @staticmethod
     def _postpone(store: HistoryStore, item: dict[str, Any], reason: str) -> None:

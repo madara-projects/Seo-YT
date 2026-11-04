@@ -35,6 +35,16 @@ _SCHEDULED_WINDOWS = {"24h", "7d", "28d"}
 # Each scheduled window and the hours after publication it covers.
 SNAPSHOT_WINDOWS = (("24h", 24.0), ("7d", 168.0), ("28d", 672.0))
 _MAX_SNAPSHOT_ATTEMPTS = 5
+# A completed window's traffic-source breakdown is asked for apart from its
+# metrics, and has its own outcome: "ok" (stored) and "empty" (YouTube answered
+# with no rows) are final; "failed" is asked again after a backoff, "refused"
+# only once the channel is connected again; each within this many attempts.
+TRAFFIC_STATUSES = frozenset({"ok", "empty", "refused", "failed"})
+_MAX_TRAFFIC_ATTEMPTS = 5
+# Completed windows already named in the log as impossible to backfill (no
+# stored days), by database: each is named once per process, not on every
+# collector run and refresh, so the warning does not bury newer ones.
+_UNDATED_TRAFFIC_REPORTED: set[tuple[str, str]] = set()
 _SNAPSHOT_COLUMNS = (
     "age_hours", "views", "watch_time_minutes", "avg_view_duration_seconds",
     "avg_view_percentage", "likes", "comments", "shares", "subscribers_gained",
@@ -1526,6 +1536,10 @@ class HistoryStore:
             failure_reason = failure_reason or "analytics_returned_no_rows"
         traffic = traffic_source_summary(traffic_sources) if snapshot_status == "complete" else None
         traffic_json = json.dumps(traffic) if traffic else None
+        # A breakdown given here is stored as "ok". Without one the outcome is
+        # not known yet: the refresh asks for it after this row is saved and
+        # notes it with record_traffic_breakdown.
+        traffic_status = "ok" if traffic_json else None
 
         with self._connect() as connection:
             # The collector and a manual refresh can write the same window at
@@ -1556,7 +1570,8 @@ class HistoryStore:
                                impressions = ?, impressions_ctr = ?, snapshot_status = ?,
                                attempt_count = ?, last_failure_reason = ?, last_attempted_at = ?,
                                completed_at = ?, source_start_date = ?, source_end_date = ?,
-                               traffic_sources_json = ?,
+                               traffic_sources_json = ?, traffic_status = ?, traffic_attempt_count = 0,
+                               traffic_last_attempted_at = NULL, traffic_last_failure_reason = NULL,
                                captured_at = CASE WHEN ? = 'complete' THEN ? ELSE captured_at END
                            WHERE id = ?""",
                         (
@@ -1564,7 +1579,7 @@ class HistoryStore:
                             avg_view_duration_seconds, avg_view_percentage, likes, comments,
                             shares, subscribers_gained, impressions, impressions_ctr,
                             snapshot_status, attempt_count, failure_reason, captured_at,
-                            completed_at, source_start_date, source_end_date, traffic_json,
+                            completed_at, source_start_date, source_end_date, traffic_json, traffic_status,
                             snapshot_status, captured_at,
                             int(existing[0]),
                         ),
@@ -1583,8 +1598,9 @@ class HistoryStore:
                     avg_view_duration_seconds, avg_view_percentage, likes, comments,
                     shares, subscribers_gained, impressions, impressions_ctr, snapshot_window,
                     snapshot_status, attempt_count, last_failure_reason, last_attempted_at,
-                    completed_at, source_start_date, source_end_date, captured_at, traffic_sources_json
-                ) VALUES ((SELECT id FROM published_video_links WHERE youtube_video_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    completed_at, source_start_date, source_end_date, captured_at, traffic_sources_json,
+                    traffic_status
+                ) VALUES ((SELECT id FROM published_video_links WHERE youtube_video_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     youtube_video_id,
@@ -1610,9 +1626,136 @@ class HistoryStore:
                     source_end_date,
                     captured_at,
                     traffic_json,
+                    traffic_status,
                 ),
             )
             return int(cursor.lastrowid or 0)
+
+    def record_traffic_breakdown(
+        self,
+        youtube_video_id: str,
+        snapshot_window: str,
+        *,
+        status: str,
+        sources: list[dict[str, Any]] | None = None,
+        failure_reason: str | None = None,
+        count_attempt: bool = True,
+    ) -> str | None:
+        """Note how a completed window's traffic-source request went, and nothing else.
+
+        Only the traffic columns of the window's completed row change: its
+        metrics are evidence already and stay exactly as captured. A final
+        outcome ("ok", "empty", or a breakdown stored before these columns
+        existed) is never overwritten. `count_attempt` is False for an outage,
+        which is not the window's fault and must not use up its attempts.
+        Returns the status stored, or None when no completed row was waiting.
+        """
+        if snapshot_window not in _SCHEDULED_WINDOWS:
+            raise ValueError("Traffic breakdowns are kept only for 24h, 7d, and 28d windows.")
+        if status not in TRAFFIC_STATUSES:
+            raise ValueError("A traffic breakdown status is ok, empty, refused or failed.")
+        summary = traffic_source_summary(sources) if status == "ok" else None
+        if status == "ok" and not summary:
+            # Rows without a source or a view count are no breakdown, and no
+            # proof that the window had none: the breakdown is asked for again.
+            status, failure_reason = "failed", "analytics_rows_unusable"
+        reason = None if status in {"ok", "empty"} else (failure_reason or status)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE video_performance_snapshots
+                   SET traffic_status = ?, traffic_sources_json = ?,
+                       traffic_attempt_count = COALESCE(traffic_attempt_count, 0) + ?,
+                       traffic_last_attempted_at = ?, traffic_last_failure_reason = ?
+                   WHERE id = (SELECT id FROM video_performance_snapshots
+                               WHERE youtube_video_id = ? AND snapshot_window = ? AND snapshot_status = 'complete'
+                               ORDER BY captured_at DESC, id DESC LIMIT 1)
+                     AND COALESCE(traffic_status, '') NOT IN ('ok', 'empty')
+                     AND NOT (traffic_status IS NULL AND traffic_sources_json IS NOT NULL)""",
+                (
+                    status, json.dumps(summary) if summary else None, 1 if count_attempt else 0,
+                    datetime.now(timezone.utc).isoformat(), reason, youtube_video_id, snapshot_window,
+                ),
+            )
+        return status if cursor.rowcount else None
+
+    def due_traffic_backfills(
+        self,
+        *,
+        now: datetime | None = None,
+        reconnected_at: datetime | None = None,
+        retry_cooldown_seconds: int = 0,
+        retry_max_seconds: int | None = None,
+        channel_id: str | None = None,
+        youtube_video_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Completed windows whose traffic sources are still to be asked for, least recently tried first.
+
+        A window qualifies while it has attempts left and its breakdown was
+        never recorded (every window captured before version 13 without one),
+        or failed and its backoff has passed (the collector's retry delays), or
+        was refused before the channel was last connected (`reconnected_at`):
+        a refusal is a permission YouTube withheld, which only a new grant can
+        change. Each is asked for over its stored Pacific days, the same days
+        as its metrics; a window without them cannot be matched and is left out.
+        """
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT s.youtube_video_id, s.snapshot_window, s.source_start_date, s.source_end_date,
+                          s.traffic_status, s.traffic_sources_json, COALESCE(s.traffic_attempt_count, 0),
+                          s.traffic_last_attempted_at, p.id
+                   FROM video_performance_snapshots s
+                   JOIN published_video_links p ON p.youtube_video_id = s.youtube_video_id
+                   WHERE s.snapshot_window IN ('24h', '7d', '28d') AND s.snapshot_status = 'complete'
+                     AND p.ownership_state = 'verified' AND p.ownership_verified = 1
+                     AND (? IS NULL OR p.verified_channel_id = ? OR COALESCE(p.verified_channel_id, '') = '')
+                     AND (? IS NULL OR s.youtube_video_id = ?)
+                   ORDER BY s.captured_at DESC, s.id DESC""",
+                (channel_id, channel_id, youtube_video_id, youtube_video_id),
+            ).fetchall()
+        seen: set[tuple[str, str]] = set()
+        due: list[tuple[str, dict[str, Any]]] = []
+        undated: list[str] = []
+        for video_id, window, start, end, status, stored, attempts, last, link_id in rows:
+            # The newest completed row of each window is its evidence, as in completed_evidence_snapshot.
+            if (video_id, window) in seen:
+                continue
+            seen.add((video_id, window))
+            attempts = int(attempts or 0)
+            if status in {"ok", "empty"} or (status is None and stored) or attempts >= _MAX_TRAFFIC_ATTEMPTS:
+                continue
+            attempted = _parse_datetime_safe(str(last or ""))
+            if status == "refused" and not (reconnected_at and attempted and attempted < reconnected_at):
+                continue
+            if status == "failed" and retry_cooldown_seconds and attempted:
+                retry_delay = retry_cooldown_seconds * (2 ** max(0, attempts - 1))
+                if retry_max_seconds:
+                    retry_delay = min(retry_delay, retry_max_seconds)
+                if (now - attempted).total_seconds() < retry_delay:
+                    continue
+            try:
+                start_day, end_day = date.fromisoformat(str(start or "")[:10]), date.fromisoformat(str(end or "")[:10])
+            except ValueError:
+                undated.append(f"{video_id} {window}")
+                continue
+            due.append((attempted.astimezone(timezone.utc).isoformat() if attempted else "", {
+                "link_id": int(link_id), "youtube_video_id": video_id, "snapshot_window": window,
+                "source_start_date": start_day.isoformat(), "source_end_date": end_day.isoformat(),
+                "traffic_status": status, "traffic_attempt_count": attempts,
+            }))
+        unreported = [key for key in undated if (self._database_path_raw, key) not in _UNDATED_TRAFFIC_REPORTED]
+        if unreported:
+            # Asking over other days would pair a breakdown with metrics it does
+            # not describe, so these wait without one, but not unseen.
+            _UNDATED_TRAFFIC_REPORTED.update((self._database_path_raw, key) for key in unreported)
+            logger.warning(
+                "Traffic sources cannot be backfilled for %d completed windows without stored days: %s",
+                len(unreported), ", ".join(unreported[:10]),
+            )
+        # ISO timestamps sort in time order, and "" (never tried) comes first.
+        planned = [item for _, item in sorted(due, key=lambda entry: entry[0])]
+        return planned[: max(0, int(limit))] if limit is not None else planned
 
     def has_snapshot_window(self, youtube_video_id: str, snapshot_window: str) -> bool:
         with self._connect() as connection:

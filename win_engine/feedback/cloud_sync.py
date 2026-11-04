@@ -869,8 +869,11 @@ class CloudSyncService:
                     # sources it lacks (read by a newer version) are filled in.
                     traffic = _traffic_json(snapshot.get("traffic_sources"))
                     if str(existing[1]) == "complete" and incoming_status == "complete" and traffic:
+                        # Its own request may have failed or never been made;
+                        # the synced breakdown settles it, so no backfill asks again.
                         local.execute(
-                            """UPDATE video_performance_snapshots SET traffic_sources_json = ?
+                            """UPDATE video_performance_snapshots
+                               SET traffic_sources_json = ?, traffic_status = 'ok', traffic_last_failure_reason = NULL
                                WHERE id = ? AND traffic_sources_json IS NULL""",
                             (traffic, int(existing[0])),
                         )
@@ -886,6 +889,9 @@ class CloudSyncService:
                 snapshot.get("source_start_date"), snapshot.get("source_end_date"), captured_at,
                 _traffic_json(snapshot.get("traffic_sources")) if incoming_status == "complete" else None,
             )
+            # A synced breakdown is "ok"; a completed window without one is not
+            # known yet here, and the traffic backfill asks for it.
+            traffic_status = "ok" if values[-1] else None
             try:
                 with _savepoint(local, "cloud_item"):
                     if existing:
@@ -894,9 +900,10 @@ class CloudSyncService:
                                watch_time_minutes=?,avg_view_duration_seconds=?,avg_view_percentage=?,likes=?,comments=?,
                                shares=?,subscribers_gained=?,impressions=?,impressions_ctr=?,snapshot_status=?,attempt_count=?,
                                last_failure_reason=?,last_attempted_at=?,completed_at=?,source_start_date=?,source_end_date=?,captured_at=?,
-                               traffic_sources_json=?
+                               traffic_sources_json=?,traffic_status=?,traffic_attempt_count=0,
+                               traffic_last_attempted_at=NULL,traffic_last_failure_reason=NULL
                                WHERE id=?""",
-                            (values[0], *values[2:13], values[14], *values[15:], int(existing[0])),
+                            (values[0], *values[2:13], values[14], *values[15:], traffic_status, int(existing[0])),
                         )
                     else:
                         local.execute(
@@ -904,9 +911,10 @@ class CloudSyncService:
                                    published_video_link_id,youtube_video_id,age_hours,views,watch_time_minutes,
                                    avg_view_duration_seconds,avg_view_percentage,likes,comments,shares,subscribers_gained,
                                    impressions,impressions_ctr,snapshot_window,snapshot_status,attempt_count,last_failure_reason,
-                                   last_attempted_at,completed_at,source_start_date,source_end_date,captured_at,traffic_sources_json)
-                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            values,
+                                   last_attempted_at,completed_at,source_start_date,source_end_date,captured_at,traffic_sources_json,
+                                   traffic_status)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (*values, traffic_status),
                         )
             except sqlite3.IntegrityError:
                 # A status this version does not know, or a second completed copy
