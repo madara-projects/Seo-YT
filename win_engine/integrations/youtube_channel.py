@@ -634,7 +634,7 @@ class YouTubeChannelService:
         # is saved by now, so a problem here is logged and noted, never raised.
         try:
             backfill = self._backfill_traffic_sources(
-                store, analytics, self._traffic_backfill_plan(store, connected, video_id=video_id)
+                store, analytics, self._traffic_backfill_plan(store, connected, video_id=video_id, force=force)
             )
         except Exception:
             logger.exception("The traffic-source backfill of a refreshed video hit an unexpected error")
@@ -813,9 +813,14 @@ class YouTubeChannelService:
         return datetime.fromtimestamp(stamp, timezone.utc)
 
     def _traffic_backfill_plan(
-        self, store, record, *, video_id: str | None = None, limit: int | None = None
+        self, store, record, *, video_id: str | None = None, limit: int | None = None, force: bool = False
     ) -> list[dict[str, Any]]:
-        """Completed windows to ask again for traffic sources, with the collector's backoff."""
+        """Completed windows to ask again for traffic sources, with the collector's backoff.
+
+        `force` is the creator's "Retry failed windows": windows whose traffic
+        attempts are used up are asked for once more in this refresh. The
+        collector and ordinary refreshes keep the cap.
+        """
         return store.due_traffic_backfills(
             reconnected_at=self._connected_since(record),
             retry_cooldown_seconds=max(0, int(self.settings.snapshot_collector_retry_base_seconds)),
@@ -823,6 +828,7 @@ class YouTubeChannelService:
             channel_id=str(record[1] or "") or None,
             youtube_video_id=video_id,
             limit=limit,
+            include_exhausted=force,
         )
 
     def _backfill_traffic_sources(self, store, analytics, plan: list[dict[str, Any]]) -> dict[str, int]:

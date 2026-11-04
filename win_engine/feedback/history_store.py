@@ -1770,6 +1770,7 @@ class HistoryStore:
         channel_id: str | None = None,
         youtube_video_id: str | None = None,
         limit: int | None = None,
+        include_exhausted: bool = False,
     ) -> list[dict[str, Any]]:
         """Completed windows whose traffic sources are still to be asked for, least recently tried first.
 
@@ -1780,6 +1781,12 @@ class HistoryStore:
         a refusal is a permission YouTube withheld, which only a new grant can
         change. Each is asked for over its stored Pacific days, the same days
         as its metrics; a window without them cannot be matched and is left out.
+
+        `include_exhausted` is the creator's explicit retry: a window whose
+        attempts are used up without a breakdown is asked for once more, without
+        waiting out its backoff. The automatic cap still holds for every other
+        caller; an empty breakdown stays final and a refusal still waits for a
+        reconnect.
         """
         now = now or datetime.now(timezone.utc)
         with self._connect() as connection:
@@ -1805,12 +1812,18 @@ class HistoryStore:
                 continue
             seen.add((video_id, window))
             attempts = int(attempts or 0)
-            if status in {"ok", "empty"} or (status is None and stored) or attempts >= _MAX_TRAFFIC_ATTEMPTS:
+            if status in {"ok", "empty"} or (status is None and stored):
+                continue
+            exhausted = attempts >= _MAX_TRAFFIC_ATTEMPTS
+            if exhausted and not include_exhausted:
                 continue
             attempted = _parse_datetime_safe(str(last or ""))
             if status == "refused" and not (reconnected_at and attempted and attempted < reconnected_at):
                 continue
-            if status == "failed" and retry_cooldown_seconds and attempted:
+            # An exhausted window reaches here only on the explicit retry, which
+            # asks once now; any other failed window keeps its backoff, so a
+            # window that failed earlier in the same refresh is not asked twice.
+            if status == "failed" and retry_cooldown_seconds and attempted and not exhausted:
                 retry_delay = retry_cooldown_seconds * (2 ** max(0, attempts - 1))
                 if retry_max_seconds:
                     retry_delay = min(retry_delay, retry_max_seconds)
