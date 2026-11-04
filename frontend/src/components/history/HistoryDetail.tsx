@@ -233,7 +233,7 @@ export function HistoryDetail({
             plan ? (
               <AiShortsBody key={run.id} run={run} plan={plan} onLink={onLink} />
             ) : (
-              <CreatorBody run={run} onLink={onLink} />
+              <CreatorBody key={run.id} run={run} onLink={onLink} />
             )
           ) : null}
         </div>

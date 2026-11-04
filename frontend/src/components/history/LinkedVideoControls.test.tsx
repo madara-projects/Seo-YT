@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { PublishedVideo } from "./HistoryDetailParts";
+import { LearningLabels } from "./LinkedVideoControls";
 import { historyKeys } from "@/hooks/queryKeys";
 import type { LinkedVideoReport } from "@/api/historyTypes";
 
@@ -279,5 +280,94 @@ describe("the evidence behind the verdict", () => {
     renderReport();
     expect(screen.getByText("Early read: views are building")).toBeInTheDocument();
     expect(screen.queryByTestId("diagnosis-basis")).not.toBeInTheDocument();
+  });
+});
+
+describe("moving an open label editor to another video", () => {
+  const metadata = { format: "youtube_shorts", language: "english", duration_bucket: "under_60s" };
+  const FIRST: LinkedVideoReport = { link_id: 5, comparable_metadata: { ...metadata, topic_category: "old topic" } };
+  const SECOND: LinkedVideoReport = { link_id: 6, comparable_metadata: { ...metadata, topic_category: "new topic" } };
+
+  function renderLabels(report: LinkedVideoReport) {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <LearningLabels report={report} />
+      </QueryClientProvider>,
+    );
+    const rerender = (next: LinkedVideoReport) =>
+      view.rerender(
+        <QueryClientProvider client={client}>
+          <LearningLabels report={next} />
+        </QueryClientProvider>,
+      );
+    return { rerender };
+  }
+
+  it("discards the first video's draft instead of saving it onto the second", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderLabels(FIRST);
+    await user.click(screen.getByRole("button", { name: "Edit labels" }));
+    const topic = screen.getByLabelText("Topic");
+    await user.clear(topic);
+    await user.type(topic, "edited first video");
+
+    rerender(SECOND);
+
+    // The editor closed with the first video's draft, and the second shows its own topic.
+    expect(screen.queryByRole("button", { name: "Save labels" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("learning-labels")).toHaveTextContent("new topic");
+    await user.click(screen.getByRole("button", { name: "Edit labels" }));
+    expect(screen.getByLabelText("Topic")).toHaveValue("new topic");
+    // Nothing changed on the second video, so there is nothing to send.
+    expect(screen.getByRole("button", { name: "Save labels" })).toBeDisabled();
+
+    await user.type(screen.getByLabelText("Topic"), " habits");
+    await user.click(screen.getByRole("button", { name: "Save labels" }));
+    await waitFor(() => expect(calls("/api/published-videos/6/comparable-metadata")).toHaveLength(1));
+    expect(JSON.parse(String(sent("/api/published-videos/6/comparable-metadata").body))).toEqual({
+      topic_category: "new topic habits",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const bodies = (fetchMock.mock.calls as [string, RequestInit][]).map(([, init]) => String(init?.body));
+    expect(bodies.some((body) => body.includes("edited first video"))).toBe(false);
+  });
+
+  it("lets a late reply for the first video leave the second video's editor alone", async () => {
+    let release: (value: unknown) => void = () => undefined;
+    fetchMock.mockImplementation(
+      (_url: string, init?: RequestInit) =>
+        new Promise((resolve) => {
+          release = () => resolve(json({ status: "updated", comparable_metadata: JSON.parse(String(init?.body)) }));
+        }),
+    );
+    const user = userEvent.setup();
+    const { rerender } = renderLabels(FIRST);
+    await user.click(screen.getByRole("button", { name: "Edit labels" }));
+    const topic = screen.getByLabelText("Topic");
+    await user.clear(topic);
+    await user.type(topic, "edited first video");
+    await user.click(screen.getByRole("button", { name: "Save labels" }));
+    await waitFor(() => expect(calls("/api/published-videos/5/comparable-metadata")).toHaveLength(1));
+    expect(await screen.findByRole("button", { name: "Saving…" })).toBeDisabled();
+
+    rerender(SECOND);
+    await user.click(screen.getByRole("button", { name: "Edit labels" }));
+    // The second video's editor is not held by the first video's pending save.
+    const second = screen.getByLabelText("Topic");
+    expect(second).toHaveValue("new topic");
+    expect(second).toBeEnabled();
+    await user.type(second, " draft");
+
+    release(null);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Learning labels saved."));
+
+    // The reply for video 5 neither closed nor changed the editor for video 6.
+    expect(screen.getByRole("button", { name: "Save labels" })).toBeEnabled();
+    expect(screen.getByLabelText("Topic")).toHaveValue("new topic draft");
+    expect(JSON.parse(String(sent("/api/published-videos/5/comparable-metadata").body))).toEqual({
+      topic_category: "edited first video",
+    });
+    expect(calls("/api/published-videos/6/comparable-metadata")).toHaveLength(0);
   });
 });

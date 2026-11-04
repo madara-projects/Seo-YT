@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutationState } from "@tanstack/react-query";
 import { RefreshCw, RotateCcw, Tags } from "lucide-react";
 import { toast } from "sonner";
@@ -104,7 +104,18 @@ function LabelEditor({
   // refresh or relink updating a package label) is never reverted by a label
   // the creator did not touch.
   const [opened] = useState(() => report.comparable_metadata ?? {});
-  const save = useUpdateComparableMetadata(linkIdOf(report));
+  const linkId = linkIdOf(report);
+  const save = useUpdateComparableMetadata(linkId);
+  // The link this editor is showing, or null once it is closed or unmounted,
+  // so a reply that lands after the creator moved to another video never
+  // closes or changes the editor now shown for that video.
+  const shown = useRef<number | null>(linkId);
+  useEffect(() => {
+    shown.current = linkId;
+    return () => {
+      shown.current = null;
+    };
+  }, [linkId]);
   const [draft, setDraft] = useState<LabelDraft>(() => labelDraft(opened));
   const errors = labelErrors(draft, opened);
   const changes = labelChanges(draft, opened);
@@ -117,11 +128,12 @@ function LabelEditor({
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!changed || invalid || save.isPending || sending.current) return;
+    const target = linkId;
     sending.current = true;
     try {
       await save.mutateAsync(changes);
       toast.success("Learning labels saved.");
-      onDone();
+      if (shown.current === target) onDone();
     } catch (error) {
       toast.error(formatApiError(error, "The labels could not be saved."));
     } finally {
@@ -182,6 +194,12 @@ function LabelEditor({
  * package's values on a relink).
  */
 export function LearningLabels({ report }: { report: LinkedVideoReport }) {
+  // Keyed by the link, so moving to another video closes an open editor and
+  // discards its draft rather than saving it onto the new video.
+  return <LearningLabelsBody key={linkIdOf(report) ?? "unlinked"} report={report} />;
+}
+
+function LearningLabelsBody({ report }: { report: LinkedVideoReport }) {
   const [editing, setEditing] = useState(false);
   const status = learningStatus(report);
   const labels = labelDraft(report.comparable_metadata);
