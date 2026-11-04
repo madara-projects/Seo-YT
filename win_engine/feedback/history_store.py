@@ -1337,24 +1337,33 @@ class HistoryStore:
             complete = metadata.get("metadata_source") == "youtube_data_api"
             previous = _json_value(row[0])
             merged = {**previous, **{key: value for key, value in metadata.items() if complete or value is not None}}
+            merged["observations"] = _metadata_observations(previous, merged, metadata, now)
             # A link holding the time YouTube last reported (the upload time, if linked while
             # private or scheduled) takes YouTube's new time until a window is measured.
-            # Any other time is the client's own and stays.
+            # Any other time is the client's own and stays, with one exception below.
             published_at = row[1]
             stored = _parse_datetime_safe(str(row[1] or ""))
             youtube_published = _parse_datetime_safe(str(metadata.get("published_at") or "")) if complete else None
-            if (
-                youtube_published
-                and stored
-                and youtube_published != stored
-                and stored == _parse_datetime_safe(str(previous.get("published_at") or ""))
-                and not connection.execute(
+            moved = False
+            if youtube_published and stored and youtube_published != stored:
+                from_youtube = stored == _parse_datetime_safe(str(previous.get("published_at") or ""))
+                # The owner's record of a public video dated after the stored time
+                # says it went public later: whatever set that time, windows measured
+                # from it hold days the public could not see, so it moves even past
+                # measured windows. A public lookup cannot see privacy for certain.
+                went_public = (
+                    metadata.get("ownership_verified") is True
+                    and str(metadata.get("privacy_status") or "").strip().lower() == "public"
+                    and youtube_published > stored
+                )
+                if went_public or (from_youtube and not connection.execute(
                     """SELECT 1 FROM video_performance_snapshots WHERE youtube_video_id = ?
                        AND snapshot_window IN ('24h', '7d', '28d') AND snapshot_status = 'complete' LIMIT 1""",
                     (row[2],),
-                ).fetchone()
-            ):
-                published_at = youtube_published.astimezone(timezone.utc).isoformat()
+                ).fetchone()):
+                    published_at = youtube_published.astimezone(timezone.utc).isoformat()
+                    moved = True
+            _settle_named_windows(connection, str(row[2]), published_at, moved)
             connection.execute(
                 """UPDATE published_video_links
                    SET youtube_metadata_json = ?, published_at = ?, metadata_synced_at = ?, updated_at = ?
@@ -1890,7 +1899,7 @@ class HistoryStore:
         now = now or datetime.now(timezone.utc)
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT id, youtube_video_id, published_at
+                """SELECT id, youtube_video_id, published_at, youtube_metadata_json, metadata_synced_at
                    FROM published_video_links
                    WHERE ownership_state = 'verified' AND ownership_verified = 1
                      AND (? IS NULL OR verified_channel_id = ? OR COALESCE(verified_channel_id, '') = '')""",
@@ -1907,11 +1916,17 @@ class HistoryStore:
         # The newest row of each window wins, as in snapshot_window_state.
         states = {(row[0], row[1]): (str(row[2] or "pending"), int(row[3] or 0), row[4]) for row in state_rows}
         due: list[tuple[str, str, int, dict[str, Any]]] = []
-        for link_id, video_id, published_at in rows:
+        for link_id, video_id, published_at, metadata_json, synced_at in rows:
             parsed = _parse_datetime_safe(str(published_at or ""))
             if not parsed:
                 continue
             age_hours = max(0.0, (now - parsed).total_seconds() / 3600)
+            # The refresh collects nothing for a video last seen private, unlisted
+            # or scheduled, so no attempt is ever noted for it. Its last metadata
+            # check stands in for one: it cools down and waits its turn, instead
+            # of taking every run's first slots until it is public.
+            privacy = str(_json_value(metadata_json).get("privacy_status") or "").strip().lower()
+            waiting_since = _parse_datetime_safe(str(synced_at or "")) if privacy and privacy != "public" else None
             due_windows: list[str] = []
             # Links sort by their most recent attempt. ISO timestamps sort in
             # time order, and "" (never attempted) comes first.
@@ -1923,6 +1938,8 @@ class HistoryStore:
                 if status == "complete" or attempts >= _MAX_SNAPSHOT_ATTEMPTS:
                     continue
                 attempted = _parse_datetime_safe(str(last or ""))
+                if waiting_since and (not attempted or waiting_since > attempted):
+                    attempted = waiting_since
                 if retry_cooldown_seconds and attempted:
                     retry_delay = retry_cooldown_seconds * (2 ** max(0, (attempts or 1) - 1))
                     if retry_max_seconds:
@@ -2563,6 +2580,104 @@ def _json_value(value: str | None) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except (TypeError, ValueError):
         return {}
+
+
+# A link keeps this many metadata observations: enough to show what was live
+# across its 28-day window and a few later edits, without growing every refresh.
+_MAX_METADATA_OBSERVATIONS = 20
+# Completed windows measured from a time before the video went public keep
+# their numbers under this prefix ("pre_public_24h"). Every evidence reader asks
+# for 24h, 7d or 28d by name, so they leave learning without being deleted.
+PRE_PUBLIC_WINDOW_PREFIX = "pre_public_"
+
+
+def _metadata_observations(
+    previous: dict[str, Any], merged: dict[str, Any], incoming: dict[str, Any], now: str
+) -> list[dict[str, Any]]:
+    """The link's title, tags and description over time, newest last.
+
+    Learning reads what was live at a window's end as the latest observation at
+    or before it, so a new one is added only on the first write and when one of
+    the three changes. None means unknown, never empty. An observation holds the
+    link's latest known values: a lookup that cannot see tags or description
+    (oEmbed, for example) keeps the ones last read, as the link itself does.
+    """
+    observations = [item for item in previous.get("observations") or [] if isinstance(item, dict)]
+    current = {"title": merged.get("title"), "tags": merged.get("tags"), "description": merged.get("description")}
+    last = observations[-1] if observations else None
+    if last is None or any(last.get(field) != value for field, value in current.items()):
+        # The lookup's own time when it has one: the refresh may store it later.
+        fetched = str(incoming.get("fetched_at") or "")
+        observed_at = fetched if _parse_datetime_safe(fetched) else now
+        observations.append({"observed_at": observed_at, **current})
+    return observations[-_MAX_METADATA_OBSERVATIONS:]
+
+
+def _settle_named_windows(
+    connection: sqlite3.Connection, youtube_video_id: str, published_at: Any, moved: bool
+) -> None:
+    """Keep a link's 24h, 7d and 28d windows measured from its publication time.
+
+    A completed window whose range starts before that time's first Pacific day
+    holds days the video was not public. The check reads the stored range, not
+    only a move made here, so it also catches a time a sync or a relink set:
+    there the times already agree and no move is seen. Such a window keeps its
+    numbers as pre-public history that no evidence reader asks for, and the
+    window is collected again.
+
+    After a move here, a window that covers the new time's own days stands: its
+    numbers are what a new query would return, so only its covered hours follow
+    the new time. Attempts spent on the old time's days, such as empty reports
+    while the video was private, say nothing about the new ones and are returned.
+    """
+    anchor = _parse_datetime_safe(str(published_at or ""))
+    if not anchor:
+        return
+    first_day = anchor.astimezone(ANALYTICS_ZONE).date()
+    rows = connection.execute(
+        """SELECT id, snapshot_window, source_start_date, source_end_date FROM video_performance_snapshots
+           WHERE youtube_video_id = ? AND snapshot_window IN ('24h', '7d', '28d') AND snapshot_status = 'complete'""",
+        (youtube_video_id,),
+    ).fetchall()
+    for snapshot_id, window, start, end in rows:
+        start_day = _parse_date_safe(start)
+        end_day = _parse_date_safe(end)
+        if start_day is None or end_day is None:
+            # A range that was not recorded cannot be checked: only a move made
+            # here says it was measured from the old time.
+            retire = moved
+        else:
+            last_day = (anchor + timedelta(hours=dict(SNAPSHOT_WINDOWS)[window])).astimezone(ANALYTICS_ZONE).date()
+            retire = start_day < first_day or (moved and end_day != last_day)
+        if retire:
+            connection.execute(
+                "UPDATE video_performance_snapshots SET snapshot_window = ? WHERE id = ?",
+                (PRE_PUBLIC_WINDOW_PREFIX + window, snapshot_id),
+            )
+        elif moved:
+            connection.execute(
+                # A row without covered hours has readers compute them from the link's time.
+                "UPDATE video_performance_snapshots SET covered_hours = ? WHERE id = ? AND covered_hours IS NOT NULL",
+                (window_covered_hours(published_at, end), snapshot_id),
+            )
+    if moved:
+        # The old time's failure and range describe days no longer asked for;
+        # the window is pending again until its first attempt from the new time.
+        connection.execute(
+            """UPDATE video_performance_snapshots
+               SET attempt_count = 0, last_attempted_at = NULL, last_failure_reason = NULL,
+                   source_start_date = NULL, source_end_date = NULL
+               WHERE youtube_video_id = ? AND snapshot_window IN ('24h', '7d', '28d')
+                 AND snapshot_status != 'complete'""",
+            (youtube_video_id,),
+        )
+
+
+def _parse_date_safe(value: Any) -> date | None:
+    try:
+        return date.fromisoformat(str(value or "").strip()[:10])
+    except ValueError:
+        return None
 
 
 # What ai_shorts_store.save_plan writes into a run's `ai_shorts` block, and the page it names.

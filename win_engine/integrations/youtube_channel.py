@@ -447,11 +447,13 @@ class YouTubeChannelService:
         first_day = published_at.astimezone(_ANALYTICS_ZONE).date()
         analytics_end = now.astimezone(_ANALYTICS_ZONE).date() - timedelta(days=ANALYTICS_REPORTING_LAG_DAYS)
 
-        def due_windows(published: datetime) -> list[tuple[str, float, tuple[date, date]]]:
+        def due_windows(
+            published: datetime, retired: Collection[str] = ()
+        ) -> list[tuple[str, float, tuple[date, date]]]:
             return [
                 (label, hours, days)
                 for label, hours in _WINDOWS
-                if (windows is None or label in windows)
+                if (windows is None or label in windows or label in retired)
                 and (days := reportable_window(published, hours, now))
                 and not store.has_snapshot_window(video_id, label)
                 and (force or store.snapshot_retry_allowed(video_id, label))
@@ -502,6 +504,7 @@ class YouTubeChannelService:
         if metadata.get("channel_id") != str(connected[1]):
             store.mark_link_ownership_failed(link_id)
             raise LinkUnavailable("This video does not belong to the connected YouTube channel.")
+        measured = {label for label, _ in _WINDOWS if store.has_snapshot_window(video_id, label)}
         store.update_linked_video_metadata(link_id, metadata)
         store.mark_link_ownership_verified(link_id, str(metadata.get("channel_id") or ""))
         # A link made before the video went public now holds YouTube's publish
@@ -511,7 +514,20 @@ class YouTubeChannelService:
             published_at = stored
             age_hours = max(0.0, (now - published_at).total_seconds() / 3600)
             first_day = published_at.astimezone(_ANALYTICS_ZONE).date()
-            due = due_windows(published_at)
+        # The write can take a window measured from before the public time out of
+        # learning even when the time came here earlier, by a sync or a relink.
+        # The collector left such a window out of its plan only for being
+        # complete, so it is collected again now rather than on a later run.
+        retired = {label for label in measured if not store.has_snapshot_window(video_id, label)}
+        due = due_windows(published_at, retired)
+        # A private, unlisted or scheduled video has no public audience yet, and
+        # its windows would be measured from the upload: near-zero results that
+        # would join public cohorts. Its named windows wait, with nothing recorded
+        # and no attempt spent, until it is public and its publish time is known.
+        # An unknown privacy status keeps collecting as before.
+        privacy = str(metadata.get("privacy_status") or "").strip().lower()
+        if privacy and privacy != "public":
+            due = []
 
         analytics_current: dict[str, Any] = {}
         if collect_current and analytics_end >= first_day:
