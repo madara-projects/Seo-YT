@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/api/client";
 import type {
@@ -48,12 +49,39 @@ export function useUpdateStudioTest(runId: number | null) {
   });
 }
 
-/** One YouTube Analytics request per call; the answer is shown, not stored. */
+/**
+ * One YouTube Analytics request per call; the answer is shown, not stored.
+ * The answer belongs to the link it was requested for: changing the link
+ * clears it, and a late answer (or error) for a previous link is never
+ * reported as the current link's.
+ */
 export function useRetentionProbe(linkId: number | null) {
-  return useMutation<RetentionProbeResult, unknown, void>({
-    mutationFn: () =>
-      apiRequest<RetentionProbeResult>(`/api/published-videos/${linkId}/retention-probe`, { method: "POST" }),
+  const mutation = useMutation<RetentionProbeResult, unknown, number>({
+    mutationFn: (id) =>
+      apiRequest<RetentionProbeResult>(`/api/published-videos/${id}/retention-probe`, { method: "POST" }),
   });
+  const { reset, mutateAsync } = mutation;
+  const latestLinkId = useRef(linkId);
+  useEffect(() => {
+    latestLinkId.current = linkId;
+    reset();
+  }, [linkId, reset]);
+  // The mutation's variables are the link id its state was requested for.
+  const current = linkId !== null && mutation.variables === linkId;
+  return {
+    data: current ? mutation.data : undefined,
+    isPending: current && mutation.isPending,
+    /** Requests the current link's curve; rejects only while that link is still the one shown. */
+    request: async () => {
+      if (linkId === null) return;
+      const id = linkId;
+      try {
+        await mutateAsync(id);
+      } catch (error) {
+        if (latestLinkId.current === id) throw error;
+      }
+    },
+  };
 }
 
 export function useTrafficCohorts(window: string) {

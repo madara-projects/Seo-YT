@@ -262,7 +262,7 @@ function ProbeResult({ result }: { result: RetentionProbeResult }) {
 export function RetentionProbe({ linkId, verified }: { linkId: number | null; verified: boolean }) {
   const probe = useRetentionProbe(linkId);
   const run = () =>
-    probe.mutateAsync().catch((error: unknown) => {
+    probe.request().catch((error: unknown) => {
       toast.error(formatApiError(error, "The retention curve could not be requested."));
     });
 

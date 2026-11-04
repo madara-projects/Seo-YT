@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { LinkedVideoLearning } from "./LinkedVideoLearning";
+import { LinkedVideoLearning, RetentionProbe } from "./LinkedVideoLearning";
 import type { LinkedTrafficEvidence, RetentionProbeResult } from "@/api/learningTypes";
 
 const EVIDENCE: LinkedTrafficEvidence = {
@@ -149,5 +149,68 @@ describe("LinkedVideoLearning", () => {
       requests ? "One YouTube Analytics request was made." : "No YouTube request was made.",
     );
     expect(screen.queryByTestId("retention-curve")).not.toBeInTheDocument();
+  });
+});
+
+describe("RetentionProbe when the linked video changes", () => {
+  const UNAVAILABLE_FOR_5: RetentionProbeResult = {
+    status: "unavailable",
+    reason: "no_data_yet",
+    message: "Response belonging only to video 5.",
+    requests: 1,
+    points: [],
+    observations: null,
+  };
+
+  function renderProbe(linkId: number) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return render(<RetentionProbe linkId={linkId} verified />, { wrapper });
+  }
+
+  it("clears link 5's result when the probe is shown for link 6", async () => {
+    probeAnswer = UNAVAILABLE_FOR_5;
+    const user = userEvent.setup();
+    const rendered = renderProbe(5);
+    await user.click(screen.getByRole("button", { name: "Check retention curve" }));
+    expect(await screen.findByText(/Response belonging only to video 5/)).toBeInTheDocument();
+
+    rendered.rerender(<RetentionProbe linkId={6} verified />);
+    expect(screen.queryByText(/Response belonging only to video 5/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check retention curve" })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    probeAnswer = AVAILABLE;
+    await user.click(screen.getByRole("button", { name: "Check retention curve" }));
+    expect(await screen.findByTestId("retention-curve")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/published-videos/6/retention-probe", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("does not show a late response for link 5 after switching to link 6", async () => {
+    let answerLink5: (response: unknown) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise((resolve) => (answerLink5 = resolve)));
+    const user = userEvent.setup();
+    const rendered = renderProbe(5);
+    await user.click(screen.getByRole("button", { name: "Check retention curve" }));
+    expect(screen.getByRole("button", { name: "Asking YouTube…" })).toBeDisabled();
+    expect(fetchMock).toHaveBeenCalledWith("/api/published-videos/5/retention-probe", expect.objectContaining({ method: "POST" }));
+
+    rendered.rerender(<RetentionProbe linkId={6} verified />);
+    expect(screen.getByRole("button", { name: "Check retention curve" })).toBeEnabled();
+
+    await act(async () => {
+      answerLink5(json(UNAVAILABLE_FOR_5));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(screen.queryByText(/Response belonging only to video 5/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check retention curve" })).toBeEnabled();
+
+    // Switching back does not resurrect the answer that arrived while link 6 was shown.
+    rendered.rerender(<RetentionProbe linkId={5} verified />);
+    expect(screen.queryByText(/Response belonging only to video 5/)).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
