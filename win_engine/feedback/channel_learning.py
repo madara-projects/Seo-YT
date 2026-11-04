@@ -185,9 +185,10 @@ def _metadata_at_window_end(
     but first seen after it is credited to the title recorded before it.
     "assumed_unchanged": nothing was recorded by then (links from before
     observations were kept), but the uploaded title is still the one the creator
-    confirmed at link time and nothing recorded since differs from it. Tags have
-    no confirmed value to check, so for such a link a tag edit made after the
-    window cannot be detected; the assumption covers them too.
+    confirmed at link time and nothing recorded since differs from it. Only the
+    title is assumed: tags have no confirmed value to check them against, so a
+    tag edit made after the window cannot be detected and the current tags may
+    be that edit. Their tags are None (unknown); only observed tags are credited.
     "unknown": neither holds; the title and tags are None and the video's
     numbers still count.
     """
@@ -217,7 +218,9 @@ def _metadata_at_window_end(
     )
     confirmed = _known_title(link.get("selected_title"))
     if title is not None and confirmed is not None and _same_title(title, confirmed) and not edited:
-        return title, tags, "assumed_unchanged"
+        # No record shows which tags were live by the window's end, so the
+        # current ones (possibly a later edit) are not credited with its views.
+        return title, None, "assumed_unchanged"
     return None, None, "unknown"
 
 

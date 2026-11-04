@@ -374,8 +374,21 @@ def _build_channel_learning_block(channel_learning: Optional[dict[str, Any]]) ->
                 details = [detail for detail in details if detail]
                 label = str(channel_learning.get("confidence_label") or confidence.replace("_", " ").title())
                 lines.append(f"- {label} linked-video pattern: \"{t}\" ({', '.join(details)})")
+                # Say how the title is known; only an observation made by the
+                # window's end shows the tags its viewers saw, so only then are
+                # they the actual uploaded tags.
+                observed = v.get("title_attribution") == "observed"
+                if observed:
+                    lines.append("  Title provenance: observed live during the measured window.")
+                elif v.get("title_attribution") == "assumed_unchanged":
+                    lines.append(
+                        "  Title provenance: assumed unchanged since linking (not observed during the measured "
+                        "window); its tags then are unknown."
+                    )
+                else:
+                    lines.append("  Title provenance: not recorded; its tags during the measured window are unknown.")
                 actual_tags = [str(tag).strip() for tag in (v.get("actual_tags") or []) if str(tag).strip()]
-                if actual_tags:
+                if observed and actual_tags:
                     lines.append(f"  Actual uploaded tags: {', '.join(actual_tags[:6])}")
     rec = channel_learning.get("recommendation")
     if learning_allowed and rec and str(rec).strip():
