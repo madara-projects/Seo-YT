@@ -605,6 +605,22 @@ class YouTubeChannelService:
                 snapshot_status="complete",
                 source_start_date=start.isoformat(),
                 source_end_date=end.isoformat(),
+                # The days were counted from this publication time, so the
+                # window's coverage is too.
+                measured_from=published_at.isoformat(),
+                # The metadata this refresh fetched before collecting: what was
+                # live when the window was captured. Its channel was checked
+                # above, so the snippet came back and no tags or an empty
+                # description is what the video has; a video always has a
+                # title, so an empty one, like any missing value, is unknown.
+                uploaded_metadata={
+                    "title": metadata.get("title") or None,
+                    "tags": metadata.get("tags"),
+                    "description": metadata.get("description"),
+                    "published_at": metadata.get("published_at") or None,
+                    "privacy_status": metadata.get("privacy_status") or None,
+                    "observed_at": metadata.get("fetched_at") or now.isoformat(),
+                },
             )
             # The metrics are saved first, so nothing the breakdown request
             # meets (a refusal, an outage, a bug) can change or lose them.

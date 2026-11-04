@@ -1581,8 +1581,16 @@ class HistoryStore:
         source_start_date: str | None = None,
         source_end_date: str | None = None,
         traffic_sources: list[dict[str, Any]] | None = None,
+        uploaded_metadata: dict[str, Any] | None = None,
+        measured_from: str | None = None,
     ) -> int:
-        """Record a measurement. `traffic_sources` is a completed window's breakdown by source."""
+        """Record a measurement. `traffic_sources` is a completed window's breakdown by source.
+
+        `uploaded_metadata` is the video's title, tags, description, publication
+        time and privacy as fetched with a completed window, null where unknown.
+        `measured_from` is the publication time the window's days were counted
+        from; its coverage runs from then to the end of `source_end_date`.
+        """
         captured_at = datetime.now(timezone.utc).isoformat()
         if snapshot_status is None:
             if snapshot_window == "current":
@@ -1600,6 +1608,16 @@ class HistoryStore:
         # not known yet: the refresh asks for it after this row is saved and
         # notes it with record_traffic_breakdown.
         traffic_status = "ok" if traffic_json else None
+        # Only a completed named window claims coverage and an observation of
+        # the uploaded metadata: a failed or empty attempt measured nothing.
+        completed_window = snapshot_status == "complete" and snapshot_window in _SCHEDULED_WINDOWS
+        covered_hours = window_covered_hours(measured_from, source_end_date) if completed_window else None
+        # ASCII escapes, as the link's metadata is stored: a lone surrogate in a
+        # title or description cannot be encoded raw and would lose the window.
+        metadata_json = (
+            json.dumps(uploaded_metadata)
+            if completed_window and isinstance(uploaded_metadata, dict) and uploaded_metadata else None
+        )
 
         with self._connect() as connection:
             # The collector and a manual refresh can write the same window at
@@ -1632,6 +1650,7 @@ class HistoryStore:
                                completed_at = ?, source_start_date = ?, source_end_date = ?,
                                traffic_sources_json = ?, traffic_status = ?, traffic_attempt_count = 0,
                                traffic_last_attempted_at = NULL, traffic_last_failure_reason = NULL,
+                               metadata_json = ?, covered_hours = ?,
                                captured_at = CASE WHEN ? = 'complete' THEN ? ELSE captured_at END
                            WHERE id = ?""",
                         (
@@ -1640,6 +1659,7 @@ class HistoryStore:
                             shares, subscribers_gained, impressions, impressions_ctr,
                             snapshot_status, attempt_count, failure_reason, captured_at,
                             completed_at, source_start_date, source_end_date, traffic_json, traffic_status,
+                            metadata_json, covered_hours,
                             snapshot_status, captured_at,
                             int(existing[0]),
                         ),
@@ -1659,8 +1679,8 @@ class HistoryStore:
                     shares, subscribers_gained, impressions, impressions_ctr, snapshot_window,
                     snapshot_status, attempt_count, last_failure_reason, last_attempted_at,
                     completed_at, source_start_date, source_end_date, captured_at, traffic_sources_json,
-                    traffic_status
-                ) VALUES ((SELECT id FROM published_video_links WHERE youtube_video_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    traffic_status, metadata_json, covered_hours
+                ) VALUES ((SELECT id FROM published_video_links WHERE youtube_video_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     youtube_video_id,
@@ -1687,6 +1707,8 @@ class HistoryStore:
                     captured_at,
                     traffic_json,
                     traffic_status,
+                    metadata_json,
+                    covered_hours,
                 ),
             )
             return int(cursor.lastrowid or 0)
