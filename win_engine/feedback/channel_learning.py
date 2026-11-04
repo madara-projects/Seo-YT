@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time as day_time, timedelta, timezone
 from typing import Any
 
 from win_engine.analysis.text_tokens import unicode_words
@@ -11,7 +11,8 @@ from win_engine.feedback.evidence_policy import (
     evidence_level, pattern_signal, sample_is_eligible, verified_for_another_channel,
 )
 from win_engine.feedback.history_store import (
-    NO_CONNECTED_CHANNEL_REASON, HistoryStore, comparable_format, format_filter_values, known_filter,
+    ANALYTICS_ZONE, NO_CONNECTED_CHANNEL_REASON, HistoryStore, comparable_format, format_filter_values, known_filter,
+    snapshot_covered_hours, views_per_covered_day,
 )
 
 
@@ -71,19 +72,27 @@ def learning_summary(
             policy_link, snapshot, expected_window=snapshot_window, connected_channel_id=channel_id
         ):
             continue
-        metadata = link.get("youtube_metadata") if isinstance(link.get("youtube_metadata"), dict) else {}
         views = int(snapshot["views"])
         age_hours = float(snapshot.get("age_hours") or 0)
+        covered_hours = snapshot_covered_hours(snapshot, link.get("published_at"))
+        per_day = views_per_covered_day(views, covered_hours)
+        title, tags, attribution = _metadata_at_window_end(link, snapshot, covered_hours)
         linked.append({
             "video_id": link.get("youtube_video_id"),
             "format": effective_format,
             "language": effective_language,
             "published_at": link.get("published_at"),
-            "title": str(metadata.get("title") or link.get("selected_title") or link.get("package_topic") or ""),
+            # The uploaded title and tags live when the window ended, never a
+            # later edit; None when that is not known (title_attribution says why).
+            "title": title,
+            "title_attribution": attribution,
             "generated_title": str(link.get("package_topic") or ""),
-            "title_used": _normalized(str(metadata.get("title") or link.get("selected_title") or "")) == _normalized(str(link.get("package_topic") or "")),
+            "title_used": None if title is None else _normalized(title) == _normalized(str(link.get("package_topic") or "")),
             "views": views,
-            "views_per_day": round(views / max(age_hours / 24, 1), 2),
+            "covered_hours": covered_hours,
+            "views_per_covered_day": per_day,
+            # Older name for views_per_covered_day, kept for existing readers.
+            "views_per_day": per_day,
             "average_view_percentage": _optional_num(snapshot.get("avg_view_percentage")),
             # The window's own counts: lifetime metadata covers a different time
             # range, and a count the window did not report stays unknown.
@@ -92,14 +101,17 @@ def learning_summary(
             "age_hours": round(age_hours, 1),
             "snapshot_window": snapshot.get("snapshot_window"),
             "captured_at": snapshot.get("captured_at"),
-            "actual_tags": [str(tag) for tag in (metadata.get("tags") or [])],
+            "actual_tags": tags,
             "generated_tags": [str(tag) for tag in (link.get("selected_tags") or [])],
             "comparable_metadata": comparable,
         })
-    eligible = linked
-    eligible.sort(key=lambda item: (item["views_per_day"], item.get("average_view_percentage") or 0), reverse=True)
-    sample = len(eligible)
-    level = evidence_level(sample)
+    # A window's raw total depends on how many hours it covered (24 to 48 for
+    # "24h"), so videos are ranked by views per covered day; one whose coverage
+    # is unknown stays in the counts but is not ranked or compared.
+    linked.sort(key=lambda item: (item["views_per_covered_day"] or 0, item.get("average_view_percentage") or 0), reverse=True)
+    eligible = [item for item in linked if item["views_per_covered_day"] is not None]
+    sample = len(linked)
+    level = evidence_level(len(eligible))
     # The leading videos reach the writer's prompt only when their lead is more
     # than noise in a cohort of one format and language; at five videos with
     # views 12% apart the top three were sent as a "pattern". Long-form formats
@@ -108,7 +120,9 @@ def learning_summary(
     comparable = len({
         ("long_form" if item["format"] in long_form else item["format"], item["language"]) for item in eligible
     }) <= 1
-    signal = pattern_signal([float(item["views_per_day"]) for item in eligible], comparable=comparable)
+    signal = pattern_signal(
+        [float(item["views_per_covered_day"]) for item in eligible], comparable=comparable, measure="views per covered day",
+    )
     pattern_found = level.learning_allowed and signal["status"] == "pattern"
     if channel_id is None:
         recommendation = NO_CONNECTED_CHANNEL_REASON
@@ -116,14 +130,19 @@ def learning_summary(
     elif not level.learning_allowed:
         recommendation = (
             f"Collect verified completed {snapshot_window} snapshots until at least {level.minimum_samples} comparable linked videos are mature "
-            f"(currently {sample}); do not change generation strategy from the early sample."
+            f"(currently {len(eligible)}); do not change generation strategy from the early sample."
+            + (
+                f" {sample - len(eligible)} more {'has' if sample - len(eligible) == 1 else 'have'} no known window coverage and "
+                f"{'is' if sample - len(eligible) == 1 else 'are'} not compared."
+                if sample > len(eligible) else ""
+            )
         )
         confidence = "collecting"
     elif pattern_found:
         best = eligible[0]
         recommendation = (
             f"{level.label}: '{best.get('title') or 'the leading comparable video'}' currently leads this "
-            f"{snapshot_window} cohort by age-normalized views, and {signal['reason']} "
+            f"{snapshot_window} cohort by views per covered day, and {signal['reason']} "
             "Treat this as historical evidence, not a guarantee."
         )
         confidence = level.key
@@ -132,6 +151,8 @@ def learning_summary(
         confidence = level.key
     return {
         "sample_size": sample,
+        # The videos ranked and compared: those whose window coverage is known.
+        "compared_sample_size": len(eligible),
         "connected_video_count": len(videos),
         "linked_video_count": len(comparable_links),
         "confidence": confidence,
@@ -146,6 +167,91 @@ def learning_summary(
         "linked_evidence": linked,
         "recommendation": recommendation,
     }
+
+
+def _metadata_at_window_end(
+    link: dict[str, Any], snapshot: dict[str, Any], covered_hours: float | None,
+) -> tuple[str | None, list[str] | None, str]:
+    """The uploaded title and tags live when the window ended, and how that is known.
+
+    "observed": the latest record seen at or before the window's end, the
+    snapshot's own uploaded metadata or a stored observation. Each refresh
+    stores the video's newest metadata, so the current title is often an edit
+    made after the window, which must not be credited with its views. The
+    snapshot's metadata is written once the window completes, usually after its
+    end, so in practice the observations decide; whichever qualifying record is
+    latest is the closest to the window's end. A record's observed_at is when a
+    change was seen, not made, so an edit made shortly before the window ended
+    but first seen after it is credited to the title recorded before it.
+    "assumed_unchanged": nothing was recorded by then (links from before
+    observations were kept), but the uploaded title is still the one the creator
+    confirmed at link time and nothing recorded since differs from it. Tags have
+    no confirmed value to check, so for such a link a tag edit made after the
+    window cannot be detected; the assumption covers them too.
+    "unknown": neither holds; the title and tags are None and the video's
+    numbers still count.
+    """
+    current = link.get("youtube_metadata") if isinstance(link.get("youtube_metadata"), dict) else {}
+    recorded = snapshot.get("uploaded_metadata") if isinstance(snapshot.get("uploaded_metadata"), dict) else None
+    observations = [item for item in (current.get("observations") or []) if isinstance(item, dict)]
+    records = [item for item in (recorded, *observations) if item]
+    window_end = _window_end(link.get("published_at"), snapshot.get("source_end_date"), covered_hours)
+    if window_end is not None:
+        seen = [(when, item) for item in records if (when := _parse_time(item.get("observed_at"))) and when <= window_end]
+        if seen:
+            latest = max(seen, key=lambda pair: pair[0])[1]
+            title = _known_title(latest.get("title"))
+            if title is None:
+                # A record that did not report the title leaves it unknown, not
+                # the current one, and its tags are then not credited either.
+                return None, None, "unknown"
+            return title, _known_tags(latest.get("tags")), "observed"
+    title, tags = _known_title(current.get("title")), _known_tags(current.get("tags"))
+    # Every record left is from after the window, or of unknown time: one that
+    # differs from the current title or tags proves an edit since, so the
+    # current values may not be what the window's viewers saw.
+    edited = any(
+        ((recorded_title := _known_title(item.get("title"))) is not None and not _same_title(recorded_title, title))
+        or ((recorded_tags := _known_tags(item.get("tags"))) is not None and recorded_tags != tags)
+        for item in records
+    )
+    confirmed = _known_title(link.get("selected_title"))
+    if title is not None and confirmed is not None and _same_title(title, confirmed) and not edited:
+        return title, tags, "assumed_unchanged"
+    return None, None, "unknown"
+
+
+def _window_end(published_at: Any, source_end_date: Any, covered_hours: float | None) -> datetime | None:
+    """The Pacific midnight that ends the window's last reported day."""
+    try:
+        last_day = date.fromisoformat(str(source_end_date or "").strip()[:10])
+    except ValueError:
+        published = _parse_time(published_at)
+        return published + timedelta(hours=covered_hours) if published and covered_hours else None
+    return datetime.combine(last_day + timedelta(days=1), day_time(), tzinfo=ANALYTICS_ZONE)
+
+
+def _parse_time(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _known_title(value: Any) -> str | None:
+    # A null title is unknown, never an empty one.
+    return (str(value).strip() or None) if value is not None else None
+
+
+def _same_title(first: str | None, second: str | None) -> bool:
+    # Every word counts here, single letters and digits too: "Top 5" edited to
+    # "Top 7" is a different title, though _normalized drops one-letter words.
+    return unicode_words(first or "", min_length=1) == unicode_words(second or "", min_length=1)
+
+
+def _known_tags(value: Any) -> list[str] | None:
+    return [str(tag) for tag in value] if isinstance(value, list) else None
 
 
 def _optional_num(value: Any) -> float | None:

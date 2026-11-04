@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from win_engine.feedback.channel_learning import learning_summary
 from win_engine.feedback.evidence_policy import sample_is_eligible, verified_for_another_channel, verified_ownership
-from win_engine.feedback.history_store import NO_CONNECTED_CHANNEL_REASON, HistoryStore
+from win_engine.feedback.history_store import ANALYTICS_ZONE, NO_CONNECTED_CHANNEL_REASON, HistoryStore
 from win_engine.feedback.score_calibration import opportunity_score_calibration
 from win_engine.generation import strategy_engine
 from win_engine.llm import seo_writer
@@ -72,16 +72,19 @@ class _ChannelScopeFixture(unittest.TestCase):
             payload={"title": title, "retention_assistant": PHASE5},
         )
         video_id = f"{label.lower()}vid{self.counter:03d}"
+        published = NOW - timedelta(days=4)
         link_id = self.store.link_published_video(
-            run_id, video_id, (NOW - timedelta(days=4)).isoformat(), format_val="youtube_shorts",
+            run_id, video_id, published.isoformat(), selected_title=title, format_val="youtube_shorts",
             language="english", ownership_state="verified", ownership_verified=True,
             verified_channel_id=channel, ownership_verified_at=NOW.isoformat(),
         )
         self.store.update_comparable_metadata(link_id, COMPARABLE)
         self.store.update_linked_video_metadata(link_id, {"title": title, "tags": [f"{label.lower()}tag"]})
+        # One publication time for every video, so each window covers the same hours.
         self.store.record_performance_snapshot(
             video_id, 24, views=views, likes=3, comments=1, avg_view_percentage=50.0 + self.counter,
             snapshot_window="24h",
+            source_end_date=(published + timedelta(hours=24)).astimezone(ANALYTICS_ZONE).date().isoformat(),
         )
         return self.store.published_video_link(link_id) or {}
 

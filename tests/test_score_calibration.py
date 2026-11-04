@@ -17,7 +17,7 @@ from win_engine.api import routes
 from win_engine.api.app import create_app
 from win_engine.core.config import Settings
 from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES
-from win_engine.feedback.history_store import HistoryStore
+from win_engine.feedback.history_store import ANALYTICS_ZONE, HistoryStore
 from win_engine.feedback.score_calibration import (
     calibrate_opportunity_score,
     opportunity_score_calibration,
@@ -164,6 +164,13 @@ def _iso(days_ago: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
 
 
+def _window_last_day(published_at: str, window: str) -> str | None:
+    hours = {"24h": 24, "7d": 168, "28d": 672}.get(window)
+    if hours is None:
+        return None
+    return (datetime.fromisoformat(published_at) + timedelta(hours=hours)).astimezone(ANALYTICS_ZONE).date().isoformat()
+
+
 class HistoryCalibrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = tempfile.TemporaryDirectory()
@@ -183,13 +190,18 @@ class HistoryCalibrationTests(unittest.TestCase):
         run_id = self.store.record_analysis_run(
             video_id, "browse", "emotion", video_id, 7.0, "LOW", label, score, payload or {},
         )
+        published = _iso(40)
         self.store.link_published_video(
-            run_id, video_id, _iso(40), format_val=fmt, language=language,
+            run_id, video_id, published, format_val=fmt, language=language,
             ownership_state="verified" if verified else "unverified", ownership_verified=verified,
             verified_channel_id="UC-owner" if verified else None, ownership_verified_at=_iso(39) if verified else None,
         )
         if views is not None:
-            self.store.record_performance_snapshot(video_id, 168, views=views, snapshot_window=window)
+            # Every video was published at the same time, so each window covers the same hours.
+            self.store.record_performance_snapshot(
+                video_id, 168, views=views, snapshot_window=window,
+                source_end_date=_window_last_day(published, window),
+            )
 
     def test_only_eligible_packages_are_compared(self):
         self.video("eligible001", 70, 900)
@@ -208,9 +220,42 @@ class HistoryCalibrationTests(unittest.TestCase):
         self.assertEqual(result["windows"], {"24h": 0, "7d": 3, "28d": 0})
         self.assertEqual(result["excluded"], {
             "not_ownership_verified": 1, "missing_format_or_language": 1,
-            "no_completed_snapshot": 2, "score_not_measured": 1,
+            "no_completed_snapshot": 2, "score_not_measured": 1, "coverage_unknown": 0,
         })
         self.assertEqual(result["links_considered"], 8)
+
+    def test_outcomes_are_views_per_covered_day_and_unknown_coverage_is_left_out(self):
+        self.video("covered0001", 70, 960)
+        self.video("covered0002", 40, 480)
+        self.video("uncovered01", 55, 99999)
+        with self.store._connect() as connection:
+            connection.execute("UPDATE video_performance_snapshots SET covered_hours = 192 WHERE youtube_video_id = 'covered0001'")
+            connection.execute("UPDATE video_performance_snapshots SET covered_hours = 168 WHERE youtube_video_id = 'covered0002'")
+            connection.execute("UPDATE video_performance_snapshots SET source_end_date = NULL WHERE youtube_video_id = 'uncovered01'")
+        result = opportunity_score_calibration(self.store, snapshot_window="7d")
+        self.assertEqual(result["sample_size"], 2)
+        self.assertEqual(result["excluded"]["coverage_unknown"], 1)
+        self.assertEqual(result["outcome"], "views_per_covered_day_at_completed_window")
+        group = result["groups"][0]
+        # 960 views over 192 hours is 120 a day; 480 over 168 hours is about 68.57.
+        # median_views keeps its meaning (the raw total); the per-day median is its own key.
+        self.assertEqual(group["higher_scoring"]["median_views_per_covered_day"], 120.0)
+        self.assertEqual(group["lower_scoring"]["median_views_per_covered_day"], 68.57)
+        self.assertEqual((group["higher_scoring"]["median_views"], group["lower_scoring"]["median_views"]), (960.0, 480.0))
+
+    def test_direction_follows_views_per_covered_day_not_raw_totals(self):
+        from win_engine.feedback.score_calibration import _group_result
+
+        # The higher-scoring videos had shorter windows: fewer raw views, more per covered day.
+        members = [
+            {"opportunity_score": score, "views": views, "views_per_covered_day": per_day}
+            for score, views, per_day in ((90, 300, 288.0), (80, 310, 290.0), (50, 400, 260.0), (20, 470, 240.0), (10, 480, 245.0))
+        ]
+        group = _group_result("youtube_shorts", "english", members)
+        self.assertEqual(group["direction"], "higher")
+        self.assertEqual(group["higher_scoring"]["median_views_per_covered_day"], 289.0)
+        self.assertEqual(group["lower_scoring"]["median_views_per_covered_day"], 242.5)
+        self.assertEqual((group["higher_scoring"]["median_views"], group["lower_scoring"]["median_views"]), (305.0, 475.0))
 
     def test_the_window_with_most_evidence_is_used_unless_one_is_asked_for(self):
         for index, (score, views) in enumerate(RISING[:6]):

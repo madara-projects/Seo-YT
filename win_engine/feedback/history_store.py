@@ -2361,9 +2361,15 @@ class HistoryStore:
         """
         window = str(latest.get("snapshot_window") or "")
 
+        # The video's own views per covered day, to compare with the peers' median.
+        covered_hours = snapshot_covered_hours(latest, link.get("published_at"))
+        own = {"covered_hours": covered_hours,
+               "views_per_covered_day": views_per_covered_day(latest.get("views"), covered_hours)}
+
         def unavailable(reason: str) -> dict[str, Any]:
             return {"sample_size": 0, "window": window or "none", "median_views": None,
-                    "median_retention_percentage": None, "unavailable_reason": reason}
+                    "median_retention_percentage": None, "unavailable_reason": reason,
+                    "covered_sample_size": 0, "median_views_per_covered_day": None, **own}
 
         # The peers are the connected channel's videos, so with none connected
         # there are none, and a video verified for another channel has none here:
@@ -2382,7 +2388,7 @@ class HistoryStore:
             return unavailable("comparable_labels_unknown")
         with self._connect() as connection:
             rows = connection.execute(
-                f"""SELECT s.views, s.avg_view_percentage
+                f"""SELECT s.views, s.avg_view_percentage, s.covered_hours, s.source_end_date, p.published_at
                    FROM video_performance_snapshots s
                    JOIN published_video_links p ON p.youtube_video_id = s.youtube_video_id
                    JOIN published_video_comparable_metadata m ON m.published_video_link_id = p.id
@@ -2402,12 +2408,26 @@ class HistoryStore:
             ).fetchall()
         views = sorted(float(row[0]) for row in rows if row[0] is not None)
         retention = sorted(float(row[1]) for row in rows if row[1] is not None)
+        # Peers are compared per covered day; one whose coverage is unknown is
+        # counted but left out of that median rather than taken as 24 hours.
+        per_day = sorted(
+            value for value in (
+                views_per_covered_day(row[0], snapshot_covered_hours(
+                    {"covered_hours": row[2], "source_end_date": row[3]}, row[4]))
+                for row in rows
+            ) if value is not None
+        )
         return {
             "sample_size": len(rows),
             "window": window,
+            # The raw total, for display. Windows differ in length, so compare
+            # views_per_covered_day with median_views_per_covered_day.
             "median_views": _median(views),
             "median_retention_percentage": _median(retention),
             "unavailable_reason": None,
+            "covered_sample_size": len(per_day),
+            "median_views_per_covered_day": _median(per_day),
+            **own,
         }
 
     # --- Stage C: Evidence & Cohort Calculation Engine ---
@@ -2467,7 +2487,8 @@ class HistoryStore:
                 SELECT p.youtube_video_id, m.format, m.language, m.duration_bucket, m.topic_category,
                        s.views, s.likes, s.avg_view_percentage,
                        m.format_source, m.language_source, m.duration_bucket_source, m.topic_category_source,
-                       json_extract(s.traffic_sources_json, '$.dominant_source')
+                       json_extract(s.traffic_sources_json, '$.dominant_source'),
+                       s.covered_hours, s.source_end_date, p.published_at
                 FROM published_video_links p
                 JOIN published_video_comparable_metadata m ON m.published_video_link_id = p.id
                 JOIN video_performance_snapshots s ON s.id = (
@@ -2500,6 +2521,9 @@ class HistoryStore:
             median_views = _median(views_list)
             median_retention = _median(retention_list)
             median_likes = _median(likes_list)
+            # Videos are compared per covered day; one whose coverage is
+            # unknown stays in the count but not in that median.
+            per_day_list = sorted(v for v in (_row_views_per_covered_day(r) for r in rows) if v is not None)
 
             more_needed = max(0, EARLY_SIGNAL_MIN_SAMPLES - count)
             recommendation = (
@@ -2531,6 +2555,8 @@ class HistoryStore:
                 "median_views": median_views,
                 "median_retention_percentage": median_retention,
                 "median_likes": median_likes,
+                "covered_sample_size": len(per_day_list),
+                "median_views_per_covered_day": _median(per_day_list),
                 "total_linked": count,
                 "total_links_considered": total_links,
                 "excluded_count": max(0, total_links - count),
@@ -2693,6 +2719,41 @@ def _median(values: list[float | int]) -> float | None:
     return round((float(values[middle - 1]) + float(values[middle])) / 2, 2)
 
 
+def snapshot_covered_hours(snapshot: dict[str, Any] | None, published_at: Any) -> float | None:
+    """Hours a completed window covered: as stored at capture, else from the link's publication time.
+
+    Rows stored before version 13 hold no coverage, so it is computed from the
+    publication time and the range's last day. None when neither is known: such
+    a window is left out of comparisons rather than taken as exactly its name.
+    """
+    if not snapshot:
+        return None
+    stored = _optional_number(snapshot.get("covered_hours"))
+    if stored is not None and stored > 0:
+        return round(stored, 2)
+    return window_covered_hours(published_at, snapshot.get("source_end_date"))
+
+
+def views_per_covered_day(views: Any, covered_hours: Any) -> float | None:
+    """A window's views scaled to 24 covered hours; None when either is unknown.
+
+    Analytics windows are whole Pacific days, so a "24h" window covers 24 to 48
+    hours after publication: two videos' raw totals are not the same window,
+    and a total over 47 hours beats one over 25.5 hours by coverage alone.
+    """
+    views, hours = _optional_number(views), _optional_number(covered_hours)
+    if views is None or hours is None or hours <= 0:
+        return None
+    return round(views * 24 / hours, 2)
+
+
+def _row_views_per_covered_day(row: tuple) -> float | None:
+    """A cohort row's views per covered day: views (column 5), coverage (13), range end (14), publication (15)."""
+    return views_per_covered_day(
+        row[5], snapshot_covered_hours({"covered_hours": row[13], "source_end_date": row[14]}, row[15])
+    )
+
+
 def _traffic_source_groups(rows: list[tuple], snapshot_window: str) -> list[dict[str, Any]]:
     """Cohort rows grouped by format, language and dominant traffic source (column 12), largest group first.
 
@@ -2722,6 +2783,9 @@ def _traffic_source_groups(rows: list[tuple], snapshot_window: str) -> list[dict
             "confidence_label": policy["confidence_label"],
             "median_views": _median(sorted(r[5] for r in members if r[5] is not None)) if allowed else None,
             "median_retention_percentage": _median(sorted(r[7] for r in members if r[7] is not None)) if allowed else None,
+            "median_views_per_covered_day": _median(sorted(
+                v for v in (_row_views_per_covered_day(r) for r in members) if v is not None
+            )) if allowed else None,
             "message": (
                 f"{policy['confidence_label']}: {len(members)} comparable videos led by this source."
                 if allowed else

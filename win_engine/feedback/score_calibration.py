@@ -3,7 +3,9 @@
 A saved package's Opportunity Score is compared with what its published video
 did, but only against comparable packages: the same format and language, each
 video ownership-verified, each measured at the same completed snapshot window
-(evidence_policy's rules), so every outcome has the same age. Within a group
+(evidence_policy's rules). A window is whole Pacific days, so its hours differ
+from video to video ("24h" covers 24 to 48); the outcome compared is views per
+covered day, and a video whose coverage is unknown is left out. Within a group
 the packages above the group's median score are compared with those below it,
 and a Spearman rank correlation is reported once a group is large enough.
 
@@ -25,12 +27,17 @@ from win_engine.feedback.evidence_policy import (
     verified_for_another_channel,
     verified_ownership,
 )
-from win_engine.feedback.history_store import HistoryStore, comparable_format, known_filter
+from win_engine.feedback.history_store import (
+    HistoryStore, comparable_format, known_filter, snapshot_covered_hours, views_per_covered_day,
+)
 
 # A correlation weaker than this is never called a relationship, however many
 # videos there are.
 MIN_ASSOCIATION = 0.3
-_EXCLUSION_REASONS = ("not_ownership_verified", "missing_format_or_language", "score_not_measured", "no_completed_snapshot")
+_EXCLUSION_REASONS = (
+    "not_ownership_verified", "missing_format_or_language", "score_not_measured", "no_completed_snapshot",
+    "coverage_unknown",
+)
 _VERDICT_LABELS = {
     "insufficient_evidence": "Not enough comparable videos yet",
     "no_clear_relationship": "No clear relationship",
@@ -49,6 +56,7 @@ CAVEATS = (
     "This is an association in your own past videos, not causation: topics, timing and packaging also differ between videos.",
     "The Opportunity Score is a local heuristic, not a prediction of views.",
     "Only packages in the same format and language, measured at the same completed window, are compared.",
+    "Views are compared per covered day, because a window's whole Pacific days cover a different number of hours for each video.",
 )
 
 
@@ -120,8 +128,8 @@ def calibrate_opportunity_score(samples: list[dict[str, Any]], *, snapshot_windo
         "verdict_label": _VERDICT_LABELS[status],
         "interpretation": "association_not_causation",
         "snapshot_window": snapshot_window,
-        "outcome": "views_at_completed_window",
-        "outcome_label": f"Views at the completed {snapshot_window} window",
+        "outcome": "views_per_covered_day_at_completed_window",
+        "outcome_label": f"Views per covered day at the completed {snapshot_window} window",
         "sample_size": len(samples),
         "compared_sample_size": compared_size,
         "minimum_group_samples": EARLY_SIGNAL_MIN_SAMPLES,
@@ -166,15 +174,34 @@ def _ranks(values: list[float]) -> list[float]:
     return ranks
 
 
+def _outcome(sample: dict[str, Any]) -> float:
+    # _collect always sets views_per_covered_day; samples given directly that
+    # leave it out are taken as already on one footing.
+    value = sample.get("views_per_covered_day")
+    return float(sample["views"] if value is None else value)
+
+
+def _half(members: list[dict[str, Any]]) -> dict[str, Any]:
+    """One half of a group: its raw median total, and the per-covered-day median the halves are compared on."""
+    per_day = [float(m["views_per_covered_day"]) for m in members if m.get("views_per_covered_day") is not None]
+    return {
+        "sample_size": len(members),
+        # The raw window total, for display only: windows differ in length.
+        "median_views": median([float(m["views"]) for m in members]) if members else None,
+        # None when a member's coverage was not given (samples passed in directly).
+        "median_views_per_covered_day": round(median(per_day), 2) if per_day and len(per_day) == len(members) else None,
+    }
+
+
 def _group_result(fmt: str, language: str, members: list[dict[str, Any]]) -> dict[str, Any]:
     scores = [float(member["opportunity_score"]) for member in members]
     median_score = median(scores)
-    higher = [float(m["views"]) for m in members if float(m["opportunity_score"]) > median_score]
-    lower = [float(m["views"]) for m in members if float(m["opportunity_score"]) < median_score]
+    higher = [m for m in members if float(m["opportunity_score"]) > median_score]
+    lower = [m for m in members if float(m["opportunity_score"]) < median_score]
     enough = len(members) >= EARLY_SIGNAL_MIN_SAMPLES
-    rho = spearman_rho(scores, [float(m["views"]) for m in members]) if enough else None
-    higher_median = median(higher) if higher else None
-    lower_median = median(lower) if lower else None
+    rho = spearman_rho(scores, [_outcome(m) for m in members]) if enough else None
+    higher_median = median([_outcome(m) for m in higher]) if higher else None
+    lower_median = median([_outcome(m) for m in lower]) if lower else None
     direction = None
     if higher_median is not None and lower_median is not None:
         direction = "higher" if higher_median > lower_median else "lower" if higher_median < lower_median else "tie"
@@ -184,8 +211,8 @@ def _group_result(fmt: str, language: str, members: list[dict[str, Any]]) -> dic
         "sample_size": len(members),
         "enough_samples": enough,
         "median_score": round(median_score, 2),
-        "higher_scoring": {"sample_size": len(higher), "median_views": higher_median},
-        "lower_scoring": {"sample_size": len(lower), "median_views": lower_median},
+        "higher_scoring": _half(higher),
+        "lower_scoring": _half(lower),
         "spearman_rho": rho,
         # Groups with too few videos show their medians but take no part in the verdict.
         "direction": direction if rho is not None else None,
@@ -218,7 +245,7 @@ def _summary(status: str, rho: float | None, compared: int, level: str, window: 
     }[status]
     early = " This is an early signal only." if level == "early_signal" else ""
     return (
-        f"In {compared} comparable video(s) measured at the completed {window} window, {described} "
+        f"In {compared} comparable video(s) measured at the completed {window} window, {described} per covered day "
         f"(rank correlation {rho:+.2f}). This is an association, not causation.{early}"
     )
 
@@ -279,11 +306,19 @@ def _collect(
         if not sample_is_eligible(policy_link, snapshot, expected_window=window, connected_channel_id=channel_id):
             excluded["no_completed_snapshot"] += 1
             continue
+        covered_hours = snapshot_covered_hours(snapshot, link.get("published_at"))
+        per_day = views_per_covered_day(snapshot["views"], covered_hours)
+        if per_day is None:
+            # Taking an unknown span as the window's name is the error this avoids.
+            excluded["coverage_unknown"] += 1
+            continue
         samples.append({
             "analysis_run_id": link.get("analysis_run_id"),
             "youtube_video_id": link.get("youtube_video_id"),
             "opportunity_score": float(score),
             "views": float(snapshot["views"]),
+            "covered_hours": covered_hours,
+            "views_per_covered_day": per_day,
             "format": policy_link["format"],
             "language": policy_link["language"],
             "breakdown_stored": breakdown_stored,
