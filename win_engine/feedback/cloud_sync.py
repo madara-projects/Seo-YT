@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import random
 import sqlite3
 import threading
@@ -54,12 +55,35 @@ def _json_or_none(value: Any) -> Any:
 
 
 def _snapshot_payload(keys: tuple[str, ...], row: tuple[Any, ...]) -> dict[str, Any]:
-    """A snapshot row for the cloud; its traffic sources only when recorded, so older hashes hold."""
+    """A snapshot row for the cloud; its traffic sources, coverage and captured metadata only
+    when recorded, so older hashes hold."""
     snapshot = dict(zip(keys, row))
     traffic = _json_or_none(row[len(keys)])
     if traffic:
         snapshot["traffic_sources"] = traffic
+    covered_hours = _covered_hours(row[len(keys) + 1]) if len(row) > len(keys) + 1 else None
+    if covered_hours is not None:
+        snapshot["covered_hours"] = covered_hours
+    metadata = _json_or_none(row[len(keys) + 2]) if len(row) > len(keys) + 2 else None
+    if isinstance(metadata, dict) and metadata:
+        snapshot["uploaded_metadata"] = metadata
     return snapshot
+
+
+def _covered_hours(value: Any) -> float | None:
+    """A window's stored coverage in hours, or None when it is not a usable number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        hours = float(value)
+    except (TypeError, ValueError):
+        return None
+    return hours if math.isfinite(hours) and hours >= 0 else None
+
+
+def _metadata_json(value: Any) -> str | None:
+    """A synced window's captured title, tags and description, stored as a local capture would."""
+    return json.dumps(value) if isinstance(value, dict) and value else None
 
 
 def _traffic_json(value: Any) -> str | None:
@@ -399,7 +423,8 @@ class CloudSyncService:
                 """SELECT age_hours,views,watch_time_minutes,avg_view_duration_seconds,avg_view_percentage,
                           likes,comments,shares,subscribers_gained,impressions,impressions_ctr,snapshot_window,
                           snapshot_status,attempt_count,last_failure_reason,last_attempted_at,completed_at,
-                          source_start_date,source_end_date,captured_at,traffic_sources_json
+                          source_start_date,source_end_date,captured_at,traffic_sources_json,covered_hours,
+                          metadata_json
                    FROM video_performance_snapshots WHERE youtube_video_id = ? ORDER BY captured_at,id""", (link[1],),
             ).fetchall()
             keys = ("age_hours", "views", "watch_time_minutes", "avg_view_duration_seconds", "avg_view_percentage",
@@ -853,7 +878,8 @@ class CloudSyncService:
             incoming_status = str(snapshot.get("snapshot_status") or "legacy_unverified")
             captured_at = snapshot.get("captured_at") or fallback_time
             existing = local.execute(
-                """SELECT id,snapshot_status,captured_at FROM video_performance_snapshots
+                """SELECT id,snapshot_status,captured_at,source_start_date,source_end_date
+                   FROM video_performance_snapshots
                    WHERE youtube_video_id = ? AND snapshot_window = ?
                    ORDER BY captured_at DESC,id DESC LIMIT 1""",
                 (video_id, window),
@@ -877,6 +903,29 @@ class CloudSyncService:
                                WHERE id = ? AND traffic_sources_json IS NULL""",
                             (traffic, int(existing[0])),
                         )
+                    # The same completed window (one Pacific-day range) captured
+                    # elsewhere settles the coverage and metadata a row from an
+                    # older version lacks; values present here always stay.
+                    same_range = (
+                        existing[3] is not None and existing[4] is not None
+                        and str(existing[3]) == str(snapshot.get("source_start_date") or "")
+                        and str(existing[4]) == str(snapshot.get("source_end_date") or "")
+                    )
+                    if str(existing[1]) == "complete" and incoming_status == "complete" and same_range:
+                        covered = _covered_hours(snapshot.get("covered_hours"))
+                        if covered is not None:
+                            local.execute(
+                                """UPDATE video_performance_snapshots SET covered_hours = ?
+                                   WHERE id = ? AND covered_hours IS NULL""",
+                                (covered, int(existing[0])),
+                            )
+                        metadata = _metadata_json(snapshot.get("uploaded_metadata"))
+                        if metadata:
+                            local.execute(
+                                """UPDATE video_performance_snapshots SET metadata_json = ?
+                                   WHERE id = ? AND metadata_json IS NULL""",
+                                (metadata, int(existing[0])),
+                            )
                     continue
             values = (
                 link_id, video_id, snapshot.get("age_hours") or 0, snapshot.get("views"),
@@ -892,6 +941,12 @@ class CloudSyncService:
             # A synced breakdown is "ok"; a completed window without one is not
             # known yet here, and the traffic backfill asks for it.
             traffic_status = "ok" if values[-1] else None
+            # Only a completed window claims coverage and captured metadata, as a
+            # local capture stores them; a payload from an older version has
+            # neither, and they stay unknown (NULL) here.
+            completed = incoming_status == "complete"
+            covered_hours = _covered_hours(snapshot.get("covered_hours")) if completed else None
+            metadata_json = _metadata_json(snapshot.get("uploaded_metadata")) if completed else None
             try:
                 with _savepoint(local, "cloud_item"):
                     if existing:
@@ -901,9 +956,11 @@ class CloudSyncService:
                                shares=?,subscribers_gained=?,impressions=?,impressions_ctr=?,snapshot_status=?,attempt_count=?,
                                last_failure_reason=?,last_attempted_at=?,completed_at=?,source_start_date=?,source_end_date=?,captured_at=?,
                                traffic_sources_json=?,traffic_status=?,traffic_attempt_count=0,
-                               traffic_last_attempted_at=NULL,traffic_last_failure_reason=NULL
+                               traffic_last_attempted_at=NULL,traffic_last_failure_reason=NULL,
+                               covered_hours=?,metadata_json=?
                                WHERE id=?""",
-                            (values[0], *values[2:13], values[14], *values[15:], traffic_status, int(existing[0])),
+                            (values[0], *values[2:13], values[14], *values[15:], traffic_status,
+                             covered_hours, metadata_json, int(existing[0])),
                         )
                     else:
                         local.execute(
@@ -912,9 +969,9 @@ class CloudSyncService:
                                    avg_view_duration_seconds,avg_view_percentage,likes,comments,shares,subscribers_gained,
                                    impressions,impressions_ctr,snapshot_window,snapshot_status,attempt_count,last_failure_reason,
                                    last_attempted_at,completed_at,source_start_date,source_end_date,captured_at,traffic_sources_json,
-                                   traffic_status)
-                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (*values, traffic_status),
+                                   traffic_status,covered_hours,metadata_json)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (*values, traffic_status, covered_hours, metadata_json),
                         )
             except sqlite3.IntegrityError:
                 # A status this version does not know, or a second completed copy
