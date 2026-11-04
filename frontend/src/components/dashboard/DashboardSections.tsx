@@ -16,10 +16,18 @@ import { EvidenceChip } from "@/components/common/EvidenceChip";
 import { Meter } from "@/components/common/Meter";
 import { Inset, Panel } from "@/components/common/Panel";
 import { CardSkeleton, UnavailableNote } from "@/components/common/States";
-import { cn, formatNumber } from "@/lib/utils";
+import { asArray, cn, formatNumber } from "@/lib/utils";
+import { labelText } from "@/lib/linkedVideoFormat";
 import { initialOf, relativeTime } from "@/lib/format";
 import { historyDate } from "@/lib/historyFormat";
-import { riskTone, roundOpportunity, roundTitleScore, titleScoreText } from "@/lib/dashboardFormat";
+import {
+  patternSignalText,
+  patternStatusLabel,
+  riskTone,
+  roundOpportunity,
+  roundTitleScore,
+  titleScoreText,
+} from "@/lib/dashboardFormat";
 import type {
   CohortLearning,
   OwnedPerformance,
@@ -173,11 +181,24 @@ export function LearningPanel({
   sampleLabel: string;
   className?: string;
 }) {
+  // Videos of different formats or languages are not one comparable cohort, so
+  // a mixed pool is never shown as one: the largest format and language cohort
+  // leads, named, and every cohort is listed with its own count.
+  const mixed = data?.cohort_scope === "mixed";
+  const cohorts = mixed
+    ? asArray<CohortLearning>(data?.cohorts)
+        .filter((cohort) => typeof cohort?.sample_size === "number")
+        .sort((a, b) => (b.sample_size ?? 0) - (a.sample_size ?? 0))
+    : [];
+  const lead = mixed ? cohorts[0] : data;
+  // Two cohorts of the same size: the one shown first is not the largest alone.
+  const leadTied = mixed && cohorts.length > 1 && cohorts[1]?.sample_size === lead?.sample_size;
   // A missing count is unavailable, not zero.
-  const sample = typeof data?.sample_size === "number" ? data.sample_size : null;
-  // Null at the strongest level: there is no next threshold to reach.
-  const threshold = typeof data?.next_threshold === "number" ? data.next_threshold : null;
-  const label = data?.confidence_label;
+  const sample = typeof lead?.sample_size === "number" ? lead.sample_size : null;
+  // Null at the largest tier: there is no next threshold to reach.
+  const threshold = typeof lead?.next_threshold === "number" ? lead.next_threshold : null;
+  const label = lead?.confidence_label;
+  const pattern = patternSignalText(lead?.pattern_signal);
 
   return (
     <Panel
@@ -186,9 +207,13 @@ export function LearningPanel({
       title={title}
       description={description}
       aside={
-        <EvidenceChip tone={!label ? "neutral" : data?.learning_allowed ? "ok" : "warn"}>
-          {label ?? "Unavailable"}
-        </EvidenceChip>
+        mixed ? (
+          <EvidenceChip tone="warn">Mixed formats or languages</EvidenceChip>
+        ) : (
+          <EvidenceChip tone={!label ? "neutral" : data?.learning_allowed ? "ok" : "warn"}>
+            {label ?? "Unavailable"}
+          </EvidenceChip>
+        )
       }
     >
       {isPending ? (
@@ -208,16 +233,21 @@ export function LearningPanel({
               >
                 {formatNumber(sample)}
               </p>
-              <p className="mt-1.5 text-xs text-muted-foreground">{sampleLabel}</p>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {mixed && lead
+                  ? `${sampleLabel} · ${cohortName(lead)}, ${leadTied ? "one of the largest cohorts" : "the largest cohort"}`
+                  : sampleLabel}
+              </p>
+              {mixed && label ? <p className="mt-0.5 text-xs text-muted-foreground">{label}</p> : null}
             </div>
             <div className="text-right">
               {threshold !== null ? (
                 <>
                   <p className="numeric text-sm font-semibold text-foreground">{formatNumber(threshold)}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">Needed for the next level</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Needed for the next sample size</p>
                 </>
-              ) : sample !== null && data?.learning_allowed ? (
-                <p className="text-xs text-muted-foreground">Top evidence level reached</p>
+              ) : sample !== null && lead?.learning_allowed ? (
+                <p className="text-xs text-muted-foreground">Largest sample size reached</p>
               ) : null}
             </div>
           </div>
@@ -225,16 +255,55 @@ export function LearningPanel({
             <Meter
               value={sample}
               max={threshold ?? Math.max(sample, 1)}
-              label="Comparable videos collected toward the next learning level"
+              label="Comparable videos collected toward the next sample size"
             />
           ) : null}
-          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
-            {data?.recommendation ?? "Learning status is unavailable for this window."}
+          {pattern ? (
+            <p className="text-[0.8125rem] leading-relaxed text-muted-foreground" data-testid="learning-pattern">
+              {pattern}
+            </p>
+          ) : null}
+          {mixed ? (
+            <div className="space-y-2" data-testid="learning-cohorts">
+              <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
+                Your linked videos span more than one format or language, so each is counted on its own
+                instead of pooled into one comparison.
+              </p>
+              {cohorts.length ? (
+                <ul className="space-y-1">
+                  {cohorts.map((cohort, index) => (
+                    <li
+                      key={`${cohort.format ?? ""}-${cohort.language ?? ""}-${index}`}
+                      className="text-xs leading-relaxed text-muted-foreground"
+                    >
+                      <span className="font-medium text-foreground">{cohortName(cohort)}</span>
+                      {`: ${formatNumber(cohort.sample_size)} ${cohort.sample_size === 1 ? "video" : "videos"}`}
+                      {cohort.confidence_label ? ` · ${cohort.confidence_label}` : ""}
+                      {cohort.pattern_signal?.status ? ` · ${patternStatusLabel(cohort.pattern_signal)}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <UnavailableNote>The per-format and language counts are unavailable.</UnavailableNote>
+              )}
+            </div>
+          ) : null}
+          <p className="text-[0.8125rem] leading-relaxed text-muted-foreground" data-testid="learning-recommendation">
+            {/* Below the list of every cohort, the advice names the cohort it is for. */}
+            {mixed && lead?.recommendation ? (
+              <span className="font-medium text-foreground">{`${cohortName(lead)}: `}</span>
+            ) : null}
+            {lead?.recommendation ?? "Learning status is unavailable for this window."}
           </p>
         </div>
       )}
     </Panel>
   );
+}
+
+/** "YouTube Short · English": the format and language a cohort shares. */
+function cohortName(cohort: CohortLearning): string {
+  return `${labelText("format", String(cohort.format ?? ""))} · ${labelText("language", String(cohort.language ?? ""))}`;
 }
 
 export function RecentPackages({

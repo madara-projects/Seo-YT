@@ -1,3 +1,4 @@
+import type { PatternSignal } from "@/api/historyTypes";
 import { UNAVAILABLE } from "./utils";
 
 /**
@@ -100,4 +101,29 @@ export function linkedWatchCaption(owned: WatchTimeFields): string {
         ? `your ${withTime.toLocaleString()} linked ${noun(withTime)} with watch time`
         : `your ${(linked ?? 0).toLocaleString()} linked ${noun(linked ?? 0)}`;
   return `Across ${scope}, at each video's highest snapshot — not a 28-day channel total.`;
+}
+
+/**
+ * Whether a pattern exists, said apart from the sample-size label: a large
+ * sample can still have no leading group. The reason is the server's clause.
+ */
+export function patternSignalText(signal: PatternSignal | null | undefined): string | null {
+  if (!signal?.status) return null;
+  const reason = typeof signal.reason === "string" ? signal.reason.trim() : "";
+  // The mixed reason starts "a mixed cohort: ...", so it follows "from", not a colon.
+  const joiner = signal.status === "mixed_cohort" ? " from " : ": ";
+  const prefix = patternStatusLabel(signal);
+  return reason ? `${prefix}${joiner}${reason}` : `${prefix}.`;
+}
+
+const PATTERN_STATUS_LABELS: Record<string, string> = {
+  pattern: "Pattern found",
+  no_pattern: "No pattern",
+  insufficient_sample: "No pattern yet",
+  mixed_cohort: "No pattern is read",
+};
+
+/** The status alone; a status this build does not know is named neutrally, never as a found pattern. */
+export function patternStatusLabel(signal: PatternSignal): string {
+  return PATTERN_STATUS_LABELS[String(signal.status)] ?? "Pattern signal";
 }

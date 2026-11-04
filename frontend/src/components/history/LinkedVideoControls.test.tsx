@@ -48,7 +48,7 @@ function renderReport(report: LinkedVideoReport = REPORT) {
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <PublishedVideo report={report} fallbackTitle="Saved package" />
+      <PublishedVideo report={report} packageTitle="Saved package" />
     </QueryClientProvider>,
   );
 }

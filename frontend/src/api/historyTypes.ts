@@ -191,11 +191,19 @@ export interface LinkedVideoReport {
     attribution_status?: "creator_selected" | "unknown" | string;
     attribution_note?: string;
     generated_title?: string;
-    uploaded_title?: string;
-    title_match?: boolean;
+    /** The title the lookup read from YouTube; null when none was read (never the selected title standing in). */
+    uploaded_title?: string | null;
+    /** Null when the uploaded title is unknown: there is nothing to compare. */
+    title_match?: boolean | null;
+    /** Null when the lookup could not read the description. */
     description_match_percent?: number | null;
     generated_tags?: string[];
-    matching_tags?: string[];
+    /** The three tag lists are null when the lookup could not read the video's tags, never [] for unknown. */
+    uploaded_tags?: string[] | null;
+    matching_tags?: string[] | null;
+    missing_generated_tags?: string[] | null;
+    /** Which uploaded fields the stored metadata holds; older servers omit it. */
+    uploaded_metadata_known?: { title?: boolean; tags?: boolean; description?: boolean } | null;
   };
   performance?: LinkedPerformance;
   /** The labels learning groups videos by; `{}` for a link that predates them. */
@@ -355,4 +363,23 @@ export interface CohortLearning {
   excluded_count?: number;
   metadata_sources?: Record<string, unknown>;
   recommendation?: string;
+  /**
+   * "mixed" when the pooled videos span more than one format or language, so
+   * the pool is not one comparable cohort; "single" otherwise. Older servers omit it.
+   */
+  cohort_scope?: "mixed" | "single" | string;
+  /** One summary per format and language, sent with the unfiltered response. */
+  cohorts?: CohortLearning[] | null;
+  /** Whether a pattern exists; the confidence label describes sample size only. */
+  pattern_signal?: PatternSignal | null;
+}
+
+/** `evidence_policy.pattern_signal`: whether a cohort's leading videos stand apart from the rest. */
+export interface PatternSignal {
+  status?: "pattern" | "no_pattern" | "insufficient_sample" | "mixed_cohort" | string;
+  /** A lowercase clause that completes a sentence, e.g. "a leading group needs 10 comparable videos ...". */
+  reason?: string;
+  sample_size?: number;
+  measure?: string;
+  margin?: number | null;
 }

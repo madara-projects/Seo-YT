@@ -200,6 +200,44 @@ export function diagnosisBasis(
   return `${parts.join(" · ")}.`;
 }
 
+export interface UploadedMetadataView {
+  /** The title read from YouTube, or null when it is unknown. */
+  title: string | null;
+  /** The package title comparison, or null when there is no uploaded title to compare. */
+  titleMatch: boolean | null;
+  tagsKnown: boolean;
+  descriptionKnown: boolean;
+}
+
+function nonBlank(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * What the lookup read of the uploaded video, so an unread field is shown as
+ * unknown rather than as empty. A server that sends `uploaded_metadata_known`
+ * says so per field and nulls the comparisons it cannot make. An older one
+ * filled the uploaded title from the selected title and the tag lists with []
+ * when the lookup read nothing (oEmbed reads no tags or description), so for
+ * it only the metadata actually stored under `youtube` counts as read.
+ */
+export function uploadedMetadataView(report: LinkedVideoReport): UploadedMetadataView {
+  const usage = report.package_usage ?? {};
+  const known = usage.uploaded_metadata_known ?? null;
+  const youtube = report.youtube ?? {};
+  const fetchedTitle = nonBlank(youtube.title);
+  const title =
+    typeof known?.title === "boolean" ? (known.title ? nonBlank(usage.uploaded_title) ?? fetchedTitle : null) : fetchedTitle;
+  const tagsRead = typeof known?.tags === "boolean" ? known.tags : Array.isArray(youtube.tags);
+  const descriptionRead = typeof known?.description === "boolean" ? known.description : typeof youtube.description === "string";
+  return {
+    title,
+    titleMatch: title !== null && typeof usage.title_match === "boolean" ? usage.title_match : null,
+    tagsKnown: tagsRead && Array.isArray(usage.matching_tags),
+    descriptionKnown: descriptionRead && typeof usage.description_match_percent === "number",
+  };
+}
+
 /** Whether a window ran out of attempts, which only "Retry failed windows" collects again. */
 export function hasExhaustedWindows(snapshots: readonly LinkedSnapshot[] | null | undefined): boolean {
   return (snapshots ?? []).some((snapshot) => snapshot?.retry_exhausted === true);

@@ -193,21 +193,23 @@ describe("ChannelPage", () => {
     expect(screen.getAllByRole("button", { name: "Refreshing…" })[0]).toBeDisabled();
   });
 
-  it("says when learning has reached its top level instead of an unavailable next step", async () => {
+  it("says when the sample has reached its largest size instead of an unavailable next step", async () => {
     status = connected(minutesAgo(1));
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = String(url);
       if (path === "/youtube/channel/status") return json(status);
       if (path === "/youtube/channel/refresh" && init?.method === "POST") return json(SYNC);
       if (path === "/api/learning/cohorts") {
-        return json({ sample_size: 40, next_threshold: null, confidence_label: "Strong evidence", learning_allowed: true });
+        return json({ sample_size: 40, next_threshold: null, confidence_label: "Large sample (20+ videos)", learning_allowed: true });
       }
       if (path === "/api/published-videos") return json({ links: [], total: 0 });
       return json({});
     });
     renderChannel();
 
-    expect(await screen.findByText("Top evidence level reached")).toBeInTheDocument();
+    // The tier describes sample size only; it never claims the evidence is strong.
+    expect(await screen.findByText("Largest sample size reached")).toBeInTheDocument();
+    expect(screen.getByText("Large sample (20+ videos)")).toBeInTheDocument();
     expect(screen.queryByText(/Unavailable\s*needed/)).not.toBeInTheDocument();
   });
 

@@ -350,8 +350,14 @@ describe("HistoryPage", () => {
     expect(within(published).getByText("121")).toBeInTheDocument();
     // A comment count YouTube didn't report is unavailable, not 0.
     expect(within(published).getAllByText("Unavailable").length).toBeGreaterThan(0);
-    // With only partial metadata the package's title stands in, never "undefined".
-    expect(within(published).getByText("Top AI Tools")).toBeInTheDocument();
+    // With only partial metadata the title is unknown: the package's title never stands in
+    // for the video's, and the title_match an older server sent is not shown as a match.
+    expect(within(published).getByTestId("uploaded-title-unknown")).toHaveTextContent("Title unknown");
+    expect(within(published).queryByText("Same title as the package")).not.toBeInTheDocument();
+    expect(within(published).queryByText(/undefined/)).not.toBeInTheDocument();
+    // The lookup read no tags, so the tag line says so instead of "0 of 1 generated tag is on the video".
+    expect(within(published).getByTestId("package-usage")).toHaveTextContent("could not read the video's tags");
+    expect(within(published).queryByText(/0 of 1 generated/)).not.toBeInTheDocument();
     expect(within(published).getByText(/OBSERVATION ONLY/)).toBeInTheDocument();
     expect(screen.queryByText(/Linked to YouTube video Unavailable/)).not.toBeInTheDocument();
   });

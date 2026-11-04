@@ -26,7 +26,7 @@ import { historyDate } from "@/lib/historyFormat";
 import { windowLabel } from "@/lib/auditFormat";
 import { youtubeWatchUrl } from "@/lib/channelFormat";
 import { cleanHashtags, cleanTags, hashtagsText, tagsText } from "@/lib/packages";
-import { diagnosisBasis } from "@/lib/linkedVideoFormat";
+import { diagnosisBasis, uploadedMetadataView } from "@/lib/linkedVideoFormat";
 import type { HistoryRunDetail, LinkedVideoReport, PackageSelection } from "@/api/historyTypes";
 import type { LinkedTrafficEvidence } from "@/api/learningTypes";
 import { LearningLabels, LinkedVideoRefresh } from "./LinkedVideoControls";
@@ -212,16 +212,19 @@ function BulletList({ items }: { items: string[] }) {
  * What went live and how it did: the linked video's report. Every number is
  * the stored measurement or "Unavailable", never a zero standing in for one.
  */
-export function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoReport; fallbackTitle: string }) {
+export function PublishedVideo({ report, packageTitle }: { report: LinkedVideoReport; packageTitle: string }) {
   const performance = report.performance ?? {};
   const usage = report.package_usage ?? {};
   const diagnosis = report.diagnosis ?? {};
   const url = youtubeWatchUrl(report.video_id);
-  // oEmbed-only metadata can lack a title; fall back to what was published from, never to "undefined".
-  const uploadedTitle = report.youtube?.title || usage.uploaded_title || fallbackTitle;
-  const titleKnown = Boolean(report.youtube?.title || usage.uploaded_title);
+  // A field the lookup could not read is unknown: the package's title never
+  // stands in for the video's, and unread tags are not "0 of N on the video".
+  const uploaded = uploadedMetadataView(report);
   const generatedTags = asArray<string>(usage.generated_tags);
   const matchingTags = asArray<string>(usage.matching_tags);
+  const tagCount = generatedTags.length.toLocaleString();
+  const tagNoun = generatedTags.length === 1 ? "tag" : "tags";
+  const tagVerb = generatedTags.length === 1 ? "is" : "are";
   const worked = asArray<string>(diagnosis.what_worked);
   const improve = asArray<string>(diagnosis.needs_improvement);
   // The window and peers behind the verdict; null from a server that sends neither.
@@ -256,10 +259,22 @@ export function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoR
             )}
             {report.published_at ? ` · published ${historyDate(report.published_at)}` : ""}
           </p>
-          <p className="break-words text-sm font-medium text-foreground">{uploadedTitle}</p>
-          {titleKnown && typeof usage.title_match === "boolean" ? (
-            <EvidenceChip tone={usage.title_match ? "ok" : "warn"}>
-              {usage.title_match
+          {uploaded.title !== null ? (
+            <p className="break-words text-sm font-medium text-foreground">{uploaded.title}</p>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-muted-foreground" data-testid="uploaded-title-unknown">
+                Title unknown
+              </p>
+              <p className="text-xs text-muted-foreground">
+                YouTube's lookup could not read the video's title, so it is not compared with the package
+                {packageTitle ? ` title “${packageTitle}”` : ""}.
+              </p>
+            </>
+          )}
+          {uploaded.titleMatch !== null ? (
+            <EvidenceChip tone={uploaded.titleMatch ? "ok" : "warn"}>
+              {uploaded.titleMatch
                 ? usage.attribution_status === "creator_selected"
                   ? "Same title as your selection"
                   : "Same title as the package"
@@ -292,10 +307,15 @@ export function PublishedVideo({ report, fallbackTitle }: { report: LinkedVideoR
 
         <div className="space-y-1">
           <p className="text-xs font-medium text-foreground">What was used from the package</p>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {generatedTags.length
-              ? `${matchingTags.length.toLocaleString()} of ${generatedTags.length.toLocaleString()} generated tags are on the video.`
-              : "The package had no tags to compare."}{" "}
+          <p className="text-xs leading-relaxed text-muted-foreground" data-testid="package-usage">
+            {!generatedTags.length
+              ? "The package had no tags to compare."
+              : uploaded.tagsKnown
+                ? `${matchingTags.length.toLocaleString()} of ${tagCount} generated ${tagNoun} ${tagVerb} on the video.`
+                : `YouTube's lookup could not read the video's tags, so the package's ${tagCount} ${tagNoun} ${tagVerb} not compared.`}{" "}
+            {uploaded.descriptionKnown
+              ? ""
+              : "YouTube's lookup could not read the video's description, so the descriptions are not compared. "}
             {displayValue(usage.attribution_note, "")}
           </p>
         </div>

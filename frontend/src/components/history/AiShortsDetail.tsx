@@ -182,7 +182,8 @@ function Performance({ run, onLink }: { run: HistoryRunDetail; onLink: () => voi
         <CollapsibleContent>
           <div className="space-y-4 border-t border-border p-4 sm:p-5">
             {isLinked && report ? (
-              <PublishedVideo report={report} fallbackTitle={String(pkg.title || run.title || "Saved package")} />
+              // Only a real title: the unknown-title note quotes it, so a placeholder would read as one.
+              <PublishedVideo report={report} packageTitle={String(pkg.title || run.title || "")} />
             ) : (
               <LinkCallout
                 onLink={onLink}

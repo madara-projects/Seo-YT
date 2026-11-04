@@ -79,7 +79,8 @@ function CreatorBody({ run, onLink }: { run: HistoryRunDetail; onLink: () => voi
       {isLinked && report ? (
         <PublishedVideo
           report={report}
-          fallbackTitle={String(selection?.package?.title || pkg.title || run.title || "Saved package")}
+          // Only a real title: the unknown-title note quotes it, so a placeholder would read as one.
+          packageTitle={String(selection?.package?.title || pkg.title || run.title || "")}
         />
       ) : null}
 
