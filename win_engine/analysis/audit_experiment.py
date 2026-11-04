@@ -94,6 +94,28 @@ def _comparison(name: str, generated: Any, selected: Any, published: Any, select
     }
 
 
+# The statuses generation_quality.evidence_trace writes since it began saying
+# what reached the writer, not only how large the cohort was.
+_PERSONALIZATION_STATUSES = {"examples_supplied", "context_only", "insufficient_evidence", "not_applied"}
+
+
+def _personal_evidence(package: dict[str, Any]) -> dict[str, Any]:
+    trace = package.get("personalization")
+    if not isinstance(trace, dict) or not trace:
+        return {"status": "unavailable"}
+    if trace.get("status") in _PERSONALIZATION_STATUSES:
+        return trace
+    # An older package's "mature_evidence_used" said only that the cohort was
+    # large enough, whether or not any example reached the writer, so it is
+    # not repeated as if it were the current claim.
+    return {
+        "status": "legacy_trace",
+        "saved_status": trace.get("status"),
+        "sample_size": trace.get("sample_size"),
+        "message": "This package was saved before the trace recorded what reached the writer, so whether channel examples were used is unknown.",
+    }
+
+
 def build_published_audit(context: dict[str, Any]) -> dict[str, Any]:
     run, link = context["run"], context["link"]
     package = run.get("package") if isinstance(run.get("package"), dict) else {}
@@ -213,7 +235,7 @@ def build_published_audit(context: dict[str, Any]) -> dict[str, Any]:
         "intent": {"original_query": run.get("query"), "generated_package": generated, "selected_package": selected_values if selection else None, "selection_attribution": "creator_selected" if selection else "unknown", "selected_package_id": selection.get("generated_package_id") if selection else None},
         "published_reality": {**published_values, "available": published_available, "captured_at": link.get("metadata_synced_at"), "provenance": "youtube_owned_metadata" if published_available else "unavailable"},
         "comparisons": comparisons,
-        "before_publication": {"generation_quality": quality or {"status": "unavailable"}, "retention_assistant": retention or {"status": "unavailable"}, "selected_package_trace": selected or None, "idea": context.get("idea"), "idea_research": context.get("idea_research"), "demand_research": context.get("demand_research"), "watchlist_context": ((context.get("demand_research") or {}).get("evidence") or {}).get("matching_watchlist"), "personal_evidence": package.get("personalization_trace") or {"status": "unavailable"}, "provenance": "saved_historical_payloads_only"},
+        "before_publication": {"generation_quality": quality or {"status": "unavailable"}, "retention_assistant": retention or {"status": "unavailable"}, "selected_package_trace": selected or None, "idea": context.get("idea"), "idea_research": context.get("idea_research"), "demand_research": context.get("demand_research"), "watchlist_context": ((context.get("demand_research") or {}).get("evidence") or {}).get("matching_watchlist"), "personal_evidence": _personal_evidence(package), "provenance": "saved_historical_payloads_only"},
         "observed_performance": {"current": current, "completed_windows": mature, "latest_observation": observed, "linked_report_performance": report.get("performance"), "maturity": "mature_observation" if mature else "collecting_evidence" if snapshots else "unavailable", "causality": "not_established"},
         "findings": findings,
         "learning_candidates": candidates,

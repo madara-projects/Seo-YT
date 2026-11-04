@@ -225,7 +225,7 @@ class TestEngineStages(unittest.TestCase):
         analytics = self.store.cohort_analytics(format_filter="tutorial", language_filter="english")
         self.assertEqual(analytics["sample_size"], 5)
         self.assertEqual(analytics["median_views"], 200.0)
-        self.assertEqual(analytics["confidence_label"], "Early signal")
+        self.assertEqual(analytics["confidence_label"], "Early signal (5+ videos)")
 
     def test_learning_summary_recent_runs_include_database_ids(self):
         with self.store._connect() as conn:

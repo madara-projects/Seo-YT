@@ -334,7 +334,8 @@ def build_seo_package(
     variant_titles = list(pkg["variants"]) or [title]
 
     package_intents = ["Search", "Browse", "Existing audience", "Alternative", "Alternative"]
-    personalization = evidence_trace(channel_learning)
+    # What the writer was actually given; a package the local fallback wrote used none of it.
+    personalization = evidence_trace(channel_learning, generation_source=effective_generation_source)
     competitor_titles = [
         str(item.get("title") or "")
         for item in research.get("youtube_results", [])

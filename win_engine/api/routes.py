@@ -1084,18 +1084,61 @@ def get_cohort_analytics(
     window: str = "24h",
     traffic_source: str | None = None,
 ):
+    """A cohort of verified videos; without a format and a language, the pooled one and its parts.
+
+    Generation compares a video only with one format and language, so a pooled
+    cohort says whether it mixes them (cohort_scope) and lists each format and
+    language's own cohort beside it rather than presenting the pool as one.
+    """
+    from win_engine.feedback.history_store import comparable_format, format_filter_values, known_filter
+
     store = HistoryStore(get_settings().database_path)
+    filters = {
+        "duration_bucket_filter": duration_bucket, "topic_category_filter": topic_category,
+        "snapshot_window": window, "traffic_source_filter": traffic_source,
+    }
     try:
-        return store.cohort_analytics(
-            format_filter=format,
-            language_filter=language,
-            duration_bucket_filter=duration_bucket,
-            topic_category_filter=topic_category,
-            snapshot_window=window,
-            traffic_source_filter=traffic_source,
-        )
+        pooled = store.cohort_analytics(format_filter=format, language_filter=language, **filters)
+        if known_filter(format) and known_filter(language):
+            return {**pooled, "cohort_scope": "single"}
+        # One cohort per stored format, because generation filters by the format
+        # the brief names: a tutorial is compared only with tutorials. Only the
+        # "long_form" format (the Other option) selects every long-form kind.
+        pairs: set[tuple[str, str]] = set()
+        for link in store.published_video_links_list():
+            labels = link.get("comparable_metadata") or {}
+            link_format = comparable_format(labels.get("format"))
+            link_language = known_filter(labels.get("language"))
+            if link_format and link_language:
+                pairs.add((
+                    format if known_filter(format) else link_format,
+                    language if known_filter(language) else link_language,
+                ))
+        by_pair = {
+            pair: store.cohort_analytics(format_filter=pair[0], language_filter=pair[1], **filters)
+            for pair in sorted(pairs)
+        }
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # A "long_form" cohort also holds the other long-form kinds' videos, so only
+    # the videos stored as "long_form" are its own. A pair with none of its own
+    # is left out: three tutorials beside one ineligible "long_form" link would
+    # otherwise be listed twice and read as two formats.
+    long_form_kinds = format_filter_values("long_form") or frozenset()
+    own_sizes: dict[tuple[str, str], int] = {}
+    for (pair_format, pair_language), cohort in by_pair.items():
+        own = cohort["sample_size"]
+        if pair_format == "long_form" and not known_filter(format):
+            for (other_format, other_language), other in by_pair.items():
+                if other_language == pair_language and other_format in long_form_kinds and other_format != "long_form":
+                    own -= other["sample_size"]
+        own_sizes[(pair_format, pair_language)] = own
+    cohorts = sorted(
+        ({**by_pair[pair], "cohort_scope": "single"} for pair, own in own_sizes.items() if own > 0),
+        key=lambda cohort: -cohort["sample_size"],
+    )
+    scope = "mixed" if len(cohorts) > 1 else "single"
+    return {**pooled, "cohort_scope": scope, "cohorts": cohorts}
 
 
 @router.get("/api/opportunity-score/calibration")

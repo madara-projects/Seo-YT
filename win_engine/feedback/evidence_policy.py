@@ -32,18 +32,21 @@ class EvidenceLevel:
 
 
 def evidence_level(sample_size: int) -> EvidenceLevel:
+    # A label names the sample's size only. Whether its videos show a pattern
+    # is pattern_signal's to say: a large cohort whose leaders are within noise
+    # has no pattern, and "Strong historical pattern" said otherwise.
     sample = max(0, int(sample_size or 0))
     if sample >= STRONG_EVIDENCE_MIN_SAMPLES:
         return EvidenceLevel(
-            "strong_evidence", "Strong historical pattern", STRONG_EVIDENCE_MIN_SAMPLES, True
+            "strong_evidence", f"Large sample ({STRONG_EVIDENCE_MIN_SAMPLES}+ videos)", STRONG_EVIDENCE_MIN_SAMPLES, True
         )
     if sample >= MODERATE_EVIDENCE_MIN_SAMPLES:
         return EvidenceLevel(
-            "moderate_evidence", "Moderate evidence", MODERATE_EVIDENCE_MIN_SAMPLES, True
+            "moderate_evidence", f"Moderate sample ({MODERATE_EVIDENCE_MIN_SAMPLES}+ videos)", MODERATE_EVIDENCE_MIN_SAMPLES, True
         )
     if sample >= EARLY_SIGNAL_MIN_SAMPLES:
         return EvidenceLevel(
-            "early_signal", "Early signal", EARLY_SIGNAL_MIN_SAMPLES, True
+            "early_signal", f"Early signal ({EARLY_SIGNAL_MIN_SAMPLES}+ videos)", EARLY_SIGNAL_MIN_SAMPLES, True
         )
     return EvidenceLevel(
         "display_only", "Collecting evidence", EARLY_SIGNAL_MIN_SAMPLES, False

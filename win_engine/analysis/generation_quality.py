@@ -1871,24 +1871,76 @@ def _quality_root(value: str) -> str:
     return word
 
 
-def evidence_trace(channel_learning: dict[str, Any] | None) -> dict[str, Any]:
-    """Expose only evidence-policy output used for personalization."""
+def evidence_trace(
+    channel_learning: dict[str, Any] | None, *, generation_source: str | None = None,
+) -> dict[str, Any]:
+    """What channel evidence the writer was given, which a cohort's size alone does not say.
+
+    Leading videos reach the writer's prompt only when the pattern check found
+    a lead beyond noise: channel_learning.learning_summary leaves best_videos
+    empty otherwise, and seo_writer._build_channel_learning_block shows them
+    only when both learning_allowed flags pass, as checked here. A cohort with
+    no pattern gives the writer only aggregate context and the recent titles
+    to avoid, and a package the local fallback wrote used no channel evidence.
+    """
+    from win_engine.feedback.evidence_policy import EARLY_SIGNAL_MIN_SAMPLES
 
     learning = channel_learning or {}
     cohort = learning.get("cohort") if isinstance(learning.get("cohort"), dict) else {}
+    signal = learning.get("pattern_signal") if isinstance(learning.get("pattern_signal"), dict) else {}
     allowed = bool(cohort.get("learning_allowed"))
+    pattern_status = signal.get("status")
+    sample_size = int(cohort.get("sample_size") or 0)
+    window = cohort.get("snapshot_window") or "24h"
+    examples = 0
+    if allowed and learning.get("learning_allowed") and pattern_status == "pattern":
+        examples = sum(
+            1 for video in (learning.get("best_videos") or [])[:3]
+            if isinstance(video, dict) and str(video.get("title") or "").strip()
+        )
+    reason = str(signal.get("reason") or "").strip()
+    if generation_source == "fallback":
+        status, examples = "not_applied", 0
+        message = "The local fallback wrote this package, so no channel evidence shaped it."
+    elif not allowed:
+        status = "insufficient_evidence"
+        message = (
+            f"Fewer than {EARLY_SIGNAL_MIN_SAMPLES} comparable linked videos have a completed {window} window "
+            f"({sample_size}), so no channel pattern was applied."
+        )
+    elif examples:
+        status = "examples_supplied"
+        message = (
+            f"The writer was shown {examples} leading video{'' if examples == 1 else 's'} "
+            f"from {sample_size} comparable linked videos"
+            + (f": {reason}" if reason else ".")
+        )
+    else:
+        status = "context_only"
+        # Name only the lines the writer's learning block really held.
+        given = ["the cohort's size"]
+        if learning.get("learning_allowed") and str(learning.get("recommendation") or "").strip():
+            given.append("the pattern check's finding")
+        if any(str(title).strip() for title in (learning.get("recent_titles") or [])[:10]):
+            given.append("your recent titles to avoid repeating")
+        message = (
+            "No example videos were shown to the writer"
+            + (f": {reason}" if reason else ".")
+            + " It was given only "
+            + (", ".join(given[:-1]) + " and " + given[-1] if len(given) > 1 else given[0])
+            + "."
+        )
     return {
-        "status": "mature_evidence_used" if allowed else "insufficient_evidence",
+        "status": status,
+        "pattern_status": pattern_status,
+        "examples_supplied": examples,
+        "generation_source": generation_source,
         "learning_allowed": allowed,
         "confidence": cohort.get("confidence_label") or learning.get("confidence_label") or "Collecting evidence",
-        "sample_size": int(cohort.get("sample_size") or 0),
-        "window": cohort.get("snapshot_window") or "24h",
-        "evidence_source": "comparable_owned_video_cohort" if allowed else "none",
-        "message": (
-            "Mature comparable channel evidence was available to the generation prompt."
-            if allowed else
-            "Insufficient mature comparable evidence; no creator winning pattern was applied."
-        ),
+        "sample_size": sample_size,
+        "window": window,
+        "evidence_source": "comparable_owned_video_cohort" if status in {"examples_supplied", "context_only"} else "none",
+        "message": message,
     }
 
 

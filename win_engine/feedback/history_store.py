@@ -2183,6 +2183,22 @@ class HistoryStore:
         comparable_ready = all(str(comparable.get(field) or "unknown") != "unknown" for field in COMPARABLE_FIELDS)
         baseline = self._comparable_snapshot_baseline(link, evidence, comparable)
         evidence_views = _optional_int(evidence.get("views"))
+        # Generation counts a video by evidence_policy's rule on its 24h window,
+        # as channel_learning reads the link: verified, with a known format and
+        # language. Length, topic and five matching peers are the peer
+        # baseline's needs only, so they must not decide whether it counts.
+        policy_link = {
+            **link,
+            "format": comparable_format(comparable.get("format") or link.get("format")) or "unknown",
+            "language": comparable.get("language") or link.get("language"),
+        }
+        counts_toward_generation = sample_is_eligible(
+            policy_link, self.completed_evidence_snapshot(str(link.get("youtube_video_id") or ""), "24h"),
+            expected_window="24h",
+        )
+        # None when no peer baseline could be attempted: no completed window,
+        # or a comparable label is unknown; 0 means peers were sought and none matched.
+        baseline_sample_size = int(baseline.get("sample_size") or 0) if mature_snapshot(evidence) and comparable_ready else None
         verdict, worked, improve = _performance_diagnosis(
             age_hours=age_hours,
             views=evidence_views,
@@ -2192,9 +2208,13 @@ class HistoryStore:
             title_match=title_match,
             matching_tags=None if matching_tags is None else len(matching_tags),
             generated_tag_count=len(generated_tags),
+            labels_known=comparable_ready,
         )
 
         diagnosis_policy = confidence_payload(baseline.get("sample_size", 0))
+        peer_baseline_available = bool(
+            diagnosis_policy["learning_allowed"] and baseline.get("median_views") is not None and evidence_views is not None
+        )
         traffic_sources, traffic_cohort = self._traffic_source_evidence(link, evidence, comparable)
         try:
             retention_learning = self.retention_learning_summary(
@@ -2271,6 +2291,8 @@ class HistoryStore:
                 "needs_improvement": improve,
                 "confidence": diagnosis_policy["confidence_label"],
                 "evidence_level": diagnosis_policy["evidence_level"],
+                # Kept for older readers: true only when the video also has a peer
+                # baseline. Whether generation uses it is counts_toward_generation.
                 "learning_eligible": bool(
                     link.get("ownership_state") == "verified"
                     and link.get("ownership_verified")
@@ -2278,6 +2300,10 @@ class HistoryStore:
                     and diagnosis_policy["learning_allowed"]
                     and comparable_ready
                 ),
+                "counts_toward_generation": counts_toward_generation,
+                "peer_baseline_available": peer_baseline_available,
+                "window": evidence.get("snapshot_window") if evidence else None,
+                "baseline_sample_size": baseline_sample_size,
                 "attribution_note": (
                     "YouTube APIs report video-level performance, not views caused by individual tags. "
                     "The tool learns reliable packaging patterns only after comparable linked videos accumulate."
@@ -3094,6 +3120,7 @@ def _performance_diagnosis(
     title_match: bool | None,
     matching_tags: int | None,
     generated_tag_count: int,
+    labels_known: bool = True,
 ) -> tuple[str, list[str], list[str]]:
     # None means YouTube has not reported that field: say so, and claim
     # neither a match nor zero use.
@@ -3128,10 +3155,22 @@ def _performance_diagnosis(
             worked.append(f"Views are at or above the {baseline.get('window')} comparable median ({int(median_views)}).")
         else:
             improve.append(f"Views are below the {baseline.get('window')} comparable median ({int(median_views)}); test a stronger opening or packaging angle next time.")
-    else:
+    elif views is None:
+        improve.append("No completed window has been collected yet, so this video is not compared with peers.")
+    elif not labels_known:
         improve.append(
-            "There are not yet five verified comparable videos at the same completed window, "
-            "so no winner/loser claim is made."
+            "This video's format, language, length or topic label is unknown, so it has no peer baseline "
+            "and no above- or below-baseline claim is made."
+        )
+    else:
+        # The peer baseline needs peers of the same format, language, length and
+        # topic; generation's cohort needs only format and language.
+        # Peers count only with the same completed window as this video's
+        # evidence, so younger peers with only shorter windows are not counted.
+        improve.append(
+            f"Fewer than {EARLY_SIGNAL_MIN_SAMPLES} other verified videos share this video's format, language, "
+            f"length and topic at the same completed {baseline.get('window')} window ({sample_size} do), "
+            "so no above- or below-baseline claim is made."
         )
 
     if retention is not None:
@@ -3149,8 +3188,17 @@ def _performance_diagnosis(
 
     if age_hours < 24:
         verdict = "TOO EARLY — collecting the first 24-hour evidence"
+    elif views is None:
+        verdict = "OBSERVATION ONLY — no completed window has been collected yet"
+    # Not "OBSERVATION ONLY": generation may still count this video, so the
+    # verdict names only the missing peer comparison (see counts_toward_generation).
+    elif not labels_known:
+        verdict = "NO PEER BASELINE — a comparable label is unknown"
     elif not baseline_policy["learning_allowed"] or median_views is None or views is None:
-        verdict = "OBSERVATION ONLY — more comparable linked videos are needed"
+        verdict = (
+            "NO PEER BASELINE — too few peers of the same format, language, length and topic "
+            f"at the {baseline.get('window')} window"
+        )
     else:
         verdict = "ABOVE BASELINE" if views >= float(median_views) else "BELOW BASELINE"
     return verdict, worked, improve
