@@ -22,6 +22,13 @@ class ChannelLearningFixture(unittest.TestCase):
         handle.close()
         self.store = HistoryStore(self.path)
         self.counter = 0
+        # Learning reads only the connected channel's linked videos.
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', ?, 'Owner', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+                ("owner",),
+            )
 
     def tearDown(self):
         for suffix in ("", "-wal", "-shm"):
@@ -203,8 +210,9 @@ class EvidencePolicyUnknownTests(ChannelLearningFixture):
         verified = {"ownership_state": "verified", "ownership_verified": True, "verified_channel_id": "owner",
                     "ownership_verified_at": NOW.isoformat(), "format": "youtube_shorts", "language": "unknown"}
         snapshot = {"snapshot_window": "24h", "snapshot_status": "complete", "completed_at": NOW.isoformat(), "views": 10}
-        self.assertFalse(sample_is_eligible(verified, snapshot, expected_window="24h"))
-        self.assertTrue(sample_is_eligible({**verified, "language": "english"}, snapshot, expected_window="24h"))
+        self.assertFalse(sample_is_eligible(verified, snapshot, expected_window="24h", connected_channel_id="owner"))
+        self.assertTrue(sample_is_eligible({**verified, "language": "english"}, snapshot, expected_window="24h",
+                                           connected_channel_id="owner"))
 
     def test_retention_learning_does_not_count_unknown_language_videos(self):
         payload = {"retention_assistant": {"rule_version": "phase5-v1", "opening": {"clarity": "clear"},

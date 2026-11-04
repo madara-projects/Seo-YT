@@ -85,6 +85,16 @@ class Phase8MigrationTests(Phase8Fixture):
 
 
 class PublishedAuditTests(Phase8Fixture):
+    def setUp(self):
+        super().setUp()
+        # Learning reads only the connected channel's linked videos.
+        with self.history._connect() as connection:
+            connection.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', ?, 'Owner', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+                ('owner',),
+            )
+
     def test_audit_preserves_generated_selected_and_published_states(self):
         run_id, link_id, _ = self.add_video()
         self.history.update_linked_video_metadata(link_id, {"title": "Published Different", "description": "Actual #Real", "tags": "actual legacy tag string"})

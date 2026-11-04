@@ -50,13 +50,35 @@ def evidence_level(sample_size: int) -> EvidenceLevel:
     )
 
 
-def verified_ownership(link: dict[str, Any]) -> bool:
+def verified_ownership(link: dict[str, Any], *, connected_channel_id: str | None) -> bool:
+    """Whether the link is verified as an upload of the channel connected now.
+
+    A link verified for another channel (one connected before, or one that
+    cloud sync brought from a device connected elsewhere) is that channel's
+    evidence, and with no channel connected no link is this creator's. The
+    link keeps its verification, so reconnecting its channel counts it again.
+    """
+    channel = str(connected_channel_id or "").strip()
     return bool(
-        link.get("ownership_state") == "verified"
+        channel
+        and link.get("ownership_state") == "verified"
         and link.get("ownership_verified")
-        and str(link.get("verified_channel_id") or "").strip()
+        and str(link.get("verified_channel_id") or "").strip() == channel
         and str(link.get("ownership_verified_at") or "").strip()
     )
+
+
+def verified_for_another_channel(link: dict[str, Any], *, connected_channel_id: str | None) -> bool:
+    """Whether the link was verified for a channel that is not connected now.
+
+    Such a link is that channel's, so learning neither counts it nor reports it
+    as one this channel left out; with no channel connected, every verified
+    link is. An unverified link is not, since it is most likely the creator's
+    own video. history_store's _NOT_OTHER_CHANNEL_SQL is the SQL complement;
+    keep them in step.
+    """
+    channel = str(link.get("verified_channel_id") or "").strip()
+    return bool(channel) and channel != str(connected_channel_id or "").strip()
 
 
 def mature_snapshot(snapshot: dict[str, Any] | None, expected_window: str | None = None) -> bool:
@@ -84,9 +106,10 @@ def sample_is_eligible(
     snapshot: dict[str, Any] | None,
     *,
     expected_window: str,
+    connected_channel_id: str | None,
 ) -> bool:
     return bool(
-        verified_ownership(link)
+        verified_ownership(link, connected_channel_id=connected_channel_id)
         and comparable_metadata(link)
         and mature_snapshot(snapshot, expected_window)
     )

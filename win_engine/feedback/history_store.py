@@ -21,7 +21,7 @@ from win_engine.feedback.migrations import (
     prepare_database,
 )
 from win_engine.feedback.evidence_policy import (
-    EARLY_SIGNAL_MIN_SAMPLES, confidence_payload, mature_snapshot, sample_is_eligible,
+    EARLY_SIGNAL_MIN_SAMPLES, confidence_payload, mature_snapshot, sample_is_eligible, verified_for_another_channel,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,10 +83,28 @@ _LONG_FORM_VALUES = frozenset(FORMAT_VALUES - {"youtube_shorts", "quote", "unkno
 # still be filling in the next day, so a day counts as reported this many days on.
 ANALYTICS_ZONE = ZoneInfo("America/Los_Angeles")
 ANALYTICS_REPORTING_LAG_DAYS = 2
+# Personal learning reads only the connected channel's videos (see
+# evidence_policy.verified_ownership), so without a connection there is none.
+# Also shown while a connection exists whose channel id is not known yet (the
+# channel lookup failed after sign-in), so it does not claim nothing is connected.
+NO_CONNECTED_CHANNEL_REASON = (
+    "No connected YouTube channel has been identified, so no linked video counts as evidence yet. "
+    "Connect or reconnect the channel the videos were published on."
+)
+# The channel connected now: NULL with none connected, so no link matches it.
+_CONNECTED_CHANNEL_SQL = "(SELECT TRIM(c.channel_id) FROM youtube_channel_connection c WHERE c.id = 1)"
+# A link `p` that is not verified for another channel: unverified, or verified
+# for the connected one. The complement of evidence_policy.verified_for_another_channel;
+# keep them in step.
+_NOT_OTHER_CHANNEL_SQL = (
+    f"TRIM(COALESCE(p.verified_channel_id, '')) IN ('', COALESCE({_CONNECTED_CHANNEL_SQL}, ''))"
+)
 # evidence_policy.sample_is_eligible in SQL, for links `p`, their comparable
-# metadata `m` and a completed snapshot `x`; keep them in step.
-_VERIFIED_LINK_SQL = """p.ownership_state = 'verified' AND p.ownership_verified = 1
-    AND TRIM(COALESCE(p.verified_channel_id, '')) != '' AND TRIM(COALESCE(p.ownership_verified_at, '')) != ''"""
+# metadata `m` and a completed snapshot `x`; keep them in step. A link verified
+# for a channel that is not connected now is that channel's evidence, not this one's.
+_VERIFIED_LINK_SQL = f"""p.ownership_state = 'verified' AND p.ownership_verified = 1
+    AND TRIM(COALESCE(p.verified_channel_id, '')) != '' AND TRIM(COALESCE(p.ownership_verified_at, '')) != ''
+    AND TRIM(p.verified_channel_id) = {_CONNECTED_CHANNEL_SQL}"""
 _COMPARABLE_LABELS_SQL = "TRIM(m.format) NOT IN ('', 'unknown') AND TRIM(m.language) NOT IN ('', 'unknown')"
 _MATURE_SNAPSHOT_SQL = "x.snapshot_status = 'complete' AND COALESCE(x.completed_at, '') != '' AND x.views IS NOT NULL"
 DURATION_VALUES ={"under_60s", "60_to_180s", "3_to_10m", "over_10m", "unknown"}
@@ -492,14 +510,43 @@ class HistoryStore:
             })
         return result
 
-    def recent_published_titles(self, limit: int = 10) -> list[str]:
-        """Return observed uploaded titles without inferring package selection."""
+    def connected_channel_id(self) -> str | None:
+        """The channel connected now (youtube_channel_connection id 1), or None."""
+        with self._connect() as connection:
+            row = connection.execute("SELECT channel_id FROM youtube_channel_connection WHERE id = 1").fetchone()
+        channel = str(row[0] or "").strip() if row else ""
+        return channel or None
+
+    def runs_published_on_other_channels(self) -> set[int]:
+        """Runs linked to a video verified for a channel that is not connected now.
+
+        Their titles are that channel's history (evidence_policy.verified_for_another_channel),
+        so they are no repetition on this one. With no channel connected, every
+        verified video is another channel's; an unverified link stays unscoped.
+        """
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT COALESCE(json_extract(youtube_metadata_json, '$.title'), selected_title)
-                   FROM published_video_links
-                   WHERE COALESCE(json_extract(youtube_metadata_json, '$.title'), selected_title) IS NOT NULL
-                   ORDER BY updated_at DESC LIMIT ?""",
+                f"""SELECT p.analysis_run_id FROM published_video_links p
+                   WHERE NOT ({_NOT_OTHER_CHANNEL_SQL})"""
+            ).fetchall()
+        return {int(row[0]) for row in rows if row[0] is not None}
+
+    def recent_published_titles(self, limit: int = 10) -> list[str]:
+        """Return observed uploaded titles without inferring package selection.
+
+        Leaves out only videos verified for a channel that is not connected now,
+        the complement of runs_published_on_other_channels: another channel's
+        titles are no repetition on this one, while an unverified link (linked
+        with no channel connected, or never checked) is most likely the creator's
+        own video, so its live title is still one not to repeat.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT COALESCE(json_extract(p.youtube_metadata_json, '$.title'), p.selected_title)
+                   FROM published_video_links p
+                   WHERE COALESCE(json_extract(p.youtube_metadata_json, '$.title'), p.selected_title) IS NOT NULL
+                     AND {_NOT_OTHER_CHANNEL_SQL}
+                   ORDER BY p.updated_at DESC LIMIT ?""",
                 (max(1, min(limit, 50)),),
             ).fetchall()
         return [str(row[0]).strip() for row in rows if row[0] and str(row[0]).strip()]
@@ -534,6 +581,7 @@ class HistoryStore:
         runs = {int(row[0]): (_json_value(row[1]), row[2]) for row in run_rows}
         formats = format_filter_values(format_filter)
         language_filter = known_filter(language_filter)
+        channel_id = self.connected_channel_id()
         eligible: list[dict[str, Any]] = []
         for link in self.published_video_links_list():
             comparable = link.get("comparable_metadata") if isinstance(link.get("comparable_metadata"), dict) else {}
@@ -547,7 +595,9 @@ class HistoryStore:
             policy_link = dict(link)
             policy_link["format"] = effective_format
             policy_link["language"] = effective_language
-            if not sample_is_eligible(policy_link, snapshot, expected_window=snapshot_window):
+            if not sample_is_eligible(
+                policy_link, snapshot, expected_window=snapshot_window, connected_channel_id=channel_id
+            ):
                 continue
             retention = _optional_number((snapshot or {}).get("avg_view_percentage"))
             if retention is None:
@@ -582,6 +632,7 @@ class HistoryStore:
                 "snapshot_window": snapshot_window, "patterns": [],
                 "retention_curve_status": "unavailable",
                 "message": (
+                    NO_CONNECTED_CHANNEL_REASON if channel_id is None else
                     f"Only {sample_size} verified comparable Phase 5 video(s) have completed {snapshot_window} "
                     f"retention evidence; at least {EARLY_SIGNAL_MIN_SAMPLES} are required before surfacing correlations."
                 ),
@@ -2219,13 +2270,34 @@ class HistoryStore:
     def _comparable_snapshot_baseline(
         self, link: dict[str, Any], latest: dict[str, Any], comparable: dict[str, Any]
     ) -> dict[str, Any]:
+        """The connected channel's comparable videos at this video's completed window.
+
+        unavailable_reason is None when the peers were counted (however few), and
+        otherwise says why none could be: no_channel_connected or
+        verified_for_another_channel (waiting changes neither, so a report must
+        not word them as "not yet"), no_completed_window or comparable_labels_unknown.
+        """
         window = str(latest.get("snapshot_window") or "")
+
+        def unavailable(reason: str) -> dict[str, Any]:
+            return {"sample_size": 0, "window": window or "none", "median_views": None,
+                    "median_retention_percentage": None, "unavailable_reason": reason}
+
+        # The peers are the connected channel's videos, so with none connected
+        # there are none, and a video verified for another channel has none here:
+        # comparing it with them would set one channel's video against another
+        # channel's audience. Checked first, as no window or label changes it.
+        channel_id = self.connected_channel_id()
+        if channel_id is None:
+            return unavailable("no_channel_connected")
+        if verified_for_another_channel(link, connected_channel_id=channel_id):
+            return unavailable("verified_for_another_channel")
         if not mature_snapshot(latest):
-            return {"sample_size": 0, "window": window or "none", "median_views": None, "median_retention_percentage": None}
+            return unavailable("no_completed_window")
         # Comparable labels are optional for older links.  A missing label
         # simply means no cohort baseline can be calculated yet.
         if any(str(comparable.get(field) or "unknown") == "unknown" for field in COMPARABLE_FIELDS):
-            return {"sample_size": 0, "window": window, "median_views": None, "median_retention_percentage": None}
+            return unavailable("comparable_labels_unknown")
         with self._connect() as connection:
             rows = connection.execute(
                 f"""SELECT s.views, s.avg_view_percentage
@@ -2253,6 +2325,7 @@ class HistoryStore:
             "window": window,
             "median_views": _median(views),
             "median_retention_percentage": _median(retention),
+            "unavailable_reason": None,
         }
 
     # --- Stage C: Evidence & Cohort Calculation Engine ---
@@ -2306,6 +2379,7 @@ class HistoryStore:
                   AND t.snapshot_status = 'complete'
                   AND json_extract(t.traffic_sources_json, '$.dominant_source') = ?)"""
             filter_params.extend([snapshot_window, traffic_source])
+        channel_connected = self.connected_channel_id() is not None
         with self._connect() as connection:
             query = f"""
                 SELECT p.youtube_video_id, m.format, m.language, m.duration_bucket, m.topic_category,
@@ -2330,10 +2404,12 @@ class HistoryStore:
 
             # Links that match the same filters, whether or not they qualify:
             # the difference is what was excluded, not a different cohort.
-            total_query = """SELECT COUNT(DISTINCT p.youtube_video_id)
+            # A link verified for a channel not connected now belongs to that
+            # channel, so it is not one this channel's cohort left out.
+            total_query = f"""SELECT COUNT(DISTINCT p.youtube_video_id)
                              FROM published_video_links p
                              LEFT JOIN published_video_comparable_metadata m ON m.published_video_link_id = p.id
-                             WHERE 1=1"""
+                             WHERE {_NOT_OTHER_CHANNEL_SQL}"""
             total_links = int(connection.execute(total_query + filters, filter_params).fetchone()[0] or 0)
 
             views_list = sorted([r[5] for r in rows if r[5] is not None])
@@ -2345,6 +2421,7 @@ class HistoryStore:
 
             more_needed = max(0, EARLY_SIGNAL_MIN_SAMPLES - count)
             recommendation = (
+                NO_CONNECTED_CHANNEL_REASON if not channel_connected else
                 f"Collect verified completed {snapshot_window} snapshots until at least {EARLY_SIGNAL_MIN_SAMPLES} comparable videos are available"
                 + (f": {more_needed} more needed." if more_needed else ".")
             )

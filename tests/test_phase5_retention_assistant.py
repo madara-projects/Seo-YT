@@ -155,6 +155,13 @@ class Phase5DeterministicAnalysisTests(unittest.TestCase):
 class Phase5HistoryLearningTests(unittest.TestCase):
     def setUp(self):
         self.store = HistoryStore(":memory:")
+        # Learning reads only the connected channel's linked videos.
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', ?, 'Owner', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+                ('owner-channel',),
+            )
 
     def _add_video(self, index: int, retention: float, *, select: bool = False, clarity: str = "clear"):
         script = "Battery result shown immediately. Then the test details follow."

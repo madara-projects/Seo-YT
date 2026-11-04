@@ -22,6 +22,7 @@ from win_engine.feedback.evidence_policy import (
     MATURE_SNAPSHOT_WINDOWS,
     evidence_level,
     sample_is_eligible,
+    verified_for_another_channel,
     verified_ownership,
 )
 from win_engine.feedback.history_store import HistoryStore, comparable_format, known_filter
@@ -55,9 +56,19 @@ def opportunity_score_calibration(history_store: HistoryStore, snapshot_window: 
     """The calibration for one window: the one asked for, else the one with the most comparable videos."""
     if snapshot_window is not None and snapshot_window not in MATURE_SNAPSHOT_WINDOWS:
         raise ValueError("Calibration requires a 24h, 7d, or 28d evidence window.")
-    links = history_store.published_video_links_list()
+    channel_id = history_store.connected_channel_id()
+    # As in learning_summary and cohort_analytics, a link verified for a channel
+    # that is not connected now is that channel's: it is neither considered nor
+    # reported as excluded here (it stays verified, and counts again once its
+    # channel is reconnected).
+    links = [
+        link for link in history_store.published_video_links_list()
+        if not verified_for_another_channel(link, connected_channel_id=channel_id)
+    ]
     labels = _package_labels(history_store)
-    collected = {window: _collect(history_store, links, labels, window) for window in MATURE_SNAPSHOT_WINDOWS}
+    collected = {
+        window: _collect(history_store, links, labels, window, channel_id) for window in MATURE_SNAPSHOT_WINDOWS
+    }
     # Ties go to the longer window: a more mature outcome.
     chosen = snapshot_window or max(
         MATURE_SNAPSHOT_WINDOWS, key=lambda window: (len(collected[window][0]), MATURE_SNAPSHOT_WINDOWS.index(window))
@@ -237,9 +248,14 @@ def _package_labels(history_store: HistoryStore) -> dict[int, tuple[str, bool]]:
 
 
 def _collect(
-    history_store: HistoryStore, links: list[dict[str, Any]], labels: dict[int, tuple[str, bool]], window: str
+    history_store: HistoryStore, links: list[dict[str, Any]], labels: dict[int, tuple[str, bool]], window: str,
+    channel_id: str | None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """The eligible samples at one window, and why each other link was left out."""
+    """The eligible samples at one window, and why each other link was left out.
+
+    `links` holds no link verified for another channel, so not_ownership_verified
+    counts only links that were never verified.
+    """
     samples: list[dict[str, Any]] = []
     excluded = dict.fromkeys(_EXCLUSION_REASONS, 0)
     for link in links:
@@ -249,7 +265,7 @@ def _collect(
         policy_link["language"] = known_filter(comparable.get("language") or link.get("language")) or "unknown"
         label, breakdown_stored = labels.get(int(link.get("analysis_run_id") or 0), ("", False))
         score = link.get("package_opportunity_score")
-        if not verified_ownership(policy_link):
+        if not verified_ownership(policy_link, connected_channel_id=channel_id):
             excluded["not_ownership_verified"] += 1
             continue
         if "unknown" in (policy_link["format"], policy_link["language"]):
@@ -260,7 +276,7 @@ def _collect(
             excluded["score_not_measured"] += 1
             continue
         snapshot = history_store.completed_evidence_snapshot(str(link.get("youtube_video_id") or ""), window)
-        if not sample_is_eligible(policy_link, snapshot, expected_window=window):
+        if not sample_is_eligible(policy_link, snapshot, expected_window=window, connected_channel_id=channel_id):
             excluded["no_completed_snapshot"] += 1
             continue
         samples.append({

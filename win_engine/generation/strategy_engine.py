@@ -531,9 +531,14 @@ def _titles_of_other_videos(
     key = _script_key(script)
     runs = history_store.history_runs(limit=50)
     same_video = {run["id"] for run in runs if _script_key(run.get("query")) == key}
+    # A run published as a video verified for another channel, like that
+    # video's title (recent_published_titles leaves it out too), is that
+    # channel's history: repeating it is no repetition on this channel. An
+    # unverified link stays in both lists.
+    other_channel = history_store.runs_published_on_other_channels()
     recent = [
         str(run.get("title") or "").strip() for run in runs
-        if run["id"] not in same_video and str(run.get("title") or "").strip()
+        if run["id"] not in same_video and run["id"] not in other_channel and str(run.get("title") or "").strip()
     ][:limit]
     # The video an earlier run of this script was published as.
     own_published: set[str] = set()

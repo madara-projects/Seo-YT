@@ -154,6 +154,13 @@ class TestEngineStages(unittest.TestCase):
         self.assertIn("TOO EARLY", report["diagnosis"]["verdict"])
 
     def test_future_generation_learning_does_not_overfit_one_linked_video(self):
+        # Learning reads only the connected channel's linked videos.
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', ?, 'Owner', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+                ('owner-channel',),
+            )
         with self.store._connect() as conn:
             run_id = conn.execute(
                 "INSERT INTO analysis_runs (query, created_at, title) VALUES (?, ?, ?)",
@@ -187,6 +194,13 @@ class TestEngineStages(unittest.TestCase):
         self.assertNotIn("linked-video pattern", prompt_block)
 
     def test_cohort_uses_median_not_a_single_outlier(self):
+        # Learning reads only the connected channel's linked videos.
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', ?, 'Owner', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+                ('owner-channel',),
+            )
         runs: list[tuple[int, int]] = []
         with self.store._connect() as conn:
             for index, views in enumerate((100, 150, 9000, 200, 250), start=1):

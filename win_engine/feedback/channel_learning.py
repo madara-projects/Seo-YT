@@ -7,8 +7,12 @@ from typing import Any
 
 from win_engine.analysis.text_tokens import unicode_words
 from win_engine.feedback.migrations import connect_managed
-from win_engine.feedback.evidence_policy import evidence_level, pattern_signal, sample_is_eligible
-from win_engine.feedback.history_store import HistoryStore, comparable_format, format_filter_values, known_filter
+from win_engine.feedback.evidence_policy import (
+    evidence_level, pattern_signal, sample_is_eligible, verified_for_another_channel,
+)
+from win_engine.feedback.history_store import (
+    NO_CONNECTED_CHANNEL_REASON, HistoryStore, comparable_format, format_filter_values, known_filter,
+)
 
 
 def save_video_snapshots(database_path: str, videos: list[dict[str, Any]], *, channel_id: str) -> None:
@@ -37,7 +41,15 @@ def learning_summary(
         rows = connection.execute("""SELECT s.video_id,s.title,s.views,s.average_view_duration,s.average_view_percentage,s.likes,s.comments,s.published_at FROM owned_video_snapshots s INNER JOIN (SELECT video_id,MAX(captured_at) captured_at FROM owned_video_snapshots GROUP BY video_id) latest ON latest.video_id=s.video_id AND latest.captured_at=s.captured_at WHERE s.channel_id=(SELECT channel_id FROM youtube_channel_connection WHERE id=1) ORDER BY s.views DESC""").fetchall()
     videos = [{"video_id": r[0], "title": r[1], "views": r[2], "average_view_duration": r[3], "average_view_percentage": r[4], "likes": r[5], "comments": r[6], "published_at": r[7]} for r in rows]
     store = HistoryStore(database_path)
-    links = store.published_video_links_list()
+    # Only the connected channel's linked videos are this creator's evidence
+    # (evidence_policy.verified_ownership); one verified for another channel is
+    # not even counted as linked here, and with no channel connected no verified
+    # link is. An unverified link still counts as linked.
+    channel_id = store.connected_channel_id()
+    links = [
+        link for link in store.published_video_links_list()
+        if not verified_for_another_channel(link, connected_channel_id=channel_id)
+    ]
     formats = format_filter_values(format_filter)
     language_filter = known_filter(language_filter)
     comparable_links: list[dict[str, Any]] = []
@@ -55,7 +67,9 @@ def learning_summary(
         policy_link = dict(link)
         policy_link["format"] = effective_format
         policy_link["language"] = effective_language
-        if not snapshot or not sample_is_eligible(policy_link, snapshot, expected_window=snapshot_window):
+        if not snapshot or not sample_is_eligible(
+            policy_link, snapshot, expected_window=snapshot_window, connected_channel_id=channel_id
+        ):
             continue
         metadata = link.get("youtube_metadata") if isinstance(link.get("youtube_metadata"), dict) else {}
         views = int(snapshot["views"])
@@ -96,7 +110,10 @@ def learning_summary(
     }) <= 1
     signal = pattern_signal([float(item["views_per_day"]) for item in eligible], comparable=comparable)
     pattern_found = level.learning_allowed and signal["status"] == "pattern"
-    if not level.learning_allowed:
+    if channel_id is None:
+        recommendation = NO_CONNECTED_CHANNEL_REASON
+        confidence = "collecting"
+    elif not level.learning_allowed:
         recommendation = (
             f"Collect verified completed {snapshot_window} snapshots until at least {level.minimum_samples} comparable linked videos are mature "
             f"(currently {sample}); do not change generation strategy from the early sample."

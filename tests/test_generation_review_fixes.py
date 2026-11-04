@@ -167,6 +167,8 @@ class SameScriptRerunTests(unittest.TestCase):
                                        "LOW", "OK", 1.0)
         other = self.store.record_analysis_run("Masala tea at home", "SEARCH", "Story", "Masala tea", 7.0,
                                                "LOW", "OK", 1.0)
+        # Unverified links (linked with no channel connected) are most likely the
+        # creator's own videos, so both their run's title and the uploaded title stay.
         self.store.link_published_video(same, "coldbrew001", "2026-08-01T10:00:00+00:00",
                                         selected_title="Cold Brew Coffee at Home")
         self.store.link_published_video(other, "masalatea01", "2026-08-02T10:00:00+00:00",
@@ -174,6 +176,42 @@ class SameScriptRerunTests(unittest.TestCase):
         recent, published = _titles_of_other_videos(self.store, COLD_BREW)
         self.assertEqual(recent, ["Masala tea"])
         self.assertEqual(published, ["Masala Tea Recipe"])
+
+        # Connecting a channel later does not drop them either.
+        self._connect_channel("UC-owner")
+        self.assertEqual(_titles_of_other_videos(self.store, COLD_BREW), (["Masala tea"], ["Masala Tea Recipe"]))
+
+    def test_titles_of_videos_verified_for_another_channel_are_left_out(self):
+        same = self.store.record_analysis_run(COLD_BREW, "SEARCH", "Story", "Cold brew at home", 7.0, "LOW", "OK", 1.0)
+        other = self.store.record_analysis_run("Masala tea at home", "SEARCH", "Story", "Masala tea", 7.0,
+                                               "LOW", "OK", 1.0)
+        owned = {"ownership_state": "verified", "ownership_verified": True, "verified_channel_id": "UC-owner",
+                 "ownership_verified_at": "2026-08-03T10:00:00+00:00"}
+        self.store.link_published_video(same, "coldbrew001", "2026-08-01T10:00:00+00:00",
+                                        selected_title="Cold Brew Coffee at Home", **owned)
+        self.store.link_published_video(other, "masalatea01", "2026-08-02T10:00:00+00:00",
+                                        selected_title="Masala Tea Recipe", **owned)
+        self._connect_channel("UC-owner")
+        self.assertEqual(_titles_of_other_videos(self.store, COLD_BREW), (["Masala tea"], ["Masala Tea Recipe"]))
+
+        # Another channel's videos are no repetition on this one: neither their
+        # published titles nor the generated titles of their runs.
+        self._connect_channel("UC-other")
+        self.assertEqual(_titles_of_other_videos(self.store, COLD_BREW), ([], []))
+        # With no channel connected, every verified video is another channel's.
+        with self.store._connect() as connection:
+            connection.execute("DELETE FROM youtube_channel_connection WHERE id = 1")
+        self.assertEqual(_titles_of_other_videos(self.store, COLD_BREW), ([], []))
+
+    def _connect_channel(self, channel_id: str) -> None:
+        # What YouTubeChannelService._save_connection stores, without OAuth.
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', ?, 'Channel', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z') "
+                "ON CONFLICT(id) DO UPDATE SET channel_id = excluded.channel_id",
+                (channel_id,),
+            )
 
 
 class TamilScoringTests(unittest.TestCase):

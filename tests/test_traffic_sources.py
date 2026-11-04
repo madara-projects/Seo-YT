@@ -527,6 +527,16 @@ class CloudSyncTrafficTests(Base):
 
 
 class CohortTests(Base):
+    def setUp(self):
+        super().setUp()
+        # Learning reads only the connected channel's linked videos.
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', ?, 'Owner', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+                ('UC-owner',),
+            )
+
     def add(self, video_id: str, dominant: str | None, *, views: int = 100, retention: float = 40.0, window: str = "7d",
             **link_values) -> None:
         self.link(video_id, **link_values)
