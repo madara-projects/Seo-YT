@@ -2192,9 +2192,10 @@ class HistoryStore:
             "format": comparable_format(comparable.get("format") or link.get("format")) or "unknown",
             "language": comparable.get("language") or link.get("language"),
         }
+        # Only the connected channel's videos count, exactly as generation reads them.
         counts_toward_generation = sample_is_eligible(
             policy_link, self.completed_evidence_snapshot(str(link.get("youtube_video_id") or ""), "24h"),
-            expected_window="24h",
+            expected_window="24h", connected_channel_id=self.connected_channel_id(),
         )
         # None when no peer baseline could be attempted: no completed window,
         # or a comparable label is unknown; 0 means peers were sought and none matched.
