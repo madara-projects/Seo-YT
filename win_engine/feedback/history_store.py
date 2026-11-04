@@ -2098,19 +2098,35 @@ class HistoryStore:
 
         primary_generated_title = str(package.get("title") or run.get("title") or "").strip()
         generated_title = str(selected_package.get("title") or primary_generated_title).strip()
-        uploaded_title = str(metadata.get("title") or link.get("selected_title") or "").strip()
+        # Each uploaded field is compared only when YouTube reported it. An
+        # unknown one is null, never "" or [] (which read as "used nothing"),
+        # and the link's selected title never stands in for the uploaded one:
+        # it defaults to the generated title, so it would always "match".
+        known = _uploaded_metadata_known(metadata)
+        uploaded_title = metadata["title"].strip() if known["title"] else None
         generated_description = str(selected_package.get("description") or package.get("description") or link.get("selected_description") or "").strip()
-        uploaded_description = str(metadata.get("description") or "").strip()
+        uploaded_description = metadata["description"].strip() if known["description"] else None
         generated_tags = _normalized_list(selected_package.get("tags") or package.get("tags") or link.get("selected_tags") or [])
-        uploaded_tags = _normalized_list(metadata.get("tags") or [])
+        uploaded_tags = _normalized_list(metadata["tags"]) if known["tags"] else None
         generated_hashtags = _normalized_list(selected_package.get("hashtags") or package.get("hashtags") or link.get("selected_hashtags") or [])
-        uploaded_hashtags = _normalized_list(re.findall(r"#([^\s#]+)", uploaded_description))
+        uploaded_hashtags = (
+            _normalized_list(re.findall(r"#([^\s#]+)", uploaded_description)) if uploaded_description is not None else None
+        )
 
-        matching_tags = [tag for tag in generated_tags if tag in set(uploaded_tags)]
-        missing_tags = [tag for tag in generated_tags if tag not in set(uploaded_tags)]
-        extra_tags = [tag for tag in uploaded_tags if tag not in set(generated_tags)]
-        matching_hashtags = [tag for tag in generated_hashtags if tag in set(uploaded_hashtags)]
-        description_match = _word_overlap_percent(generated_description, uploaded_description)
+        title_match = None if uploaded_title is None else _normalize_text(uploaded_title) == _normalize_text(generated_title)
+        matching_tags: list[str] | None = None
+        missing_tags: list[str] | None = None
+        extra_tags: list[str] | None = None
+        matching_hashtags: list[str] | None = None
+        if uploaded_tags is not None:
+            matching_tags = [tag for tag in generated_tags if tag in set(uploaded_tags)]
+            missing_tags = [tag for tag in generated_tags if tag not in set(uploaded_tags)]
+            extra_tags = [tag for tag in uploaded_tags if tag not in set(generated_tags)]
+        if uploaded_hashtags is not None:
+            matching_hashtags = [tag for tag in generated_hashtags if tag in set(uploaded_hashtags)]
+        description_match = (
+            _word_overlap_percent(generated_description, uploaded_description) if uploaded_description is not None else None
+        )
 
         views = _first_number(latest.get("views"), metadata.get("view_count"))
         likes = _first_number(latest.get("likes"), metadata.get("like_count"))
@@ -2134,8 +2150,8 @@ class HistoryStore:
             retention=_optional_number(evidence.get("avg_view_percentage")),
             like_rate=_rate(_optional_int(evidence.get("likes")), evidence_views),
             baseline=baseline,
-            title_match=_normalize_text(uploaded_title) == _normalize_text(generated_title),
-            matching_tags=len(matching_tags),
+            title_match=title_match,
+            matching_tags=None if matching_tags is None else len(matching_tags),
             generated_tag_count=len(generated_tags),
         )
 
@@ -2178,7 +2194,8 @@ class HistoryStore:
                 ),
                 "generated_title": generated_title,
                 "uploaded_title": uploaded_title,
-                "title_match": _normalize_text(uploaded_title) == _normalize_text(generated_title),
+                "title_match": title_match,
+                "uploaded_metadata_known": known,
                 "description_match_percent": description_match,
                 "generated_tags": generated_tags,
                 "uploaded_tags": uploaded_tags,
@@ -2827,6 +2844,39 @@ def _normalized_list(values: Any) -> list[str]:
     return out
 
 
+# The title the public fallbacks once stored when they could not get one.
+_PLACEHOLDER_UPLOADED_TITLE = "YouTube Video"
+
+
+def _uploaded_metadata_known(metadata: dict[str, Any]) -> dict[str, bool]:
+    """Which uploaded fields YouTube reported, so a comparison means something.
+
+    A field is known only when its key is stored: oEmbed and the bare-id
+    fallback report no description or tags, and the merge leaves those keys
+    out instead of erasing earlier ones. The Data API reports every field, so
+    its "" and [] are a real empty description and a video with no tags.
+    Links saved before that merge can hold the fallbacks' old placeholders:
+    exactly "", [] and a made-up "YouTube Video" title. Only a Data API
+    lookup stamps fetched_at, so on a fallback record without it those exact
+    values are placeholders, not what was uploaded. The first fallbacks
+    stored no metadata_source at all, only that title and published_at, so
+    the placeholder title is unknown on any record no Data API lookup wrote.
+    """
+    source, fetched = metadata.get("metadata_source"), bool(metadata.get("fetched_at"))
+    from_fallback = source in {"oembed", "unverified_id"} and not fetched
+    from_data_api = fetched or source == "youtube_data_api"
+    title, tags, description = metadata.get("title"), metadata.get("tags"), metadata.get("description")
+    return {
+        "title": (
+            isinstance(title, str)
+            and bool(title.strip())
+            and (from_data_api or title.strip() != _PLACEHOLDER_UPLOADED_TITLE)
+        ),
+        "tags": isinstance(tags, list) and not (from_fallback and not tags),
+        "description": isinstance(description, str) and not (from_fallback and not description.strip()),
+    }
+
+
 def _word_overlap_percent(left: str, right: str) -> float:
     left_words = set(_normalize_text(left).split())
     right_words = set(_normalize_text(right).split())
@@ -2990,23 +3040,33 @@ def _performance_diagnosis(
     retention: float | None,
     like_rate: float | None,
     baseline: dict[str, Any],
-    title_match: bool,
-    matching_tags: int,
+    title_match: bool | None,
+    matching_tags: int | None,
     generated_tag_count: int,
 ) -> tuple[str, list[str], list[str]]:
+    # None means YouTube has not reported that field: say so, and claim
+    # neither a match nor zero use.
     worked: list[str] = []
     improve: list[str] = []
-    if title_match:
+    if title_match is None:
+        improve.append("YouTube has not reported the uploaded title, so whether the generated title was used is unknown.")
+    elif title_match:
         worked.append(
             "The uploaded title exactly matches the generated recommendation, preserving title attribution "
             "if enough comparable evidence accumulates."
         )
     else:
         improve.append("The uploaded title differs from the generated title; treat this as a test of the uploaded title, not the original recommendation.")
-    if generated_tag_count and matching_tags:
+    if generated_tag_count and matching_tags is None:
+        improve.append("YouTube has not reported this video's tags, so whether the generated tags were used is unknown.")
+    elif generated_tag_count and matching_tags:
         worked.append(f"You used {matching_tags} of {generated_tag_count} generated tags.")
+    elif generated_tag_count == 1:
+        improve.append("The generated tag is not on the uploaded video, so its effect cannot be evaluated.")
     elif generated_tag_count:
-        improve.append("The uploaded metadata does not currently contain the generated tags, so tag-package adoption cannot be evaluated.")
+        improve.append(
+            f"None of the {generated_tag_count} generated tags are on the uploaded video, so their effect cannot be evaluated."
+        )
 
     sample_size = int(baseline.get("sample_size") or 0)
     baseline_policy = confidence_payload(sample_size)
