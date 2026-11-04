@@ -101,6 +101,13 @@ class StoreFixture(unittest.TestCase):
         self.path = handle.name
         self.store = HistoryStore(self.path)
         self.count = 0
+        # Learning counts only the connected channel's videos, so the channel
+        # these links are verified for is the connected one.
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO youtube_channel_connection (id, encrypted_refresh_token, channel_id, channel_title, connected_at, updated_at) "
+                "VALUES (1, 'token', 'owner', 'Owner', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')"
+            )
 
     def tearDown(self):
         for suffix in ("", "-wal", "-shm"):
