@@ -118,6 +118,34 @@ def sample_is_eligible(
     )
 
 
+def not_counted_reason(
+    link: dict[str, Any],
+    snapshot: dict[str, Any] | None,
+    *,
+    expected_window: str,
+    connected_channel_id: str | None,
+) -> str | None:
+    """Why sample_is_eligible is false, or None when the video counts.
+
+    The first failing check in the order generation applies them: "no_channel"
+    (nothing connected), "other_channel" (verified for a channel not connected
+    now), "unverified", "labels" (format or language unknown), then "window"
+    (the expected window has not completed). History words its exclusion from
+    this rather than guessing it from the ownership flags alone.
+    """
+    if not str(connected_channel_id or "").strip():
+        return "no_channel"
+    if verified_for_another_channel(link, connected_channel_id=connected_channel_id):
+        return "other_channel"
+    if not verified_ownership(link, connected_channel_id=connected_channel_id):
+        return "unverified"
+    if not comparable_metadata(link):
+        return "labels"
+    if not mature_snapshot(snapshot, expected_window):
+        return "window"
+    return None
+
+
 def _median(values: list[float]) -> float | None:
     ordered = sorted(values)
     if not ordered:

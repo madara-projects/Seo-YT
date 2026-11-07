@@ -21,7 +21,8 @@ from win_engine.feedback.migrations import (
     prepare_database,
 )
 from win_engine.feedback.evidence_policy import (
-    EARLY_SIGNAL_MIN_SAMPLES, confidence_payload, mature_snapshot, sample_is_eligible, verified_for_another_channel,
+    EARLY_SIGNAL_MIN_SAMPLES, confidence_payload, mature_snapshot, not_counted_reason, sample_is_eligible,
+    verified_for_another_channel,
 )
 
 logger = logging.getLogger(__name__)
@@ -2238,9 +2239,15 @@ class HistoryStore:
             "language": comparable.get("language") or link.get("language"),
         }
         # Only the connected channel's videos count, exactly as generation reads them.
+        window_24h = self.completed_evidence_snapshot(str(link.get("youtube_video_id") or ""), "24h")
+        connected_channel = self.connected_channel_id()
         counts_toward_generation = sample_is_eligible(
-            policy_link, self.completed_evidence_snapshot(str(link.get("youtube_video_id") or ""), "24h"),
-            expected_window="24h", connected_channel_id=self.connected_channel_id(),
+            policy_link, window_24h, expected_window="24h", connected_channel_id=connected_channel,
+        )
+        # The first check that fails, so History names the real reason (a video
+        # verified for another channel is not "waiting for its 24h window").
+        excluded_because = not_counted_reason(
+            policy_link, window_24h, expected_window="24h", connected_channel_id=connected_channel,
         )
         # None when no peer baseline could be attempted: no completed window,
         # or a comparable label is unknown; 0 means peers were sought and none matched.
@@ -2347,6 +2354,7 @@ class HistoryStore:
                     and comparable_ready
                 ),
                 "counts_toward_generation": counts_toward_generation,
+                "not_counted_reason": excluded_because,
                 "peer_baseline_available": peer_baseline_available,
                 "window": evidence.get("snapshot_window") if evidence else None,
                 "baseline_sample_size": baseline_sample_size,

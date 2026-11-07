@@ -181,7 +181,34 @@ class DiagnosisTests(StoreFixture):
         run_id, link_id, _ = self.linked()
         with self.store._connect() as connection:
             connection.execute("UPDATE published_video_links SET ownership_state = 'unverified', ownership_verified = 0 WHERE id = ?", (link_id,))
-        self.assertFalse(self.store.linked_package_report(run_id)["diagnosis"]["counts_toward_generation"])
+        diagnosis = self.store.linked_package_report(run_id)["diagnosis"]
+        self.assertFalse(diagnosis["counts_toward_generation"])
+        self.assertEqual(diagnosis["not_counted_reason"], "unverified")
+
+    def test_the_report_names_the_first_rule_an_excluded_video_fails(self):
+        """History words the exclusion from this, so a video verified for another channel is never "awaiting its window"."""
+        run_id, link_id, _ = self.linked()
+        self.assertIsNone(self.store.linked_package_report(run_id)["diagnosis"]["not_counted_reason"])
+
+        with self.store._connect() as connection:
+            connection.execute("UPDATE published_video_links SET verified_channel_id = 'elsewhere' WHERE id = ?", (link_id,))
+        diagnosis = self.store.linked_package_report(run_id)["diagnosis"]
+        self.assertEqual((diagnosis["counts_toward_generation"], diagnosis["not_counted_reason"]), (False, "other_channel"))
+
+        # Verified for the connected channel but its 24h window is still being collected.
+        pending_run, _, pending_video = self.linked()
+        with self.store._connect() as connection:
+            connection.execute("DELETE FROM video_performance_snapshots WHERE youtube_video_id = ?", (pending_video,))
+        self.assertEqual(self.store.linked_package_report(pending_run)["diagnosis"]["not_counted_reason"], "window")
+
+        # Format unknown: the labels fail before the window is looked at.
+        unlabelled_run, _, _ = self.linked(format_val="unknown")
+        self.assertEqual(self.store.linked_package_report(unlabelled_run)["diagnosis"]["not_counted_reason"], "labels")
+
+        # Nothing connected: every verified video is another channel's.
+        with self.store._connect() as connection:
+            connection.execute("DELETE FROM youtube_channel_connection")
+        self.assertEqual(self.store.linked_package_report(pending_run)["diagnosis"]["not_counted_reason"], "no_channel")
 
 
 class CohortRouteTests(StoreFixture):

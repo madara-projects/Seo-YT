@@ -122,6 +122,32 @@ function ownershipVerified(report: LinkedVideoReport): boolean {
   return report.verified_channel_id === undefined || String(report.verified_channel_id ?? "").trim() !== "";
 }
 
+const WINDOW_PENDING = "Its labels are set. It counts once its 24-hour window has been collected.";
+const OWNERSHIP_NEEDED = "Its labels are set, but only videos verified as your connected channel's own are used.";
+
+/**
+ * Why a labelled video does not count, from the server's reason when it sends
+ * one (`not_counted_reason`). An older server sends none, and the reason is
+ * then read from the ownership flags: verified means the window is pending.
+ */
+function notCountedBody(report: LinkedVideoReport): string {
+  switch (report.diagnosis?.not_counted_reason) {
+    case "no_channel":
+      return "Its labels are set, but no channel is connected; learning uses only the connected channel's own videos.";
+    case "other_channel":
+      return "Its labels are set, but it was verified for a channel that is not connected now, so this channel's learning leaves it out.";
+    case "unverified":
+      return OWNERSHIP_NEEDED;
+    case "window":
+      return WINDOW_PENDING;
+    case "labels":
+      // The server's label record disagrees with the one shown; say what it needs, not when.
+      return "Its format or language is not set on the server, so learning leaves it out until they are.";
+    default:
+      return ownershipVerified(report) ? WINDOW_PENDING : OWNERSHIP_NEEDED;
+  }
+}
+
 /**
  * Why a linked video is or is not used for learning. Unknown labels are the
  * reason the creator can repair here, so they come first; the server's own
@@ -146,9 +172,7 @@ export function learningStatus(report: LinkedVideoReport): LearningStatus {
     return {
       excluded: true,
       title: "Not used for learning yet",
-      body: ownershipVerified(report)
-        ? `Its labels are set. It counts once its 24-hour window has been collected.${peerNote}`
-        : `Its labels are set, but only videos verified as your connected channel's own are used.${peerNote}`,
+      body: `${notCountedBody(report)}${peerNote}`,
     };
   }
   return {

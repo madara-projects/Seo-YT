@@ -44,6 +44,23 @@ describe("learningStatus", () => {
     );
   });
 
+  it("names the server's reason over one inferred from the ownership flags", () => {
+    const labelled = { language: "english", format: "youtube_shorts", duration_bucket: "under_60s", topic_category: "sleep" };
+    // Verified, and an older reading would say the window is pending; the
+    // server says the video belongs to a channel that is not connected now.
+    const verified = { comparable_metadata: labelled, ownership_verified: true, ownership_state: "verified", verified_channel_id: "UC1" };
+    const bodyFor = (reason: string | null) =>
+      learningStatus({ ...verified, diagnosis: { counts_toward_generation: false, not_counted_reason: reason } }).body;
+    expect(bodyFor("other_channel")).toContain("verified for a channel that is not connected now");
+    expect(bodyFor("other_channel")).not.toContain("24-hour window");
+    expect(bodyFor("no_channel")).toContain("no channel is connected");
+    expect(bodyFor("unverified")).toContain("only videos verified as your connected channel's own are used");
+    expect(bodyFor("window")).toContain("once its 24-hour window has been collected");
+    expect(bodyFor("labels")).toContain("not set on the server");
+    // An older server sends no reason: the ownership flags still decide.
+    expect(bodyFor(null)).toContain("once its 24-hour window has been collected");
+  });
+
   it("counts only the exact placeholder as unknown, as the server does", () => {
     expect(learningStatus({ comparable_metadata: { language: "Unknown", format: "vlog" } }).excluded).not.toBe(true);
   });

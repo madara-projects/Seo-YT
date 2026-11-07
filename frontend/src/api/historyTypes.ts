@@ -220,6 +220,12 @@ export interface LinkedVideoReport {
     attribution_note?: string;
     /** The rule generation uses: verified, labelled, and a completed 24-hour window. Older servers omit it. */
     counts_toward_generation?: boolean;
+    /**
+     * The first rule the video fails when it does not count: "no_channel",
+     * "other_channel", "unverified", "labels" or "window"; null when it counts.
+     * Older servers omit it.
+     */
+    not_counted_reason?: string | null;
     /** Whether enough comparable videos existed for the verdict to compare with their median. */
     peer_baseline_available?: boolean;
     /** The window the verdict used ("24h", "7d", "28d"), or "none"/null before any completed. */
